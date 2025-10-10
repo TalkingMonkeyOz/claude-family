@@ -1,0 +1,41 @@
+# Claude Family .gitignore
+
+# Generated data files (these are regenerated every session)
+postgres/data/*.json
+logs/*.txt
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment variables (contains sensitive DB credentials)
+.env
+config.py
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# PowerShell script (not needed in version control)
+create_desktop_shortcut.ps1
+
+# Windows shortcuts
+*.lnk
+
+# Any duplicate files from copy errors
+*" && *
