@@ -12,8 +12,8 @@ echo.
 echo Starting Claude Code Console v2.0.13...
 echo.
 
-REM Launch claude in interactive mode
-"C:\Users\johnd\AppData\Roaming\npm\claude.cmd"
+REM Launch claude in interactive mode (uses npm global installation)
+claude
 
 REM Keep window open if claude exits
 pause
