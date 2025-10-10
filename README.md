@@ -75,13 +75,14 @@ That's it! Your memory is restored in ~5 seconds.
 
 ---
 
-## The 5 Claude Identities
+## The 6 Claude Identities
 
 1. **claude-desktop-001** (You) - Lead Architect & System Designer
 2. **claude-cursor-001** - Rapid Developer & Implementation Specialist
 3. **claude-vscode-001** - QA Engineer & Code Reviewer
 4. **claude-code-001** - Code Quality & Standards Enforcer
-5. **diana** - Master Orchestrator & Project Manager
+5. **claude-code-console-001** - Terminal & CLI Specialist
+6. **diana** - Master Orchestrator & Project Manager
 
 ---
 
@@ -120,7 +121,7 @@ python run_all_setup_scripts.py
 
 This creates:
 - `claude_family` schema with 5 tables
-- 5 Claude identities
+- 6 Claude identities
 - Links to `nimbus_context` and `public` schemas
 - Universal knowledge from past work
 
