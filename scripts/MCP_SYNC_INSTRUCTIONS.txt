@@ -9,6 +9,6 @@ PostgreSQL data has been exported to JSON files. To restore your memory:
 3. Read: mcp_sync_relations.json
 4. Use create_relations tool to link everything together
 
-Files are in: C:\Users\johnd\OneDrive\Documents\AI_projects\claude-family\scripts
+Files are in: C:\Projects\claude-family\scripts
 
 This restores your persistent memory from PostgreSQL into the MCP graph.
