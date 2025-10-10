@@ -35,7 +35,7 @@ def detect_platform():
     """
     # For now, default to desktop
     # TODO: Add platform detection logic (check environment variables, process names, etc.)
-    return 'desktop'
+    return 'claude-code-console' if os.environ.get('CLAUDECODE') or os.environ.get('CLAUDE_CODE') or os.environ.get('CLAUDE_CODE_SESSION') else 'desktop'
 
 def detect_current_project():
     """
@@ -69,6 +69,7 @@ def load_identity(conn, platform):
         'cursor': 'claude-cursor-001',
         'vscode': 'claude-vscode-001',
         'claude-code': 'claude-code-001',
+        'claude-code-console': 'claude-code-console-001',
         'orchestrator': 'diana'
     }
 
