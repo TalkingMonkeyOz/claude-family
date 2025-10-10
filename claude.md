@@ -55,13 +55,14 @@ This loads:
 - All sessions attributed to specific Claude identity
 - Universal knowledge applies across all projects
 
-## MCP Servers (To Be Configured)
+## MCP Servers
 
-Claude Code Console should have access to:
-- ✅ Filesystem (already built-in)
-- ❌ PostgreSQL MCP (needs configuration)
-- ❌ Memory MCP (needs configuration)
-- ❌ Git MCP (optional)
+**Configured via .mcp.json (portable, committable)**
+
+Claude Code Console has access to:
+- ✅ **postgres** - PostgreSQL database access (ai_company_foundation)
+- ✅ **memory** - Persistent memory graph for cross-session context
+- ✅ **filesystem** - File access to AI_projects and claude-family directories
 
 ## Workflow After Reboot
 
@@ -83,6 +84,14 @@ Claude Code Console should have access to:
 - MCP server failures? Check logs first
 - Sessions tracked in PostgreSQL permanently
 - Cross-reference other Claudes' work via session_history
+
+### Repository Organization Rule (IMPORTANT)
+**Work projects MUST stay separate from infrastructure and AI projects**
+- ✅ Work projects (Nimbus, job tools) → Separate private repos (e.g., nimbus-user-loader)
+- ✅ Infrastructure (Claude Family) → claude-family repo
+- ✅ Personal AI projects → ai-workspace repo
+- ❌ NEVER mix work code with personal/infrastructure repos
+- **Default:** All repos are PRIVATE unless explicitly specified otherwise
 
 ## Location
 

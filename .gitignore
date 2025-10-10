@@ -26,6 +26,9 @@ desktop.ini
 *.swo
 *~
 
+# Claude Code local settings (auto-generated permissions)
+.claude/
+
 # Temporary files
 *.tmp
 *.bak
