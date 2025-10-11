@@ -2,8 +2,10 @@
   "mcpServers": {
     "postgres": {
       "type": "stdio",
-      "command": "npx",
+      "command": "cmd",
       "args": [
+        "/c",
+        "npx",
         "-y",
         "@modelcontextprotocol/server-postgres",
         "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
@@ -12,8 +14,10 @@
     },
     "memory": {
       "type": "stdio",
-      "command": "npx",
+      "command": "cmd",
       "args": [
+        "/c",
+        "npx",
         "-y",
         "@modelcontextprotocol/server-memory"
       ],
@@ -21,8 +25,10 @@
     },
     "filesystem": {
       "type": "stdio",
-      "command": "npx",
+      "command": "cmd",
       "args": [
+        "/c",
+        "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
         "C:\\Users\\johnd\\OneDrive\\Documents\\AI_projects",
