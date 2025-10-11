@@ -163,6 +163,29 @@ This creates:
 
 ---
 
+## Claude Code Console Configuration
+
+### Reducing Approval Prompts
+
+To minimize interruptions while maintaining safety, run:
+```bash
+claude config set allowedToolPatterns
+```
+
+**Recommended patterns to add** (append to existing, don't replace):
+- `Bash(*)` - All bash commands
+- `Edit(**)` - All file edits
+- `Write(**)` - All file writes
+- `Grep(*)` - All searches
+- `Glob(*)` - File pattern matching
+- `mcp__filesystem__*` - Filesystem MCP tools
+- `mcp__postgres__*` - PostgreSQL MCP tools
+- `mcp__memory__*` - Memory MCP tools
+
+**Safety Note:** These patterns allow claude-code-console-001 to work autonomously within the claude-family and AI_projects directories without breaking family coordination rules.
+
+---
+
 ## Future Enhancements
 
 - True auto-sync (when Claude Desktop adds startup script support)

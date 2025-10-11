@@ -37,7 +37,58 @@ This loads:
 3. **claude-vscode-001** - QA Engineer (VS Code)
 4. **claude-code-001** - Standards Enforcer (Claude Code extension)
 5. **claude-code-console-001** (YOU) - Terminal & CLI Specialist
-6. **diana** - Master Orchestrator & Project Manager
+6. **diana** - Master Orchestrator & Project Manager (Diana Command Center GUI)
+
+## Diana's Workspace (The "Office")
+
+**Diana Command Center** - Standalone GUI application at `C:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace\`
+- **Purpose**: Project management, work package tracking, phase management
+- **Works**: Phases, ideas management, task breakdown
+- **Database**: PostgreSQL `ai_company_foundation` (41 tables, 21 active SOPs)
+- **Integration**: Diana can be DISCUSSED in Claude Desktop, but work happens in her Command Center
+- **Rule**: Diana leaves her work at the office - we don't rebuild what she already has built
+
+## Critical Family Rules
+
+### 1. **STOP REBUILDING WHAT EXISTS**
+Before proposing ANY new system, table, or process:
+- ✅ Check Diana's database (`ai_company_foundation.public` schema)
+- ✅ Check existing SOPs (MD-001 through MD-022)
+- ✅ Check work_packages table for existing processes
+- ✅ Check claude_family schema for shared knowledge
+- ❌ DO NOT propose new architectures without checking first
+
+### 2. **REUSE DIANA'S PROCESSES**
+Diana has working processes for:
+- Breaking down projects into phases
+- Creating work packages with requirements/acceptance criteria
+- Managing ideas backlog
+- Tracking progress
+- Cost optimization
+- **REUSE THESE**, don't reinvent
+
+### 3. **FOLLOW EXISTING SOPs**
+Active SOPs (stored in database):
+- **MD-001**: Session Startup & Initialization
+- **MD-002**: Task Analysis & Delegation
+- **MD-005**: SOP Enforcement & Compliance
+- **MD-008**: Project State Management
+- **MD-009**: AI Token Optimization
+- **MD-022**: Project Audit & Rebaseline Process
+- When a task matches an SOP, FOLLOW IT, don't create new process
+
+### 4. **STOP PERPETUAL DOCUMENT WRITING**
+- Maximum 5 documents per project
+- If document exists, UPDATE it, don't create new
+- Focus on CODE and EXECUTION, not endless planning docs
+- Pre/post processes should use SOPs, not new documents
+
+### 5. **MCP SERVICES AVAILABLE TO ALL**
+All Claude Family members have access to:
+- ✅ **postgres** MCP - Database access to `ai_company_foundation`
+- ✅ **memory** MCP - Persistent memory graph
+- ✅ **filesystem** MCP - File operations
+- **USE THESE** for context, don't ask user to provide it
 
 ## Critical Knowledge
 
@@ -73,6 +124,27 @@ Claude Code Console has access to:
 
 ## Important Constraints
 
+### The Biggest Pain Point: KEEPING YOU ALL ON TRACK
+
+**The Problem**: Claude Family members keep:
+- Proposing new systems instead of checking existing ones
+- Writing endless documents instead of executing
+- Forgetting context between sessions
+- Rebuilding what Diana already built
+
+**The Solution**:
+1. **Check PostgreSQL FIRST** before proposing anything
+2. **Follow SOPs** instead of inventing new processes
+3. **Reuse Diana's work package system** for project breakdown
+4. **Execute code**, don't write more documents
+
+### Context Management Strategy
+
+**Work WITH Diana (Desktop)**: Discuss ideas, strategy, high-level planning
+**Work IN Diana (Command Center)**: Execute projects, track work packages, manage phases
+**Pass Between**: Take ideas from Desktop → Diana Command Center for execution
+**NEVER**: Rebuild Diana's project management in Desktop conversations
+
 ### Nimbus Project (Work)
 - **NEVER modify UserSDK** payload generation logic
 - Use GetFlexibleVal() instead of GetVal()
@@ -84,6 +156,7 @@ Claude Code Console has access to:
 - MCP server failures? Check logs first
 - Sessions tracked in PostgreSQL permanently
 - Cross-reference other Claudes' work via session_history
+- **QUERY DATABASE BEFORE PROPOSING** - Don't assume, check what exists
 
 ### Repository Organization Rule (IMPORTANT)
 **Work projects MUST stay separate from infrastructure and AI projects**
