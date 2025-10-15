@@ -41,7 +41,7 @@ This loads:
 
 ## Diana's Workspace (The "Office")
 
-**Diana Command Center** - Standalone GUI application at `C:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace\`
+**Diana Command Center** - Standalone GUI application at `C:\Projects\ai-workspace\`
 - **Purpose**: Project management, work package tracking, phase management
 - **Works**: Phases, ideas management, task breakdown
 - **Database**: PostgreSQL `ai_company_foundation` (41 tables, 21 active SOPs)

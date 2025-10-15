@@ -31,8 +31,7 @@
         "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:\\Users\\johnd\\OneDrive\\Documents\\AI_projects",
-        "C:\\Projects\\claude-family"
+        "C:\\Projects"
       ],
       "env": {}
     }
