@@ -254,6 +254,26 @@ cd workspace
 
 ---
 
+## Troubleshooting Isolated Workspaces
+
+**If MCP servers are missing or permissions reset:**
+
+See detailed troubleshooting guide: `C:\claude\claude-console-01\TROUBLESHOOTING.md`
+
+**Quick Fix:**
+1. Close Claude Code
+2. Run: `C:\claude\claude-console-01\start_claude_console_01.bat`
+3. This launches Claude in the correct isolated workspace
+4. Run: `/mcp list` to verify all 7 servers are loaded
+
+**Configuration Hierarchy:**
+- **PROJECT-LEVEL** (highest priority): `.mcp.json` and `.claude/settings.local.json` in working directory
+- **GLOBAL** (fallback): `~/.claude/mcp.json` and `~/.claude/settings.local.json`
+
+**The Key:** Always launch from your isolated workspace directory to use project-level configs.
+
+---
+
 **Auto-loaded:** 2025-10-17
 **Version:** 3.0.0 (Isolated Workspaces Architecture)
 **Repository:** C:\Projects\claude-family\ (git operations only)
