@@ -42,3 +42,9 @@ create_desktop_shortcut.ps1
 
 # Any duplicate files from copy errors
 *" && *
+
+# Nimbus test artifacts
+output/
+
+# MCP config (use .mcp.json.template instead)
+.mcp.json
