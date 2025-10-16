@@ -20,8 +20,8 @@ PostgreSQL database: `ai_company_foundation`
 
 Run this at startup to restore your complete memory:
 ```bash
-cd C:\Projects\claude-family\scripts
-python load_claude_startup_context.py
+cd C:\claude\claude-console-01
+python C:\claude\shared\scripts\load_claude_startup_context.py
 ```
 
 This loads:
@@ -29,6 +29,8 @@ This loads:
 - ✅ Universal knowledge (12+ patterns, gotchas, techniques)
 - ✅ Recent sessions (last 7 days across all Claudes)
 - ✅ Project-specific context
+
+**Note**: Always work from your isolated workspace at `C:\claude\claude-console-01\`
 
 ## The Claude Family (6 Members)
 
@@ -117,10 +119,12 @@ Claude Code Console has access to:
 
 ## Workflow After Reboot
 
-1. This file (claude.md) auto-loads when you start
-2. Run: `python C:\Projects\claude-family\scripts\load_claude_startup_context.py`
-3. Check: `python C:\Projects\claude-family\scripts\sync_postgres_to_mcp.py`
-4. Your complete context is restored in 5 seconds
+1. Open Claude Code in your isolated workspace: `cd C:\claude\claude-console-01`
+2. This file (claude.md) auto-loads when you start
+3. Run: `python C:\claude\shared\scripts\load_claude_startup_context.py`
+4. Check: `python C:\claude\shared\scripts\sync_postgres_to_mcp.py`
+5. Your complete context is restored in 5 seconds
+6. Do all work in `workspace\` subdirectory
 
 ## Important Constraints
 
@@ -166,31 +170,91 @@ Claude Code Console has access to:
 - ❌ NEVER mix work code with personal/infrastructure repos
 - **Default:** All repos are PRIVATE unless explicitly specified otherwise
 
+## Workspace Architecture (CRITICAL)
+
+**ISOLATED WORKSPACES** - Each Claude Family member has their own workspace to prevent mutual overwriting of settings.
+
+### The Problem We Solved (2025-10-17)
+- Multiple Claude instances shared `.claude\settings.local.json` in `C:\Projects\claude-family\`
+- Each instance auto-saved permissions, overwriting others
+- `.mcp.json` tracked in git caused merge conflicts
+- Result: MCP servers kept disappearing, permissions reset constantly
+
+### The Solution: Isolated Workspaces
+
+```
+C:\claude\
+├── claude-console-01\          # claude-code-console-001 (YOU)
+│   ├── .claude\               # Isolated settings
+│   ├── .mcp.json              # Personal MCP config (NOT in git)
+│   ├── workspace\             # Working directory
+│   └── README.md
+│
+├── claude-desktop-01\          # claude-desktop-001
+├── claude-cursor-01\           # claude-cursor-001
+├── claude-vscode-01\           # claude-vscode-001
+├── claude-code-01\             # claude-code-001
+│
+└── shared\                     # Shared resources (READ-ONLY)
+    ├── scripts\               # Shared Python scripts
+    ├── docs\                  # CLAUDE.md and documentation
+    └── templates\             # Configuration templates
+```
+
+### Your Workspace
+
+**Primary Workspace**: `C:\claude\claude-console-01\`
+- All work happens in `workspace\` subdirectory
+- Settings isolated - won't conflict with other Claudes
+- MCP config is local, not tracked in git
+
+**Git Repository**: `C:\Projects\claude-family\`
+- Source of truth for shared resources
+- Commit changes here
+- Copy updates to `C:\claude\shared\` as needed
+
+**Shared Resources**: `C:\claude\shared\`
+- Read-only access for all family members
+- Scripts, docs, templates available to all
+- Don't modify directly - update git repo instead
+
 ## Location
 
 This directory: `C:\Projects\claude-family\`
 - Moved from OneDrive to avoid caching issues
 - GitHub: https://github.com/TalkingMonkeyOz/claude-family
 - Windows startup: Auto-syncs at boot (silent mode)
+- **Use for git operations only**
+- **Work from `C:\claude\claude-console-01\workspace\` instead**
 
 ## Quick Commands
 
 ```bash
+# Navigate to your isolated workspace
+cd C:\claude\claude-console-01
+
 # Load full startup context
-python C:\Projects\claude-family\scripts\load_claude_startup_context.py
+python C:\claude\shared\scripts\load_claude_startup_context.py
 
 # Sync PostgreSQL to MCP JSON
-python C:\Projects\claude-family\scripts\sync_postgres_to_mcp.py
+python C:\claude\shared\scripts\sync_postgres_to_mcp.py
 
 # Run all setup scripts (one-time)
-python C:\Projects\claude-family\scripts\run_all_setup_scripts.py
+python C:\claude\shared\scripts\run_all_setup_scripts.py
 
 # Check PostgreSQL identities
 psql -U postgres -d ai_company_foundation -c "SELECT identity_name, platform, role_description FROM claude_family.identities"
+
+# List your MCP servers
+/mcp list
+
+# Start working in your workspace
+cd workspace
 ```
 
 ---
 
-**Auto-loaded:** 2025-10-11
-**Version:** 2.0.13 (Claude Code Console)
-**Repository:** C:\Projects\claude-family\
+**Auto-loaded:** 2025-10-17
+**Version:** 3.0.0 (Isolated Workspaces Architecture)
+**Repository:** C:\Projects\claude-family\ (git operations only)
+**Workspace:** C:\claude\claude-console-01\ (your primary workspace)
