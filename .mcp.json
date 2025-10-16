@@ -31,7 +31,43 @@
         "npx",
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
+        "C:\Projects"
+      ],
+      "env": {}
+    },
+    "py-notes-server": {
+      "type": "stdio",
+      "command": "C:\venvs\mcp\Scripts\python.exe",
+      "args": [
+        "C:\Users\johnd\mcp\py-notes-server\server.py"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\venvs\mcp\Scripts\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    },
+    "github": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
       ],
       "env": {}
     }
