@@ -427,6 +427,36 @@ mcp__tree-sitter__get_symbols(
 - All sessions attributed to specific Claude identity
 - Universal knowledge applies across all projects
 
+### Postgres MCP Migration (2025-10-18)
+**IMPORTANT**: Migrated from deprecated `@modelcontextprotocol/server-postgres` to `postgres-mcp` v0.3.0
+
+**Why**: The npm-based postgres server was read-only. `postgres-mcp` provides full read/write access.
+
+**Installation**:
+```bash
+pip install postgres-mcp
+# Installed to: C:\venvs\mcp\Scripts\postgres-mcp.exe
+```
+
+**Configuration** (.mcp.json and claude_desktop_config.json):
+```json
+"postgres": {
+  "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
+  "args": ["--access-mode=unrestricted"],
+  "env": {
+    "DATABASE_URI": "postgresql://postgres:PASSWORD@localhost/ai_company_foundation"
+  }
+}
+```
+
+**Capabilities**:
+- ✅ SELECT queries (read access)
+- ✅ INSERT/UPDATE/DELETE queries (write access)
+- ✅ All PostgreSQL operations without restrictions
+- ✅ Tool: `mcp__postgres__execute_sql`
+
+**Both Console and Desktop updated** - all Claudes now have read/write postgres access.
+
 ## MCP Servers Configuration
 
 **Configured via .mcp.json (portable, committable)**
