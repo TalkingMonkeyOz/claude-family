@@ -422,6 +422,31 @@ mcp__tree-sitter__get_symbols(
 - Location: `%APPDATA%\Claude\logs\mcp-server-*.log`
 - Check these when MCP tools fail
 
+### Windows Git Bash Path Handling
+**CRITICAL**: Claude Code on Windows uses Git Bash, which requires **forward slashes** in paths.
+
+**The Problem**:
+- Windows paths use backslashes: `C:\claude\file.json`
+- Git Bash uses Unix commands (`cp`, `mv`, `ls`, etc.)
+- Unix commands interpret backslashes as escape characters
+- Result: Commands fail with "No such file or directory"
+
+**The Solution**:
+```bash
+# ❌ FAILS - backslashes don't work in Git Bash
+cp "C:\claude\file.json" "C:\claude\backup.json"
+
+# ✅ WORKS - always use forward slashes
+cp "C:/claude/file.json" "C:/claude/backup.json"
+```
+
+**Why This Works**:
+- Git Bash automatically translates forward slashes to Windows paths internally
+- `C:/claude/file.json` becomes `C:\claude\file.json` when accessing files
+- Works for ALL Unix commands: `cp`, `mv`, `ls`, `cd`, `find`, etc.
+
+**The Rule**: Always use forward slashes `/` in Git Bash commands, even on Windows.
+
 ### PostgreSQL Schema Links
 - `claude_family` has foreign keys to `nimbus_context` and `public`
 - All sessions attributed to specific Claude identity
