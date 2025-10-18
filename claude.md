@@ -18,6 +18,45 @@
 
 ---
 
+## 🖥️ Environment Specifications
+
+**Hardware:**
+- **GPU:** NVIDIA GeForce RTX 3080 (10GB VRAM) — Supports GPU-accelerated tasks
+- **CPU:** Intel Core i9-10900K @ 3.70GHz (10 cores)
+- **RAM:** 32GB
+
+**Development Tools:**
+- **Python:** 3.13.7 (pip 25.2)
+- **Node.js:** v24.9.0 (npm 11.6.1)
+- **Java:** OpenJDK 25
+- **.NET:** 9.0.302
+- **Git:** 2.42.0 (Git Bash — requires forward slashes)
+- **GitHub CLI:** 2.81.0
+- **Docker:** 28.5.1 ✅
+
+**IDEs:**
+- **VS Code:** Installed (claude-vscode-001 workspace)
+- **Cursor IDE:** Installed (claude-cursor-001 workspace)
+- **Claude Code:** npm package (YOU)
+
+**AI/ML Tools:**
+- **ollama:** 0.12.6 ✅
+  - **Models:** gemma3:4b (3.3GB), llama2:latest (3.8GB)
+  - **Use case:** Local inference without API calls
+
+**Databases:**
+- **PostgreSQL:** 18.0 (database: `ai_company_foundation`)
+  - Schemas: `claude_family`, `nimbus_context`, `public`
+
+**Virtual Environments:**
+- **C:/venvs/llama_project** — LLM projects
+- **C:/venvs/mcp** — MCP servers (postgres-mcp installed here)
+- **C:/venvs/vault** — Secure projects
+
+**Last Updated:** 2025-10-18 (review quarterly or when hardware changes)
+
+---
+
 ## Table of Contents
 
 1. [Identity & Role](#1-identity--role) (§1)
