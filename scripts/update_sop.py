@@ -2,7 +2,13 @@
 """Update SOP-PROJ-001 with documentation system integration"""
 
 import json
+import os
+import sys
 import psycopg2
+
+# Force UTF-8 encoding for Windows
+if sys.platform == 'win32':
+    sys.stdout.reconfigure(encoding='utf-8')
 
 # New procedure steps with documentation system integration
 procedure_steps = [
@@ -74,11 +80,18 @@ procedure_steps = [
 
 # Connect and update
 try:
+    # Get password from environment variable
+    pg_password = os.environ.get('PGPASSWORD')
+    if not pg_password:
+        print("[XX] PGPASSWORD not set. Please configure it first.")
+        print("[XX] Run: [System.Environment]::SetEnvironmentVariable('PGPASSWORD', 'your_password', 'User')")
+        exit(1)
+
     conn = psycopg2.connect(
         host="localhost",
         database="ai_company_foundation",
         user="postgres",
-        password="password"  # Update if different
+        password=pg_password
     )
     cur = conn.cursor()
 
@@ -97,14 +110,14 @@ try:
     result = cur.fetchone()
     conn.commit()
 
-    print(f"✅ Updated {result[0]}: {result[2]}")
-    print(f"   Version: {result[1]}")
-    print(f"   Updated: {result[3]}")
-    print(f"   Steps: {len(procedure_steps)} (added 2 new steps: 5.1, 5.2)")
+    print(f"[OK] Updated {result[0]}: {result[2]}")
+    print(f"     Version: {result[1]}")
+    print(f"     Updated: {result[3]}")
+    print(f"     Steps: {len(procedure_steps)} (added 2 new steps: 5.1, 5.2)")
 
     cur.close()
     conn.close()
 
 except Exception as e:
-    print(f"❌ Error: {e}")
+    print(f"[XX] Error: {e}")
     exit(1)
