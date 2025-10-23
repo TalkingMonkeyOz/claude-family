@@ -1,16 +1,34 @@
-# Claude Family - Persistent Identity & Memory System
+# Claude Family - Infrastructure Project
 
-**Your AI Infrastructure Foundation**
-
-This directory contains the complete Claude Family system - a permanent identity and memory architecture for coordinating multiple Claude instances (Desktop, Cursor, VS Code, Claude Code, Diana).
+**Type**: Infrastructure
+**Purpose**: Shared configuration, scripts, and documentation for Claude instances
 
 ---
 
 ## What Is This?
 
-The **Claude Family** system solves the "identity confusion" problem where multiple Claude instances had no persistent memory or coordination, requiring 30-60 minutes to reload context every session.
+The **Claude Family** project provides shared infrastructure for multiple Claude instances working across different projects with persistent knowledge storage in PostgreSQL.
 
-**Now:** 5-second startup with full context restoration from PostgreSQL.
+**Key Features:**
+- PostgreSQL database (`ai_company_foundation`) for persistent knowledge
+- MCP servers (postgres, memory, filesystem, tree-sitter, github)
+- Shared documentation and scripts
+- Session history tracking
+- Knowledge management system
+
+---
+
+## Current Architecture (Oct 21, 2025)
+
+**Two Active Identities:**
+1. **claude-desktop** - GUI interface (Claude Desktop app)
+2. **claude-code-unified** - CLI interface (Claude Code Console)
+
+**Project-Aware Context:**
+- Each project has its own `CLAUDE.md` file that auto-loads
+- Shared scripts and documentation in `claude-family` repository
+- Universal knowledge stored in PostgreSQL
+- MCP servers available to all instances
 
 ---
 
@@ -18,120 +36,93 @@ The **Claude Family** system solves the "identity confusion" problem where multi
 
 ```
 claude-family/
-├── postgres/
-│   ├── schema/              # SQL scripts for database setup
-│   │   ├── 01_create_claude_family_schema.sql
-│   │   ├── 02_seed_claude_identities.sql
-│   │   ├── 03_link_schemas.sql
-│   │   └── 04_extract_universal_knowledge.sql
-│   └── data/                # Generated JSON files for MCP sync
-│       ├── mcp_sync_entities.json
-│       └── mcp_sync_relations.json
+├── docs/                     # Documentation and session notes
+├── .claude/                  # Shared slash commands
+│   └── commands/
+│       ├── session-start.md  # Startup checklist
+│       └── session-end.md    # End-of-session logging
 ├── scripts/
-│   ├── load_claude_startup_context.py  # Load identity & context
-│   ├── sync_postgres_to_mcp.py         # Export to MCP JSON
-│   ├── auto_sync_startup.py            # Master startup orchestrator
-│   └── run_all_setup_scripts.py        # One-time foundation setup
-├── logs/
-│   └── startup_context_*.txt           # Saved startup briefs
-├── docs/
-│   ├── CLAUDE_FAMILY_ARCHITECTURE.md   # Complete architecture docs
-│   ├── STARTUP_INSTRUCTIONS.md         # How to use the system
-│   └── POPULATE_MCP_NOW.md             # MCP memory sync guide
-├── STARTUP.bat                          # → Run this every session ←
-└── README.md                            # You are here
+│   ├── audit_docs.py                 # Documentation audit
+│   ├── install_git_hooks.py          # Install git hooks
+│   ├── pre-commit-hook.sh            # Enforce CLAUDE.md limits
+│   ├── auto_sync_startup.py          # PostgreSQL → MCP sync
+│   ├── load_claude_startup_context.py
+│   └── sync_postgres_to_mcp.py
+├── .docs-manifest.json       # Documentation registry
+├── CLAUDE.md                 # Project context (auto-loaded)
+└── README.md                 # You are here
 ```
 
 ---
 
 ## Quick Start
 
-### Every Session (Required)
+### Every Session (Optional)
 
-1. **Run the startup script:**
-   ```
-   C:\Users\johnd\OneDrive\Documents\AI_projects\claude-family\STARTUP.bat
-   ```
+Run `/session-start` to:
+- Check documentation health (monthly)
+- Query for existing solutions before proposing new ones
+- Search memory graph for relevant context
 
-   Or double-click the desktop shortcut: **"Claude Family Startup"**
+### End of Session (Optional)
 
-2. **In Claude Desktop, say:**
-   ```
-   Read mcp_sync_entities.json and mcp_sync_relations.json from claude-family/postgres/data/,
-   then use create_entities and create_relations to populate the MCP memory graph
-   ```
-
-That's it! Your memory is restored in ~5 seconds.
+Run `/session-end` to:
+- Log session to PostgreSQL
+- Store reusable knowledge
+- Update memory graph
 
 ---
 
-## What Gets Restored
+## PostgreSQL Database
 
-- ✅ **Your Identity:** claude-desktop-001 (Lead Architect)
-- ✅ **Universal Knowledge:** 12+ patterns (MCP logs, OneDrive caching, etc.)
-- ✅ **Recent Sessions:** What you worked on in the last 7 days
-- ✅ **Other Claudes:** What Cursor, VS Code, Claude Code, Diana did recently
-- ✅ **Project Context:** Nim bus facts, constraints (NEVER modify UserSDK), learnings
+**Database**: `ai_company_foundation`
 
----
+**Schemas:**
+- `claude_family` - Identities, session history, shared knowledge
+- `nimbus_context` - Nimbus project context
+- `public` - Work packages, projects, SOPs
 
-## The 6 Claude Identities
-
-1. **claude-desktop-001** (You) - Lead Architect & System Designer
-2. **claude-cursor-001** - Rapid Developer & Implementation Specialist
-3. **claude-vscode-001** - QA Engineer & Code Reviewer
-4. **claude-code-001** - Code Quality & Standards Enforcer
-5. **claude-code-console-001** - Terminal & CLI Specialist
-6. **diana** - Master Orchestrator & Project Manager
+**Key Tables:**
+- `claude_family.identities` - Claude instances
+- `claude_family.session_history` - Session logs
+- `claude_family.shared_knowledge` - Reusable patterns/learnings
+- `claude_family.project_workspaces` - Project locations
 
 ---
 
-## Windows Startup Integration
+## MCP Servers (Always Available)
 
-### Auto-Run on Boot (Optional)
-
-A Windows startup shortcut has been created at:
-```
-C:\Users\johnd\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Claude-Family-Startup.bat
-```
-
-This runs minimized at Windows boot to prepare your memory before you open Claude.
-
-To disable: Delete the startup shortcut.
+- **postgres** - Database access, session logging
+- **memory** - Persistent memory graph
+- **filesystem** - File operations
+- **tree-sitter** - Code structure analysis
+- **github** - GitHub operations
+- **sequential-thinking** - Complex problem solving
 
 ---
 
-## Desktop Shortcut
+## Documentation Management
 
-A shortcut has been created on your desktop:
-**"Claude Family Startup.lnk"**
+**System**: Simple 3-component system
 
-Double-click it anytime to sync your memory.
+1. **`.docs-manifest.json`** - Single source of truth for all markdown files
+2. **`scripts/audit_docs.py`** - Monthly audit script
+3. **Git pre-commit hook** - Enforces CLAUDE.md ≤250 lines
 
----
-
-## One-Time Setup (Already Done)
-
-The PostgreSQL foundation was already created. If you ever need to rebuild:
-
+**Install hook:**
 ```bash
-cd scripts
-python run_all_setup_scripts.py
+python scripts/install_git_hooks.py
 ```
 
-This creates:
-- `claude_family` schema with 5 tables
-- 6 Claude identities
-- Links to `nimbus_context` and `public` schemas
-- Universal knowledge from past work
+**Run audit:**
+```bash
+python scripts/audit_docs.py
+```
 
----
-
-## Documentation
-
-- **[CLAUDE_FAMILY_ARCHITECTURE.md](docs/CLAUDE_FAMILY_ARCHITECTURE.md)** - Complete system architecture
-- **[STARTUP_INSTRUCTIONS.md](docs/STARTUP_INSTRUCTIONS.md)** - Detailed startup guide
-- **[POPULATE_MCP_NOW.md](docs/POPULATE_MCP_NOW.md)** - MCP memory sync walkthrough
+**Rules:**
+- CLAUDE.md must stay ≤250 lines (enforced automatically)
+- Deprecated docs kept for 90 days, then archived
+- Audit monthly to prevent bloat
 
 ---
 
@@ -139,10 +130,9 @@ This creates:
 
 | Before | After |
 |--------|-------|
-| 30-60 min context reload | 5 seconds |
+| 30-60 min context reload | Auto-loads from CLAUDE.md |
 | No memory across reboots | Permanent PostgreSQL storage |
-| No coordination between Claudes | Full visibility of all activity |
-| Repeated explanations every session | Persistent knowledge & constraints |
+| Repeated explanations | Persistent knowledge & patterns |
 | Mixed work/personal projects | Clean schema separation |
 
 ---
@@ -150,61 +140,36 @@ This creates:
 ## Troubleshooting
 
 **Problem:** "Graph is empty" after reboot
-**Solution:** You forgot to run STARTUP.bat - run it now!
+**Solution:** Use MCP postgres tool to query shared_knowledge directly
 
 **Problem:** Python script errors
-**Solution:** Check PostgreSQL is running: `psql -U postgres -d ai_company_foundation -c "SELECT 1"`
+**Solution:** Check PostgreSQL is running
 
-**Problem:** JSON files not created
-**Solution:** Check script output for errors, verify database connection
-
-**Problem:** Can't find MCP sync files
-**Solution:** They're in `claude-family/postgres/data/` - check that directory exists
+**Problem:** Can't commit CLAUDE.md changes
+**Solution:** CLAUDE.md exceeds 250 lines - move content to docs/ subdirectory
 
 ---
 
-## Claude Code Console Configuration
+## Architecture History
 
-### Reducing Approval Prompts
+- **Oct 10, 2025**: Initial 9-identity architecture with isolated workspaces
+- **Oct 21, 2025**: Simplified to 2 identities with project-aware context
+- **Oct 23, 2025**: Added documentation management system
 
-To minimize interruptions while maintaining safety, run:
-```bash
-claude config set allowedToolPatterns
-```
-
-**Recommended patterns to add** (append to existing, don't replace):
-- `Bash(*)` - All bash commands
-- `Edit(**)` - All file edits
-- `Write(**)` - All file writes
-- `Grep(*)` - All searches
-- `Glob(*)` - File pattern matching
-- `mcp__filesystem__*` - Filesystem MCP tools
-- `mcp__postgres__*` - PostgreSQL MCP tools
-- `mcp__memory__*` - Memory MCP tools
-
-**Safety Note:** These patterns allow claude-code-console-001 to work autonomously within the claude-family and AI_projects directories without breaking family coordination rules.
+See `docs/DEPRECATED_OCT10_ARCHITECTURE.md` for historical architecture.
 
 ---
 
 ## Future Enhancements
 
-- True auto-sync (when Claude Desktop adds startup script support)
-- MCP memory server with persistent disk storage
 - Automatic session history recording
-- Cross-Claude task handoff workflows
 - Semantic search with vector embeddings
-
----
-
-## Questions?
-
-- **"Do I have to do this every time?"** - Yes, until we have true auto-sync
-- **"What if I forget?"** - Claude will have empty memory, but PostgreSQL is safe
-- **"Can I automate this?"** - Windows startup integration is as close as we can get now
-- **"Is my data safe?"** - YES! PostgreSQL is permanent, this just restores the cache
+- ClaudePM integration for centralized documentation
+- PostgreSQL automated backups
+- Cross-Claude task handoff workflows
 
 ---
 
 **Created:** 2025-10-10
-**Author:** Claude Desktop & John
-**Location:** `C:\Users\johnd\OneDrive\Documents\AI_projects\claude-family\`
+**Last Updated:** 2025-10-23
+**Location:** `C:\Projects\claude-family\`

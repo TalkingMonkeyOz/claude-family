@@ -3,10 +3,12 @@
 # Install: cp scripts/pre-commit-hook.sh .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
 
 MAX_LINES=250
-CLAUDE_MD="CLAUDE.md"
 
-# Check if CLAUDE.md is being committed
-if git diff --cached --name-only | grep -q "^${CLAUDE_MD}$"; then
+# Check if CLAUDE.md (case-insensitive) is being committed
+if git diff --cached --name-only | grep -iq "^claude\.md$"; then
+    # Find the actual filename (CLAUDE.md or claude.md)
+    CLAUDE_MD=$(git diff --cached --name-only | grep -i "^claude\.md$")
+
     # Count lines in CLAUDE.md
     LINE_COUNT=$(wc -l < "$CLAUDE_MD" | tr -d ' ')
 

@@ -1,0 +1,29 @@
+{
+  "_metadata": {
+    "generated_at": "2025-10-23T17:40:03.280086",
+    "source": "PostgreSQL (claude_family.project_workspaces)",
+    "description": "Auto-generated workspace mappings. Do not edit manually."
+  },
+  "workspaces": {
+    "claude-family": {
+      "path": "C:\\Projects\\claude-family",
+      "type": "infrastructure",
+      "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "claude-pm": {
+      "path": "C:\\Projects\\claude-pm",
+      "type": "infrastructure",
+      "description": "New simplified project management system (WIP, replacing Diana)"
+    },
+    "ATO-tax-agent": {
+      "path": "C:\\Projects\\ATO-tax-agent",
+      "type": "work",
+      "description": "ATO tax agent tools (private work project)"
+    },
+    "nimbus-user-loader": {
+      "path": "C:\\Projects\\nimbus-user-loader",
+      "type": "work",
+      "description": "Nimbus user import tool (private work project)"
+    }
+  }
+}
