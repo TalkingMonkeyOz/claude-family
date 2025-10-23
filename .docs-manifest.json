@@ -1,0 +1,165 @@
+{
+  "project": "claude-family",
+  "last_updated": "2025-10-23",
+  "documentation_home": "C:\\Projects\\claude-family",
+
+  "active": {
+    "CLAUDE.md": {
+      "purpose": "Project context for Claude Code CLI (auto-loaded)",
+      "max_lines": 250,
+      "current_lines": 80,
+      "status": "active",
+      "last_reviewed": "2025-10-23"
+    },
+    "README.md": {
+      "purpose": "Human-readable project overview (partially outdated)",
+      "status": "active-needs-update",
+      "current_lines": 234,
+      "last_reviewed": "2025-10-23",
+      "todo": "Update to remove references to old 6-9 member architecture"
+    },
+    "ANTI-HALLUCINATION.md": {
+      "purpose": "Bloat prevention protocol",
+      "status": "active",
+      "current_lines": 232,
+      "last_reviewed": "2025-10-19"
+    },
+    "workspaces.json": {
+      "purpose": "Auto-generated workspace mappings from PostgreSQL",
+      "status": "active-auto-generated",
+      "last_reviewed": "2025-10-23"
+    }
+  },
+
+  "deprecated": {
+    "DEPRECATED_OCT10_ARCHITECTURE.md": {
+      "deprecated_date": "2025-10-21",
+      "reason": "Architecture changed from 9 instances to 2",
+      "archive_after": "2026-01-21",
+      "current_location": "docs/",
+      "status": "deprecated"
+    },
+    "CLAUDE_v4.md": {
+      "deprecated_date": "2025-10-21",
+      "reason": "Complex MCP protocol replaced by simpler approach",
+      "archive_after": "2026-01-21",
+      "current_location": "docs/",
+      "status": "deprecated-keep-reference"
+    }
+  },
+
+  "archive_candidates": {
+    "COMPLETE_SETUP_GUIDE.md": {
+      "reason": "Outdated - references old 6-member architecture",
+      "lines": 280,
+      "last_useful": "2025-10-21",
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "REALITY_CHECK.md": {
+      "reason": "Superseded by REALITY_CHECK_UPDATED_2025-10-16.md",
+      "lines": 304,
+      "action": "Archive or delete"
+    },
+    "REALITY_CHECK_UPDATED_2025-10-16.md": {
+      "reason": "One-time reality check from Oct 16, historical value only",
+      "lines": 446,
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "SIMPLIFICATION_GUIDE.md": {
+      "reason": "One-time guide, completed Oct 21",
+      "lines": 370,
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "AFTER_REBOOT_INSTRUCTIONS.md": {
+      "reason": "References old startup process, likely outdated",
+      "lines": 97,
+      "action": "Review and archive or update"
+    },
+    "WINDOWS_STARTUP.md": {
+      "reason": "Check if still relevant with new launcher",
+      "lines": 158,
+      "action": "Review"
+    },
+    "CLAUDE_CODE_CONSOLE_SETUP.md": {
+      "reason": "Setup from old architecture",
+      "lines": 191,
+      "action": "Review - may be outdated"
+    },
+    "DIANA_SETUP.md": {
+      "reason": "References Diana as separate workspace (archived identity)",
+      "lines": 222,
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "GITHUB_SETUP.md": {
+      "reason": "One-time setup guide",
+      "lines": 167,
+      "action": "Review - may still be useful reference"
+    },
+    "MIGRATION_GUIDE.md": {
+      "reason": "One-time migration completed",
+      "lines": 143,
+      "action": "Archive to docs/archive/2025-10/"
+    }
+  },
+
+  "docs_subdirectory": {
+    "CLAUDE_FAMILY_REDUCTION_PLAN.md": {
+      "purpose": "Proposed reduction plan (never implemented)",
+      "status": "historical-reference",
+      "lines": 528,
+      "action": "Keep for reference or archive"
+    },
+    "COMPLETION_REPORT_2025-10-16.md": {
+      "purpose": "Session report from Oct 16",
+      "status": "session-note",
+      "lines": 476,
+      "action": "Move to docs/session-notes/archive/2025-10/"
+    },
+    "DIANA_COMPLETION_REPORT_2025-10-18.md": {
+      "purpose": "Session report from Oct 18",
+      "status": "session-note",
+      "lines": 419,
+      "action": "Move to docs/session-notes/archive/2025-10/"
+    },
+    "DIANA_INTEGRATION_PLAN.md": {
+      "purpose": "Plan for Diana integration (completed)",
+      "status": "historical",
+      "lines": 331,
+      "action": "Archive to docs/archive/2025-10/"
+    }
+  },
+
+  "recent_additions": {
+    "DOCUMENTATION_STANDARDS_v1.md": {
+      "purpose": "Comprehensive documentation system (TOO COMPLEX)",
+      "status": "experimental",
+      "lines": 736,
+      "created": "2025-10-23",
+      "note": "Creating simpler version instead - this one is 3x too long",
+      "action": "Extract key points, simplify, or archive"
+    }
+  },
+
+  "audit_schedule": {
+    "last_audit": "2025-10-23",
+    "next_audit": "2025-11-23",
+    "frequency": "monthly",
+    "run_command": "python scripts/audit_docs.py"
+  },
+
+  "rules": {
+    "max_lines_CLAUDE_md": 250,
+    "deprecated_retention_days": 90,
+    "session_notes_archive_days": 30,
+    "enforce_via": "git pre-commit hook + monthly audit"
+  },
+
+  "stats": {
+    "total_md_files": 33,
+    "active_docs": 4,
+    "deprecated_docs": 2,
+    "archive_candidates": 10,
+    "docs_subdirectory": 4,
+    "recent_additions": 1
+  }
+}
