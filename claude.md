@@ -89,6 +89,7 @@ ORDER BY session_start DESC LIMIT 10;
 
 ---
 
-**Version**: 1.0 (Project-Specific - Infrastructure)
+**Version**: 1.1 (Project-Specific - Infrastructure + Doc Management)
 **Created**: 2025-10-21
+**Updated**: 2025-10-23
 **Location**: C:\Projects\claude-family\CLAUDE.md
