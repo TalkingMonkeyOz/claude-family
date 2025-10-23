@@ -86,19 +86,29 @@ def check_deprecated_age(manifest: Dict) -> List[Dict]:
     return ready_to_archive
 
 def main():
+    # Use current working directory as project root
+    import os
+    project_root = Path(os.getcwd())
+
     print(f"\n{BLUE}{'='*80}{END}")
     print(f"{BLUE}Documentation Audit - {datetime.now().strftime('%Y-%m-%d %H:%M')}{END}")
+    print(f"{BLUE}Project: {project_root.name}{END}")
     print(f"{BLUE}{'='*80}{END}\n")
 
-    # Load manifest
+    # Load manifest from current directory
+    manifest_path = project_root / '.docs-manifest.json'
+    if not manifest_path.exists():
+        print(f"{RED}{ERROR}{END} No .docs-manifest.json found in current directory")
+        print(f"    Run: python C:\\Projects\\claude-family\\scripts\\init_project_docs.py {project_root}")
+        return 1
+
     try:
-        manifest = load_manifest()
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
         print(f"{GREEN}{CHECK}{END} Loaded .docs-manifest.json")
     except Exception as e:
         print(f"{RED}{ERROR}{END} Failed to load manifest: {e}")
         return 1
-
-    project_root = Path(manifest['documentation_home'])
     issues_found = []
 
     # Check 1: CLAUDE.md line limit

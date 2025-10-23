@@ -46,59 +46,7 @@
       "status": "deprecated-keep-reference"
     }
   },
-  "archive_candidates": {
-    "COMPLETE_SETUP_GUIDE.md": {
-      "reason": "Outdated - references old 6-member architecture",
-      "lines": 280,
-      "last_useful": "2025-10-21",
-      "action": "Archive to docs/archive/2025-10/"
-    },
-    "REALITY_CHECK.md": {
-      "reason": "Superseded by REALITY_CHECK_UPDATED_2025-10-16.md",
-      "lines": 304,
-      "action": "Archive or delete"
-    },
-    "REALITY_CHECK_UPDATED_2025-10-16.md": {
-      "reason": "One-time reality check from Oct 16, historical value only",
-      "lines": 446,
-      "action": "Archive to docs/archive/2025-10/"
-    },
-    "SIMPLIFICATION_GUIDE.md": {
-      "reason": "One-time guide, completed Oct 21",
-      "lines": 370,
-      "action": "Archive to docs/archive/2025-10/"
-    },
-    "AFTER_REBOOT_INSTRUCTIONS.md": {
-      "reason": "References old startup process, likely outdated",
-      "lines": 97,
-      "action": "Review and archive or update"
-    },
-    "WINDOWS_STARTUP.md": {
-      "reason": "Check if still relevant with new launcher",
-      "lines": 158,
-      "action": "Review"
-    },
-    "CLAUDE_CODE_CONSOLE_SETUP.md": {
-      "reason": "Setup from old architecture",
-      "lines": 191,
-      "action": "Review - may be outdated"
-    },
-    "DIANA_SETUP.md": {
-      "reason": "References Diana as separate workspace (archived identity)",
-      "lines": 222,
-      "action": "Archive to docs/archive/2025-10/"
-    },
-    "GITHUB_SETUP.md": {
-      "reason": "One-time setup guide",
-      "lines": 167,
-      "action": "Review - may still be useful reference"
-    },
-    "MIGRATION_GUIDE.md": {
-      "reason": "One-time migration completed",
-      "lines": 143,
-      "action": "Archive to docs/archive/2025-10/"
-    }
-  },
+  "archive_candidates": {},
   "slash_commands": {
     ".claude/commands/session-start.md": {
       "purpose": "Session startup checklist (simplified)",
@@ -248,7 +196,7 @@
     "active_docs": 4,
     "deprecated_docs": 2,
     "slash_commands": 2,
-    "archive_candidates": 10,
+    "archive_candidates": 0,
     "docs_subdirectory": 17,
     "recent_additions": 1,
     "tracked_in_manifest": 36,
