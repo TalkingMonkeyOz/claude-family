@@ -43,8 +43,15 @@ if (-not (Test-Path $pgDump)) {
 
 Write-Log "[>>] Using pg_dump: $pgDump"
 
-# Set PostgreSQL password (from environment or prompt)
-$env:PGPASSWORD = "password"  # TODO: Use Windows Credential Manager or .pgpass file
+# Set PostgreSQL password from User environment variable (if not already set)
+if (-not $env:PGPASSWORD) {
+    $env:PGPASSWORD = [System.Environment]::GetEnvironmentVariable('PGPASSWORD', 'User')
+    if (-not $env:PGPASSWORD) {
+        Write-Log "[XX] PGPASSWORD not set. Please configure it first."
+        Write-Host "[XX] Run: [System.Environment]::SetEnvironmentVariable('PGPASSWORD', 'your_password', 'User')"
+        exit 1
+    }
+}
 
 # Run backup
 Write-Log "[>>] Backing up database: ai_company_foundation"
