@@ -78,6 +78,33 @@ You're likely:
 
 ---
 
+## Procedures Registry
+
+**Central database of ALL Claude Family procedures** - no more searching!
+
+**Quick Query:**
+```sql
+-- Find procedures for current project
+SELECT procedure_name, short_description, location, mandatory, frequency
+FROM claude_family.my_procedures
+WHERE 'all' = ANY(applies_to_projects);
+
+-- Find mandatory procedures only
+SELECT procedure_name, frequency, location
+FROM claude_family.my_procedures
+WHERE mandatory = true;
+```
+
+**Key Procedures:**
+- Session Start/End: `SELECT * FROM claude_family.my_procedures WHERE procedure_type = 'session-workflow'`
+- C# Compliance: `SELECT * FROM claude_family.my_procedures WHERE 'claude-pm' = ANY(applies_to_projects)`
+- All Mandatory: `SELECT * FROM claude_family.my_procedures WHERE mandatory = true`
+
+**Location:** `claude_family.procedure_registry` table (12 procedures registered)
+**View:** `claude_family.my_procedures` (sorted by priority)
+
+---
+
 ## Recent Work
 
 ```sql
