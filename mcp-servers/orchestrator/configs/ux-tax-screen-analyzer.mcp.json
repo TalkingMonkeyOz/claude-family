@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "postgres-mcp"],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres@localhost/ai_company_foundation"
+      }
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@executeautomation/playwright-mcp-server@latest"],
+      "env": {}
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects\\ATO-Tax-Agent"
+      ],
+      "env": {}
+    }
+  }
+}
