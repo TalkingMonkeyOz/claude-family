@@ -7,12 +7,12 @@ Execute ALL of the following steps at the start of EVERY session:
 ## Step 1: Load Startup Context
 
 ```bash
-python C:\claude\shared\scripts\load_claude_startup_context.py
+python "C:\claude\shared\scripts\load_claude_startup_context.py"
 ```
 
 This restores:
 - Your identity and role
-- Universal knowledge (patterns, gotchas, techniques)
+- Shared knowledge (patterns, gotchas, techniques)
 - Recent sessions (last 7 days across all Claudes)
 - Project-specific context
 
@@ -21,7 +21,7 @@ This restores:
 ## Step 2: Sync Workspaces
 
 ```bash
-python C:\claude\shared\scripts\sync_workspaces.py
+python "C:\claude\shared\scripts\sync_workspaces.py"
 ```
 
 This generates `workspaces.json` from PostgreSQL, mapping project names to locations.
@@ -62,17 +62,19 @@ mcp__memory__search_nodes(query="relevant keywords from user's request")
 NEVER propose new solutions without checking if we've solved this before:
 
 ```sql
--- Check universal knowledge
-SELECT pattern_name, description, example_code, gotchas
-FROM claude_family.universal_knowledge
-WHERE pattern_name ILIKE '%relevant-keyword%'
-   OR description ILIKE '%relevant-keyword%';
+-- Check shared knowledge
+SELECT title, description, knowledge_category, confidence_level
+FROM claude_family.shared_knowledge
+WHERE title ILIKE '%relevant-keyword%'
+   OR description ILIKE '%relevant-keyword%'
+ORDER BY confidence_level DESC, times_applied DESC
+LIMIT 10;
 
 -- Check past sessions for similar work
-SELECT summary, outcome, files_modified, project_name
+SELECT session_summary, tasks_completed, project_name, session_start
 FROM claude_family.session_history
-WHERE task_description ILIKE '%relevant-keyword%'
-   OR summary ILIKE '%relevant-keyword%'
+WHERE session_summary ILIKE '%relevant-keyword%'
+   OR 'relevant-keyword' = ANY(tasks_completed)
 ORDER BY session_start DESC
 LIMIT 10;
 ```
@@ -87,7 +89,7 @@ Before starting work, verify:
 - [ ] Synced `workspaces.json` from database
 - [ ] Logged session start to PostgreSQL
 - [ ] Queried memory graph for context
-- [ ] Checked for existing solutions in universal_knowledge
+- [ ] Checked for existing solutions in shared_knowledge
 - [ ] Checked past sessions for similar work
 
 **IF ANY ANSWER IS NO → DO IT NOW BEFORE STARTING WORK**

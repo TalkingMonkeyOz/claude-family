@@ -9,20 +9,25 @@ Before ending this session, complete ALL of the following:
 ### ✅ Session Logging (postgres MCP)
 
 ```sql
--- 1. Get your latest session ID
-SELECT id FROM claude_family.session_history
-WHERE identity_id = 5
+-- 1. Get your latest unclosed session ID
+SELECT session_id, project_name, session_start
+FROM claude_family.session_history
+WHERE identity_id = (
+    SELECT identity_id FROM claude_family.identities
+    WHERE identity_name = 'claude-code-unified'  -- Or your identity name
+)
+AND session_end IS NULL
 ORDER BY session_start DESC LIMIT 1;
 
 -- 2. Update session with summary
 UPDATE claude_family.session_history
 SET
     session_end = NOW(),
-    summary = 'What was accomplished',
-    files_modified = ARRAY['file1.cs', 'file2.cs'],
-    outcome = 'success',
-    tokens_used = <estimated_tokens>
-WHERE id = <session_id>;
+    session_summary = 'What was accomplished in this session',
+    tasks_completed = ARRAY['Task 1 completed', 'Task 2 fixed'],
+    learnings_gained = ARRAY['Learned X', 'Discovered Y'],
+    challenges_encountered = ARRAY['Challenge Z']
+WHERE session_id = '<uuid-from-step-1>';
 ```
 
 ### ✅ Store Reusable Knowledge (postgres MCP)
@@ -30,23 +35,23 @@ WHERE id = <session_id>;
 **If you discovered a reusable pattern:**
 
 ```sql
-INSERT INTO claude_family.universal_knowledge
-(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
+INSERT INTO claude_family.shared_knowledge
+(title, description, knowledge_type, knowledge_category, confidence_level, created_by_identity_id)
 VALUES (
     'Pattern Name',
-    'Clear description',
-    'When to use this',
-    'Code example',
-    'Things to watch out for',
-    5
+    'Clear description of what was learned',
+    'pattern',  -- or 'technique', 'gotcha', 'best-practice'
+    'category', -- e.g., 'mcp', 'csharp', 'database'
+    10,         -- Confidence: 1-10
+    (SELECT identity_id FROM claude_family.identities WHERE identity_name = 'claude-code-unified')
 );
 ```
 
-**If project-specific:**
+**If project-specific (Nimbus example):**
 
 ```sql
-INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
-VALUES ('bug-fix', 'Solution details', 'When this applies');
+INSERT INTO nimbus_context.project_learnings (learning_type, lesson_learned, outcome)
+VALUES ('bug-fix', 'Solution details', 'Positive outcome');
 ```
 
 ### ✅ Store in Memory Graph (memory MCP)
