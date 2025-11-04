@@ -35,7 +35,7 @@
       "mcp_config": "configs/coder-haiku.mcp.json",
       "workspace_jail_template": "{project_root}/src/",
       "read_only": false,
-      "permission_mode": "default",
+      "permission_mode": "bypassPermissions",
       "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.",
       "cost_profile": {
         "input_tokens_avg": 10000,
@@ -109,7 +109,7 @@
       "mcp_config": "configs/tester-haiku.mcp.json",
       "workspace_jail_template": "{project_root}/tests/",
       "read_only": false,
-      "permission_mode": "default",
+      "permission_mode": "bypassPermissions",
       "system_prompt": "You are a test writer. Write comprehensive, maintainable tests with good coverage. Follow testing best practices (AAA, Given-When-Then).",
       "cost_profile": {
         "input_tokens_avg": 12000,
@@ -212,7 +212,7 @@
       "mcp_config": "configs/analyst-sonnet.mcp.json",
       "workspace_jail_template": "{project_root}/docs/",
       "read_only": false,
-      "permission_mode": "default",
+      "permission_mode": "bypassPermissions",
       "system_prompt": "You are a technical analyst. Research codebases, write comprehensive documentation, design architectures. Focus on clarity and completeness.",
       "cost_profile": {
         "input_tokens_avg": 25000,
