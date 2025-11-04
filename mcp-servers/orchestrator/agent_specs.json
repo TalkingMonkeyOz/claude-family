@@ -252,6 +252,7 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
+      "skip_all_permissions": true,
       "system_prompt": "You are a specialized UX analyst for Australian tax software. Analyze wizard screens following the 10-step checklist in SCREEN_ANALYSIS_CHECKLIST.md. Focus on accuracy (wizard matches PDF), usability (plain language), and compliance (cross-references to supplement). Take screenshots of all issues. Write detailed findings to SCREEN_ANALYSIS_FINDINGS_{section_code}.md.",
       "cost_profile": {
         "input_tokens_avg": 15000,

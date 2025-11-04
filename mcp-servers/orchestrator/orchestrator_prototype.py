@@ -172,11 +172,15 @@ class AgentOrchestrator:
             cmd.extend(['--system-prompt', spec['system_prompt']])
 
         # Add permission mode (prioritize explicit permission_mode, fallback to read_only check)
-        permission_mode = spec.get('permission_mode')
-        if permission_mode and permission_mode != 'default':
-            cmd.extend(['--permission-mode', permission_mode])
-        elif spec.get('read_only', False):
-            cmd.extend(['--permission-mode', 'plan'])
+        # If skip_all_permissions is set, use --dangerously-skip-permissions for MCP tool access
+        if spec.get('skip_all_permissions', False):
+            cmd.append('--dangerously-skip-permissions')
+        else:
+            permission_mode = spec.get('permission_mode')
+            if permission_mode and permission_mode != 'default':
+                cmd.extend(['--permission-mode', permission_mode])
+            elif spec.get('read_only', False):
+                cmd.extend(['--permission-mode', 'plan'])
 
         # Add allowed tools (if specified)
         if 'allowed_tools' in spec and spec['allowed_tools']:
