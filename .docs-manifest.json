@@ -6,10 +6,10 @@
     "CLAUDE.md": {
       "purpose": "Project context for Claude Code CLI (auto-loaded)",
       "max_lines": 250,
-      "current_lines": 95,
+      "current_lines": 122,
       "status": "active",
-      "last_reviewed": "2025-10-23",
-      "note": "Added documentation management section"
+      "last_reviewed": "2025-11-04",
+      "note": "Added procedure registry section, still well within limit"
     },
     "README.md": {
       "purpose": "Human-readable project overview (partially outdated)",

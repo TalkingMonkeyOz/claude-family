@@ -1,151 +1,190 @@
 #!/usr/bin/env python3
 """
-Sync Slash Commands - Claude Family Infrastructure
+Sync Slash Commands Distribution Script
 
-Distributes updated slash commands from claude-family to all other project workspaces.
-This ensures all Claude instances use the latest command versions.
+Distributes slash commands from claude-family infrastructure repo to all active projects.
+This ensures all Claude instances have access to the latest session workflow commands.
 
 Usage:
-    python sync_slash_commands.py [--dry-run]
+    python scripts/sync_slash_commands.py [--dry-run]
 
-Options:
-    --dry-run    Show what would be copied without actually copying
+Requirements:
+    - workspaces.json must exist (run sync_workspaces.py first)
+    - Source commands in .claude/commands/
+    - Target projects must have .claude/commands/ directories
+
+Author: Claude Family
+Created: 2025-11-15
 """
 
-import os
+import json
 import shutil
-import sys
 from pathlib import Path
 from datetime import datetime
+import argparse
+import sys
 
-# Source: Master command files in claude-family
-SOURCE_DIR = Path(r"C:\Projects\claude-family\.claude\commands")
+# Configuration
+WORKSPACE_FILE = Path("workspaces.json")
+SOURCE_DIR = Path(".claude/commands")
+SYNC_LOG_FILE = Path("logs/slash_command_sync.log")
 
-# Targets: All other project workspaces
-TARGET_WORKSPACES = [
-    Path(r"C:\Projects\claude-pm\.claude\commands"),
-    Path(r"C:\Projects\nimbus-user-loader\.claude\commands"),
-    Path(r"C:\Projects\ATO-tax-agent\.claude\commands"),
+# Commands to distribute (add new universal commands here)
+UNIVERSAL_COMMANDS = [
+    "session-start.md",
+    "session-end.md", 
+    "session-commit.md",
+    # Add more universal commands here as they're created
 ]
 
-def get_file_info(file_path):
-    """Get file modification time and size for comparison."""
-    if not file_path.exists():
-        return None
-    stat = file_path.stat()
-    return {
-        'mtime': datetime.fromtimestamp(stat.st_mtime),
-        'size': stat.st_size
-    }
-
-def sync_commands(dry_run=False):
-    """Sync all command files from source to target workspaces."""
-
-    print("=" * 80)
-    print("SLASH COMMAND SYNC - Claude Family Infrastructure")
-    print("=" * 80)
-    print()
-
-    if dry_run:
-        print("[DRY RUN] No files will be modified")
-        print()
-
-    # Check source directory exists
-    if not SOURCE_DIR.exists():
-        print(f"[ERROR] Source directory not found: {SOURCE_DIR}")
-        return 1
-
-    # Get all .md files in source
-    source_files = list(SOURCE_DIR.glob("*.md"))
-
-    if not source_files:
-        print(f"[ERROR] No .md files found in {SOURCE_DIR}")
-        return 1
-
-    print(f"Source: {SOURCE_DIR}")
-    print(f"Commands found: {len(source_files)}")
-    for f in source_files:
-        info = get_file_info(f)
-        print(f"   - {f.name} ({info['size']} bytes, modified {info['mtime'].strftime('%Y-%m-%d %H:%M')})")
-    print()
-
-    # Sync to each target workspace
-    total_copied = 0
-    total_skipped = 0
-    total_errors = 0
-
-    for target_dir in TARGET_WORKSPACES:
-        print(f"Target: {target_dir}")
-
+class CommandSyncer:
+    def __init__(self, dry_run=False):
+        self.dry_run = dry_run
+        self.stats = {
+            'synced': 0,
+            'skipped': 0,
+            'errors': 0,
+            'projects': 0
+        }
+        self.log_entries = []
+        
+    def log(self, message, level="INFO"):
+        """Log a message with timestamp"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}"
+        self.log_entries.append(log_entry)
+        # Use ASCII-safe output for Windows console
+        print(log_entry.encode('ascii', 'replace').decode('ascii'))
+    
+    def load_workspaces(self):
+        """Load workspace configuration"""
+        if not WORKSPACE_FILE.exists():
+            self.log("ERROR: workspaces.json not found. Run sync_workspaces.py first.", "ERROR")
+            sys.exit(1)
+            
+        with open(WORKSPACE_FILE, 'r') as f:
+            data = json.load(f)
+            return data.get('workspaces', {})
+    
+    def sync_commands_to_project(self, project_name, project_info):
+        """Sync commands to a single project"""
+        project_path = Path(project_info['path'])
+        target_dir = project_path / ".claude" / "commands"
+        
+        # Skip claude-family (source repo)
+        if project_name == "claude-family":
+            self.log(f"  Skipping {project_name} (source repository)", "INFO")
+            self.stats['skipped'] += 1
+            return
+        
         # Create target directory if it doesn't exist
-        if not target_dir.exists():
-            if not dry_run:
-                target_dir.mkdir(parents=True, exist_ok=True)
-                print(f"   [CREATED] Directory")
-            else:
-                print(f"   [DRY RUN] Would create directory")
-
-        # Copy each source file
-        for source_file in source_files:
-            target_file = target_dir / source_file.name
-            source_info = get_file_info(source_file)
-            target_info = get_file_info(target_file)
-
-            # Determine if copy is needed
-            needs_copy = False
-            reason = ""
-
-            if target_info is None:
-                needs_copy = True
-                reason = "new file"
-            elif source_info['size'] != target_info['size']:
-                needs_copy = True
-                reason = f"size changed ({target_info['size']} -> {source_info['size']} bytes)"
-            elif source_info['mtime'] > target_info['mtime']:
-                needs_copy = True
-                reason = f"newer version ({target_info['mtime'].strftime('%Y-%m-%d %H:%M')} -> {source_info['mtime'].strftime('%Y-%m-%d %H:%M')})"
-            else:
-                reason = "up to date"
-
-            if needs_copy:
-                if not dry_run:
-                    try:
-                        shutil.copy2(source_file, target_file)
-                        print(f"   [COPIED] {source_file.name} ({reason})")
-                        total_copied += 1
-                    except Exception as e:
-                        print(f"   [ERROR] Copying {source_file.name}: {e}")
-                        total_errors += 1
+        if not self.dry_run:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.log(f"  [DRY-RUN] Would create {target_dir}", "INFO")
+        
+        # Copy each universal command
+        commands_synced = 0
+        for command in UNIVERSAL_COMMANDS:
+            source_file = SOURCE_DIR / command
+            target_file = target_dir / command
+            
+            if not source_file.exists():
+                self.log(f"  WARNING: Source command not found: {command}", "WARN")
+                continue
+            
+            try:
+                if not self.dry_run:
+                    shutil.copy2(source_file, target_file)
+                    self.log(f"    ✓ Copied {command}", "INFO")
                 else:
-                    print(f"   [DRY RUN] Would copy: {source_file.name} ({reason})")
-                    total_copied += 1
-            else:
-                print(f"   [SKIPPED] {source_file.name} ({reason})")
-                total_skipped += 1
+                    self.log(f"    [DRY-RUN] Would copy {command}", "INFO")
+                
+                commands_synced += 1
+                self.stats['synced'] += 1
+                
+            except Exception as e:
+                self.log(f"    ✗ Error copying {command}: {e}", "ERROR")
+                self.stats['errors'] += 1
+        
+        if commands_synced > 0:
+            self.stats['projects'] += 1
+            self.log(f"  -> Synced {commands_synced} commands to {project_name}", "SUCCESS")
+    
+    def sync_all(self):
+        """Sync commands to all projects"""
+        self.log("=" * 80, "INFO")
+        self.log("SLASH COMMAND SYNC STARTED", "INFO")
+        self.log("=" * 80, "INFO")
+        
+        if self.dry_run:
+            self.log("DRY RUN MODE - No files will be modified", "INFO")
+        
+        # Load workspaces
+        workspaces = self.load_workspaces()
+        self.log(f"Found {len(workspaces)} projects in workspaces.json", "INFO")
+        self.log("", "INFO")
+        
+        # Verify source commands exist
+        missing_commands = []
+        for command in UNIVERSAL_COMMANDS:
+            if not (SOURCE_DIR / command).exists():
+                missing_commands.append(command)
+        
+        if missing_commands:
+            self.log(f"WARNING: Missing source commands: {', '.join(missing_commands)}", "WARN")
+            self.log("", "INFO")
+        
+        # Sync to each project
+        for project_name, project_info in workspaces.items():
+            self.log(f"Project: {project_name}", "INFO")
+            self.sync_commands_to_project(project_name, project_info)
+            self.log("", "INFO")
+        
+        # Summary
+        self.log("=" * 80, "INFO")
+        self.log("SYNC COMPLETE", "INFO")
+        self.log("=" * 80, "INFO")
+        self.log(f"Projects processed: {len(workspaces)}", "INFO")
+        self.log(f"Projects updated: {self.stats['projects']}", "INFO")
+        self.log(f"Commands synced: {self.stats['synced']}", "INFO")
+        self.log(f"Commands skipped: {self.stats['skipped']}", "INFO")
+        self.log(f"Errors: {self.stats['errors']}", "INFO")
+        
+        # Save log
+        if not self.dry_run:
+            self.save_log()
+        
+        return self.stats['errors'] == 0
+    
+    def save_log(self):
+        """Save sync log to file"""
+        SYNC_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(SYNC_LOG_FILE, 'a') as f:
+            f.write('\n'.join(self.log_entries))
+            f.write('\n\n')
+        
+        self.log(f"Log saved to: {SYNC_LOG_FILE}", "INFO")
 
-        print()
 
-    # Summary
-    print("=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
-    print(f"Copied:  {total_copied} file(s)")
-    print(f"Skipped: {total_skipped} file(s)")
-    if total_errors > 0:
-        print(f"Errors:  {total_errors} file(s)")
-    print()
+def main():
+    parser = argparse.ArgumentParser(
+        description="Sync universal slash commands to all projects"
+    )
+    parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='Show what would be synced without making changes'
+    )
+    
+    args = parser.parse_args()
+    
+    syncer = CommandSyncer(dry_run=args.dry_run)
+    success = syncer.sync_all()
+    
+    sys.exit(0 if success else 1)
 
-    if dry_run:
-        print("[DRY RUN] This was a dry run. Run without --dry-run to actually sync files.")
-    else:
-        print("Sync complete! All workspaces now have the latest commands.")
-
-    return 0 if total_errors == 0 else 1
 
 if __name__ == "__main__":
-    # Check for --dry-run flag
-    dry_run = "--dry-run" in sys.argv
-
-    # Run sync
-    exit_code = sync_commands(dry_run=dry_run)
-    sys.exit(exit_code)
+    main()

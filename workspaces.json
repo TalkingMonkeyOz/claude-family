@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2025-11-01T14:16:39.878513",
+    "generated_at": "2025-11-24T21:12:52.626399",
     "source": "PostgreSQL (claude_family.project_workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -19,6 +19,11 @@
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "claude-mission-control": {
+      "path": "C:\\Projects\\claude-mission-control",
+      "type": "python-flet",
+      "description": "Mission Control - AI governance hub for Claude Family. Card-based UI for project management, agent orchestration, and automated workflows."
     },
     "ATO-tax-agent": {
       "path": "C:\\Projects\\ATO-tax-agent",
