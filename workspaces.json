@@ -1,0 +1,34 @@
+{
+  "_metadata": {
+    "generated_at": "2025-11-24T21:12:52.626399",
+    "source": "PostgreSQL (claude_family.project_workspaces)",
+    "description": "Auto-generated workspace mappings. Do not edit manually."
+  },
+  "workspaces": {
+    "nimbus-user-loader": {
+      "path": "C:\\Projects\\nimbus-user-loader",
+      "type": "csharp-winforms",
+      "description": "Nimbus user import tool (private work project)"
+    },
+    "claude-pm": {
+      "path": "C:\\Projects\\claude-pm",
+      "type": "csharp-wpf",
+      "description": "New simplified project management system (WIP, replacing Diana)"
+    },
+    "claude-family": {
+      "path": "C:\\Projects\\claude-family",
+      "type": "infrastructure",
+      "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "claude-mission-control": {
+      "path": "C:\\Projects\\claude-mission-control",
+      "type": "python-flet",
+      "description": "Mission Control - AI governance hub for Claude Family. Card-based UI for project management, agent orchestration, and automated workflows."
+    },
+    "ATO-tax-agent": {
+      "path": "C:\\Projects\\ATO-tax-agent",
+      "type": "work-research",
+      "description": "ATO tax agent tools (private work project)"
+    }
+  }
+}

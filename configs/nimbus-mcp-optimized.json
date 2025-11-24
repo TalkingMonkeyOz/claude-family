@@ -1,0 +1,38 @@
+{
+  "_comment": "Nimbus Project MCP Config - C# WinForms (Option A: Conservative)",
+  "_purpose": "C# development with WinForms UI testing",
+  "_deploy_to": "C:/Projects/nimbus-user-loader/.mcp.json",
+  "_additional_tokens": "~23,357 tokens (roslyn 1902 + flaui 3528 + tree-sitter 17927)",
+  "_total_with_global": "~45,966 tokens (down from 70k = 34% savings)",
+  "_removed": "github (18123), py-notes (4251), context7 (1709) = 24,083 tokens saved",
+  "mcpServers": {
+    "roslyn": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--no-build",
+        "--project",
+        "C:\\Projects\\roslyn-mcp\\RoslynMCP\\RoslynMCP.csproj"
+      ],
+      "env": {}
+    },
+    "flaui-testing": {
+      "type": "stdio",
+      "command": "C:\\Projects\\claude-family\\mcp-servers\\flaui-testing\\bin\\Release\\net8.0-windows\\FlaUIMcpServer.exe",
+      "args": [
+        "--project",
+        "nimbus-user-loader",
+        "--db-connection",
+        "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

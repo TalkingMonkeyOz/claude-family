@@ -1,8 +1,30 @@
-# Claude Family Architecture - Complete Documentation
+# ⚠️ DEPRECATED - Claude Family Architecture (Oct 10 - Oct 21, 2025)
 
-**Status**: ✅ **PRODUCTION READY**
+**Status**: ❌ **DEPRECATED - REPLACED OCT 21, 2025**
 **Date**: 2025-10-10
 **Version**: 1.0
+**Deprecated**: 2025-10-21
+
+---
+
+## ⚠️ DEPRECATION NOTICE
+
+**This architecture was replaced on October 21, 2025.**
+
+**Old Architecture (Oct 10-21):** 9 separate Claude identities with isolated workspaces
+**New Architecture (Oct 21+):** ONE project-aware Claude Code instance + Claude Desktop GUI
+
+**See**: `README.md` and project CLAUDE.md files for current architecture.
+
+**Why Deprecated:**
+- Official Claude Code docs recommend project-based context over instance specialization
+- Eliminated coordination overhead (9 workspaces → 2 instances)
+- Simpler: Universal launcher (`start-claude.bat`) with project menu
+- Better: Subagents for task specialization, not permanent instances
+
+---
+
+## Historical Documentation Follows (for reference only)
 
 ---
 

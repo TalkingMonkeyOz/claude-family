@@ -60,27 +60,37 @@ def detect_current_project():
     return (None, 'Current Project')
 
 def load_identity(conn, platform):
-    """Load Claude identity from database"""
+    """Load Claude identity from database by platform"""
     cur = conn.cursor(cursor_factory=RealDictCursor)
 
-    # Map platform to identity name
-    identity_map = {
-        'desktop': 'claude-desktop-001',
-        'cursor': 'claude-cursor-001',
-        'vscode': 'claude-vscode-001',
-        'claude-code': 'claude-code-001',
-        'claude-code-console': 'claude-code-console-001',
-        'orchestrator': 'diana'
-    }
-
-    identity_name = identity_map.get(platform, 'claude-desktop-001')
-
-    # Load identity
+    # Query for active identity matching this platform
     cur.execute("""
-        SELECT * FROM claude_family.get_identity(%s)
-    """, (identity_name,))
+        SELECT
+            identity_id,
+            identity_name,
+            platform,
+            role_description,
+            capabilities,
+            personality_traits,
+            last_active_at
+        FROM claude_family.identities
+        WHERE platform = %s
+        AND status = 'active'
+        ORDER BY last_active_at DESC NULLS LAST
+        LIMIT 1
+    """, (platform,))
 
     identity = cur.fetchone()
+
+    # Update last_active_at if found
+    if identity:
+        cur.execute("""
+            UPDATE claude_family.identities
+            SET last_active_at = CURRENT_TIMESTAMP
+            WHERE identity_id = %s
+        """, (identity['identity_id'],))
+        conn.commit()
+
     cur.close()
 
     return dict(identity) if identity else None

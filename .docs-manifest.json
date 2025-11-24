@@ -1,0 +1,205 @@
+{
+  "project": "claude-family",
+  "last_updated": "2025-10-23",
+  "documentation_home": "C:\\Projects\\claude-family",
+  "active": {
+    "CLAUDE.md": {
+      "purpose": "Project context for Claude Code CLI (auto-loaded)",
+      "max_lines": 250,
+      "current_lines": 122,
+      "status": "active",
+      "last_reviewed": "2025-11-04",
+      "note": "Added procedure registry section, still well within limit"
+    },
+    "README.md": {
+      "purpose": "Human-readable project overview (partially outdated)",
+      "status": "active-needs-update",
+      "current_lines": 175,
+      "last_reviewed": "2025-10-23",
+      "todo": "Update to remove references to old 6-9 member architecture"
+    },
+    "ANTI-HALLUCINATION.md": {
+      "purpose": "Bloat prevention protocol",
+      "status": "active",
+      "current_lines": 232,
+      "last_reviewed": "2025-10-19"
+    },
+    "workspaces.json": {
+      "purpose": "Auto-generated workspace mappings from PostgreSQL",
+      "status": "active-auto-generated",
+      "last_reviewed": "2025-10-23"
+    }
+  },
+  "deprecated": {
+    "DEPRECATED_OCT10_ARCHITECTURE.md": {
+      "deprecated_date": "2025-10-21",
+      "reason": "Architecture changed from 9 instances to 2",
+      "archive_after": "2026-01-21",
+      "current_location": "docs/",
+      "status": "deprecated"
+    },
+    "CLAUDE_v4.md": {
+      "deprecated_date": "2025-10-21",
+      "reason": "Complex MCP protocol replaced by simpler approach",
+      "archive_after": "2026-01-21",
+      "current_location": "docs/",
+      "status": "deprecated-keep-reference"
+    }
+  },
+  "archive_candidates": {},
+  "slash_commands": {
+    ".claude/commands/session-start.md": {
+      "purpose": "Session startup checklist (simplified)",
+      "status": "active",
+      "lines": 66,
+      "last_updated": "2025-10-23",
+      "current_lines": 65
+    },
+    ".claude/commands/session-end.md": {
+      "purpose": "End-of-session knowledge capture",
+      "status": "active",
+      "lines": 109,
+      "last_updated": "2025-10-23",
+      "current_lines": 108
+    }
+  },
+  "docs_subdirectory": {
+    "AUTOMATION_AUDIT_2025-10-23.md": {
+      "purpose": "Automation audit and contradictions found",
+      "status": "active",
+      "lines": 110,
+      "created": "2025-10-23"
+    },
+    "CLAUDE_FAMILY_REDUCTION_PLAN.md": {
+      "purpose": "Proposed reduction plan (never implemented)",
+      "status": "historical-reference",
+      "lines": 528,
+      "action": "Keep for reference or archive"
+    },
+    "COMPLETION_REPORT_2025-10-16.md": {
+      "purpose": "Session report from Oct 16",
+      "status": "session-note",
+      "lines": 476,
+      "action": "Move to docs/session-notes/archive/2025-10/"
+    },
+    "DIANA_COMPLETION_REPORT_2025-10-18.md": {
+      "purpose": "Session report from Oct 18",
+      "status": "session-note",
+      "lines": 419,
+      "action": "Move to docs/session-notes/archive/2025-10/"
+    },
+    "DIANA_INTEGRATION_PLAN.md": {
+      "purpose": "Plan for Diana integration (completed)",
+      "status": "historical",
+      "lines": 331,
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "GITHUB_TOKEN_SECURITY.md": {
+      "purpose": "GitHub token setup guide",
+      "status": "reference",
+      "lines": 85,
+      "action": "Keep - useful reference"
+    },
+    "MCP_CONFIGURATION_GUIDE.md": {
+      "purpose": "MCP server configuration guide",
+      "status": "reference",
+      "lines": 120,
+      "action": "Keep - useful reference"
+    },
+    "POPULATE_MCP_NOW.md": {
+      "purpose": "MCP memory sync guide (outdated)",
+      "status": "archive-candidate",
+      "lines": 95,
+      "action": "Archive - process changed"
+    },
+    "STARTUP_INSTRUCTIONS.md": {
+      "purpose": "Old startup instructions",
+      "status": "archive-candidate",
+      "lines": 140,
+      "action": "Archive - replaced by simplified session commands"
+    },
+    "SUB_AGENT_TEST_RESULTS.md": {
+      "purpose": "Sub-agent testing results",
+      "status": "session-note",
+      "lines": 200,
+      "action": "Move to docs/session-notes/"
+    },
+    "test_isolation.md": {
+      "purpose": "Test isolation notes",
+      "status": "session-note",
+      "lines": 50,
+      "action": "Move to docs/session-notes/"
+    },
+    "TESTING_SETUP_COMPLETE.md": {
+      "purpose": "Testing setup completion notes",
+      "status": "session-note",
+      "lines": 80,
+      "action": "Move to docs/session-notes/"
+    },
+    "TESTING_SETUP_IMPLEMENTATION.md": {
+      "purpose": "Testing setup implementation notes",
+      "status": "session-note",
+      "lines": 150,
+      "action": "Move to docs/session-notes/"
+    },
+    "session-notes/NEXT_SESSION_START_HERE.md": {
+      "purpose": "Session continuation note",
+      "status": "session-note",
+      "lines": 40,
+      "action": "Archive when no longer relevant"
+    },
+    "session-notes/SESSION_END_VERIFICATION.md": {
+      "purpose": "Session end verification checklist",
+      "status": "session-note",
+      "lines": 60,
+      "action": "Keep or archive based on relevance"
+    },
+    "session-notes/SESSION_RESUME_2025-10-19.md": {
+      "purpose": "Session resume notes",
+      "status": "session-note",
+      "lines": 100,
+      "action": "Archive when no longer relevant"
+    }
+  },
+  "recent_additions": {
+    "DOCUMENTATION_STANDARDS_v1.md": {
+      "purpose": "Comprehensive documentation system (SUPERSEDED)",
+      "status": "superseded",
+      "lines": 736,
+      "created": "2025-10-23",
+      "superseded_by": "docs/DOC_MANAGEMENT_SUMMARY.md",
+      "note": "Simplified to 70-line summary - was 736 lines (10x too complex)",
+      "action": "Archive to docs/archive/2025-10/"
+    },
+    "docs/DOC_MANAGEMENT_SUMMARY.md": {
+      "purpose": "Simple documentation management guide (70 lines)",
+      "status": "active",
+      "lines": 70,
+      "created": "2025-10-23",
+      "replaces": "DOCUMENTATION_STANDARDS_v1.md"
+    }
+  },
+  "audit_schedule": {
+    "last_audit": "2025-10-23",
+    "next_audit": "2025-11-23",
+    "frequency": "monthly",
+    "run_command": "python scripts/audit_docs.py"
+  },
+  "rules": {
+    "max_lines_CLAUDE_md": 250,
+    "deprecated_retention_days": 90,
+    "session_notes_archive_days": 30,
+    "enforce_via": "git pre-commit hook + monthly audit"
+  },
+  "stats": {
+    "total_md_files": 33,
+    "active_docs": 4,
+    "deprecated_docs": 2,
+    "slash_commands": 2,
+    "archive_candidates": 0,
+    "docs_subdirectory": 17,
+    "recent_additions": 1,
+    "tracked_in_manifest": 36,
+    "last_updated": "2025-10-23"
+  }
+}

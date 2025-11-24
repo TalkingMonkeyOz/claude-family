@@ -1,0 +1,32 @@
+{
+  "_comment": "Claude PM Project MCP Config - AGGRESSIVE (No tree-sitter)",
+  "_purpose": "C# development with WPF UI testing - Roslyn only",
+  "_deploy_to": "C:/Projects/claude-pm/.mcp.json",
+  "_additional_tokens": "~5,430 tokens (roslyn 1902 + flaui 3528)",
+  "_total_with_global": "~28,039 tokens (down from 70k = 60% savings!)",
+  "_removed": "github (18123), py-notes (4251), context7 (1709), tree-sitter (17927) = 42,010 tokens saved",
+  "mcpServers": {
+    "roslyn": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--no-build",
+        "--project",
+        "C:\\Projects\\roslyn-mcp\\RoslynMCP\\RoslynMCP.csproj"
+      ],
+      "env": {}
+    },
+    "flaui-testing": {
+      "type": "stdio",
+      "command": "C:\\Projects\\claude-family\\mcp-servers\\flaui-testing\\bin\\Release\\net8.0-windows\\FlaUIMcpServer.exe",
+      "args": [
+        "--project",
+        "claude-pm",
+        "--db-connection",
+        "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      ],
+      "env": {}
+    }
+  }
+}

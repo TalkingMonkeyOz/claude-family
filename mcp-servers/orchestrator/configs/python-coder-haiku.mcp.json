@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects"
+      ],
+      "env": {}
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "python-repl": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-python.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

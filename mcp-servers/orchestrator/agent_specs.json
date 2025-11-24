@@ -1,0 +1,325 @@
+{
+  "description": "Claude Agent Orchestrator - Specialized agent type definitions",
+  "version": "1.0.0",
+  "created": "2025-11-04",
+  "agent_types": {
+    "coder-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Fast code writing for new features and simple refactoring",
+      "use_cases": [
+        "Implement new functions/classes",
+        "Simple refactoring",
+        "Bug fixes (non-complex)",
+        "Add logging/comments",
+        "Format code"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/src/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.",
+      "cost_profile": {
+        "input_tokens_avg": 10000,
+        "output_tokens_avg": 5000,
+        "cost_per_task_usd": 0.035
+      },
+      "recommended_timeout_seconds": 300
+    },
+    "python-coder-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Python code writing with REPL testing and database access",
+      "use_cases": [
+        "Write Python scripts and modules",
+        "Build/modify MCP servers",
+        "Test code in Python REPL",
+        "Database schema work",
+        "Python refactoring and bug fixes"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(python*)",
+        "Bash(pip*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/python-coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use filesystem MCP to read/write Python files. Follow PEP 8 and project conventions.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.045
+      },
+      "recommended_timeout_seconds": 300
+    },
+    "debugger-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Fast test execution and failure analysis",
+      "use_cases": [
+        "Run test suites",
+        "Analyze test failures",
+        "Debug simple issues",
+        "Check build status",
+        "Verify test coverage"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Bash(pytest:*)",
+        "Bash(npm test:*)",
+        "Bash(dotnet test:*)",
+        "Bash(python*)",
+        "Bash(node*)"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)"
+      ],
+      "mcp_config": "configs/debugger-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a debugger. Run tests, analyze failures, identify root causes. Read-only mode - do not modify code.",
+      "cost_profile": {
+        "input_tokens_avg": 8000,
+        "output_tokens_avg": 3000,
+        "cost_per_task_usd": 0.028
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Write unit and integration tests",
+      "use_cases": [
+        "Write unit tests",
+        "Write integration tests",
+        "Add test fixtures",
+        "Mock/stub creation",
+        "Test data generation"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Bash(pytest:*)",
+        "Bash(npm test:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/tests/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a test writer. Write comprehensive, maintainable tests with good coverage. Follow testing best practices (AAA, Given-When-Then).",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.052
+      },
+      "recommended_timeout_seconds": 300
+    },
+    "reviewer-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Code review and architectural analysis",
+      "use_cases": [
+        "Code review for PRs",
+        "Architecture analysis",
+        "Best practices validation",
+        "Performance review",
+        "Maintainability assessment"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/reviewer-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a code reviewer. Analyze code for quality, maintainability, performance, and best practices. Provide constructive feedback. Never modify code.",
+      "cost_profile": {
+        "input_tokens_avg": 20000,
+        "output_tokens_avg": 3000,
+        "cost_per_task_usd": 0.105
+      },
+      "recommended_timeout_seconds": 300
+    },
+    "security-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Security audits and vulnerability scanning",
+      "use_cases": [
+        "Security vulnerability scanning",
+        "OWASP Top 10 checks",
+        "Sensitive data detection",
+        "Authentication/authorization review",
+        "Dependency vulnerability audit"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/security-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a security auditor. Scan for vulnerabilities (SQL injection, XSS, CSRF, insecure auth, etc.). Check for hardcoded secrets. Never modify code.",
+      "cost_profile": {
+        "input_tokens_avg": 30000,
+        "output_tokens_avg": 10000,
+        "cost_per_task_usd": 0.24
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "analyst-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Research, documentation, and architectural analysis",
+      "use_cases": [
+        "Codebase research",
+        "Documentation writing",
+        "Architecture design",
+        "Technical specifications",
+        "Migration planning"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)"
+      ],
+      "mcp_config": "configs/analyst-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/docs/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a technical analyst. Research codebases, write comprehensive documentation, design architectures. Focus on clarity and completeness.",
+      "cost_profile": {
+        "input_tokens_avg": 25000,
+        "output_tokens_avg": 15000,
+        "cost_per_task_usd": 0.30
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "ux-tax-screen-analyzer": {
+      "model": "claude-haiku-4-5",
+      "description": "Specialized agent for analyzing ATO tax wizard screens to validate accuracy, usability, and compliance with tax pack requirements",
+      "use_cases": [
+        "Analyze wizard sections for UX issues",
+        "Validate fields against PDF tax pack",
+        "Check help text and cross-references",
+        "Verify database mapping",
+        "Screenshot and document issues"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(python*)",
+        "Bash(node*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/ux-tax-screen-analyzer.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "skip_all_permissions": true,
+      "system_prompt": "You are a specialized UX analyst for Australian tax software. Analyze wizard screens following the 10-step checklist in SCREEN_ANALYSIS_CHECKLIST.md. Focus on accuracy (wizard matches PDF), usability (plain language), and compliance (cross-references to supplement). Take screenshots of all issues. Write detailed findings to SCREEN_ANALYSIS_FINDINGS_{section_code}.md.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.08
+      },
+      "recommended_timeout_seconds": 900
+    }
+  },
+  "expansion_guide": {
+    "description": "How to add new agent types",
+    "steps": [
+      "1. Add new entry to agent_types in this file",
+      "2. Create corresponding .mcp.json in configs/",
+      "3. Test agent spawn independently",
+      "4. Update documentation",
+      "5. Add to cost tracking"
+    ],
+    "example_agent_types": [
+      "performance-profiler (Haiku - run benchmarks)",
+      "migrator (Sonnet - code migration/modernization)",
+      "documenter (Haiku - inline comments/docstrings)",
+      "ui-tester (Haiku - FlaUI/Playwright testing)",
+      "data-analyst (Sonnet - SQL query analysis)"
+    ]
+  }
+}

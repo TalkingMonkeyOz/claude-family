@@ -1,0 +1,58 @@
+{
+  "_comment": "Global MCP Config - Minimal Core (22k tokens)",
+  "_purpose": "Core MCPs needed by all Claude instances",
+  "_deploy_to": "~/.claude/mcp.json",
+  "_token_cost": "~23k tokens (added python-repl)",
+  "mcpServers": {
+    "postgres": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "memory": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {}
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects"
+      ],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {}
+    },
+    "python-repl": {
+      "type": "stdio",
+      "command": "C:/venvs/mcp/Scripts/mcp-python.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

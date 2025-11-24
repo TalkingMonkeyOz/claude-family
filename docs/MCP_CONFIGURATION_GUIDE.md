@@ -82,6 +82,7 @@ C:\Users\{username}\AppData\Roaming\Claude\claude_desktop_config.json
 5. **github** - GitHub integration
 6. **tree-sitter** - Code parsing/AST analysis
 7. **sequential-thinking** - Methodical problem-solving
+8. **playwright** - Browser automation using Playwright
 
 ### Configuration Differences
 
@@ -230,6 +231,45 @@ C:\Users\{username}\AppData\Roaming\Claude\claude_desktop_config.json
 - Console adds `type: stdio` (required for Console)
 - Both work identically
 
+### Playwright MCP Server
+
+**Desktop:**
+```json
+{
+  "playwright": {
+    "command": "C:\\Program Files\\nodejs\\npx.cmd",
+    "args": [
+      "-y",
+      "@playwright/mcp@latest"
+    ]
+  }
+}
+```
+
+**Console:**
+```json
+{
+  "playwright": {
+    "type": "stdio",
+    "command": "cmd",
+    "args": [
+      "/c",
+      "npx",
+      "-y",
+      "@playwright/mcp@latest"
+    ],
+    "env": {}
+  }
+}
+```
+
+**Key Features:**
+- Browser automation via Playwright
+- Uses accessibility tree snapshots (no screenshots needed)
+- Web navigation, form-filling, data extraction
+- Automated testing driven by LLMs
+- Installed: 2025-10-31
+
 ---
 
 ## Permission Management (Console Only)
@@ -252,7 +292,8 @@ C:\Users\{username}\AppData\Roaming\Claude\claude_desktop_config.json
       "mcp__py-notes-server__*",
       "mcp__github__*",
       "mcp__tree-sitter__*",
-      "mcp__sequential-thinking__*"
+      "mcp__sequential-thinking__*",
+      "mcp__playwright__*"
     ],
     "deny": [],
     "ask": []
