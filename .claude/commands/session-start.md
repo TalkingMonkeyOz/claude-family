@@ -7,12 +7,12 @@ Execute ALL of the following steps at the start of EVERY session:
 ## Step 1: Load Startup Context
 
 ```bash
-python "C:\claude\shared\scripts\load_claude_startup_context.py"
+python C:/claude/shared/scripts/load_claude_startup_context.py
 ```
 
 This restores:
 - Your identity and role
-- Shared knowledge (patterns, gotchas, techniques)
+- Universal knowledge (patterns, gotchas, techniques)
 - Recent sessions (last 7 days across all Claudes)
 - Project-specific context
 
@@ -21,7 +21,7 @@ This restores:
 ## Step 2: Sync Workspaces
 
 ```bash
-python "C:\claude\shared\scripts\sync_workspaces.py"
+python C:/claude/shared/scripts/sync_workspaces.py
 ```
 
 This generates `workspaces.json` from PostgreSQL, mapping project names to locations.
@@ -62,22 +62,45 @@ mcp__memory__search_nodes(query="relevant keywords from user's request")
 NEVER propose new solutions without checking if we've solved this before:
 
 ```sql
--- Check shared knowledge
-SELECT title, description, knowledge_category, confidence_level
-FROM claude_family.shared_knowledge
-WHERE title ILIKE '%relevant-keyword%'
-   OR description ILIKE '%relevant-keyword%'
-ORDER BY confidence_level DESC, times_applied DESC
-LIMIT 10;
+-- Check universal knowledge
+SELECT pattern_name, description, example_code, gotchas
+FROM claude_family.universal_knowledge
+WHERE pattern_name ILIKE '%relevant-keyword%'
+   OR description ILIKE '%relevant-keyword%';
 
 -- Check past sessions for similar work
-SELECT session_summary, tasks_completed, project_name, session_start
+SELECT summary, outcome, files_modified, project_name
 FROM claude_family.session_history
-WHERE session_summary ILIKE '%relevant-keyword%'
-   OR 'relevant-keyword' = ANY(tasks_completed)
+WHERE task_description ILIKE '%relevant-keyword%'
+   OR summary ILIKE '%relevant-keyword%'
 ORDER BY session_start DESC
 LIMIT 10;
 ```
+
+---
+
+## Step 6: Check Open Feedback (Optional)
+
+If working on a registered project, check for open feedback items:
+
+```sql
+-- Quick check for open feedback (if project has feedback tracking)
+-- Replace PROJECT-ID with your project's UUID from CLAUDE.md
+SELECT
+    feedback_type,
+    COUNT(*) as count
+FROM claude_pm.project_feedback
+WHERE project_id = 'PROJECT-ID'::uuid
+  AND status IN ('new', 'in_progress')
+GROUP BY feedback_type;
+```
+
+**If open items exist:** Briefly mention them to user: "📋 Note: This project has X open feedback items. Use `/feedback-check` to view details."
+
+**Registered Projects:**
+- claude-pm: `a3097e59-7799-4114-86a7-308702115905`
+- nimbus-user-loader: `07206097-4caf-423b-9eb8-541d4c25da6c`
+- ATO-Tax-Agent: `7858ecf4-4550-456d-9509-caea0339ec0d`
 
 ---
 
@@ -89,8 +112,9 @@ Before starting work, verify:
 - [ ] Synced `workspaces.json` from database
 - [ ] Logged session start to PostgreSQL
 - [ ] Queried memory graph for context
-- [ ] Checked for existing solutions in shared_knowledge
+- [ ] Checked for existing solutions in universal_knowledge
 - [ ] Checked past sessions for similar work
+- [ ] Checked open feedback (if applicable)
 
 **IF ANY ANSWER IS NO → DO IT NOW BEFORE STARTING WORK**
 
