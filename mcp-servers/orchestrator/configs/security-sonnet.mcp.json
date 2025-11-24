@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {}
+    }
+  }
+}

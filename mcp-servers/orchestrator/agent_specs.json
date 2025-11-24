@@ -44,6 +44,49 @@
       },
       "recommended_timeout_seconds": 300
     },
+    "python-coder-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Python code writing with REPL testing and database access",
+      "use_cases": [
+        "Write Python scripts and modules",
+        "Build/modify MCP servers",
+        "Test code in Python REPL",
+        "Database schema work",
+        "Python refactoring and bug fixes"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(python*)",
+        "Bash(pip*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/python-coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use filesystem MCP to read/write Python files. Follow PEP 8 and project conventions.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.045
+      },
+      "recommended_timeout_seconds": 300
+    },
     "debugger-haiku": {
       "model": "claude-haiku-4-5",
       "description": "Fast test execution and failure analysis",
