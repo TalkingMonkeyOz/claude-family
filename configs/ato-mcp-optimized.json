@@ -1,0 +1,28 @@
+{
+  "_comment": "ATO Tax Agent Project MCP Config - Web Research (Option A: Conservative)",
+  "_purpose": "Web research, scraping, and browser automation",
+  "_deploy_to": "C:/Projects/ATO-Tax-Agent/.mcp.json",
+  "_additional_tokens": "~23,627 tokens (playwright 5700 + tree-sitter 17927)",
+  "_total_with_global": "~46,236 tokens (down from 70k = 34% savings)",
+  "_removed": "github (18123), py-notes (4251), context7 (1709), roslyn (1902), flaui (3528) = 29,513 tokens saved",
+  "_note": "Playwright for browser automation, tree-sitter for analyzing scraped code/data",
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

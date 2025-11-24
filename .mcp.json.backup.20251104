@@ -1,0 +1,84 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "memory": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {}
+    },
+    "filesystem": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects"
+      ],
+      "env": {}
+    },
+    "py-notes-server": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": [
+        "C:\\Users\\johnd\\mcp\\py-notes-server\\server.py"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    },
+    "github": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {}
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {}
+    },
+    "playwright": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "env": {}
+    }
+  }
+}

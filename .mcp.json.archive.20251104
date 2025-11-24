@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

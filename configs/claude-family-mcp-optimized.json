@@ -1,0 +1,28 @@
+{
+  "_comment": "Claude Family Project MCP Config - Infrastructure/Console",
+  "_purpose": "Multi-language infrastructure, git operations, documentation",
+  "_deploy_to": "C:/Projects/claude-family/.mcp.json",
+  "_additional_tokens": "~36,050 tokens (github 18123 + tree-sitter 17927)",
+  "_total_with_global": "~58,659 tokens (down from 70k = 16% savings)",
+  "_removed": "py-notes (4251), context7 (1709), roslyn (1902), flaui (3528), playwright (5700) = 17,090 tokens saved",
+  "_note": "GitHub for PR/issue management, tree-sitter for multi-language code analysis",
+  "mcpServers": {
+    "github": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}
