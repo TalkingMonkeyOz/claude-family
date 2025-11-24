@@ -47,7 +47,9 @@
 
 ### 1. FlaUI MCP Server (C# Project)
 
-**Location:** `C:\Projects\flaui-mcp-server\`
+**Location:** `C:\Projects\claude-family\mcp-servers\flaui-testing\`
+
+**Why Here?** Part of Claude Family infrastructure - shared testing tool for nimbus-user-loader and claude-pm WinForms projects.
 
 **NuGet Dependencies:**
 ```xml
@@ -127,7 +129,7 @@ C:\Projects\test-screenshots\
   "mcpServers": {
     "flaui-testing": {
       "type": "stdio",
-      "command": "C:\\Projects\\flaui-mcp-server\\bin\\Release\\net8.0\\FlaUIMcpServer.exe",
+      "command": "C:\\Projects\\claude-family\\mcp-servers\\flaui-testing\\bin\\Release\\net8.0\\FlaUIMcpServer.exe",
       "args": [
         "--project", "nimbus-user-loader",
         "--db-connection", "postgresql://postgres:***@localhost/ai_company_foundation"
