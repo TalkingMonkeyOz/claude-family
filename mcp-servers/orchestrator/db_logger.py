@@ -27,15 +27,21 @@ except ImportError:
 
 
 class AgentLogger:
-    """Logs agent execution to PostgreSQL."""
+    """Logs agent execution to PostgreSQL.
+
+    Thread-safe: Creates a fresh connection for each operation to support
+    concurrent access from multiple Claude instances.
+    """
 
     def __init__(self, connection_string: Optional[str] = None):
         """
-        Initialize logger with database connection.
+        Initialize logger with database connection string.
 
         Args:
             connection_string: PostgreSQL connection string
                              Default: connects to ai_company_foundation database
+
+        Note: Connections are created per-operation for thread safety.
         """
         if connection_string is None:
             # Default connection from environment/config
@@ -47,20 +53,22 @@ class AgentLogger:
             )
 
         self.connection_string = connection_string
-        self.conn = None
         self._ensure_schema()
 
     def _get_connection(self):
-        """Get database connection (create if needed)."""
-        if self.conn is None or self.conn.closed:
-            self.conn = psycopg.connect(self.connection_string)
-        return self.conn
+        """Create a fresh database connection.
+
+        Returns a NEW connection each time for thread safety.
+        Caller is responsible for closing the connection.
+        """
+        return psycopg.connect(self.connection_string)
 
     def _ensure_schema(self):
         """Ensure agent_sessions table exists."""
         if psycopg is None:
             return
 
+        conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -108,8 +116,17 @@ class AgentLogger:
 
         except Exception as e:
             print(f"WARNING: Failed to ensure schema: {e}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def log_spawn(
         self,
@@ -124,10 +141,13 @@ class AgentLogger:
 
         Returns:
             session_id (UUID) for tracking, or None if logging fails
+
+        Thread-safe: Uses dedicated connection per call.
         """
         if psycopg is None:
             return None
 
+        conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -154,19 +174,32 @@ class AgentLogger:
 
         except Exception as e:
             print(f"WARNING: Failed to log spawn: {e}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
             return None
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def log_completion(
         self,
         session_id: str,
         result: Dict[str, Any]
     ):
-        """Log agent completion event."""
+        """Log agent completion event.
+
+        Thread-safe: Uses dedicated connection per call.
+        """
         if psycopg is None or session_id is None:
             return
 
+        conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -198,14 +231,27 @@ class AgentLogger:
 
         except Exception as e:
             print(f"WARNING: Failed to log completion: {e}")
-            if self.conn:
-                self.conn.rollback()
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def get_agent_stats(self, agent_type: Optional[str] = None) -> Dict[str, Any]:
-        """Get statistics for agent usage."""
+        """Get statistics for agent usage.
+
+        Thread-safe: Uses dedicated connection per call.
+        """
         if psycopg is None:
             return {}
 
+        conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
@@ -239,11 +285,17 @@ class AgentLogger:
         except Exception as e:
             print(f"WARNING: Failed to get stats: {e}")
             return {}
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def close(self):
-        """Close database connection."""
-        if self.conn and not self.conn.closed:
-            self.conn.close()
+        """Close any resources (no-op for thread-safe implementation)."""
+        # No persistent connection to close - connections are per-operation
+        pass
 
     def __enter__(self):
         """Context manager entry."""
