@@ -4,7 +4,27 @@ Execute ALL of the following steps at the start of EVERY session:
 
 ---
 
-## Step 1: Load Startup Context
+## Step 1: Check Where We Left Off
+
+```sql
+-- Check for saved session state (todo list, focus, pending actions)
+SELECT
+    todo_list,
+    current_focus,
+    files_modified,
+    pending_actions,
+    updated_at
+FROM claude_family.session_state
+WHERE project_name = '<current-project-name>';
+```
+
+**If state exists:** Resume from todo list. Report what was in progress.
+
+**If no state:** Fresh start, proceed normally.
+
+---
+
+## Step 2: Load Startup Context (Optional)
 
 ```bash
 python C:/claude/shared/scripts/load_claude_startup_context.py
@@ -18,89 +38,51 @@ This restores:
 
 ---
 
-## Step 2: Sync Workspaces
-
-```bash
-python C:/claude/shared/scripts/sync_workspaces.py
-```
-
-This generates `workspaces.json` from PostgreSQL, mapping project names to locations.
-
----
-
 ## Step 3: Log Session Start (postgres MCP)
 
 ```sql
--- Get your identity_id first (check CLAUDE.md for your identity)
--- claude-desktop-001: Use appropriate ID
--- claude-code-console-001: Use appropriate ID
--- diana: Use appropriate ID
-
--- Then log the session start
+-- Log the session start
 INSERT INTO claude_family.session_history
-(identity_id, session_start, project_name, task_description)
-VALUES ('<your-identity-uuid>', NOW(), 'project-name', 'Brief task description')
-RETURNING id;
+(identity_id, session_start, project_name, session_summary)
+VALUES (
+    'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid,  -- claude-code-unified
+    NOW(),
+    '<project-name>',
+    'Session started'
+)
+RETURNING session_id;
 
 -- Save the returned ID - you'll need it for session end
 ```
 
 ---
 
-## Step 4: Query Relevant Context (memory MCP)
+## Step 4: Check for Pending Messages
 
-Based on the user's request, search for relevant past knowledge:
+```sql
+-- Check for messages from other Claude instances
+SELECT message_id, from_session_id, subject, body, created_at
+FROM claude_family.instance_messages
+WHERE status = 'pending'
+  AND (to_project = '<project-name>' OR to_project IS NULL)
+ORDER BY created_at DESC;
+```
 
-```
-mcp__memory__search_nodes(query="relevant keywords from user's request")
-```
+Or use: `mcp__orchestrator__check_inbox`
 
 ---
 
-## Step 5: Check for Existing Solutions (postgres MCP)
+## Step 5: Query Relevant Context (If Needed)
 
-NEVER propose new solutions without checking if we've solved this before:
+Based on the user's request, check for existing solutions:
 
 ```sql
 -- Check universal knowledge
-SELECT pattern_name, description, example_code, gotchas
+SELECT pattern_name, description, example_code
 FROM claude_family.universal_knowledge
-WHERE pattern_name ILIKE '%relevant-keyword%'
-   OR description ILIKE '%relevant-keyword%';
-
--- Check past sessions for similar work
-SELECT summary, outcome, files_modified, project_name
-FROM claude_family.session_history
-WHERE task_description ILIKE '%relevant-keyword%'
-   OR summary ILIKE '%relevant-keyword%'
-ORDER BY session_start DESC
-LIMIT 10;
+WHERE pattern_name ILIKE '%keyword%'
+   OR description ILIKE '%keyword%';
 ```
-
----
-
-## Step 6: Check Open Feedback (Optional)
-
-If working on a registered project, check for open feedback items:
-
-```sql
--- Quick check for open feedback (if project has feedback tracking)
--- Replace PROJECT-ID with your project's UUID from CLAUDE.md
-SELECT
-    feedback_type,
-    COUNT(*) as count
-FROM claude_pm.project_feedback
-WHERE project_id = 'PROJECT-ID'::uuid
-  AND status IN ('new', 'in_progress')
-GROUP BY feedback_type;
-```
-
-**If open items exist:** Briefly mention them to user: "📋 Note: This project has X open feedback items. Use `/feedback-check` to view details."
-
-**Registered Projects:**
-- claude-pm: `a3097e59-7799-4114-86a7-308702115905`
-- nimbus-user-loader: `07206097-4caf-423b-9eb8-541d4c25da6c`
-- ATO-Tax-Agent: `7858ecf4-4550-456d-9509-caea0339ec0d`
 
 ---
 
@@ -108,16 +90,25 @@ GROUP BY feedback_type;
 
 Before starting work, verify:
 
-- [ ] Ran `load_claude_startup_context.py`
-- [ ] Synced `workspaces.json` from database
+- [ ] Checked for saved session state (where we left off)
+- [ ] Loaded todo list from session_state if exists
 - [ ] Logged session start to PostgreSQL
-- [ ] Queried memory graph for context
-- [ ] Checked for existing solutions in universal_knowledge
-- [ ] Checked past sessions for similar work
-- [ ] Checked open feedback (if applicable)
+- [ ] Checked for pending messages
+- [ ] Checked for existing solutions if relevant
 
-**IF ANY ANSWER IS NO → DO IT NOW BEFORE STARTING WORK**
+**IF ANY ANSWER IS NO -> DO IT NOW BEFORE STARTING WORK**
 
 ---
 
-**Remember**: The time spent loading context prevents hours of rediscovering existing solutions.
+## Quick Resume Flow
+
+If resuming from previous session:
+
+1. Check `session_state` table for todo list
+2. Report: "Resuming from where we left off: [current_focus]"
+3. Show todo list with status markers
+4. Continue with in_progress item
+
+---
+
+**Remember**: The session state hook runs automatically. This is for manual checks when needed.

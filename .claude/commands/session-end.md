@@ -4,28 +4,70 @@ Before ending this session, complete ALL of the following:
 
 ---
 
-## 🚨 MCP USAGE CHECKLIST 🚨
+## 1. SAVE SESSION STATE (Do This First!)
 
-### ✅ Session Logging (postgres MCP)
+Save your current todo list and work state for next session resume:
+
+```sql
+-- Save session state (uses UPSERT - creates or updates)
+INSERT INTO claude_family.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
+VALUES (
+    '<project_name>',  -- e.g., 'claude-family', 'nimbus-user-loader'
+    '<todo_list_json>', -- Copy your current TodoWrite list as JSON array
+    '<current_focus>',  -- What you were working on (1 sentence)
+    ARRAY['file1.py', 'file2.ts'],  -- Files you modified this session
+    ARRAY['action1', 'action2']  -- Things that still need to be done
+)
+ON CONFLICT (project_name) DO UPDATE SET
+    todo_list = EXCLUDED.todo_list,
+    current_focus = EXCLUDED.current_focus,
+    files_modified = EXCLUDED.files_modified,
+    pending_actions = EXCLUDED.pending_actions,
+    updated_at = NOW();
+```
+
+**Quick Example:**
+```sql
+INSERT INTO claude_family.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
+VALUES (
+    'claude-family',
+    '[{"content": "Implement feature X", "status": "in_progress"}, {"content": "Test feature X", "status": "pending"}]'::jsonb,
+    'Working on session resume feature',
+    ARRAY['scripts/session_startup_hook.py', '.claude/commands/session-end.md'],
+    ARRAY['Need to sync commands to other projects']
+)
+ON CONFLICT (project_name) DO UPDATE SET
+    todo_list = EXCLUDED.todo_list,
+    current_focus = EXCLUDED.current_focus,
+    files_modified = EXCLUDED.files_modified,
+    pending_actions = EXCLUDED.pending_actions,
+    updated_at = NOW();
+```
+
+---
+
+## 2. SESSION LOGGING (postgres MCP)
 
 ```sql
 -- 1. Get your latest session ID
-SELECT id FROM claude_family.session_history
-WHERE identity_id = 5
+SELECT session_id FROM claude_family.session_history
+WHERE identity_id = 'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid
 ORDER BY session_start DESC LIMIT 1;
 
 -- 2. Update session with summary
 UPDATE claude_family.session_history
 SET
     session_end = NOW(),
-    summary = 'What was accomplished',
+    session_summary = 'What was accomplished',
     files_modified = ARRAY['file1.cs', 'file2.cs'],
     outcome = 'success',
     tokens_used = <estimated_tokens>
-WHERE id = <session_id>;
+WHERE session_id = '<session_id>'::uuid;
 ```
 
-### ✅ Store Reusable Knowledge (postgres MCP)
+---
+
+## 3. Store Reusable Knowledge (If Applicable)
 
 **If you discovered a reusable pattern:**
 
@@ -38,40 +80,8 @@ VALUES (
     'When to use this',
     'Code example',
     'Things to watch out for',
-    5
+    'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid
 );
-```
-
-**If project-specific:**
-
-```sql
-INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
-VALUES ('bug-fix', 'Solution details', 'When this applies');
-```
-
-### ✅ Store in Memory Graph (memory MCP)
-
-```
-mcp__memory__create_entities(entities=[{
-    "name": "Session Summary",
-    "entityType": "Session",
-    "observations": [
-        "Completed: X",
-        "Key decision: Y",
-        "Files modified: Z",
-        "Pattern discovered: P"
-    ]
-}])
-```
-
-**If you solved a problem:**
-
-```
-mcp__memory__create_relations(relations=[{
-    "from": "Problem Name",
-    "relationType": "solved-by",
-    "to": "Solution Pattern"
-}])
 ```
 
 ---
@@ -80,24 +90,21 @@ mcp__memory__create_relations(relations=[{
 
 Ask yourself:
 
-- [ ] Did I log session start to postgres?
-- [ ] Did I query for existing knowledge before proposing solutions?
-- [ ] Did I use tree-sitter for code analysis (if applicable)?
-- [ ] Did I store learnings in memory graph?
+- [ ] Did I save session state (todo list, focus, files)?
 - [ ] Did I update session log with summary?
-- [ ] Did I store reusable patterns in postgres?
+- [ ] Did I store reusable patterns if I discovered any?
 
-**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
-
----
-
-## Cost of Skipping MCPs
-
-- Next Claude spends 30 minutes rediscovering your solution
-- Same bug gets solved 3 times by different Claudes
-- Institutional knowledge stays at zero
-- User gets frustrated repeating themselves
+**IF ANY ANSWER IS NO -> DO IT NOW BEFORE ENDING SESSION**
 
 ---
 
-**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.
+## Why This Matters
+
+- Next session starts with full context of where you left off
+- Todo list persists across context resets
+- No more rediscovering what you were working on
+- Continuous progress across sessions
+
+---
+
+**Remember**: Session state saves your progress. Session logging records history.
