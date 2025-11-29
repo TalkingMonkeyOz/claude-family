@@ -260,7 +260,7 @@
       "cost_profile": {
         "input_tokens_avg": 25000,
         "output_tokens_avg": 15000,
-        "cost_per_task_usd": 0.30
+        "cost_per_task_usd": 0.3
       },
       "recommended_timeout_seconds": 600
     },
@@ -642,6 +642,177 @@
         "cost_per_task_usd": 0.045
       },
       "recommended_timeout_seconds": 300
+    },
+    "test-coordinator-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Coordinates parallel testing by spawning specialized test agents and aggregating results",
+      "use_cases": [
+        "Orchestrate comprehensive test suites",
+        "Parallel test execution across unit/integration/e2e",
+        "Aggregate and summarize test results",
+        "Identify test coverage gaps",
+        "Coordinate visual regression + functional tests"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)"
+      ],
+      "mcp_config": "configs/coordinator-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "tester-haiku",
+        "debugger-haiku",
+        "web-tester-haiku",
+        "nextjs-tester-haiku",
+        "screenshot-tester-haiku"
+      ],
+      "system_prompt": "You are a test coordinator. Orchestrate comprehensive testing by spawning specialized test agents in parallel. 1) Analyze what needs testing, 2) Spawn appropriate agents (tester-haiku for unit tests, web-tester-haiku for E2E), 3) Wait for results, 4) Aggregate into unified report with: total tests, passed, failed, coverage gaps, critical issues.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.15
+      },
+      "recommended_timeout_seconds": 900
+    },
+    "review-coordinator-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Coordinates comprehensive code review by spawning specialized reviewers in parallel",
+      "use_cases": [
+        "Orchestrate multi-aspect code reviews",
+        "Parallel security + quality + performance review",
+        "Aggregate review findings by severity",
+        "Generate unified review report"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message"
+      ],
+      "disallowed_tools": [
+        "Edit",
+        "Bash(rm*)",
+        "Bash(del*)"
+      ],
+      "mcp_config": "configs/coordinator-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "reviewer-sonnet",
+        "security-sonnet",
+        "security-opus"
+      ],
+      "system_prompt": "You are a review coordinator. Orchestrate code reviews by spawning specialized reviewers in parallel. 1) Identify scope, 2) Spawn reviewer-sonnet for quality + security-sonnet for vulnerabilities, 3) Aggregate by severity (critical/high/medium/low), 4) Generate unified report with prioritized actions. Never modify code.",
+      "cost_profile": {
+        "input_tokens_avg": 20000,
+        "output_tokens_avg": 10000,
+        "cost_per_task_usd": 0.2
+      },
+      "recommended_timeout_seconds": 900
+    },
+    "refactor-coordinator-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Plans and coordinates large refactoring efforts across multiple files/modules",
+      "use_cases": [
+        "Coordinate multi-file refactoring",
+        "Plan refactor strategy with architect",
+        "Spawn coders for parallel implementation",
+        "Validate consistency across changes"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)"
+      ],
+      "mcp_config": "configs/coordinator-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "architect-opus",
+        "coder-haiku",
+        "python-coder-haiku",
+        "csharp-coder-haiku",
+        "tester-haiku",
+        "reviewer-sonnet"
+      ],
+      "system_prompt": "You are a refactor coordinator. 1) Spawn architect-opus to design strategy, 2) Break into parallel-safe chunks, 3) Spawn coders to implement, 4) Spawn tester-haiku to verify, 5) Spawn reviewer-sonnet for validation. Ensure consistency. Track progress.",
+      "cost_profile": {
+        "input_tokens_avg": 25000,
+        "output_tokens_avg": 12000,
+        "cost_per_task_usd": 0.25
+      },
+      "recommended_timeout_seconds": 1200
+    },
+    "onboarding-coordinator-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Analyzes new codebases and generates CLAUDE.md and onboarding materials",
+      "use_cases": [
+        "New project onboarding",
+        "Generate CLAUDE.md for unknown codebases",
+        "Document architecture and patterns",
+        "Create developer onboarding guide"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message"
+      ],
+      "disallowed_tools": [
+        "Edit",
+        "Bash(rm*)",
+        "Bash(del*)"
+      ],
+      "mcp_config": "configs/coordinator-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "researcher-opus",
+        "analyst-sonnet",
+        "security-sonnet",
+        "reviewer-sonnet"
+      ],
+      "system_prompt": "You are an onboarding coordinator. 1) Spawn researcher-opus to analyze architecture, 2) Spawn analyst-sonnet for tech stack docs, 3) Spawn security-sonnet for overview, 4) Aggregate into CLAUDE.md with: project structure, key files, build commands, testing, conventions, gotchas.",
+      "cost_profile": {
+        "input_tokens_avg": 30000,
+        "output_tokens_avg": 15000,
+        "cost_per_task_usd": 0.35
+      },
+      "recommended_timeout_seconds": 1200
     }
   },
   "expansion_guide": {
@@ -660,5 +831,15 @@
       "ui-tester (Haiku - FlaUI/Playwright testing)",
       "data-analyst (Sonnet - SQL query analysis)"
     ]
+  },
+  "hierarchical_orchestration": {
+    "current_state": "Coordinators can spawn child agents but communication is synchronous (spawn returns when child completes)",
+    "future_enhancements": [
+      "Async spawning with progress callbacks",
+      "Parent-child messaging during execution",
+      "Cancellation/redirect of running children",
+      "Hierarchical result aggregation"
+    ],
+    "usage_pattern": "coordinator.spawn() -> child executes -> returns result -> coordinator aggregates"
   }
 }
