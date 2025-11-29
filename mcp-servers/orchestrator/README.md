@@ -4,7 +4,7 @@
 
 ## Overview
 
-The orchestrator manages 6 specialized agent types, each with:
+The orchestrator manages 14 specialized agent types, each with:
 - **Dedicated MCP configs** (only load what's needed)
 - **Workspace jailing** (restrict filesystem access)
 - **Tool restrictions** (whitelist/blacklist tools)
@@ -41,14 +41,33 @@ The orchestrator manages 6 specialized agent types, each with:
 
 ## Agent Types
 
-| Agent | Model | MCPs | Use Cases | Cost/Task |
-|-------|-------|------|-----------|-----------|
-| **coder-haiku** | Haiku 4.5 | None | Write code, refactor | $0.035 |
-| **debugger-haiku** | Haiku 4.5 | None | Run tests, debug | $0.028 |
-| **tester-haiku** | Haiku 4.5 | None | Write tests | $0.052 |
-| **reviewer-sonnet** | Sonnet 4.5 | tree-sitter | Code review | $0.105 |
-| **security-sonnet** | Sonnet 4.5 | tree-sitter, seq-thinking | Security audit | $0.240 |
-| **analyst-sonnet** | Sonnet 4.5 | seq-thinking, memory | Research, docs | $0.300 |
+### Haiku Agents (Fast & Cost-Effective)
+
+| Agent | MCPs | Use Cases | Cost/Task |
+|-------|------|-----------|-----------|
+| **coder-haiku** | None | Write code, refactor | $0.035 |
+| **python-coder-haiku** | python-repl, postgres | Python with REPL/DB | $0.045 |
+| **debugger-haiku** | None | Run tests, debug | $0.028 |
+| **tester-haiku** | None | Write tests | $0.052 |
+| **csharp-coder-haiku** | None | C#/.NET development | $0.045 |
+| **ux-tax-screen-analyzer** | None | ATO screen analysis | $0.080 |
+
+### Sonnet Agents (Balanced Quality/Cost)
+
+| Agent | MCPs | Use Cases | Cost/Task |
+|-------|------|-----------|-----------|
+| **reviewer-sonnet** | tree-sitter | Code review | $0.105 |
+| **security-sonnet** | tree-sitter, seq-thinking | Security audit | $0.240 |
+| **analyst-sonnet** | seq-thinking, memory | Research, docs | $0.300 |
+| **planner-sonnet** | seq-thinking | Task planning | $0.210 |
+
+### Opus Agents (Maximum Quality)
+
+| Agent | MCPs | Use Cases | Cost/Task |
+|-------|------|-----------|-----------|
+| **architect-opus** | seq-thinking, memory | System design | $0.825 |
+| **security-opus** | seq-thinking, memory | Deep security audit | $1.000 |
+| **researcher-opus** | seq-thinking, memory | Deep research | $0.725 |
 
 ## Usage
 
@@ -282,7 +301,7 @@ claude --strict-mcp-config --allowed-tools "Read,Write"
 
 ## References
 
-- [Agent Specs](./agent_specs.json) - All 6 agent type definitions
+- [Agent Specs](./agent_specs.json) - All 14 agent type definitions
 - [MCP Configs](./configs/) - Individual agent MCP configurations
 - [Orchestrator](./orchestrator_prototype.py) - Spawn logic implementation
 - [SUB_AGENT_TEST_RESULTS.md](../../docs/SUB_AGENT_TEST_RESULTS.md) - Proof of concept testing

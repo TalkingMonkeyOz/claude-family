@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2025-11-24T21:12:52.626399",
+    "generated_at": "2025-11-30T00:14:18.164753",
     "source": "PostgreSQL (claude_family.project_workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -19,6 +19,11 @@
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "mission-control-web": {
+      "path": "C:\\Projects\\mission-control-web",
+      "type": "nextjs-typescript",
+      "description": "Web-based Mission Control using Next.js, shadcn/ui, TanStack"
     },
     "claude-mission-control": {
       "path": "C:\\Projects\\claude-mission-control",

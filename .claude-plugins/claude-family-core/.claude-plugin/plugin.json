@@ -1,0 +1,12 @@
+{
+  "name": "claude-family-core",
+  "version": "1.0.0",
+  "description": "Core coordination and session management for Claude Family. Provides session workflow, feedback system, messaging, and database integration.",
+  "author": "Claude Family",
+  "homepage": "https://github.com/your-org/claude-family",
+  "keywords": ["claude-family", "session-management", "coordination", "feedback"],
+  "commands": "./commands",
+  "agents": "./agents",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}

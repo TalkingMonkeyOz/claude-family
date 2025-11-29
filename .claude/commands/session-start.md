@@ -79,27 +79,7 @@ LIMIT 10;
 
 ---
 
-## Step 6: Check Messages (orchestrator MCP)
-
-Check for messages from other Claude instances:
-
-```
-mcp__orchestrator__check_inbox(
-  project_name="<current-project-name>",
-  include_broadcasts=true
-)
-```
-
-**IMPORTANT**: You MUST pass `project_name` to see project-targeted messages. Without it, only broadcasts are returned.
-
-If messages exist:
-- Display count and summaries
-- For task_request messages, acknowledge and consider adding to your work plan
-- For notifications, acknowledge and inform user if relevant
-
----
-
-## Step 7: Check Open Feedback (Optional)
+## Step 6: Check Open Feedback (Optional)
 
 If working on a registered project, check for open feedback items:
 
@@ -134,7 +114,6 @@ Before starting work, verify:
 - [ ] Queried memory graph for context
 - [ ] Checked for existing solutions in universal_knowledge
 - [ ] Checked past sessions for similar work
-- [ ] **Checked messages from other Claudes** (pass project_name!)
 - [ ] Checked open feedback (if applicable)
 
 **IF ANY ANSWER IS NO → DO IT NOW BEFORE STARTING WORK**

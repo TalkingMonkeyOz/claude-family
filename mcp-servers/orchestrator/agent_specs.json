@@ -445,6 +445,159 @@
       },
       "recommended_timeout_seconds": 600
     },
+    "web-tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "General-purpose E2E web testing with Playwright",
+      "use_cases": [
+        "E2E web application testing",
+        "Form submission testing",
+        "Navigation and routing tests",
+        "Screenshot capture for documentation",
+        "Cross-browser testing",
+        "Accessibility testing"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(npx playwright*)",
+        "Bash(npm test*)",
+        "Bash(node*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/web-tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are an E2E web tester using Playwright. Test web applications thoroughly: navigation, forms, buttons, modals, responsive design. Capture screenshots of issues. Write clear test reports. Focus on user flows and edge cases.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.05
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "nextjs-tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Next.js and React application testing with Playwright and database validation",
+      "use_cases": [
+        "Next.js route testing (pages, API routes)",
+        "React component interaction testing",
+        "shadcn/ui component testing",
+        "Server-side rendering validation",
+        "API route response testing",
+        "Database state verification"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(npx playwright*)",
+        "Bash(npm test*)",
+        "Bash(pnpm test*)",
+        "Bash(node*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/nextjs-tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a Next.js testing specialist using Playwright. Test Next.js applications: page routes, API routes, SSR/SSG, React components, shadcn/ui elements. Verify database state matches UI. Check loading states, error boundaries, and edge cases. Write comprehensive test reports.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 7000,
+        "cost_per_task_usd": 0.06
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "screenshot-tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Visual regression testing and screenshot comparison",
+      "use_cases": [
+        "Visual regression testing",
+        "Screenshot baseline creation",
+        "Before/after comparison",
+        "Responsive design validation",
+        "Theme/dark mode testing",
+        "Component visual consistency"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "Bash(npx playwright*)",
+        "Bash(node*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Edit"
+      ],
+      "mcp_config": "configs/screenshot-tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a visual regression tester using Playwright. Capture screenshots at multiple viewport sizes. Compare against baselines. Report visual differences with annotated screenshots. Focus on layout shifts, color changes, and component consistency.",
+      "cost_profile": {
+        "input_tokens_avg": 10000,
+        "output_tokens_avg": 4000,
+        "cost_per_task_usd": 0.04
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "agent-creator-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Creates new agent profiles with proper specs, MCP configs, and documentation",
+      "use_cases": [
+        "Design new specialized agents",
+        "Create agent_specs.json entries",
+        "Generate MCP config files",
+        "Define tool permissions and prompts",
+        "Validate agent configurations",
+        "Document agent capabilities"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/agent-creator-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are an agent architect. Design and create new Claude agent profiles following the established patterns in agent_specs.json. For each new agent: 1) Analyze the use case and required capabilities, 2) Choose appropriate model (haiku for fast/simple, sonnet for complex, opus for deep reasoning), 3) Define allowed/disallowed tools based on security needs, 4) Write a focused system prompt, 5) Create the MCP config with required servers, 6) Estimate costs based on token usage. Always validate JSON syntax and test configurations.",
+      "cost_profile": {
+        "input_tokens_avg": 20000,
+        "output_tokens_avg": 12000,
+        "cost_per_task_usd": 0.18
+      },
+      "recommended_timeout_seconds": 600
+    },
     "csharp-coder-haiku": {
       "model": "claude-haiku-4-5",
       "description": "C# and .NET code writing with build and test capabilities",
