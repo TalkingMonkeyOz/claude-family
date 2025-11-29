@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "prompt",
-            "prompt": "Before ending, save session state: 1) Run /session-end to save your todo list and current work focus to the database. 2) This ensures next session can resume where you left off.",
+            "prompt": "Before ending, save session state by running /session-end to preserve your todo list and work focus for next session.",
             "timeout": 10
           }
         ]
@@ -41,9 +41,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"systemMessage\": \"Messages checked. Remember to acknowledge important ones with mcp__orchestrator__acknowledge.\"}'",
-            "timeout": 5,
-            "description": "Remind to acknowledge messages"
+            "command": "echo '{\"systemMessage\": \"Messages checked. Acknowledge important ones.\"}'",
+            "timeout": 5
           }
         ]
       }

@@ -2,16 +2,26 @@
 
 Core coordination and session management for Claude Family instances.
 
-## Installation
+## Quick Install
 
-Copy this plugin to your project or reference it from a central location:
+Run the install script from your project directory:
 
 ```bash
-# Option 1: Copy to project
-cp -r C:/claude/plugins/claude-family-core /your/project/.claude-plugins/
+python C:/Projects/claude-family/scripts/install_plugin.py
+```
 
-# Option 2: Symlink (recommended for updates)
-ln -s C:/claude/plugins/claude-family-core /your/project/.claude-plugins/claude-family-core
+Or manually:
+
+```bash
+# 1. Copy commands to your project
+cp C:/Projects/claude-family/.claude-plugins/claude-family-core/commands/*.md /your/project/.claude/commands/
+
+# 2. Copy hooks.json (or merge with existing)
+cp C:/Projects/claude-family/.claude/hooks.json /your/project/.claude/hooks.json
+
+# 3. Copy startup script
+mkdir -p /your/project/.claude-plugins/claude-family-core/scripts
+cp C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py /your/project/.claude-plugins/claude-family-core/scripts/
 ```
 
 ## Features
@@ -20,60 +30,74 @@ ln -s C:/claude/plugins/claude-family-core /your/project/.claude-plugins/claude-
 
 | Command | Description |
 |---------|-------------|
-| `/session-start` | Initialize session with context loading |
-| `/session-end` | Close session with summary logging |
-| `/inbox-check` | Check messages from other Claudes |
-| `/feedback-check` | View open feedback items |
+| `/session-start` | Initialize session with context loading, check for previous state |
+| `/session-end` | Save session state (todo list, focus) and log summary |
+| `/inbox-check` | Check messages from other Claude instances |
+| `/feedback-check` | View open feedback items for current project |
 | `/feedback-create` | Create new feedback item |
-| `/team-status` | View active Claude instances |
-| `/broadcast` | Send message to all Claudes |
+| `/team-status` | View active Claude instances and their work |
+| `/broadcast` | Send message to all Claude instances |
 
 ### Hooks
 
-- **SessionStart**: Auto-runs startup script on session begin
-- **PostToolUse (check_inbox)**: Reminder to acknowledge messages
+- **SessionStart (startup)**: Auto-loads previous session state, checks for messages
+- **SessionStart (resume)**: Same as startup, for session resume
+- **SessionEnd**: Prompts to save session state
+- **PostToolUse (check_inbox)**: Reminder to acknowledge important messages
 
-### MCP Servers
+### Session State Persistence
 
-Bundled servers:
-- `postgres` - Database access (ai_company_foundation)
-- `memory` - Persistent knowledge graph
-- `orchestrator` - Agent spawning and messaging
-- `filesystem` - File operations
+The plugin saves your work state between sessions:
+- Todo list (from TodoWrite tool)
+- Current focus/task description
+- Files modified
+- Pending actions
 
-### Agents
+On next session start, this context is automatically restored.
 
-- `coordinator` - Team coordination and status synthesis
+## Database Requirements
 
-## Configuration
+PostgreSQL database: `ai_company_foundation`
 
-### Database Connection
-
-The plugin expects PostgreSQL at:
-```
-postgresql://postgres:postgres@localhost:5432/ai_company_foundation
-```
-
-Modify `.mcp.json` if your connection differs.
-
-### Required Schemas
-
-- `claude_family` - Identities, sessions, knowledge
+Required schemas:
+- `claude_family` - Identities, sessions, knowledge, session_state
 - `claude_pm` - Feedback/issue tracking
 
-## Usage
+Required tables:
+- `claude_family.session_history` - Session logs
+- `claude_family.session_state` - Persisted todo/focus between sessions
+- `claude_family.instance_messages` - Inter-Claude messaging
+- `claude_family.identities` - Claude identity registry
+- `claude_pm.project_feedback` - Feedback items
 
-After installation, commands are available via `/command-name`.
+## File Structure
 
-The SessionStart hook will automatically run on session begin, providing:
-- Working directory detection
-- Project identification
-- Reminder to run full `/session-start`
+```
+.claude-plugins/claude-family-core/
+├── .claude-plugin/
+│   └── plugin.json          # Plugin manifest
+├── commands/
+│   ├── session-start.md     # Session initialization
+│   ├── session-end.md       # Session close + state save
+│   ├── inbox-check.md       # Check messages
+│   ├── broadcast.md         # Send to all Claudes
+│   ├── feedback-check.md    # View feedback
+│   ├── feedback-create.md   # Create feedback
+│   └── team-status.md       # View team activity
+├── hooks/
+│   └── hooks.json           # Hook definitions
+├── scripts/
+│   └── session_startup_hook.py  # Auto-run on session start
+├── agents/
+│   └── coordinator/
+│       └── AGENT.md         # Coordinator agent definition
+└── README.md
+```
 
 ## Version
 
-1.0.0
+1.0.0 (2025-11-30)
 
 ## Author
 
-Claude Family
+Claude Family (claude-code-unified)
