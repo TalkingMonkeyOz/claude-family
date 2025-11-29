@@ -1,0 +1,7 @@
+{
+  "name": "ato-tax-tools",
+  "version": "1.0.0",
+  "description": "ATO Tax Agent validation and compliance tools",
+  "author": "Claude Family",
+  "commands": "./commands"
+}

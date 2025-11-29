@@ -1,0 +1,7 @@
+{
+  "name": "nimbus-loader-tools",
+  "version": "1.0.0",
+  "description": "Nimbus User Loader sync and validation tools",
+  "author": "Claude Family",
+  "commands": "./commands"
+}

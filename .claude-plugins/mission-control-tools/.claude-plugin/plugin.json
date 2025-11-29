@@ -1,0 +1,7 @@
+{
+  "name": "mission-control-tools",
+  "version": "1.0.0",
+  "description": "Mission Control dashboard and team management for Claude Family",
+  "author": "Claude Family",
+  "commands": "./commands"
+}
