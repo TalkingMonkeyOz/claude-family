@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects"
+      ],
+      "env": {}
+    },
+    "roslyn": {
+      "type": "stdio",
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--no-build",
+        "--project",
+        "C:\\Projects\\roslyn-mcp\\RoslynMCP\\RoslynMCP.csproj"
+      ],
+      "env": {}
+    }
+  }
+}

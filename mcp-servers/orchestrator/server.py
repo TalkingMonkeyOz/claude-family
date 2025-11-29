@@ -95,15 +95,34 @@ def get_db_connection():
 # Messaging Functions
 # ============================================================================
 
-def check_inbox(project_name: Optional[str] = None, session_id: Optional[str] = None, include_broadcasts: bool = True) -> dict:
-    """Check for pending messages."""
+def check_inbox(
+    project_name: Optional[str] = None,
+    session_id: Optional[str] = None,
+    include_broadcasts: bool = True,
+    include_read: bool = False
+) -> dict:
+    """Check for pending messages.
+
+    Args:
+        project_name: Filter to messages sent to this project
+        session_id: Filter to messages sent to this session
+        include_broadcasts: Include messages with no specific recipient
+        include_read: Also include already-read messages (default: pending only)
+    """
     conn = get_db_connection()
     try:
         cur = conn.cursor()
-        conditions = ["status = 'pending'"]
+
+        # Status filter
+        if include_read:
+            status_condition = "status IN ('pending', 'read')"
+        else:
+            status_condition = "status = 'pending'"
+
+        conditions = [status_condition]
         params = []
 
-        # Build WHERE clause
+        # Build WHERE clause for recipients
         or_conditions = []
         if include_broadcasts:
             or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
@@ -114,8 +133,13 @@ def check_inbox(project_name: Optional[str] = None, session_id: Optional[str] = 
             or_conditions.append("to_session_id = %s")
             params.append(session_id)
 
-        if or_conditions:
-            conditions.append(f"({' OR '.join(or_conditions)})")
+        # If no recipient filters specified, show all messages to any project/session
+        # This prevents returning 0 when user forgets to pass project_name
+        if not or_conditions:
+            # Show broadcasts + any messages to any project (but not direct session messages)
+            or_conditions.append("to_session_id IS NULL")
+
+        conditions.append(f"({' OR '.join(or_conditions)})")
 
         query = f"""
             SELECT
@@ -127,6 +151,7 @@ def check_inbox(project_name: Optional[str] = None, session_id: Optional[str] = 
                 subject,
                 body,
                 metadata,
+                status,
                 created_at
             FROM claude_family.instance_messages
             WHERE {' AND '.join(conditions)}
@@ -379,13 +404,13 @@ async def list_tools() -> List[Tool]:
         tools.extend([
             Tool(
                 name="check_inbox",
-                description="Check for pending messages from other Claude instances. Returns unread messages addressed to you or broadcast to all.",
+                description="Check for pending messages from other Claude instances. Returns unread messages addressed to you or broadcast to all. IMPORTANT: Pass project_name to see project-targeted messages!",
                 inputSchema={
                     "type": "object",
                     "properties": {
                         "project_name": {
                             "type": "string",
-                            "description": "Your project name to filter messages"
+                            "description": "Your project name to filter messages (IMPORTANT: required to see project-targeted messages)"
                         },
                         "session_id": {
                             "type": "string",
@@ -394,6 +419,10 @@ async def list_tools() -> List[Tool]:
                         "include_broadcasts": {
                             "type": "boolean",
                             "description": "Include broadcast messages (default: true)"
+                        },
+                        "include_read": {
+                            "type": "boolean",
+                            "description": "Include already-read messages (default: false, only pending)"
                         }
                     }
                 }
@@ -620,7 +649,8 @@ async def handle_check_inbox(arguments: dict) -> List[TextContent]:
     result = check_inbox(
         project_name=arguments.get('project_name'),
         session_id=arguments.get('session_id'),
-        include_broadcasts=arguments.get('include_broadcasts', True)
+        include_broadcasts=arguments.get('include_broadcasts', True),
+        include_read=arguments.get('include_read', False)
     )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

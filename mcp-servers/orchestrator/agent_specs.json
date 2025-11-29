@@ -303,6 +303,192 @@
         "cost_per_task_usd": 0.08
       },
       "recommended_timeout_seconds": 900
+    },
+    "architect-opus": {
+      "model": "claude-opus-4-5-20251101",
+      "description": "Complex architectural decisions, system design, and strategic planning using Opus 4.5",
+      "use_cases": [
+        "System architecture design",
+        "Complex refactoring planning",
+        "Multi-service integration design",
+        "Performance optimization strategy",
+        "Migration planning",
+        "Technical decision making"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)"
+      ],
+      "mcp_config": "configs/architect-opus.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a senior software architect using Claude Opus 4.5. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.",
+      "cost_profile": {
+        "input_tokens_avg": 40000,
+        "output_tokens_avg": 25000,
+        "cost_per_task_usd": 0.825
+      },
+      "recommended_timeout_seconds": 900
+    },
+    "security-opus": {
+      "model": "claude-opus-4-5-20251101",
+      "description": "Deep security audits and vulnerability analysis using Opus 4.5 for maximum thoroughness",
+      "use_cases": [
+        "Comprehensive security audits",
+        "Complex vulnerability analysis",
+        "Threat modeling",
+        "Security architecture review",
+        "Penetration test planning",
+        "Compliance assessment (SOC2, ISO27001)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/security-opus.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a senior security auditor using Claude Opus 4.5. Perform thorough security analysis including OWASP Top 10, authentication/authorization flaws, injection vulnerabilities, cryptographic weaknesses, and compliance gaps. Think deeply about attack vectors. Never modify code.",
+      "cost_profile": {
+        "input_tokens_avg": 50000,
+        "output_tokens_avg": 30000,
+        "cost_per_task_usd": 1.0
+      },
+      "recommended_timeout_seconds": 1200
+    },
+    "researcher-opus": {
+      "model": "claude-opus-4-5-20251101",
+      "description": "Deep research and analysis tasks requiring extensive reasoning",
+      "use_cases": [
+        "Complex codebase analysis",
+        "Technology evaluation",
+        "Best practices research",
+        "Framework comparison",
+        "Performance analysis",
+        "Root cause analysis"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash(rm*)"
+      ],
+      "mcp_config": "configs/researcher-opus.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a technical researcher using Claude Opus 4.5. Conduct thorough research with deep analysis. Consider multiple perspectives. Provide well-reasoned conclusions backed by evidence. Focus on accuracy and completeness.",
+      "cost_profile": {
+        "input_tokens_avg": 45000,
+        "output_tokens_avg": 20000,
+        "cost_per_task_usd": 0.725
+      },
+      "recommended_timeout_seconds": 900
+    },
+    "planner-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Task planning and breakdown for complex multi-step work",
+      "use_cases": [
+        "Sprint planning",
+        "Feature breakdown",
+        "Task estimation",
+        "Dependency mapping",
+        "Implementation roadmaps",
+        "Work package creation"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "Write",
+        "Edit"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(curl*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/planner-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a technical project planner. Break down complex tasks into actionable steps. Identify dependencies and risks. Create clear implementation plans with acceptance criteria. Output structured plans in markdown.",
+      "cost_profile": {
+        "input_tokens_avg": 20000,
+        "output_tokens_avg": 10000,
+        "cost_per_task_usd": 0.21
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "csharp-coder-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "C# and .NET code writing with build and test capabilities",
+      "use_cases": [
+        "Write C# code",
+        "WPF/WinForms development",
+        ".NET Core services",
+        "Entity Framework work",
+        "NuGet package management",
+        "Unit test creation"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(dotnet*)",
+        "Bash(nuget*)",
+        "Bash(msbuild*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/csharp-coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a C#/.NET developer. Write clean, well-tested C# code following Microsoft conventions. Use proper async/await patterns. Implement SOLID principles. Follow the project's existing patterns and architecture.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.045
+      },
+      "recommended_timeout_seconds": 300
     }
   },
   "expansion_guide": {
