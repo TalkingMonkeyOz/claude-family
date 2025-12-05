@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "C:/Projects"],
+      "env": {}
+    },
+    "postgres": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["-m", "mcp_server_postgres", "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"],
+      "env": {}
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    }
+  }
+}

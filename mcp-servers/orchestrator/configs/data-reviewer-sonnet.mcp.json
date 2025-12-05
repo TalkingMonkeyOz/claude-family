@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "postgres": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["-m", "mcp_server_postgres", "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"],
+      "env": {}
+    }
+  }
+}

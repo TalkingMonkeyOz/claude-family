@@ -879,6 +879,78 @@
         "cost_per_task_usd": 0.35
       },
       "recommended_timeout_seconds": 1200
+    },
+    "doc-reviewer-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Automated documentation quality reviewer. Checks for staleness, completeness, and consistency across project documentation.",
+      "use_cases": [
+        "Review CLAUDE.md for staleness and accuracy",
+        "Check ARCHITECTURE.md reflects current system",
+        "Validate PROBLEM_STATEMENT.md completeness",
+        "Identify missing required documentation",
+        "Check cross-references between docs",
+        "Generate documentation health report"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Grep",
+        "Glob",
+        "mcp__postgres__execute_sql",
+        "mcp__filesystem__read_text_file",
+        "mcp__filesystem__list_directory"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash(rm*)",
+        "Bash(del*)"
+      ],
+      "mcp_config": "configs/doc-reviewer-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a documentation reviewer for the Claude Governance System. Review project documentation for: 1) Staleness - check file modification dates vs thresholds (CLAUDE.md: 7 days, ARCHITECTURE.md: 30 days), 2) Completeness - verify all required sections exist per templates, 3) Accuracy - check version footers, dates, project IDs match database, 4) Consistency - cross-references valid, links work. Output a structured report with findings by severity (critical/warning/info) and specific remediation steps. Query claude.documents and claude.project_governance for database state.",
+      "cost_profile": {
+        "input_tokens_avg": 25000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.15
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "data-reviewer-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Automated database data quality reviewer. Validates data against column_registry constraints and checks for orphaned/stale records.",
+      "use_cases": [
+        "Validate data against column_registry valid_values",
+        "Find orphaned records (missing FK references)",
+        "Identify stale/test data patterns",
+        "Check status field consistency",
+        "Validate priority values (1-5 scale)",
+        "Generate data quality report"
+      ],
+      "allowed_tools": [
+        "Read",
+        "mcp__postgres__execute_sql",
+        "mcp__postgres__list_schemas",
+        "mcp__postgres__list_objects",
+        "mcp__postgres__get_object_details"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash"
+      ],
+      "mcp_config": "configs/data-reviewer-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "system_prompt": "You are a data quality reviewer for the Claude Governance System. Review database data for: 1) Constraint violations - check values against claude.column_registry valid_values, 2) Orphaned records - check FK relationships exist (features→projects, build_tasks→features, etc.), 3) Test data - identify patterns like 'test', 'TODO', placeholder UUIDs, 4) Stale data - records with old updated_at, unclosed sessions >24h, 5) Priority consistency - all priority fields use 1-5 scale. Output structured report with: table, issue type, record count, sample records, recommended fix SQL. Focus on claude schema tables.",
+      "cost_profile": {
+        "input_tokens_avg": 20000,
+        "output_tokens_avg": 10000,
+        "cost_per_task_usd": 0.18
+      },
+      "recommended_timeout_seconds": 600
     }
   },
   "expansion_guide": {
