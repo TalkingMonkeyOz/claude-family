@@ -22,7 +22,6 @@ from pathlib import Path
 
 # Plugin source directory
 PLUGINS_SOURCE = Path("C:/Projects/claude-family/.claude-plugins")
-HOOKS_SOURCE = Path("C:/Projects/claude-family/.claude/hooks.json")
 
 # Available plugins
 PLUGINS = {
@@ -103,29 +102,75 @@ def install_plugin(plugin_key: str, target_dir: Path, verbose: bool = True):
 
     # For core plugin, also copy hooks and scripts
     if plugin_key == "core":
-        # Copy hooks.json
-        dst_hooks = claude_dir / "hooks.json"
-        if dst_hooks.exists():
-            # Merge hooks
-            with open(HOOKS_SOURCE) as f:
-                src_hooks = json.load(f)
-            with open(dst_hooks) as f:
-                dst_hooks_data = json.load(f)
+        # Add hooks to settings.local.json (NOT hooks.json - Claude Code reads from settings)
+        settings_file = claude_dir / "settings.local.json"
 
-            for event_type, hooks_list in src_hooks.get("hooks", {}).items():
-                if event_type not in dst_hooks_data.get("hooks", {}):
-                    if "hooks" not in dst_hooks_data:
-                        dst_hooks_data["hooks"] = {}
-                    dst_hooks_data["hooks"][event_type] = hooks_list
+        # Build hooks config with absolute path for this project
+        project_script_path = str(target_dir / ".claude-plugins" / plugin_name / "scripts" / "session_startup_hook.py").replace("\\", "/")
+        hooks_config = {
+            "SessionStart": [
+                {
+                    "matcher": "startup",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f'python "{project_script_path}"',
+                            "timeout": 30000
+                        }
+                    ]
+                },
+                {
+                    "matcher": "resume",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f'python "{project_script_path}" --resume',
+                            "timeout": 30000
+                        }
+                    ]
+                }
+            ],
+            "SessionEnd": [
+                {
+                    "hooks": [
+                        {
+                            "type": "prompt",
+                            "prompt": "Before ending, save session state by running /session-end to preserve your todo list and work focus for next session."
+                        }
+                    ]
+                }
+            ]
+        }
 
-            with open(dst_hooks, 'w') as f:
-                json.dump(dst_hooks_data, f, indent=2)
+        if settings_file.exists():
+            # Merge hooks into existing settings
+            with open(settings_file) as f:
+                settings_data = json.load(f)
+
+            if "hooks" not in settings_data:
+                settings_data["hooks"] = {}
+
+            # Merge each hook type
+            for event_type, hooks_list in hooks_config.items():
+                if event_type not in settings_data["hooks"]:
+                    settings_data["hooks"][event_type] = hooks_list
+                # If exists, don't overwrite (user may have customized)
+
+            with open(settings_file, 'w') as f:
+                json.dump(settings_data, f, indent=2)
             if verbose:
-                print("      + hooks.json (merged)")
+                print("      + hooks in settings.local.json (merged)")
         else:
-            shutil.copy2(HOOKS_SOURCE, dst_hooks)
+            # Create new settings file with hooks
+            settings_data = {
+                "hooks": hooks_config,
+                "permissions": {"allow": [], "deny": [], "ask": []},
+                "enabledMcpjsonServers": []
+            }
+            with open(settings_file, 'w') as f:
+                json.dump(settings_data, f, indent=2)
             if verbose:
-                print("      + hooks.json")
+                print("      + settings.local.json (created with hooks)")
 
         # Copy startup script
         plugin_scripts_dir = target_dir / ".claude-plugins" / plugin_name / "scripts"

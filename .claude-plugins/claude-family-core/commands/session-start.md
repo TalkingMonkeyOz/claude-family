@@ -14,7 +14,7 @@ SELECT
     files_modified,
     pending_actions,
     updated_at
-FROM claude_family.session_state
+FROM claude.session_state
 WHERE project_name = '<current-project-name>';
 ```
 
@@ -42,7 +42,7 @@ This restores:
 
 ```sql
 -- Log the session start
-INSERT INTO claude_family.session_history
+INSERT INTO claude.sessions
 (identity_id, session_start, project_name, session_summary)
 VALUES (
     'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid,  -- claude-code-unified
@@ -62,7 +62,7 @@ RETURNING session_id;
 ```sql
 -- Check for messages from other Claude instances
 SELECT message_id, from_session_id, subject, body, created_at
-FROM claude_family.instance_messages
+FROM claude.messages
 WHERE status = 'pending'
   AND (to_project = '<project-name>' OR to_project IS NULL)
 ORDER BY created_at DESC;
@@ -79,7 +79,7 @@ Based on the user's request, check for existing solutions:
 ```sql
 -- Check universal knowledge
 SELECT pattern_name, description, example_code
-FROM claude_family.universal_knowledge
+FROM claude.knowledge
 WHERE pattern_name ILIKE '%keyword%'
    OR description ILIKE '%keyword%';
 ```

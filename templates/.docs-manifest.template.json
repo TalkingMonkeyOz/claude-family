@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "project": "{{PROJECT_NAME}}",
+  "created": "{{CREATED_DATE}}",
+  "last_audit": "{{CREATED_DATE}}",
+  "files": {
+    "CLAUDE.md": {
+      "purpose": "Claude Code configuration and project instructions",
+      "max_lines": 250,
+      "status": "active",
+      "auto_generated": false
+    },
+    "README.md": {
+      "purpose": "Project overview and getting started",
+      "status": "active",
+      "auto_generated": true
+    }
+  },
+  "rules": {
+    "max_claude_md_lines": 250,
+    "archive_after_days": 90,
+    "audit_frequency": "monthly"
+  }
+}

@@ -39,7 +39,7 @@ The dashboard displays:
 
 ## Technical Details
 
-Queries the `claude_family.session_history` table:
+Queries the `claude.sessions` table:
 - Active sessions: `session_end IS NULL`
 - Recent sessions: `created_at >= NOW() - INTERVAL '24 hours'`
 - Calls `mcp__orchestrator__get_active_sessions()` for real-time agent status

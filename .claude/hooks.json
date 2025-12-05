@@ -1,12 +1,53 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_claude_md.py\" \"$FILE_PATH\"",
+            "timeout": 10,
+            "description": "Validate CLAUDE.md governance compliance"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_claude_md.py\" \"$FILE_PATH\"",
+            "timeout": 10,
+            "description": "Validate CLAUDE.md governance compliance"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__postgres__execute_sql",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_db_write.py\" \"mcp__postgres__execute_sql\"",
+            "timeout": 10,
+            "description": "Validate database writes against column_registry"
+          },
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_phase.py\"",
+            "timeout": 10,
+            "description": "Check project phase for build_task creation"
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "startup",
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
             "timeout": 30,
             "description": "Load session state and check for messages"
           }
@@ -17,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python \"$CLAUDE_PROJECT_DIR/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\" --resume",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\" --resume",
             "timeout": 30,
             "description": "Resume session with saved state"
           }
@@ -27,6 +68,12 @@
     "SessionEnd": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/check_doc_updates.py\"",
+            "timeout": 10,
+            "description": "Check if documentation needs updating"
+          },
           {
             "type": "prompt",
             "prompt": "Before ending, save session state by running /session-end to preserve your todo list and work focus for next session.",

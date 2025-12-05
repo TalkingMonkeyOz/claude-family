@@ -67,6 +67,11 @@ class AgentOrchestrator:
             if claude_cmd:
                 return claude_cmd
 
+            # Fallback to common npm global location on Windows
+            npm_global = Path(os.environ.get('APPDATA', '')) / 'npm' / 'claude.cmd'
+            if npm_global.exists():
+                return str(npm_global)
+
         # Fallback to just 'claude' and let subprocess handle it
         return 'claude'
 
@@ -105,6 +110,10 @@ class AgentOrchestrator:
         """
         spec = self.get_agent_spec(agent_type)
 
+        # Check if this is a local Ollama model
+        if spec.get('local_model', False):
+            return await self._spawn_local_agent(spec, task, timeout)
+
         # Resolve paths
         mcp_config_path = self.base_dir / spec['mcp_config']
         workspace_path = Path(workspace_dir).resolve()
@@ -113,7 +122,13 @@ class AgentOrchestrator:
         mcp_servers = []
         try:
             with open(mcp_config_path, 'r') as f:
-                mcp_config = json.load(f)
+                # Read as string first to replace {workspace_dir} placeholder
+                mcp_config_str = f.read()
+                # Replace {workspace_dir} with actual workspace path
+                # Escape backslashes for JSON format
+                escaped_workspace_path = str(workspace_path).replace('\\', '\\\\')
+                mcp_config_str = mcp_config_str.replace('{workspace_dir}', escaped_workspace_path)
+                mcp_config = json.loads(mcp_config_str)
                 mcp_servers = list(mcp_config.get('mcpServers', {}).keys())
         except:
             pass
@@ -135,9 +150,17 @@ class AgentOrchestrator:
         # Set timeout
         timeout = timeout or spec['recommended_timeout_seconds']
 
+        # Prepend workspace context to task so agent knows where to work
+        # Agent accesses files via filesystem MCP, not local filesystem
+        task_with_context = f"""WORKSPACE: {workspace_path}
+Use the filesystem MCP tools (mcp__filesystem__*) to read and write files in this workspace.
+
+TASK:
+{task}"""
+
         # Execute
         start_time = datetime.now()
-        result = await self._execute_agent(cmd, task, timeout, spec)
+        result = await self._execute_agent(cmd, task_with_context, timeout, spec)
         execution_time = (datetime.now() - start_time).total_seconds()
 
         # Add metadata
@@ -158,12 +181,15 @@ class AgentOrchestrator:
         workspace_path: Path
     ) -> list:
         """Build the Claude Code CLI command."""
+        # Use isolated agent workspace to avoid inheriting hooks/plugins from target project
+        # The agent accesses the actual project files via filesystem MCP
+        agent_workspace = Path("C:/claude/agent-workspaces")
+
         cmd = [
             self.claude_executable,
             '--model', spec['model'],
             '--mcp-config', str(mcp_config_path),
-            '--strict-mcp-config',  # Ignore global configs
-            '--add-dir', str(workspace_path),  # Workspace jail
+            '--add-dir', str(agent_workspace),  # Clean workspace with disableAllHooks
             '--print',  # Output to stdout
         ]
 
@@ -256,6 +282,87 @@ class AgentOrchestrator:
                 'output': None,
                 'error': f'Failed to spawn agent: {str(e)}',
                 'stderr': None
+            }
+
+    async def _spawn_local_agent(
+        self,
+        spec: Dict[str, Any],
+        task: str,
+        timeout: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Spawn a local Ollama agent instead of Claude.
+
+        Args:
+            spec: Agent specification with ollama_model field
+            task: Task description
+            timeout: Max execution time in seconds
+
+        Returns:
+            Dict with 'success', 'output', 'error', 'cost_estimate'
+        """
+        ollama_model = spec.get('ollama_model', 'deepseek-r1:14b')
+        system_prompt = spec.get('system_prompt', '')
+        timeout = timeout or spec.get('recommended_timeout_seconds', 120)
+
+        # Build prompt with system context
+        full_prompt = f"{system_prompt}\n\nTask: {task}" if system_prompt else task
+
+        start_time = datetime.now()
+
+        try:
+            # Call Ollama directly via CLI
+            cmd = ['ollama', 'run', ollama_model, full_prompt]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return {
+                    'success': False,
+                    'output': None,
+                    'error': f'Local agent timed out after {timeout} seconds',
+                    'stderr': None,
+                    'agent_type': f"local-{ollama_model}",
+                    'execution_time_seconds': timeout,
+                    'estimated_cost_usd': 0.0
+                }
+
+            output = stdout.decode('utf-8') if stdout else None
+            error_output = stderr.decode('utf-8') if stderr else None
+            execution_time = (datetime.now() - start_time).total_seconds()
+
+            return {
+                'success': proc.returncode == 0,
+                'output': output,
+                'error': None if proc.returncode == 0 else f"Ollama failed with code {proc.returncode}",
+                'stderr': error_output,
+                'agent_type': f"local-{ollama_model}",
+                'execution_time_seconds': execution_time,
+                'estimated_cost_usd': 0.0,
+                'local_model': True,
+                'performance': spec.get('performance_notes', {})
+            }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'output': None,
+                'error': f'Failed to spawn local agent: {str(e)}',
+                'stderr': None,
+                'agent_type': f"local-{ollama_model}",
+                'execution_time_seconds': (datetime.now() - start_time).total_seconds(),
+                'estimated_cost_usd': 0.0
             }
 
     def list_agent_types(self) -> Dict[str, str]:

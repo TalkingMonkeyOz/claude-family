@@ -772,6 +772,72 @@
       },
       "recommended_timeout_seconds": 1200
     },
+    "local-reasoner-deepseek": {
+      "model": "deepseek-r1:14b",
+      "description": "Local reasoning agent using DeepSeek-r1 on RTX 5080 (FREE, 77 tok/s). Best for math, logic chains, and privacy-sensitive reasoning.",
+      "use_cases": [
+        "Mathematical problem solving",
+        "Logic puzzles and chains",
+        "Step-by-step reasoning",
+        "Privacy-sensitive analysis",
+        "Cost-free reasoning tasks",
+        "Offline reasoning capability"
+      ],
+      "allowed_tools": [],
+      "disallowed_tools": ["*"],
+      "mcp_config": "configs/local-reasoner.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "local_model": true,
+      "ollama_model": "deepseek-r1:14b",
+      "system_prompt": "You are a reasoning specialist. Think step by step through problems. Show your reasoning process. Provide clear, logical conclusions.",
+      "cost_profile": {
+        "input_tokens_avg": 5000,
+        "output_tokens_avg": 3000,
+        "cost_per_task_usd": 0.0
+      },
+      "recommended_timeout_seconds": 120,
+      "performance_notes": {
+        "tokens_per_second": 77,
+        "cold_start_seconds": 22,
+        "vram_required_gb": 9,
+        "hardware": "RTX 5080 16GB"
+      }
+    },
+    "local-coder-qwen": {
+      "model": "qwen2.5-coder:14b",
+      "description": "Local code generation using Qwen2.5-Coder on RTX 5080 (FREE, ~70 tok/s). Best for code completion and simple implementations.",
+      "use_cases": [
+        "Code completion",
+        "Simple function implementations",
+        "Code explanation",
+        "Refactoring suggestions",
+        "Privacy-sensitive code work",
+        "Offline coding assistance"
+      ],
+      "allowed_tools": [],
+      "disallowed_tools": ["*"],
+      "mcp_config": "configs/local-reasoner.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": true,
+      "permission_mode": "plan",
+      "local_model": true,
+      "ollama_model": "qwen2.5-coder:14b",
+      "system_prompt": "You are a code assistant. Write clean, efficient code. Explain your implementations clearly.",
+      "cost_profile": {
+        "input_tokens_avg": 5000,
+        "output_tokens_avg": 3000,
+        "cost_per_task_usd": 0.0
+      },
+      "recommended_timeout_seconds": 120,
+      "performance_notes": {
+        "tokens_per_second": 70,
+        "cold_start_seconds": 22,
+        "vram_required_gb": 9,
+        "hardware": "RTX 5080 16GB"
+      }
+    },
     "onboarding-coordinator-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
       "description": "Analyzes new codebases and generates CLAUDE.md and onboarding materials",

@@ -43,13 +43,12 @@ class AgentLogger:
 
         Note: Connections are created per-operation for thread safety.
         """
+        import os
         if connection_string is None:
-            # Default connection from environment/config
-            connection_string = (
-                "host=localhost "
-                "dbname=ai_company_foundation "
-                "user=postgres "
-                "password=postgres"
+            # Try environment variable first, then default
+            connection_string = os.environ.get(
+                'DATABASE_URI',
+                "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
             )
 
         self.connection_string = connection_string
@@ -75,7 +74,7 @@ class AgentLogger:
 
             # Create table if not exists
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS claude_family.agent_sessions (
+                CREATE TABLE IF NOT EXISTS claude.agent_sessions (
                     session_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     agent_type VARCHAR(50) NOT NULL,
                     task_description TEXT NOT NULL,
@@ -98,17 +97,17 @@ class AgentLogger:
             # Create indexes
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_type
-                ON claude_family.agent_sessions(agent_type);
+                ON claude.agent_sessions(agent_type);
             """)
 
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_spawned
-                ON claude_family.agent_sessions(spawned_at DESC);
+                ON claude.agent_sessions(spawned_at DESC);
             """)
 
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_agent_sessions_success
-                ON claude_family.agent_sessions(success);
+                ON claude.agent_sessions(success);
             """)
 
             conn.commit()
@@ -153,7 +152,7 @@ class AgentLogger:
             cursor = conn.cursor()
 
             cursor.execute("""
-                INSERT INTO claude_family.agent_sessions
+                INSERT INTO claude.agent_sessions
                 (agent_type, task_description, workspace_dir, spawned_at, model, mcp_servers)
                 VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING session_id;
@@ -205,7 +204,7 @@ class AgentLogger:
             cursor = conn.cursor()
 
             cursor.execute("""
-                UPDATE claude_family.agent_sessions
+                UPDATE claude.agent_sessions
                 SET
                     completed_at = %s,
                     execution_time_seconds = %s,
@@ -268,7 +267,7 @@ class AgentLogger:
                     SUM(CASE WHEN success THEN 1 ELSE 0 END) as successful_sessions,
                     AVG(execution_time_seconds) as avg_execution_time,
                     SUM(estimated_cost_usd) as total_cost
-                FROM claude_family.agent_sessions
+                FROM claude.agent_sessions
                 {where_clause};
             """, params)
 

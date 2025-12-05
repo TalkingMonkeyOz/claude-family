@@ -1,7 +1,40 @@
 # Claude Family - Infrastructure Project
 
 **Type**: Infrastructure
-**Purpose**: Shared configuration, scripts, and documentation for Claude Family instances
+**Status**: Implementation
+**Project ID**: `20b5627c-e72c-4501-8537-95b559731b59`
+
+---
+
+## Problem Statement
+
+Enable coordinated AI-assisted software development across multiple Claude instances with:
+- Consistent project structure and documentation
+- Enforced procedures via hooks and constraints
+- Shared knowledge that persists across sessions
+- Quality data in tracking systems
+
+**Full details**: See `PROBLEM_STATEMENT.md`
+
+---
+
+## Current Phase
+
+**Phase**: Implementation (governance system)
+**Focus**: Building the Claude Governance System (Phase A)
+**Plan**: `docs/CLAUDE_GOVERNANCE_SYSTEM_PLAN.md`
+
+---
+
+## Architecture Overview
+
+Infrastructure for the Claude Family ecosystem:
+- **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
+- **MCP Servers**: orchestrator, postgres, memory, filesystem
+- **Enforcement**: Hooks, database constraints, column_registry
+- **UI**: Mission Control Web (MCW) for visibility
+
+**Full details**: See `ARCHITECTURE.md`
 
 ---
 
@@ -9,114 +42,84 @@
 
 ```
 claude-family/
-├── docs/                     # Documentation and session notes
-├── .claude/                  # Shared slash commands (distributed to instances)
-├── shared/
-│   ├── commands/            # Slash commands (session-start, session-end)
-│   ├── scripts/             # Python utilities
-│   └── docs/                # Importable documentation
-└── README.md
+├── CLAUDE.md              # This file - AI constitution
+├── PROBLEM_STATEMENT.md   # Problem definition
+├── ARCHITECTURE.md        # System design
+├── .claude/commands/      # Slash commands
+├── docs/
+│   ├── adr/              # Architecture decisions
+│   ├── sop/              # Standard operating procedures
+│   └── *.md              # Plans, specs, guides
+├── scripts/              # Python utilities
+├── mcp-servers/          # MCP server implementations
+└── templates/            # Project templates
 ```
 
 ---
 
-## This Repository Contains
+## Coding Standards
 
-**Shared Resources:**
-- Slash commands (`/session-start`, `/session-end`)
-- Python scripts (workspace sync, context loading)
-- Documentation (MCP guides, troubleshooting)
-- Session notes archive
-
-**NOT Code Projects:**
-- Work projects (nimbus, ATO) are in separate repos
-- Personal projects are in separate repos
-- This is ONLY infrastructure
+- **Python**: PEP 8, type hints where helpful
+- **SQL**: Use `claude` schema (not legacy `claude_family`, `claude_pm`)
+- **Docs**: Markdown, follow template structure
+- **Commits**: Descriptive messages, reference issues
 
 ---
 
-## Build Commands
+## Work Tracking
 
-```bash
-# No build - this is config/docs only
+| I have... | Put it in... | How |
+|-----------|--------------|-----|
+| An idea | feedback | type='idea' |
+| A bug | feedback | type='bug' |
+| A feature to build | features | link to project |
+| A task to do | build_tasks | link to feature |
+| Work right now | TodoWrite | session only |
 
-# Test scripts
-python shared/scripts/sync_workspaces.py
-python shared/scripts/select_project.py
-
-# Commit changes
-git add .
-git commit -m "Update: description"
-git push
-```
+**Data Gateway**: Before writing, check `claude.column_registry` for valid values.
 
 ---
 
-## When Working Here
+## Key Procedures
 
-You're likely:
-- Updating shared scripts
-- Adding/modifying slash commands
-- Updating documentation
-- Archiving session notes
+1. **Session Start**: Run `/session-start` (auto-logs to DB)
+2. **Session End**: Run `/session-end` (saves summary)
+3. **Data Writes**: Check column_registry for valid values
+4. **Doc Changes**: Update version footer, set updated date
 
-**Remember**: Changes here affect ALL Claude instances on next startup.
-
----
-
-## Documentation Management
-
-**System**: `.docs-manifest.json` + `audit_docs.py` + git pre-commit hook
-
-**Rules:**
-- CLAUDE.md must stay ≤250 lines (enforced by pre-commit hook)
-- Audit monthly: `python scripts/audit_docs.py`
-- Archive candidates: Move to `docs/archive/YYYY-MM/`
-- Deprecated docs: Keep 90 days, then archive
-
-**Install hook**: `python scripts/install_git_hooks.py`
+**SOPs**: See `docs/sop/` folder
 
 ---
 
-## Procedures Registry
+## Recent Changes
 
-**Central database of ALL Claude Family procedures** - no more searching!
-
-**Quick Query:**
-```sql
--- Find procedures for current project
-SELECT procedure_name, short_description, location, mandatory, frequency
-FROM claude_family.my_procedures
-WHERE 'all' = ANY(applies_to_projects);
-
--- Find mandatory procedures only
-SELECT procedure_name, frequency, location
-FROM claude_family.my_procedures
-WHERE mandatory = true;
-```
-
-**Key Procedures:**
-- Session Start/End: `SELECT * FROM claude_family.my_procedures WHERE procedure_type = 'session-workflow'`
-- C# Compliance: `SELECT * FROM claude_family.my_procedures WHERE 'claude-pm' = ANY(applies_to_projects)`
-- All Mandatory: `SELECT * FROM claude_family.my_procedures WHERE mandatory = true`
-
-**Location:** `claude_family.procedure_registry` table (12 procedures registered)
-**View:** `claude_family.my_procedures` (sorted by priority)
+| Date | Change |
+|------|--------|
+| 2025-12-04 | Created Claude Governance System Plan |
+| 2025-12-04 | Added Data Gateway (column_registry, CHECK constraints) |
+| 2025-12-04 | Updated to new CLAUDE.md standard |
+| 2025-12-04 | Cleaned test data from work_tasks, feedback |
 
 ---
 
-## Recent Work
+## Quick Queries
 
 ```sql
-SELECT summary, outcome, files_modified, session_start
-FROM claude_family.session_history
-WHERE project_name = 'claude-family'
-ORDER BY session_start DESC LIMIT 10;
+-- Check project status
+SELECT * FROM claude.projects WHERE project_name = 'claude-family';
+
+-- Recent sessions
+SELECT session_start, summary FROM claude.sessions
+WHERE project_name = 'claude-family' ORDER BY session_start DESC LIMIT 5;
+
+-- Valid values for any field
+SELECT valid_values FROM claude.column_registry
+WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 ```
 
 ---
 
-**Version**: 1.1 (Project-Specific - Infrastructure + Doc Management)
+**Version**: 2.0 (Governance System Standard)
 **Created**: 2025-10-21
-**Updated**: 2025-10-23
+**Updated**: 2025-12-04
 **Location**: C:\Projects\claude-family\CLAUDE.md

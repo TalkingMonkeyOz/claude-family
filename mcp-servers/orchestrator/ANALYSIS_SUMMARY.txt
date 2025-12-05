@@ -1,0 +1,274 @@
+================================================================================
+KNOWLEDGE TABLE DATA QUALITY ANALYSIS - EXECUTIVE SUMMARY
+================================================================================
+
+DATABASE: PostgreSQL (ai_company_foundation)
+SCHEMA: claude.knowledge
+ANALYSIS DATE: 2025-10-24
+
+================================================================================
+KEY METRICS
+================================================================================
+
+Total Records: 144
+Distinct Titles: 138 (95.8% unique)
+Data Quality Score: 78/100
+
+================================================================================
+CRITICAL ISSUES FOUND
+================================================================================
+
+1. DUPLICATE RECORDS (6 entries - 4.2% of data)
+   Severity: HIGH
+   Details: 6 knowledge entries have identical titles and were created within
+            9 seconds of each other on 2025-10-10
+   
+   Affected titles:
+   - OneDrive caches build folders causing stale DLL issues
+   - CancellationToken for graceful operation cancellation
+   - MCP server logs location for diagnostics
+   - HttpClient session affinity with CookieContainer
+   - Form.Shown event for control initialization requiring window handles
+   - Windows-MCP server requires uv package manager
+   
+   Impact: Data integrity issues, confusion about canonical source, wasted storage
+   Fix: DELETE 6 duplicate records keeping oldest version (5 min)
+
+
+2. KNOWLEDGE TYPE INCONSISTENCY (38 different values)
+   Severity: HIGH
+   Details: The knowledge_type field has 38 different values instead of standardized
+            set of 12 core types. Issues include:
+   
+   a) Case sensitivity problems (6 records):
+      - 'PATTERN' should be 'pattern' (3 records)
+      - 'ARCHITECTURE' should be 'architecture' (2 records)
+      - 'GOTCHA' should be 'gotcha' (1 record)
+      - 'API_PATTERN' should be 'api-pattern' (1 record)
+   
+   b) Typos and variants (8 records):
+      - 'bugfix' → 'bug-fix' (1 record)
+      - 'bug_fix_pattern' → 'bug-fix' (1 record)
+      - 'bug_workaround' → 'bug-fix' (1 record)
+      - 'bug-pattern' → 'bug-fix' (2 records)
+      - *-pattern variants → 'pattern' (7 records)
+   
+   c) Non-standard single-use types (11 records):
+      system, performance, debugging, implementation, lesson, methodology,
+      reference, solution, testing, procedure, infrastructure
+   
+   Impact: Query inconsistency, reporting failures, analytics problems
+   Fix: Normalize to 12 core types (10 min)
+   
+   Proposed Core Types:
+   - pattern (90+ records after consolidation)
+   - gotcha (16+ records)
+   - bug-fix (10+ records)
+   - architecture (7+ records)
+   - technique (5 records)
+   - best-practice (7+ records)
+   - troubleshooting (3 records)
+   - process (5+ records)
+   - configuration (2+ records)
+   - mcp-tool (2 records)
+   - mcp-server (1 record)
+
+
+3. CONFIDENCE LEVEL SCALE ISSUES (6 records - 4.2%)
+   Severity: MEDIUM
+   Details: 6 records have confidence values outside 1-10 range:
+   
+   - 85 (2 records) - appears to be on 0-100 scale
+   - 90 (3 records) - appears to be on 0-100 scale
+   - 95 (1 record) - appears to be on 0-100 scale
+   
+   Root cause: No CHECK constraint on confidence_level column
+   Impact: Breaks queries expecting 1-10 scale, analytics failures
+   Fix: Divide by 10 and round (2 min)
+
+
+4. MISSING PROJECT SCOPE (11 records - 7.6%)
+   Severity: MEDIUM
+   Details: Records with NULL or empty 'applies_to_projects' array
+   Impact: Knowledge entries lack clear project context
+   Fix: Manual review and population (15 min with review)
+
+
+5. MISSING OWNERSHIP (33 records - 22.9%)
+   Severity: LOW
+   Details: Records with NULL 'learned_by_identity_id'
+   Impact: Can't trace knowledge origin; audit trail incomplete
+   Fix: Optional - assign to service identity or leave as NULL (10 min)
+
+
+6. MISSING CODE EXAMPLES (7 records - 4.9%)
+   Severity: LOW
+   Details: Records with NULL or empty 'code_example'
+   Impact: Reduced practical utility for technical knowledge
+   Note: Acceptable for non-technical types (process, methodology, reference)
+
+
+7. MISSING CONFIDENCE LEVELS (2 records - 1.4%)
+   Severity: LOW
+   Details: Records with NULL 'confidence_level'
+   Impact: Quality metrics incomplete for 1.4% of records
+   Fix: Assign reasonable defaults (2 min)
+
+
+================================================================================
+CLEANUP PLAN
+================================================================================
+
+PHASE 1: CRITICAL FIXES (9 minutes)
+├─ Remove 6 duplicate records
+├─ Normalize 6 case-sensitive types
+└─ Fix 6 confidence scale issues (85→9, 90→9, 95→10)
+
+PHASE 2: STANDARDIZATION (8 minutes)
+├─ Consolidate 7 *-pattern variants to 'pattern'
+└─ Map 20 non-standard types to 12 core types
+
+PHASE 3: CONSTRAINTS (7 minutes)
+├─ Add CHECK constraint on confidence_level (1-10)
+├─ Add CHECK constraint on knowledge_type (not empty)
+└─ Optional: Create ENUM type for type validation
+
+PHASE 4: CLEANUP (25 minutes)
+├─ Fill 11 missing applies_to_projects
+└─ Review/assign 33 missing learned_by_identity_id
+
+TOTAL ESTIMATED TIME: 49 minutes
+EXPECTED QUALITY IMPROVEMENT: 78/100 → 92/100
+RISK LEVEL: LOW (all changes are standardization/consolidation)
+
+
+================================================================================
+SQL CLEANUP SCRIPTS
+================================================================================
+
+1. REMOVE DUPLICATES (Keep oldest, delete younger):
+   
+   WITH duplicates AS (
+     SELECT knowledge_id, title,
+            ROW_NUMBER() OVER (PARTITION BY title ORDER BY created_at DESC) as rn
+     FROM claude.knowledge
+     WHERE title IN (
+       'OneDrive caches build folders causing stale DLL issues',
+       'CancellationToken for graceful operation cancellation',
+       'MCP server logs location for diagnostics',
+       'HttpClient session affinity with CookieContainer',
+       'Form.Shown event for control initialization requiring window handles',
+       'Windows-MCP server requires uv package manager'
+     )
+   )
+   DELETE FROM claude.knowledge
+   WHERE knowledge_id IN (SELECT knowledge_id FROM duplicates WHERE rn = 1);
+
+
+2. NORMALIZE CASE-SENSITIVE TYPES:
+   
+   UPDATE claude.knowledge SET knowledge_type = 'pattern' 
+   WHERE knowledge_type = 'PATTERN';
+   
+   UPDATE claude.knowledge SET knowledge_type = 'architecture' 
+   WHERE knowledge_type = 'ARCHITECTURE';
+   
+   UPDATE claude.knowledge SET knowledge_type = 'gotcha' 
+   WHERE knowledge_type = 'GOTCHA';
+   
+   UPDATE claude.knowledge SET knowledge_type = 'api-pattern'
+   WHERE knowledge_type = 'API_PATTERN';
+
+
+3. FIX CONFIDENCE SCALE (0-100 to 1-10):
+   
+   UPDATE claude.knowledge 
+   SET confidence_level = ROUND(confidence_level / 10.0)::int 
+   WHERE confidence_level > 10;
+
+
+4. CONSOLIDATE *-PATTERN VARIANTS:
+   
+   UPDATE claude.knowledge SET knowledge_type = 'pattern' 
+   WHERE knowledge_type IN (
+     'code-pattern', 'design-pattern', 'technical-pattern',
+     'performance-pattern', 'security-pattern', 'api-pattern'
+   );
+
+
+5. CONSOLIDATE NON-STANDARD TYPES:
+   
+   UPDATE claude.knowledge SET knowledge_type = 'bug-fix' 
+   WHERE knowledge_type IN ('bugfix', 'bug_fix_pattern', 'bug_workaround', 'bug-pattern');
+   
+   UPDATE claude.knowledge SET knowledge_type = 'architecture' 
+   WHERE knowledge_type IN ('system', 'infrastructure', 'architecture_pattern');
+   
+   UPDATE claude.knowledge SET knowledge_type = 'pattern' 
+   WHERE knowledge_type IN ('performance', 'debugging', 'implementation');
+   
+   UPDATE claude.knowledge SET knowledge_type = 'best-practice' 
+   WHERE knowledge_type IN ('testing', 'methodology');
+   
+   UPDATE claude.knowledge SET knowledge_type = 'process' 
+   WHERE knowledge_type IN ('lesson', 'reference', 'solution', 'procedure');
+
+
+6. ADD VALIDATION CONSTRAINTS:
+   
+   ALTER TABLE claude.knowledge 
+   ADD CONSTRAINT confidence_level_valid 
+   CHECK (confidence_level IS NULL OR 
+          (confidence_level >= 1 AND confidence_level <= 10));
+
+
+================================================================================
+VERIFICATION QUERY (Post-Cleanup)
+================================================================================
+
+SELECT 
+  COUNT(*) as total_records,
+  COUNT(DISTINCT title) as distinct_titles,
+  COUNT(DISTINCT LOWER(knowledge_type)) as distinct_types,
+  COUNT(CASE WHEN applies_to_projects IS NULL THEN 1 END) as null_projects,
+  COUNT(CASE WHEN confidence_level BETWEEN 1 AND 10 THEN 1 END) as valid_confidence
+FROM claude.knowledge;
+
+Expected Results:
+  total_records: 138
+  distinct_titles: 138
+  distinct_types: 11-12
+  null_projects: 0-2 (after cleanup)
+  valid_confidence: 136+ (all remaining valid)
+
+
+================================================================================
+RECOMMENDATIONS
+================================================================================
+
+IMMEDIATE (Today):
+✓ Run Phase 1 & 2 scripts (17 min) - Fixes critical data integrity issues
+✓ Document any business rules for one-off types before consolidation
+
+SHORT TERM (This Week):
+✓ Run Phase 3 - Add constraints (7 min) - Prevents future issues
+✓ Run Phase 4 - Cleanup metadata (25 min) - Optional but recommended
+
+ONGOING:
+✓ Enforce knowledge_type enum at application level
+✓ Add pre-insert validation for confidence_level (1-10)
+✓ Require applies_to_projects on INSERT
+✓ Review knowledge_type choices quarterly
+
+
+================================================================================
+DETAILED ANALYSIS DOCUMENT
+================================================================================
+
+See: knowledge-table-analysis.md
+- Complete findings with all knowledge_ids and timestamps
+- Detailed cleanup scripts with explanations
+- Post-cleanup verification queries
+- Phase-by-phase implementation guide
+
+================================================================================

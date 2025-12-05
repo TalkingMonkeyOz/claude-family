@@ -25,7 +25,7 @@ Optional parameters (interactive):
 
 ## Queries
 
-Analyzes data from `claude_family.session_history` table:
+Analyzes data from `claude.sessions` table:
 
 ```sql
 -- Session counts by project (last 7 days)
@@ -33,7 +33,7 @@ SELECT
   project_name,
   COUNT(*) as session_count,
   SUM(EXTRACT(EPOCH FROM (session_end - session_start))/3600) as total_hours
-FROM claude_family.session_history
+FROM claude.sessions
 WHERE session_end >= NOW() - INTERVAL '7 days'
 GROUP BY project_name
 ORDER BY total_hours DESC;
@@ -43,7 +43,7 @@ SELECT
   DATE(session_start) as date,
   COUNT(*) as sessions,
   SUM(EXTRACT(EPOCH FROM (session_end - session_start))/3600) as hours
-FROM claude_family.session_history
+FROM claude.sessions
 WHERE session_end >= NOW() - INTERVAL '7 days'
 GROUP BY DATE(session_start)
 ORDER BY date DESC;
@@ -54,7 +54,7 @@ SELECT
   COUNT(*) as sessions,
   SUM(EXTRACT(EPOCH FROM (session_end - session_start))/3600) as total_hours,
   AVG(EXTRACT(EPOCH FROM (session_end - session_start))/3600) as avg_hours
-FROM claude_family.session_history
+FROM claude.sessions
 WHERE session_end >= NOW() - INTERVAL '7 days'
 GROUP BY identity
 ORDER BY total_hours DESC;

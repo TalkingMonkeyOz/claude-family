@@ -12,7 +12,7 @@
       "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
       "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
       "env": {
-        "DATABASE_URI": "postgresql://postgres:postgres@localhost:5432/ai_company_foundation"
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
       }
     }
   }

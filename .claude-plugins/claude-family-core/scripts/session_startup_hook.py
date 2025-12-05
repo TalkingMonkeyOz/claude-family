@@ -63,7 +63,7 @@ def get_session_state(project_name):
         cur = conn.cursor()
         cur.execute("""
             SELECT todo_list, current_focus, files_modified, pending_actions, updated_at
-            FROM claude_family.session_state
+            FROM claude.session_state
             WHERE project_name = %s
         """, (project_name,))
 
@@ -90,7 +90,7 @@ def get_pending_messages(project_name):
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) as count
-            FROM claude_family.instance_messages
+            FROM claude.messages
             WHERE status = 'pending'
               AND (to_project = %s OR to_project IS NULL)
         """, (project_name,))
@@ -103,6 +103,99 @@ def get_pending_messages(project_name):
         return 0
     except:
         return 0
+
+
+def get_due_reminders(project_name):
+    """Check for due reminders."""
+    if not DB_AVAILABLE:
+        return []
+
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT reminder_id, title, description, check_after, reminder_count, max_reminders
+            FROM claude.reminders
+            WHERE status = 'pending'
+              AND check_after <= NOW()
+              AND (project_name = %s OR project_name IS NULL)
+            ORDER BY check_after ASC
+            LIMIT 5
+        """, (project_name,))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
+    except:
+        return []
+
+
+def get_due_jobs(project_name):
+    """Check for scheduled jobs that should run."""
+    if not DB_AVAILABLE:
+        return []
+
+    conn = get_db_connection()
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT job_id, job_name, job_description,
+                   EXTRACT(DAY FROM NOW() - COALESCE(last_run, created_at)) as days_since_run
+            FROM claude.scheduled_jobs
+            WHERE is_active = true
+              AND (
+                  -- Check if enough days have passed (default 7 if no trigger_condition)
+                  EXTRACT(DAY FROM NOW() - COALESCE(last_run, created_at)) >= 7
+              )
+            ORDER BY last_run ASC NULLS FIRST
+            LIMIT 3
+        """)
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
+    except:
+        return []
+
+
+def get_governance_compliance(project_name):
+    """Check project governance compliance."""
+    if not DB_AVAILABLE:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                has_claude_md,
+                has_problem_statement,
+                has_architecture,
+                compliance_pct,
+                phase
+            FROM claude.v_project_governance
+            WHERE project_name = %s
+        """, (project_name,))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            return dict(row) if PSYCOPG_VERSION == 3 else dict(row)
+        return None
+    except:
+        return None
 
 
 def main():
@@ -157,16 +250,79 @@ def main():
         context_lines.append(f"📬 {msg_count} pending message(s) - use /inbox-check to view")
         context_lines.append("")
 
+    # Check for due reminders
+    reminders = get_due_reminders(project_name)
+    if reminders:
+        context_lines.append("⏰ DUE REMINDERS:")
+        for r in reminders:
+            context_lines.append(f"   - {r['title']}")
+            if r.get('description'):
+                context_lines.append(f"     {r['description'][:100]}...")
+        context_lines.append("")
+
+    # Check for due scheduled jobs
+    due_jobs = get_due_jobs(project_name)
+    if due_jobs:
+        context_lines.append("📅 JOBS DUE TO RUN:")
+        for job in due_jobs:
+            days = int(job.get('days_since_run', 0))
+            context_lines.append(f"   - {job['job_name']} (last run: {days} days ago)")
+        context_lines.append("")
+
+    # Check governance compliance
+    compliance = get_governance_compliance(project_name)
+    if compliance:
+        pct = compliance.get('compliance_pct', 0)
+        if pct < 100:
+            context_lines.append(f"⚠️  GOVERNANCE COMPLIANCE: {pct}%")
+            missing = []
+            if not compliance.get('has_claude_md'):
+                missing.append('CLAUDE.md')
+            if not compliance.get('has_problem_statement'):
+                missing.append('PROBLEM_STATEMENT.md')
+            if not compliance.get('has_architecture'):
+                missing.append('ARCHITECTURE.md')
+            if missing:
+                context_lines.append(f"   Missing: {', '.join(missing)}")
+                context_lines.append("   Run /retrofit-project to add missing documents")
+            context_lines.append("")
+        else:
+            context_lines.append(f"✓ Governance: 100% compliant (Phase: {compliance.get('phase', 'unknown')})")
+            context_lines.append("")
+
     # Reminder about commands
     context_lines.append("Available commands: /session-start, /session-end, /inbox-check, /feedback-check, /team-status, /broadcast")
 
     result["additionalContext"] = "\n".join(context_lines)
 
-    # Build system message
-    if state and state.get('current_focus'):
-        result["systemMessage"] = f"Session resumed for {project_name}. Previous focus: {state['current_focus']}"
-    else:
-        result["systemMessage"] = f"Claude Family session initialized for {project_name}."
+    # Build system message - show key info to user
+    system_parts = [f"Claude Family session {'resumed' if is_resume else 'initialized'} for {project_name}."]
+
+    if state:
+        if state.get('current_focus'):
+            system_parts.append(f"Focus: {state['current_focus'][:80]}...")
+        if state.get('todo_list'):
+            todo_list = state['todo_list']
+            if isinstance(todo_list, str):
+                try:
+                    todo_list = json.loads(todo_list)
+                except:
+                    pass
+            if isinstance(todo_list, list):
+                pending = [t for t in todo_list if t.get('status') != 'completed']
+                if pending:
+                    system_parts.append(f"{len(pending)} pending todos.")
+
+    if msg_count > 0:
+        system_parts.append(f"{msg_count} pending message(s).")
+
+    if reminders:
+        system_parts.append(f"{len(reminders)} reminder(s) due!")
+
+    if due_jobs:
+        system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
+
+    result["systemMessage"] = " ".join(system_parts)
 
     print(json.dumps(result))
     return 0

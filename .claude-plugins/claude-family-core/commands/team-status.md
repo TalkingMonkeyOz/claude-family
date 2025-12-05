@@ -15,8 +15,8 @@ SELECT
   sh.session_start,
   EXTRACT(EPOCH FROM (NOW() - sh.session_start))/60 as minutes_active,
   sh.session_summary as current_task
-FROM claude_family.session_history sh
-JOIN claude_family.identities i ON sh.identity_id = i.identity_id
+FROM claude.sessions sh
+JOIN claude.identities i ON sh.identity_id = i.identity_id
 WHERE sh.session_end IS NULL
 ORDER BY sh.session_start DESC;
 ```

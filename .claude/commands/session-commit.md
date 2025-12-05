@@ -14,7 +14,7 @@ This command performs BOTH session logging AND git operations in one atomic work
 ```sql
 -- 1. Get your latest session ID
 SELECT session_id, session_start, project_name 
-FROM claude_family.session_history
+FROM claude.sessions
 WHERE identity_id = 'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid
   AND session_end IS NULL
 ORDER BY session_start DESC 
@@ -22,7 +22,7 @@ LIMIT 1;
 
 -- 2. Update session with summary
 -- Replace <session_id> with the UUID from step 1
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET
     session_end = NOW(),
     session_summary = '**Brief summary of what was accomplished**',
@@ -51,7 +51,7 @@ RETURNING session_id, session_end;
 **If you discovered a reusable pattern:**
 
 ```sql
-INSERT INTO claude_family.universal_knowledge
+INSERT INTO claude.knowledge
 (pattern_name, category, description, example_code, gotchas, confidence_level, times_applied, created_by_identity)
 VALUES (
     'Pattern Name',

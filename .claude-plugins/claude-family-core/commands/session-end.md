@@ -10,7 +10,7 @@ Save your current todo list and work state for next session resume:
 
 ```sql
 -- Save session state (uses UPSERT - creates or updates)
-INSERT INTO claude_family.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
+INSERT INTO claude.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
 VALUES (
     '<project_name>',  -- e.g., 'claude-family', 'nimbus-user-loader'
     '<todo_list_json>', -- Copy your current TodoWrite list as JSON array
@@ -28,7 +28,7 @@ ON CONFLICT (project_name) DO UPDATE SET
 
 **Quick Example:**
 ```sql
-INSERT INTO claude_family.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
+INSERT INTO claude.session_state (project_name, todo_list, current_focus, files_modified, pending_actions)
 VALUES (
     'claude-family',
     '[{"content": "Implement feature X", "status": "in_progress"}, {"content": "Test feature X", "status": "pending"}]'::jsonb,
@@ -50,12 +50,12 @@ ON CONFLICT (project_name) DO UPDATE SET
 
 ```sql
 -- 1. Get your latest session ID
-SELECT session_id FROM claude_family.session_history
+SELECT session_id FROM claude.sessions
 WHERE identity_id = 'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid
 ORDER BY session_start DESC LIMIT 1;
 
 -- 2. Update session with summary
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET
     session_end = NOW(),
     session_summary = 'What was accomplished',
@@ -72,7 +72,7 @@ WHERE session_id = '<session_id>'::uuid;
 **If you discovered a reusable pattern:**
 
 ```sql
-INSERT INTO claude_family.universal_knowledge
+INSERT INTO claude.knowledge
 (pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
 VALUES (
     'Pattern Name',

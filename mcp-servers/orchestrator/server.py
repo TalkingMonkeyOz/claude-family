@@ -23,6 +23,10 @@ from typing import Any, Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
 
+# Ensure we're running from the orchestrator directory so relative paths work
+SCRIPT_DIR = Path(__file__).parent.resolve()
+os.chdir(SCRIPT_DIR)
+
 # MCP SDK imports
 try:
     from mcp.server import Server
@@ -153,7 +157,7 @@ def check_inbox(
                 metadata,
                 status,
                 created_at
-            FROM claude_family.instance_messages
+            FROM claude.messages
             WHERE {' AND '.join(conditions)}
             ORDER BY
                 CASE priority
@@ -200,7 +204,7 @@ def send_message(
     try:
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO claude_family.instance_messages
+            INSERT INTO claude.messages
             (from_session_id, to_session_id, to_project, message_type, priority, subject, body, metadata)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING message_id::text, created_at
@@ -248,14 +252,14 @@ def acknowledge(message_id: str, action: str = "read") -> dict:
         cur = conn.cursor()
         if action == "read":
             cur.execute("""
-                UPDATE claude_family.instance_messages
+                UPDATE claude.messages
                 SET status = 'read', read_at = NOW()
                 WHERE message_id = %s
                 RETURNING message_id::text
             """, (message_id,))
         else:
             cur.execute("""
-                UPDATE claude_family.instance_messages
+                UPDATE claude.messages
                 SET status = 'acknowledged', acknowledged_at = NOW()
                 WHERE message_id = %s
                 RETURNING message_id::text
@@ -286,8 +290,8 @@ def get_active_sessions() -> dict:
                 sh.project_name,
                 sh.session_start,
                 EXTRACT(EPOCH FROM (NOW() - sh.session_start))/60 as minutes_active
-            FROM claude_family.session_history sh
-            JOIN claude_family.identities i ON sh.identity_id = i.identity_id
+            FROM claude.sessions sh
+            JOIN claude.identities i ON sh.identity_id = i.identity_id
             WHERE sh.session_end IS NULL
             ORDER BY sh.session_start DESC
         """)
@@ -322,7 +326,7 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
         cur = conn.cursor()
         cur.execute("""
             SELECT from_session_id::text, to_project, subject
-            FROM claude_family.instance_messages
+            FROM claude.messages
             WHERE message_id = %s
         """, (original_message_id,))
         original = cur.fetchone()
@@ -344,6 +348,79 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
         from_session_id=from_session_id,
         metadata={"reply_to": original_message_id}
     )
+
+
+def recommend_agent(task: str) -> dict:
+    """Analyze task description and recommend best agent type.
+    
+    Args:
+        task: Task description to analyze
+    
+    Returns:
+        dict with recommended agent type, reason, and cost
+    """
+    task_lower = task.lower()
+    
+    # Security tasks
+    if any(w in task_lower for w in ['security', 'vulnerability', 'audit', 'owasp', 'penetration']):
+        if 'deep' in task_lower or 'comprehensive' in task_lower:
+            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00"}
+        return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24"}
+    
+    # Testing tasks
+    if any(w in task_lower for w in ['playwright', 'e2e', 'browser', 'selenium']):
+        if 'next' in task_lower or 'react' in task_lower:
+            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06"}
+        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05"}
+    if any(w in task_lower for w in ['test', 'unit test', 'pytest', 'jest']):
+        return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05"}
+    
+    # Code review
+    if any(w in task_lower for w in ['review', 'code review', 'pr review']):
+        return {"agent": "reviewer-sonnet", "reason": "Code review", "cost": "$0.11"}
+    
+    # Python development
+    if 'python' in task_lower and any(w in task_lower for w in ['write', 'create', 'build', 'fix', 'implement']):
+        return {"agent": "python-coder-haiku", "reason": "Python development", "cost": "$0.045"}
+    
+    # C# development
+    if any(w in task_lower for w in ['c#', 'csharp', '.net', 'wpf', 'winforms']):
+        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045"}
+    
+    # Architecture
+    if any(w in task_lower for w in ['architect', 'design', 'system design', 'refactor large']):
+        return {"agent": "architect-opus", "reason": "Architecture design", "cost": "$0.83"}
+    
+    # Research/analysis
+    if any(w in task_lower for w in ['research', 'analyze', 'investigate', 'understand']):
+        return {"agent": "analyst-sonnet", "reason": "Research and analysis", "cost": "$0.30"}
+    
+    # Planning
+    if any(w in task_lower for w in ['plan', 'breakdown', 'sprint', 'roadmap']):
+        return {"agent": "planner-sonnet", "reason": "Task planning", "cost": "$0.21"}
+    
+    # Exploration/search tasks - recommend Task tool instead
+    if any(w in task_lower for w in ['find', 'search', 'where is', 'locate', 'explore codebase']):
+        return {
+            "agent": "TASK_TOOL",
+            "reason": "Use Task tool with subagent_type='Explore' for codebase exploration",
+            "cost": "varies by model",
+            "models": ["haiku", "sonnet"],
+            "note": "Not an orchestrator agent - use built-in Task tool with model parameter"
+        }
+
+    # Complex multi-step research
+    if any(w in task_lower for w in ['multi-step', 'complex research', 'gather context']):
+        return {
+            "agent": "TASK_TOOL",
+            "reason": "Use Task tool with subagent_type='general-purpose' for complex research",
+            "cost": "varies by model",
+            "models": ["haiku", "sonnet", "opus"],
+            "note": "Not an orchestrator agent - use built-in Task tool with model parameter"
+        }
+
+    # Default: general coding
+    return {"agent": "coder-haiku", "reason": "General coding task", "cost": "$0.035"}
 
 
 # ============================================================================
@@ -395,6 +472,20 @@ async def list_tools() -> List[Tool]:
                 "type": "object",
                 "properties": {},
                 "required": []
+            }
+        ),
+        Tool(
+            name="recommend_agent",
+            description="Analyze a task description and recommend the best agent type to use, based on task keywords and complexity.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "Task description to analyze for agent recommendation"
+                    }
+                },
+                "required": ["task"]
             }
         ),
     ]
@@ -542,6 +633,44 @@ async def list_tools() -> List[Tool]:
                     "required": ["original_message_id", "body"]
                 }
             ),
+            Tool(
+                name="get_agent_stats",
+                description="Get usage statistics for spawned agents (total sessions, success rate, avg time, cost)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "agent_type": {
+                            "type": "string",
+                            "description": "Filter by agent type (optional, shows all if not specified)"
+                        },
+                        "days": {
+                            "type": "integer",
+                            "description": "Limit to last N days (default: all time)",
+                            "minimum": 1,
+                            "maximum": 365
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="get_mcp_stats",
+                description="Get usage statistics for MCP tool calls (call counts, success rates, avg execution time)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "mcp_server": {
+                            "type": "string",
+                            "description": "Filter by MCP server name (optional)"
+                        },
+                        "days": {
+                            "type": "integer",
+                            "description": "Limit to last N days (default: all time)",
+                            "minimum": 1,
+                            "maximum": 365
+                        }
+                    }
+                }
+            ),
         ])
 
     return tools
@@ -560,6 +689,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_spawn_agent(arguments)
     elif name == "list_agent_types":
         return await handle_list_agent_types()
+    elif name == "recommend_agent":
+        return await handle_recommend_agent(arguments)
 
     # Messaging tools
     elif name == "check_inbox":
@@ -574,6 +705,12 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_get_active_sessions()
     elif name == "reply_to":
         return await handle_reply_to(arguments)
+
+    # Stats tools
+    elif name == "get_agent_stats":
+        return await handle_get_agent_stats(arguments)
+    elif name == "get_mcp_stats":
+        return await handle_get_mcp_stats(arguments)
 
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -644,6 +781,13 @@ async def handle_list_agent_types() -> List[TextContent]:
     return [TextContent(type="text", text=json.dumps(agent_types_info, indent=2))]
 
 
+async def handle_recommend_agent(arguments: dict) -> List[TextContent]:
+    """Handle recommend_agent tool call."""
+    task = arguments['task']
+    result = recommend_agent(task)
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
 async def handle_check_inbox(arguments: dict) -> List[TextContent]:
     """Handle check_inbox tool call."""
     result = check_inbox(
@@ -704,6 +848,142 @@ async def handle_reply_to(arguments: dict) -> List[TextContent]:
         from_session_id=arguments.get('from_session_id')
     )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_get_agent_stats(arguments: dict) -> List[TextContent]:
+    """Handle get_agent_stats tool call."""
+    agent_type = arguments.get('agent_type')
+    days = arguments.get('days')
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Build query with optional filters
+        conditions = []
+        params = []
+
+        if agent_type:
+            conditions.append("agent_type = %s")
+            params.append(agent_type)
+
+        if days:
+            conditions.append("spawned_at > NOW() - INTERVAL '%s days'")
+            params.append(days)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        # Get summary stats
+        cur.execute(f"""
+            SELECT
+                agent_type,
+                COUNT(*) as total_sessions,
+                COUNT(*) FILTER (WHERE success = true) as successful,
+                COUNT(*) FILTER (WHERE success = false) as failed,
+                ROUND(AVG(execution_time_seconds)::numeric, 2) as avg_execution_seconds,
+                ROUND(SUM(estimated_cost_usd)::numeric, 4) as total_cost_usd,
+                MIN(spawned_at) as first_spawn,
+                MAX(spawned_at) as last_spawn
+            FROM claude.agent_sessions
+            {where_clause}
+            GROUP BY agent_type
+            ORDER BY total_sessions DESC
+        """, params)
+
+        rows = cur.fetchall()
+        cur.close()
+
+        # Format results
+        stats = []
+        for row in rows:
+            row_dict = dict(row) if not isinstance(row, dict) else row
+            # Convert datetime to string
+            if row_dict.get('first_spawn'):
+                row_dict['first_spawn'] = row_dict['first_spawn'].isoformat()
+            if row_dict.get('last_spawn'):
+                row_dict['last_spawn'] = row_dict['last_spawn'].isoformat()
+            # Convert Decimal to float
+            if row_dict.get('avg_execution_seconds'):
+                row_dict['avg_execution_seconds'] = float(row_dict['avg_execution_seconds'])
+            if row_dict.get('total_cost_usd'):
+                row_dict['total_cost_usd'] = float(row_dict['total_cost_usd'])
+            stats.append(row_dict)
+
+        return [TextContent(type="text", text=json.dumps({
+            "filter": {"agent_type": agent_type, "days": days},
+            "stats": stats
+        }, indent=2))]
+
+    finally:
+        conn.close()
+
+
+async def handle_get_mcp_stats(arguments: dict) -> List[TextContent]:
+    """Handle get_mcp_stats tool call."""
+    mcp_server = arguments.get('mcp_server')
+    days = arguments.get('days')
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Build query with optional filters
+        conditions = []
+        params = []
+
+        if mcp_server:
+            conditions.append("mcp_server = %s")
+            params.append(mcp_server)
+
+        if days:
+            conditions.append("called_at > NOW() - INTERVAL '%s days'")
+            params.append(days)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        # Get summary stats
+        cur.execute(f"""
+            SELECT
+                mcp_server,
+                tool_name,
+                COUNT(*) as call_count,
+                COUNT(*) FILTER (WHERE success = true) as success_count,
+                COUNT(*) FILTER (WHERE success = false) as failure_count,
+                ROUND(AVG(execution_time_ms)::numeric, 2) as avg_execution_ms,
+                MIN(called_at) as first_used,
+                MAX(called_at) as last_used
+            FROM claude.mcp_usage
+            {where_clause}
+            GROUP BY mcp_server, tool_name
+            ORDER BY call_count DESC
+            LIMIT 50
+        """, params)
+
+        rows = cur.fetchall()
+        cur.close()
+
+        # Format results
+        stats = []
+        for row in rows:
+            row_dict = dict(row) if not isinstance(row, dict) else row
+            # Convert datetime to string
+            if row_dict.get('first_used'):
+                row_dict['first_used'] = row_dict['first_used'].isoformat()
+            if row_dict.get('last_used'):
+                row_dict['last_used'] = row_dict['last_used'].isoformat()
+            # Convert Decimal to float
+            if row_dict.get('avg_execution_ms'):
+                row_dict['avg_execution_ms'] = float(row_dict['avg_execution_ms'])
+            stats.append(row_dict)
+
+        return [TextContent(type="text", text=json.dumps({
+            "filter": {"mcp_server": mcp_server, "days": days},
+            "stats": stats,
+            "note": "MCP usage tracking requires hooks to be configured to log tool calls"
+        }, indent=2))]
+
+    finally:
+        conn.close()
 
 
 # ============================================================================

@@ -25,8 +25,8 @@ You are a coordination specialist for the Claude Family. Your role is to help ma
 ### Check Team Status
 ```sql
 SELECT i.identity_name, sh.project_name, sh.session_start, sh.session_summary
-FROM claude_family.session_history sh
-JOIN claude_family.identities i ON sh.identity_id = i.identity_id
+FROM claude.sessions sh
+JOIN claude.identities i ON sh.identity_id = i.identity_id
 WHERE sh.session_end IS NULL;
 ```
 
@@ -39,7 +39,7 @@ Consider:
 ### Synthesize Recent Progress
 ```sql
 SELECT project_name, session_summary, tasks_completed
-FROM claude_family.session_history
+FROM claude.sessions
 WHERE session_start > NOW() - INTERVAL '24 hours'
 ORDER BY session_start DESC;
 ```
