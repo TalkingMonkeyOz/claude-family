@@ -74,6 +74,7 @@ CLAUDE.md    Slash        Hooks        DB            Reviewer
 | PreToolUse | Edit CLAUDE.md | validate_claude_md.py | Warn on violations |
 | PreToolUse | mcp__postgres__execute_sql | validate_db_write.py | Block invalid column values |
 | PreToolUse | mcp__postgres__execute_sql | validate_phase.py | Block build_task if wrong phase |
+| PreCommit | Any | pre_commit_check.py | Block if schema invalid or sensitive files |
 | SessionStart | startup | session_startup_hook.py | Load state, check messages |
 | SessionStart | resume | session_startup_hook.py | Resume with saved state |
 | SessionEnd | Any | check_doc_updates.py | Warn if docs stale |

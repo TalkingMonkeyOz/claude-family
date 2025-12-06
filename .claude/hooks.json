@@ -93,6 +93,19 @@
           }
         ]
       }
+    ],
+    "PreCommit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/pre_commit_check.py\"",
+            "timeout": 60,
+            "blocking": true,
+            "description": "Run Level 1 tests: schema validation, sensitive file check"
+          }
+        ]
+      }
     ]
   }
 }
