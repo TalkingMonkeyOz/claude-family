@@ -488,6 +488,57 @@ async def list_tools() -> List[Tool]:
                 "required": ["task"]
             }
         ),
+        Tool(
+            name="spawn_agent_async",
+            description=(
+                "Spawn an agent asynchronously - returns immediately with task_id. "
+                "The agent works in background and reports results via messaging when complete. "
+                "Use this when you don't want to block waiting for the agent to finish."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "agent_type": {
+                        "type": "string",
+                        "enum": list(orchestrator.agent_specs['agent_types'].keys()),
+                        "description": "Type of agent to spawn"
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Task description for the agent"
+                    },
+                    "workspace_dir": {
+                        "type": "string",
+                        "description": "Workspace directory for the agent"
+                    },
+                    "callback_project": {
+                        "type": "string",
+                        "description": "Project to notify when complete (default: claude-family)"
+                    },
+                    "timeout": {
+                        "type": "number",
+                        "description": "Optional timeout in seconds",
+                        "minimum": 1,
+                        "maximum": 600
+                    }
+                },
+                "required": ["agent_type", "task", "workspace_dir"]
+            }
+        ),
+        Tool(
+            name="check_async_task",
+            description="Check the status of an async task by its task_id",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {
+                        "type": "string",
+                        "description": "Task ID returned from spawn_agent_async"
+                    }
+                },
+                "required": ["task_id"]
+            }
+        ),
     ]
 
     # Add messaging tools if postgres is available
@@ -691,6 +742,10 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_list_agent_types()
     elif name == "recommend_agent":
         return await handle_recommend_agent(arguments)
+    elif name == "spawn_agent_async":
+        return await handle_spawn_agent_async(arguments)
+    elif name == "check_async_task":
+        return await handle_check_async_task(arguments)
 
     # Messaging tools
     elif name == "check_inbox":
@@ -786,6 +841,60 @@ async def handle_recommend_agent(arguments: dict) -> List[TextContent]:
     task = arguments['task']
     result = recommend_agent(task)
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_spawn_agent_async(arguments: dict) -> List[TextContent]:
+    """Handle spawn_agent_async tool call."""
+    agent_type = arguments['agent_type']
+    task = arguments['task']
+    workspace_dir = arguments['workspace_dir']
+    callback_project = arguments.get('callback_project')
+    timeout = arguments.get('timeout')
+
+    result = await orchestrator.spawn_agent_async(
+        agent_type=agent_type,
+        task=task,
+        workspace_dir=workspace_dir,
+        callback_project=callback_project,
+        timeout=timeout
+    )
+
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_check_async_task(arguments: dict) -> List[TextContent]:
+    """Handle check_async_task tool call."""
+    task_id = arguments['task_id']
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT task_id::text, agent_type, task_description, workspace_dir,
+                   callback_project, status, spawned_at, started_at, completed_at,
+                   result, error
+            FROM claude.async_tasks
+            WHERE task_id = %s
+        """, (task_id,))
+
+        row = cur.fetchone()
+        cur.close()
+
+        if not row:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Task {task_id} not found"
+            }, indent=2))]
+
+        row_dict = dict(row) if not isinstance(row, dict) else row
+        # Convert datetime to string
+        for key in ['spawned_at', 'started_at', 'completed_at']:
+            if row_dict.get(key):
+                row_dict[key] = row_dict[key].isoformat()
+
+        return [TextContent(type="text", text=json.dumps(row_dict, indent=2))]
+
+    finally:
+        conn.close()
 
 
 async def handle_check_inbox(arguments: dict) -> List[TextContent]:

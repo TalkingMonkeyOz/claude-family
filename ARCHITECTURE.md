@@ -1,8 +1,8 @@
 # Architecture - Claude Family Infrastructure
 
 **Project**: claude-family
-**Version**: 1.0
-**Updated**: 2025-12-04
+**Version**: 1.1
+**Updated**: 2025-12-06
 **Status**: Active
 
 ---
@@ -242,6 +242,45 @@ The orchestrator MCP server can spawn specialized agents:
 - architect-opus: Design decisions
 - tester-haiku: Test writing
 
+**Current**: Agents spawn synchronously (caller blocks until completion)
+**Planned**: Async spawn with messaging-based result delivery (ADR-003)
+
+---
+
+## Scheduled Jobs
+
+**IMPORTANT**: Job execution gap identified 2025-12-06.
+
+The `claude.scheduled_jobs` table registers scheduled jobs, but **no execution mechanism exists**. The `session_startup_hook.py` checks for due jobs and reports them but does NOT execute them.
+
+```
+STATUS (2025-12-06):
+- 11 jobs registered, 0 have ever run
+- Jobs are reported to Claude at session start
+- Claude must manually run or delegate jobs
+- MCW task requested to build job runner
+```
+
+**Planned resolution**: MCW job runner integration (see docs/TODO_NEXT_SESSION.md)
+
+---
+
+## Enforcement Reality
+
+The enforcement hierarchy exists but with gaps:
+
+| Level | Mechanism | Status |
+|-------|-----------|--------|
+| CLAUDE.md | Guidance | Active (not always followed) |
+| Slash Commands | Manual | Active |
+| Hooks | Pre-tool validation | Active (3 validators) |
+| DB Constraints | CHECK constraints | Active (limited coverage) |
+| Reviewer Agents | Async verification | Not yet implemented |
+
+**Recent additions** (2025-12-06):
+- `validate_parent_links.py` - Prevents orphan records at INSERT time
+- Updated hooks.json to include parent validation
+
 ---
 
 ## Security Considerations
@@ -268,8 +307,9 @@ The orchestrator MCP server can spawn specialized agents:
 |-----|-------|--------|
 | ADR-001 | Schema Consolidation | Accepted |
 | ADR-002 | Core Documentation System | Accepted |
+| ADR-003 | Async Agent Workflow | Proposed |
 
-See `claude.architecture_decisions` table for full records.
+See `claude.architecture_decisions` table and `docs/adr/` folder for full records.
 
 ---
 

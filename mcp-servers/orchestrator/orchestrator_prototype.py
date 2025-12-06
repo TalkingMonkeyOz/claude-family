@@ -365,6 +365,109 @@ TASK:
                 'estimated_cost_usd': 0.0
             }
 
+    async def spawn_agent_async(
+        self,
+        agent_type: str,
+        task: str,
+        workspace_dir: str,
+        callback_project: Optional[str] = None,
+        timeout: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Spawn a Claude agent asynchronously - returns immediately with task_id.
+
+        The agent will report its result via the messaging system when complete.
+
+        Args:
+            agent_type: Type of agent (e.g., 'coder-haiku', 'reviewer-sonnet')
+            task: Task description for the agent
+            workspace_dir: Directory to jail the agent to
+            callback_project: Project to notify on completion (via messaging)
+            timeout: Max execution time in seconds (default: from spec)
+
+        Returns:
+            Dict with 'task_id', 'status', message about where results will be sent
+        """
+        import uuid
+
+        spec = self.get_agent_spec(agent_type)
+        task_id = str(uuid.uuid4())
+        timeout = timeout or spec['recommended_timeout_seconds']
+
+        # Log to async_tasks table
+        if self.db_logger:
+            self.db_logger.log_async_spawn(
+                task_id=task_id,
+                agent_type=agent_type,
+                task=task,
+                workspace_dir=workspace_dir,
+                callback_project=callback_project
+            )
+
+        # Wrap task to include completion reporting instructions
+        wrapped_task = f"""{task}
+
+IMPORTANT: When you complete this task, send your result via the messaging system:
+
+mcp__orchestrator__send_message(
+    message_type="status_update",
+    to_project="{callback_project or 'claude-family'}",
+    subject="Async Task Complete: {task_id}",
+    body="<your result summary here>"
+)
+
+Task ID for reference: {task_id}"""
+
+        # Start the agent in background (fire and forget)
+        asyncio.create_task(
+            self._run_async_agent(task_id, agent_type, wrapped_task, workspace_dir, timeout, callback_project)
+        )
+
+        return {
+            "task_id": task_id,
+            "status": "spawned",
+            "agent_type": agent_type,
+            "callback_project": callback_project or "claude-family",
+            "message": f"Agent spawned. Results will be sent to {callback_project or 'claude-family'} via messaging."
+        }
+
+    async def _run_async_agent(
+        self,
+        task_id: str,
+        agent_type: str,
+        task: str,
+        workspace_dir: str,
+        timeout: int,
+        callback_project: Optional[str]
+    ):
+        """Background task that runs agent and updates status."""
+        try:
+            # Update status to running
+            if self.db_logger:
+                self.db_logger.update_async_task(task_id, status='running')
+
+            # Run the agent (reuse existing spawn logic)
+            result = await self.spawn_agent(agent_type, task, workspace_dir, timeout)
+
+            # Update completion status
+            if self.db_logger:
+                if result['success']:
+                    self.db_logger.update_async_task(
+                        task_id,
+                        status='completed',
+                        result=result.get('output', '')[:5000]  # Truncate large outputs
+                    )
+                else:
+                    self.db_logger.update_async_task(
+                        task_id,
+                        status='failed',
+                        error=result.get('error', 'Unknown error')
+                    )
+
+        except Exception as e:
+            if self.db_logger:
+                self.db_logger.update_async_task(task_id, status='failed', error=str(e))
+
     def list_agent_types(self) -> Dict[str, str]:
         """List all available agent types with descriptions."""
         return {

@@ -291,6 +291,105 @@ class AgentLogger:
                 except Exception:
                     pass
 
+    def log_async_spawn(
+        self,
+        task_id: str,
+        agent_type: str,
+        task: str,
+        workspace_dir: str,
+        callback_project: Optional[str] = None
+    ):
+        """Log async agent spawn to async_tasks table."""
+        if psycopg is None:
+            return
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute("""
+                INSERT INTO claude.async_tasks
+                (task_id, agent_type, task_description, workspace_dir, callback_project, status, spawned_at)
+                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+            """, (
+                task_id,
+                agent_type,
+                task,
+                workspace_dir,
+                callback_project,
+                datetime.now()
+            ))
+
+            conn.commit()
+            cursor.close()
+
+        except Exception as e:
+            print(f"WARNING: Failed to log async spawn: {e}")
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    def update_async_task(
+        self,
+        task_id: str,
+        status: str,
+        result: Optional[str] = None,
+        error: Optional[str] = None
+    ):
+        """Update async task status."""
+        if psycopg is None:
+            return
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            if status == 'running':
+                cursor.execute("""
+                    UPDATE claude.async_tasks
+                    SET status = 'running', started_at = %s
+                    WHERE task_id = %s
+                """, (datetime.now(), task_id))
+            elif status == 'completed':
+                cursor.execute("""
+                    UPDATE claude.async_tasks
+                    SET status = 'completed', completed_at = %s, result = %s
+                    WHERE task_id = %s
+                """, (datetime.now(), result, task_id))
+            elif status == 'failed':
+                cursor.execute("""
+                    UPDATE claude.async_tasks
+                    SET status = 'failed', completed_at = %s, error = %s
+                    WHERE task_id = %s
+                """, (datetime.now(), error, task_id))
+
+            conn.commit()
+            cursor.close()
+
+        except Exception as e:
+            print(f"WARNING: Failed to update async task: {e}")
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def close(self):
         """Close any resources (no-op for thread-safe implementation)."""
         # No persistent connection to close - connections are per-operation

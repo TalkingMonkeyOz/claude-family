@@ -37,6 +37,12 @@
             "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_phase.py\"",
             "timeout": 10,
             "description": "Check project phase for build_task creation"
+          },
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_parent_links.py\"",
+            "timeout": 10,
+            "description": "Prevent orphan creation - require parent links"
           }
         ]
       }
