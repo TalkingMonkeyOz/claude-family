@@ -37,7 +37,7 @@ def load_identities(conn):
     cur.execute("""
         SELECT identity_id, identity_name, platform, role_description,
                capabilities, personality_traits, status
-        FROM claude_family.identities
+        FROM claude.identities
         WHERE status = 'active'
     """)
     identities = [dict(row) for row in cur.fetchall()]
@@ -50,7 +50,7 @@ def load_knowledge(conn):
     cur.execute("""
         SELECT knowledge_id, knowledge_type, knowledge_category, title,
                description, applies_to_projects, confidence_level, times_applied
-        FROM claude_family.shared_knowledge
+        FROM claude.knowledge
         ORDER BY confidence_level DESC, times_applied DESC
         LIMIT 50
     """)
@@ -62,9 +62,9 @@ def load_sessions(conn, days=30):
     """Load recent sessions"""
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
-        SELECT session_id, identity_id, project_schema, project_name,
-               session_start, session_end, tasks_completed, learnings_gained, session_summary
-        FROM claude_family.session_history
+        SELECT session_id, identity_id, project_name,
+               session_start, session_end, session_summary
+        FROM claude.sessions
         WHERE session_start >= NOW() - INTERVAL '%s days'
         ORDER BY session_start DESC
         LIMIT 100
@@ -104,7 +104,7 @@ def create_mcp_entities(identities, knowledge, sessions):
                 f"Category: {k['knowledge_category']}",
                 f"Title: {k['title']}",
                 f"Description: {k['description']}",
-                f"Applies to: {', '.join(k.get('applies_to_projects', ['all']))}",
+                f"Applies to: {', '.join(k.get('applies_to_projects') or ['all'])}",
                 f"Confidence: {k['confidence_level']}/10",
                 f"Times applied: {k['times_applied']}"
             ]
@@ -116,10 +116,9 @@ def create_mcp_entities(identities, knowledge, sessions):
             "name": f"session_{session['session_id']}",
             "entityType": "session",
             "observations": [
-                f"Project: {session['project_name']} ({session['project_schema']})",
+                f"Project: {session['project_name']}",
                 f"Started: {session['session_start']}",
-                f"Tasks: {', '.join(session.get('tasks_completed', [])[:3])}",
-                f"Summary: {session.get('session_summary', 'No summary')[:200]}"
+                f"Summary: {session.get('session_summary', 'No summary')[:200] if session.get('session_summary') else 'No summary'}"
             ]
         })
 

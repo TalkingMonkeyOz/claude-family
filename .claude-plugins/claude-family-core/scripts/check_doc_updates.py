@@ -38,8 +38,6 @@ except ImportError:
     except ImportError:
         DB_AVAILABLE = False
 
-CONN_STR = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation'
-
 # Core docs to check
 CORE_DOCS = ['CLAUDE.md', 'ARCHITECTURE.md', 'PROBLEM_STATEMENT.md']
 
@@ -49,12 +47,16 @@ ARCHITECTURE_STALE_DAYS = 30
 
 
 def get_db_connection():
-    """Get PostgreSQL connection."""
+    """Get PostgreSQL connection from environment."""
+    conn_str = os.environ.get('DATABASE_URL')
+    if not conn_str:
+        return None
+
     try:
         if PSYCOPG_VERSION == 3:
-            return psycopg.connect(CONN_STR, row_factory=dict_row)
+            return psycopg.connect(conn_str, row_factory=dict_row)
         else:
-            return psycopg.connect(CONN_STR, cursor_factory=RealDictCursor)
+            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
     except Exception:
         return None
 

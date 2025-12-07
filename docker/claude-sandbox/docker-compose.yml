@@ -1,0 +1,57 @@
+# Claude Sandbox Docker Compose
+# Manages sandboxed Claude agent containers
+#
+# Usage:
+#   docker-compose run --rm sandbox "Write a hello world script"
+
+version: '3.8'
+
+services:
+  sandbox:
+    build: .
+    image: claude-sandbox:latest
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    volumes:
+      # Mount workspace - agent can only access this directory
+      - ${WORKSPACE_PATH:-C:/Projects}:/workspace:rw
+    working_dir: /workspace
+    # Resource limits for safety
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    # Network isolation (can disable for agents needing internet)
+    network_mode: bridge
+    # No privileged access
+    privileged: false
+    # Read-only root filesystem (workspace is writable)
+    read_only: false
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+  # Computer Use variant with display
+  sandbox-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile.gui
+    image: claude-sandbox-gui:latest
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DISPLAY=:99
+    volumes:
+      - ${WORKSPACE_PATH:-C:/Projects}:/workspace:rw
+      - ./screenshots:/screenshots:rw
+    ports:
+      - "6080:6080"  # noVNC web interface
+    working_dir: /workspace
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G

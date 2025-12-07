@@ -13,10 +13,14 @@ Usage:
 
 import os
 import sys
+import io
 import json
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Fix Windows encoding
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 # Database imports
 try:
@@ -233,16 +237,38 @@ def main():
     if not critical:
         print("  All critical documents are up to date.")
 
+    # Apply fixes if requested
+    fixed_count = 0
+    if args.fix and missing:
+        print("\n## Applying Fixes")
+        print("  Archiving documents with missing files...")
+        cur = conn.cursor()
+        for doc in missing:
+            cur.execute("""
+                UPDATE claude.documents
+                SET status = 'ARCHIVED',
+                    updated_at = NOW()
+                WHERE doc_id = %s AND status = 'ACTIVE'
+                RETURNING doc_id
+            """, (doc['doc_id'],))
+            if cur.fetchone():
+                fixed_count += 1
+                print(f"    ✓ Archived: {doc['doc_title']}")
+        conn.commit()
+        print(f"  Archived {fixed_count} documents with missing files")
+
     # Summary
     total_issues = len(stale) + len(missing) + len(critical)
     summary = f"Found {total_issues} issues: {len(stale)} stale, {len(missing)} missing, {len(critical)} critical"
+    if args.fix:
+        summary += f", {fixed_count} fixed"
 
     print("\n" + "=" * 60)
     print(f"Summary: {summary}")
     print("=" * 60)
 
     # Log completion
-    log_run_complete(conn, run_id, findings, summary, total_issues)
+    log_run_complete(conn, run_id, findings, summary, total_issues - fixed_count)
 
     if args.json:
         print("\nJSON Output:")

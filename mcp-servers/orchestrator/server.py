@@ -793,7 +793,8 @@ async def handle_spawn_agent(arguments: dict) -> List[TextContent]:
             "agent_type": result['agent_type'],
             "execution_time_seconds": result['execution_time_seconds'],
             "estimated_cost_usd": result['estimated_cost_usd'],
-            "output": result['output']
+            "output": result['output'],
+            "debug_stderr": result.get('stderr')  # Include stderr for debugging
         }
     else:
         response = {

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "tool-search": {
+      "command": "python",
+      "args": ["C:/Projects/claude-family/mcp-servers/tool-search/server.py"],
+      "env": {}
+    }
+  }
+}

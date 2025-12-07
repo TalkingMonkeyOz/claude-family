@@ -36,7 +36,7 @@
       "workspace_jail_template": "{project_root}/src/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.",
+      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.\n\nTOOL USAGE EXAMPLES:\n- Read file: mcp__filesystem__read_text_file(path=\"/path/to/file.py\")\n- Write file: mcp__filesystem__write_file(path=\"/path/to/file.py\", content=\"...\")\n- List dir: mcp__filesystem__list_directory(path=\"/path\")\n- Search: mcp__filesystem__search_files(path=\"/project\", pattern=\"*.py\")",
       "cost_profile": {
         "input_tokens_avg": 10000,
         "output_tokens_avg": 5000,
@@ -65,7 +65,11 @@
         "Bash(git add:*)",
         "Bash(git commit:*)",
         "Bash(git status:*)",
-        "Bash(git diff:*)"
+        "Bash(git diff:*)",
+        "mcp__filesystem",
+        "mcp__postgres",
+        "mcp__python-repl",
+        "mcp__orchestrator"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -79,7 +83,8 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use filesystem MCP to read/write Python files. Follow PEP 8 and project conventions.",
+      "skip_all_permissions": true,
+      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use filesystem MCP to read/write Python files. Follow PEP 8 and project conventions.\n\nTOOL USAGE EXAMPLES:\n- Execute Python: mcp__python-repl__execute_python(code=\"print('test')\")\n- Query DB: mcp__postgres__execute_sql(sql=\"SELECT * FROM table LIMIT 5\")\n- Read file: mcp__filesystem__read_text_file(path=\"/path/to/file.py\")\n- Write file: mcp__filesystem__write_file(path=\"/path/to/file.py\", content=\"...\")",
       "cost_profile": {
         "input_tokens_avg": 12000,
         "output_tokens_avg": 6000,
@@ -163,13 +168,14 @@
     },
     "reviewer-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
-      "description": "Code review and architectural analysis",
+      "description": "Code review and architectural analysis with LLM-as-Judge verification",
       "use_cases": [
         "Code review for PRs",
         "Architecture analysis",
         "Best practices validation",
         "Performance review",
-        "Maintainability assessment"
+        "Maintainability assessment",
+        "LLM-as-Judge quality verification"
       ],
       "allowed_tools": [
         "Read",
@@ -187,7 +193,8 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "system_prompt": "You are a code reviewer. Analyze code for quality, maintainability, performance, and best practices. Provide constructive feedback. Never modify code.",
+      "betas": ["interleaved-thinking-2025-05-14"],
+      "system_prompt": "You are a code reviewer using the LLM-as-Judge pattern. Analyze code for quality, maintainability, performance, and best practices. For each finding: 1) Rate severity (critical/high/medium/low), 2) Explain the issue clearly, 3) Suggest specific fix, 4) Consider trade-offs. Use structured output: FINDING: [description], SEVERITY: [level], FIX: [suggestion], RATIONALE: [why]. Provide constructive feedback. Never modify code.",
       "cost_profile": {
         "input_tokens_avg": 20000,
         "output_tokens_avg": 3000,
@@ -306,7 +313,7 @@
     },
     "architect-opus": {
       "model": "claude-opus-4-5-20251101",
-      "description": "Complex architectural decisions, system design, and strategic planning using Opus 4.5",
+      "description": "Complex architectural decisions, system design, and strategic planning using Opus 4.5 with 1M token context",
       "use_cases": [
         "System architecture design",
         "Complex refactoring planning",
@@ -333,7 +340,8 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a senior software architect using Claude Opus 4.5. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.",
+      "betas": ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"],
+      "system_prompt": "You are a senior software architect using Claude Opus 4.5 with 1M token context. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.",
       "cost_profile": {
         "input_tokens_avg": 40000,
         "output_tokens_avg": 25000,
@@ -343,7 +351,7 @@
     },
     "security-opus": {
       "model": "claude-opus-4-5-20251101",
-      "description": "Deep security audits and vulnerability analysis using Opus 4.5 for maximum thoroughness",
+      "description": "Deep security audits and vulnerability analysis using Opus 4.5 with 1M token context for maximum thoroughness",
       "use_cases": [
         "Comprehensive security audits",
         "Complex vulnerability analysis",
@@ -367,7 +375,8 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "system_prompt": "You are a senior security auditor using Claude Opus 4.5. Perform thorough security analysis including OWASP Top 10, authentication/authorization flaws, injection vulnerabilities, cryptographic weaknesses, and compliance gaps. Think deeply about attack vectors. Never modify code.",
+      "betas": ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"],
+      "system_prompt": "You are a senior security auditor using Claude Opus 4.5 with 1M token context. Perform thorough security analysis including OWASP Top 10, authentication/authorization flaws, injection vulnerabilities, cryptographic weaknesses, and compliance gaps. Think deeply about attack vectors. Never modify code.",
       "cost_profile": {
         "input_tokens_avg": 50000,
         "output_tokens_avg": 30000,
@@ -377,7 +386,7 @@
     },
     "researcher-opus": {
       "model": "claude-opus-4-5-20251101",
-      "description": "Deep research and analysis tasks requiring extensive reasoning",
+      "description": "Deep research and analysis tasks requiring extensive reasoning with 1M token context",
       "use_cases": [
         "Complex codebase analysis",
         "Technology evaluation",
@@ -402,7 +411,8 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "system_prompt": "You are a technical researcher using Claude Opus 4.5. Conduct thorough research with deep analysis. Consider multiple perspectives. Provide well-reasoned conclusions backed by evidence. Focus on accuracy and completeness.",
+      "betas": ["context-1m-2025-08-07", "interleaved-thinking-2025-05-14"],
+      "system_prompt": "You are a technical researcher using Claude Opus 4.5 with 1M token context. Conduct thorough research with deep analysis. Consider multiple perspectives. Provide well-reasoned conclusions backed by evidence. Focus on accuracy and completeness.",
       "cost_profile": {
         "input_tokens_avg": 45000,
         "output_tokens_avg": 20000,
@@ -671,6 +681,7 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
+      "betas": ["interleaved-thinking-2025-05-14"],
       "can_spawn_agents": true,
       "spawnable_agent_types": [
         "tester-haiku",
@@ -679,7 +690,7 @@
         "nextjs-tester-haiku",
         "screenshot-tester-haiku"
       ],
-      "system_prompt": "You are a test coordinator. Orchestrate comprehensive testing by spawning specialized test agents in parallel. 1) Analyze what needs testing, 2) Spawn appropriate agents (tester-haiku for unit tests, web-tester-haiku for E2E), 3) Wait for results, 4) Aggregate into unified report with: total tests, passed, failed, coverage gaps, critical issues.",
+      "system_prompt": "You are a test coordinator. Orchestrate comprehensive testing by spawning specialized test agents in parallel. 1) Analyze what needs testing, 2) Spawn appropriate agents (tester-haiku for unit tests, web-tester-haiku for E2E), 3) Wait for results, 4) Aggregate into unified report with: total tests, passed, failed, coverage gaps, critical issues.\n\nTOOL USAGE EXAMPLES:\n- Spawn agent: mcp__orchestrator__spawn_agent(agent_type=\"tester-haiku\", task=\"Run unit tests\", workspace_dir=\"/project\")\n- Spawn async: mcp__orchestrator__spawn_agent_async(agent_type=\"web-tester-haiku\", task=\"E2E tests\", workspace_dir=\"/project\", callback_project=\"test-coordinator\")\n- Check results: mcp__orchestrator__check_inbox(project_name=\"test-coordinator\")",
       "cost_profile": {
         "input_tokens_avg": 15000,
         "output_tokens_avg": 8000,
@@ -714,13 +725,14 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
+      "betas": ["interleaved-thinking-2025-05-14"],
       "can_spawn_agents": true,
       "spawnable_agent_types": [
         "reviewer-sonnet",
         "security-sonnet",
         "security-opus"
       ],
-      "system_prompt": "You are a review coordinator. Orchestrate code reviews by spawning specialized reviewers in parallel. 1) Identify scope, 2) Spawn reviewer-sonnet for quality + security-sonnet for vulnerabilities, 3) Aggregate by severity (critical/high/medium/low), 4) Generate unified report with prioritized actions. Never modify code.",
+      "system_prompt": "You are a review coordinator. Orchestrate code reviews by spawning specialized reviewers in parallel. 1) Identify scope, 2) Spawn reviewer-sonnet for quality + security-sonnet for vulnerabilities, 3) Aggregate by severity (critical/high/medium/low), 4) Generate unified report with prioritized actions. Never modify code.\n\nTOOL USAGE EXAMPLES:\n- Spawn reviewer: mcp__orchestrator__spawn_agent(agent_type=\"reviewer-sonnet\", task=\"Review PR changes\", workspace_dir=\"/project\")\n- Spawn security: mcp__orchestrator__spawn_agent(agent_type=\"security-sonnet\", task=\"Security audit\", workspace_dir=\"/project\")\n- Send report: mcp__orchestrator__send_message(message_type=\"status_update\", body=\"Review complete\", to_project=\"project-name\")",
       "cost_profile": {
         "input_tokens_avg": 20000,
         "output_tokens_avg": 10000,
@@ -755,6 +767,7 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
+      "betas": ["interleaved-thinking-2025-05-14"],
       "can_spawn_agents": true,
       "spawnable_agent_types": [
         "architect-opus",
@@ -865,6 +878,7 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
+      "betas": ["interleaved-thinking-2025-05-14"],
       "can_spawn_agents": true,
       "spawnable_agent_types": [
         "researcher-opus",
@@ -944,13 +958,106 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "system_prompt": "You are a data quality reviewer for the Claude Governance System. Review database data for: 1) Constraint violations - check values against claude.column_registry valid_values, 2) Orphaned records - check FK relationships exist (features→projects, build_tasks→features, etc.), 3) Test data - identify patterns like 'test', 'TODO', placeholder UUIDs, 4) Stale data - records with old updated_at, unclosed sessions >24h, 5) Priority consistency - all priority fields use 1-5 scale. Output structured report with: table, issue type, record count, sample records, recommended fix SQL. Focus on claude schema tables.",
+      "system_prompt": "You are a data quality reviewer for the Claude Governance System. Review database data for: 1) Constraint violations - check values against claude.column_registry valid_values, 2) Orphaned records - check FK relationships exist (features→projects, build_tasks→features, etc.), 3) Test data - identify patterns like 'test', 'TODO', placeholder UUIDs, 4) Stale data - records with old updated_at, unclosed sessions >24h, 5) Priority consistency - all priority fields use 1-5 scale. Output structured report with: table, issue type, record count, sample records, recommended fix SQL. Focus on claude schema tables.\n\nTOOL USAGE EXAMPLES:\n- List schemas: mcp__postgres__list_schemas()\n- List tables: mcp__postgres__list_objects(schema_name=\"claude\", object_type=\"table\")\n- Query data: mcp__postgres__execute_sql(sql=\"SELECT * FROM claude.features WHERE status = 'not_started'\")\n- Check constraints: mcp__postgres__execute_sql(sql=\"SELECT * FROM claude.column_registry WHERE table_name = 'features'\")",
       "cost_profile": {
         "input_tokens_avg": 20000,
         "output_tokens_avg": 10000,
         "cost_per_task_usd": 0.18
       },
       "recommended_timeout_seconds": 600
+    },
+    "lightweight-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Minimal agent with filesystem-only access. Fastest and cheapest for simple file operations.",
+      "use_cases": [
+        "Simple file read/write",
+        "Code formatting",
+        "File organization",
+        "Quick edits"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "mcp__filesystem"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/lightweight-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a lightweight file operations agent. Focus on simple file tasks. Use filesystem MCP tools for file access.",
+      "cost_profile": {
+        "input_tokens_avg": 3000,
+        "output_tokens_avg": 2000,
+        "cost_per_task_usd": 0.01
+      },
+      "recommended_timeout_seconds": 120
+    },
+    "computer-use-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "GUI-enabled agent with Computer Use tool for visual testing and automation",
+      "use_cases": [
+        "Visual UI testing",
+        "Screenshot verification",
+        "Click-through testing",
+        "Visual feedback loops"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "computer_use",
+        "screenshot"
+      ],
+      "disallowed_tools": [],
+      "mcp_config": "configs/coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "skip_all_permissions": true,
+      "sandbox_required": true,
+      "sandbox_type": "docker-gui",
+      "system_prompt": "You are a visual testing agent with Computer Use capabilities. You can see the screen, take screenshots, and control mouse/keyboard.\n\nVISUAL FEEDBACK LOOP:\n1. Take screenshot to see current state\n2. Analyze what you see\n3. Take action (click, type, etc.)\n4. Take screenshot to verify result\n5. Repeat until task complete\n\nALWAYS verify your actions with screenshots. If something looks wrong, try again.\n\nSCREENSHOT TIPS:\n- Use take-screenshot to capture display\n- Screenshots saved to /screenshots/\n- Check screenshot before and after each action",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.08
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "sandbox-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Fully autonomous agent running in isolated Docker sandbox",
+      "use_cases": [
+        "Tasks requiring full filesystem access",
+        "Installing dependencies",
+        "Running arbitrary scripts",
+        "Parallel isolated work"
+      ],
+      "allowed_tools": ["*"],
+      "disallowed_tools": [],
+      "mcp_config": "configs/coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "skip_all_permissions": true,
+      "sandbox_required": true,
+      "sandbox_type": "docker",
+      "system_prompt": "You are running in an isolated Docker sandbox with FULL PERMISSIONS. You can:\n- Install any packages\n- Modify any files in /workspace\n- Run any commands\n- Access the network\n\nYou cannot affect the host system - you're fully contained. Be bold and efficient.",
+      "cost_profile": {
+        "input_tokens_avg": 10000,
+        "output_tokens_avg": 5000,
+        "cost_per_task_usd": 0.035
+      },
+      "recommended_timeout_seconds": 300
     }
   },
   "expansion_guide": {

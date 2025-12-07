@@ -1,0 +1,181 @@
+{
+  "version": "1.0",
+  "description": "Tool index for deferred loading - search tools by keywords",
+  "tools": {
+    "query_database": {
+      "server": "postgres",
+      "tool": "mcp__postgres__execute_sql",
+      "description": "Execute any SQL query against PostgreSQL database",
+      "keywords": ["database", "sql", "query", "select", "insert", "update", "delete", "postgres"],
+      "example": "mcp__postgres__execute_sql(sql=\"SELECT * FROM claude.projects LIMIT 5\")"
+    },
+    "list_tables": {
+      "server": "postgres",
+      "tool": "mcp__postgres__list_objects",
+      "description": "List tables, views, or sequences in a schema",
+      "keywords": ["database", "tables", "schema", "list", "objects"],
+      "example": "mcp__postgres__list_objects(schema_name=\"claude\", object_type=\"table\")"
+    },
+    "read_file": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__read_text_file",
+      "description": "Read contents of a text file",
+      "keywords": ["file", "read", "text", "content", "open"],
+      "example": "mcp__filesystem__read_text_file(path=\"C:/Projects/myproject/README.md\")"
+    },
+    "write_file": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__write_file",
+      "description": "Write content to a file (creates or overwrites)",
+      "keywords": ["file", "write", "save", "create", "output"],
+      "example": "mcp__filesystem__write_file(path=\"output.txt\", content=\"Hello World\")"
+    },
+    "list_directory": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__list_directory",
+      "description": "List files and directories in a path",
+      "keywords": ["directory", "list", "files", "folders", "ls", "dir"],
+      "example": "mcp__filesystem__list_directory(path=\"C:/Projects\")"
+    },
+    "search_memory": {
+      "server": "memory",
+      "tool": "mcp__memory__search_nodes",
+      "description": "Search knowledge graph for entities matching query",
+      "keywords": ["memory", "search", "knowledge", "graph", "entities", "find"],
+      "example": "mcp__memory__search_nodes(query=\"session patterns\")"
+    },
+    "create_entities": {
+      "server": "memory",
+      "tool": "mcp__memory__create_entities",
+      "description": "Create new entities in knowledge graph",
+      "keywords": ["memory", "create", "entity", "knowledge", "store", "save"],
+      "example": "mcp__memory__create_entities(entities=[{\"name\": \"Pattern\", \"entityType\": \"concept\", \"observations\": [\"details\"]}])"
+    },
+    "spawn_agent": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__spawn_agent",
+      "description": "Spawn a specialized Claude agent for a task",
+      "keywords": ["agent", "spawn", "delegate", "task", "orchestrate", "parallel"],
+      "example": "mcp__orchestrator__spawn_agent(agent_type=\"coder-haiku\", task=\"Write function\", workspace_dir=\"C:/Projects/myproject\")"
+    },
+    "spawn_agent_async": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__spawn_agent_async",
+      "description": "Spawn agent asynchronously - returns immediately with task_id",
+      "keywords": ["agent", "spawn", "async", "background", "parallel", "non-blocking"],
+      "example": "mcp__orchestrator__spawn_agent_async(agent_type=\"reviewer-sonnet\", task=\"Review code\", workspace_dir=\"C:/Projects\")"
+    },
+    "check_inbox": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__check_inbox",
+      "description": "Check for messages from other Claude instances",
+      "keywords": ["messages", "inbox", "check", "receive", "communication"],
+      "example": "mcp__orchestrator__check_inbox(project_name=\"claude-family\")"
+    },
+    "send_message": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__send_message",
+      "description": "Send message to another Claude instance or project",
+      "keywords": ["message", "send", "communicate", "notify", "broadcast"],
+      "example": "mcp__orchestrator__send_message(message_type=\"status_update\", body=\"Task complete\")"
+    },
+    "execute_python": {
+      "server": "python-repl",
+      "tool": "mcp__python-repl__execute_python",
+      "description": "Execute Python code and return output",
+      "keywords": ["python", "execute", "code", "run", "script", "repl"],
+      "example": "mcp__python-repl__execute_python(code=\"print('Hello World')\")"
+    },
+    "sequential_thinking": {
+      "server": "sequential-thinking",
+      "tool": "mcp__sequential-thinking__sequentialthinking",
+      "description": "Step-by-step reasoning for complex problems",
+      "keywords": ["thinking", "reasoning", "step", "complex", "problem", "analyze"],
+      "example": "mcp__sequential-thinking__sequentialthinking(thought=\"First...\", thoughtNumber=1, totalThoughts=5, nextThoughtNeeded=true)"
+    },
+    "explain_query": {
+      "server": "postgres",
+      "tool": "mcp__postgres__explain_query",
+      "description": "Explain SQL query execution plan with cost estimates",
+      "keywords": ["database", "explain", "query", "plan", "performance", "optimize"],
+      "example": "mcp__postgres__explain_query(sql=\"SELECT * FROM users WHERE email = 'test@test.com'\")"
+    },
+    "analyze_db_health": {
+      "server": "postgres",
+      "tool": "mcp__postgres__analyze_db_health",
+      "description": "Analyze database health - indexes, connections, vacuum status",
+      "keywords": ["database", "health", "analyze", "indexes", "performance", "maintenance"],
+      "example": "mcp__postgres__analyze_db_health(health_type=\"all\")"
+    },
+    "get_top_queries": {
+      "server": "postgres",
+      "tool": "mcp__postgres__get_top_queries",
+      "description": "Report slowest or most resource-intensive queries",
+      "keywords": ["database", "slow", "queries", "performance", "top", "resources"],
+      "example": "mcp__postgres__get_top_queries(sort_by=\"mean_time\", limit=10)"
+    },
+    "read_graph": {
+      "server": "memory",
+      "tool": "mcp__memory__read_graph",
+      "description": "Read entire knowledge graph with all entities and relations",
+      "keywords": ["memory", "graph", "read", "all", "entities", "relations", "full"],
+      "example": "mcp__memory__read_graph()"
+    },
+    "directory_tree": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__directory_tree",
+      "description": "Get recursive tree view of files and directories as JSON",
+      "keywords": ["directory", "tree", "recursive", "structure", "files", "folders"],
+      "example": "mcp__filesystem__directory_tree(path=\"C:/Projects/myproject\")"
+    },
+    "edit_file": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__edit_file",
+      "description": "Make line-based edits to a text file with find/replace",
+      "keywords": ["file", "edit", "replace", "modify", "change", "update"],
+      "example": "mcp__filesystem__edit_file(path=\"file.py\", edits=[{\"oldText\": \"old\", \"newText\": \"new\"}])"
+    },
+    "search_files": {
+      "server": "filesystem",
+      "tool": "mcp__filesystem__search_files",
+      "description": "Recursively search for files matching a pattern",
+      "keywords": ["search", "find", "files", "pattern", "recursive", "locate"],
+      "example": "mcp__filesystem__search_files(path=\"C:/Projects\", pattern=\"*.py\")"
+    },
+    "list_agent_types": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__list_agent_types",
+      "description": "List all available agent types with descriptions and costs",
+      "keywords": ["agent", "types", "list", "available", "capabilities"],
+      "example": "mcp__orchestrator__list_agent_types()"
+    },
+    "broadcast": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__broadcast",
+      "description": "Send message to ALL active Claude instances",
+      "keywords": ["broadcast", "all", "message", "notify", "everyone"],
+      "example": "mcp__orchestrator__broadcast(body=\"Important update\", priority=\"normal\")"
+    },
+    "get_active_sessions": {
+      "server": "orchestrator",
+      "tool": "mcp__orchestrator__get_active_sessions",
+      "description": "Get all currently active Claude sessions (who's online)",
+      "keywords": ["sessions", "active", "online", "instances", "who"],
+      "example": "mcp__orchestrator__get_active_sessions()"
+    },
+    "install_package": {
+      "server": "python-repl",
+      "tool": "mcp__python-repl__install_package",
+      "description": "Install a Python package using uv",
+      "keywords": ["python", "install", "package", "pip", "dependency"],
+      "example": "mcp__python-repl__install_package(package=\"pandas\")"
+    },
+    "list_variables": {
+      "server": "python-repl",
+      "tool": "mcp__python-repl__list_variables",
+      "description": "List all variables in current Python session",
+      "keywords": ["python", "variables", "list", "session", "state"],
+      "example": "mcp__python-repl__list_variables()"
+    }
+  }
+}

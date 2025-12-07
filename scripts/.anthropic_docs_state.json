@@ -1,0 +1,15 @@
+{
+  "hashes": {
+    "advanced-tool-use": "b77dd91edbccf091",
+    "claude-code-best-practices": "34ab5f227463189a",
+    "building-agents": "30bcc78569c5b5d5",
+    "claude-code-sandboxing": "d404d96eea3e984f",
+    "models-overview": "a8cb9a24178ce7c9",
+    "computer-use": "3d4ef1e1a93aedda",
+    "token-efficient-tools": "8cb65aea201205cc",
+    "extended-thinking": "b4796ca9070d2846",
+    "mcp-overview": "dd3cc7efe76e7461",
+    "claude-code-changelog": "bfbdaf23b1751fce"
+  },
+  "last_check": "2025-12-07T13:09:59.714296"
+}

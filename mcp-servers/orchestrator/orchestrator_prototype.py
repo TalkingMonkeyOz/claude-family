@@ -147,6 +147,10 @@ class AgentOrchestrator:
         # Build Claude Code command
         cmd = self._build_command(spec, mcp_config_path, workspace_path)
 
+        # Debug: print command being executed
+        print(f"DEBUG: Spawning agent with command:", file=sys.stderr)
+        print(f"DEBUG: {' '.join(str(c) for c in cmd)}", file=sys.stderr)
+
         # Set timeout
         timeout = timeout or spec['recommended_timeout_seconds']
 
@@ -193,6 +197,11 @@ TASK:
             '--print',  # Output to stdout
         ]
 
+        # Add beta headers if specified (enables features like 1M context, interleaved thinking)
+        # Note: Requires API key authentication
+        if 'betas' in spec and spec['betas']:
+            cmd.extend(['--betas'] + spec['betas'])
+
         # Add system prompt if specified
         if 'system_prompt' in spec:
             cmd.extend(['--system-prompt', spec['system_prompt']])
@@ -228,9 +237,18 @@ TASK:
         """Execute agent command and capture output."""
         try:
             # On Windows, use shell for .cmd files
-            if platform.system() == 'Windows' and self.claude_executable.endswith('.cmd'):
-                # Convert command list to shell string
-                cmd_str = ' '.join(f'"{arg}"' if ' ' in str(arg) else str(arg) for arg in cmd)
+            if platform.system() == 'Windows' and self.claude_executable.lower().endswith('.cmd'):
+                # Convert command list to shell string with proper escaping
+                def escape_arg(arg):
+                    arg_str = str(arg)
+                    # If arg contains newlines, spaces, or special chars, quote and escape it
+                    if '\n' in arg_str or ' ' in arg_str or '"' in arg_str:
+                        # Replace newlines with spaces, escape internal quotes
+                        arg_str = arg_str.replace('\n', ' ').replace('"', '\\"')
+                        return f'"{arg_str}"'
+                    return arg_str
+
+                cmd_str = ' '.join(escape_arg(arg) for arg in cmd)
                 proc = await asyncio.create_subprocess_shell(
                     cmd_str,
                     stdin=asyncio.subprocess.PIPE,

@@ -18,6 +18,13 @@
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
       }
+    },
+    "tool-search": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\tool-search\\server.py"],
+      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\tool-search",
+      "env": {}
     }
   }
 }

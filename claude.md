@@ -91,14 +91,32 @@ claude-family/
 
 ---
 
+## Agent Capabilities (Beta Features)
+
+**Enabled via `--betas` CLI flag** (requires API key auth):
+
+| Feature | Beta Header | Agents Enabled |
+|---------|-------------|----------------|
+| 1M Token Context | `context-1m-2025-08-07` | architect-opus, researcher-opus, security-opus |
+| Interleaved Thinking | `interleaved-thinking-2025-05-14` | All coordinators, reviewer-sonnet, opus agents |
+| Token-Efficient Tools | Native in Claude 4 | All agents (no header needed) |
+
+**Parallel Work Pattern**: Use git worktrees for multiple Claude instances on same repo.
+See `docs/sops/GIT_WORKTREES_FOR_PARALLEL_WORK.md`
+
+---
+
 ## Recent Changes
 
 | Date | Change |
 |------|--------|
+| 2025-12-06 | Proposed Tool Search for deferred loading (ADR-004) |
+| 2025-12-06 | Added beta headers support (1M context, interleaved thinking) |
+| 2025-12-06 | Added LLM-as-Judge pattern to reviewer-sonnet |
+| 2025-12-06 | Created git worktrees SOP for parallel work |
+| 2025-12-06 | Implemented async agent workflow (ADR-003) |
 | 2025-12-04 | Created Claude Governance System Plan |
 | 2025-12-04 | Added Data Gateway (column_registry, CHECK constraints) |
-| 2025-12-04 | Updated to new CLAUDE.md standard |
-| 2025-12-04 | Cleaned test data from work_tasks, feedback |
 
 ---
 
@@ -119,7 +137,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.0 (Governance System Standard)
+**Version**: 2.1 (Beta Features + Async Agents)
 **Created**: 2025-10-21
-**Updated**: 2025-12-04
+**Updated**: 2025-12-06
 **Location**: C:\Projects\claude-family\CLAUDE.md

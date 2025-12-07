@@ -1,0 +1,104 @@
+# Claude Code Sandboxed Agent with Computer Use (GUI)
+# Isolated environment with virtual display for visual testing
+#
+# Features:
+# - Claude Code CLI with Computer Use tool
+# - Virtual display (Xvfb) for headless GUI
+# - noVNC for browser-based viewing
+# - Screenshot capture capability
+#
+# Usage:
+#   docker build -f Dockerfile.gui -t claude-sandbox-gui .
+#   docker run -p 6080:6080 -v C:\Projects\myproject:/workspace claude-sandbox-gui "task"
+#   Open http://localhost:6080 to view the virtual display
+
+FROM node:20-slim
+
+# Install system dependencies for GUI
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    python3 \
+    python3-pip \
+    python3-venv \
+    # Virtual display
+    xvfb \
+    x11vnc \
+    # noVNC for web access
+    novnc \
+    websockify \
+    # Browser for testing
+    chromium \
+    # Screenshot tools
+    scrot \
+    imagemagick \
+    # Window manager
+    fluxbox \
+    # Fonts
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Create directories
+RUN mkdir -p /workspace /screenshots /tmp/.X11-unix
+
+# Set up virtual display
+ENV DISPLAY=:99
+ENV RESOLUTION=1920x1080x24
+
+# Create startup script
+RUN echo '#!/bin/bash\n\
+set -e\n\
+\n\
+# Start virtual display\n\
+echo "Starting Xvfb..."\n\
+Xvfb :99 -screen 0 $RESOLUTION &\n\
+sleep 1\n\
+\n\
+# Start window manager\n\
+echo "Starting Fluxbox..."\n\
+fluxbox &\n\
+sleep 1\n\
+\n\
+# Start VNC server\n\
+echo "Starting x11vnc..."\n\
+x11vnc -display :99 -forever -shared -rfbport 5900 -bg -nopw\n\
+\n\
+# Start noVNC\n\
+echo "Starting noVNC on port 6080..."\n\
+websockify --web=/usr/share/novnc 6080 localhost:5900 &\n\
+\n\
+echo "GUI ready at http://localhost:6080"\n\
+echo ""\n\
+\n\
+# Check API key\n\
+if [ -z "$ANTHROPIC_API_KEY" ]; then\n\
+    echo "ERROR: ANTHROPIC_API_KEY not set"\n\
+    exit 1\n\
+fi\n\
+\n\
+# Run Claude with task\n\
+if [ -n "$1" ]; then\n\
+    echo "$@" | claude --dangerously-skip-permissions --print\n\
+else\n\
+    claude --dangerously-skip-permissions --print\n\
+fi\n\
+' > /entrypoint-gui.sh && chmod +x /entrypoint-gui.sh
+
+# Screenshot helper script
+RUN echo '#!/bin/bash\n\
+# Take screenshot and save to /screenshots\n\
+FILENAME="${1:-screenshot-$(date +%Y%m%d-%H%M%S).png}"\n\
+scrot -o "/screenshots/$FILENAME"\n\
+echo "Screenshot saved: /screenshots/$FILENAME"\n\
+' > /usr/local/bin/take-screenshot && chmod +x /usr/local/bin/take-screenshot
+
+WORKDIR /workspace
+
+# Expose noVNC port
+EXPOSE 6080
+
+ENTRYPOINT ["/entrypoint-gui.sh"]

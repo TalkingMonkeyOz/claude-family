@@ -3,7 +3,8 @@
 
 param(
     [string]$BackupDir = "C:\Users\johnd\OneDrive\Documents\Backups\PostgreSQL",
-    [int]$KeepBackups = 10
+    [int]$KeepBackups = 3,  # Keep 3 weekly backups (~2-3 weeks)
+    [int]$MinDaysBetweenBackups = 6  # Don't backup if last one is < 6 days old
 )
 
 $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
@@ -25,6 +26,22 @@ function Write-Log {
 }
 
 Write-Log "=== PostgreSQL Backup Started ==="
+
+# Check if backup is needed (skip if recent backup exists)
+$latestBackup = Get-ChildItem -Path $BackupDir -Filter "ai_company_foundation_*.backup" -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -First 1
+
+if ($latestBackup) {
+    $daysSinceLastBackup = (New-TimeSpan -Start $latestBackup.LastWriteTime -End (Get-Date)).Days
+    if ($daysSinceLastBackup -lt $MinDaysBetweenBackups) {
+        Write-Log "[OK] Recent backup exists ($daysSinceLastBackup days old). Skipping."
+        Write-Log "[OK] Last backup: $($latestBackup.Name)"
+        Write-Host "[OK] Backup skipped - last backup is only $daysSinceLastBackup days old"
+        exit 0
+    }
+    Write-Log "[>>] Last backup is $daysSinceLastBackup days old. Proceeding with new backup."
+}
 
 # Check if pg_dump is available
 $pgDump = "C:\Program Files\PostgreSQL\18\bin\pg_dump.exe"

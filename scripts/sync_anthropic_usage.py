@@ -23,6 +23,11 @@ Requirements:
 
 import sys
 import os
+import io
+
+# Fix Windows encoding
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor

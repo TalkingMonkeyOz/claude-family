@@ -31,23 +31,18 @@ except ImportError:
 
 
 def get_db_connection():
-    """Get PostgreSQL connection."""
-    conn_strings = [
-        os.environ.get('DATABASE_URL'),
-        'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation',
-    ]
+    """Get PostgreSQL connection from environment."""
+    conn_str = os.environ.get('DATABASE_URL')
+    if not conn_str:
+        return None
 
-    for conn_str in conn_strings:
-        if not conn_str:
-            continue
-        try:
-            if PSYCOPG_VERSION == 3:
-                return psycopg.connect(conn_str, row_factory=dict_row)
-            else:
-                return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-        except:
-            continue
-    return None
+    try:
+        if PSYCOPG_VERSION == 3:
+            return psycopg.connect(conn_str, row_factory=dict_row)
+        else:
+            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
+    except:
+        return None
 
 
 def get_session_state(project_name):
@@ -62,7 +57,7 @@ def get_session_state(project_name):
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT todo_list, current_focus, files_modified, pending_actions, updated_at
+            SELECT todo_list, current_focus, next_steps, files_modified, pending_actions, updated_at
             FROM claude.session_state
             WHERE project_name = %s
         """, (project_name,))
@@ -203,8 +198,12 @@ def main():
 
     is_resume = '--resume' in sys.argv
 
+    # Claude Code expects hookSpecificOutput.additionalContext for SessionStart hooks
     result = {
-        "additionalContext": "",
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": ""
+        },
         "systemMessage": ""
     }
 
@@ -222,9 +221,31 @@ def main():
     # Check for saved session state
     state = get_session_state(project_name)
     if state:
-        context_lines.append("📋 PREVIOUS SESSION STATE FOUND:")
+        context_lines.append("=" * 50)
+        context_lines.append("HERE'S WHERE WE LEFT OFF:")
+        context_lines.append("=" * 50)
+        context_lines.append("")
+
         if state.get('current_focus'):
-            context_lines.append(f"   Focus: {state['current_focus']}")
+            context_lines.append(f"Focus: {state['current_focus']}")
+            context_lines.append("")
+
+        # Show next_steps prominently - this is the key handoff info
+        next_steps = state.get('next_steps', [])
+        if isinstance(next_steps, str):
+            try:
+                next_steps = json.loads(next_steps)
+            except:
+                next_steps = []
+        if next_steps:
+            context_lines.append("NEXT STEPS (from last session):")
+            for i, step in enumerate(next_steps, 1):
+                if isinstance(step, dict):
+                    step = step.get('content', str(step))
+                context_lines.append(f"   {i}. {step}")
+            context_lines.append("")
+
+        # Show pending todos
         if state.get('todo_list'):
             todo_list = state['todo_list']
             if isinstance(todo_list, str):
@@ -233,15 +254,18 @@ def main():
                 except:
                     pass
             if isinstance(todo_list, list):
-                context_lines.append(f"   Todo items: {len(todo_list)}")
-                for item in todo_list[:5]:  # Show first 5
-                    status = item.get('status', 'pending')
-                    icon = '✓' if status == 'completed' else '→' if status == 'in_progress' else '○'
-                    context_lines.append(f"   {icon} {item.get('content', 'Unknown')}")
-                if len(todo_list) > 5:
-                    context_lines.append(f"   ... and {len(todo_list) - 5} more")
-        if state.get('pending_actions'):
-            context_lines.append(f"   Pending actions: {', '.join(state['pending_actions'][:3])}")
+                pending = [t for t in todo_list if t.get('status') != 'completed']
+                if pending:
+                    context_lines.append(f"PENDING TODOS ({len(pending)} items):")
+                    for item in pending[:5]:
+                        status = item.get('status', 'pending')
+                        icon = '→' if status == 'in_progress' else '○'
+                        context_lines.append(f"   {icon} {item.get('content', 'Unknown')}")
+                    if len(pending) > 5:
+                        context_lines.append(f"   ... and {len(pending) - 5} more")
+                    context_lines.append("")
+
+        context_lines.append("=" * 50)
         context_lines.append("")
 
     # Check for pending messages
@@ -293,14 +317,25 @@ def main():
     # Reminder about commands
     context_lines.append("Available commands: /session-start, /session-end, /inbox-check, /feedback-check, /team-status, /broadcast")
 
-    result["additionalContext"] = "\n".join(context_lines)
+    result["hookSpecificOutput"]["additionalContext"] = "\n".join(context_lines)
 
     # Build system message - show key info to user
     system_parts = [f"Claude Family session {'resumed' if is_resume else 'initialized'} for {project_name}."]
 
     if state:
+        # Show next steps count first - most important for continuity
+        next_steps = state.get('next_steps', [])
+        if isinstance(next_steps, str):
+            try:
+                next_steps = json.loads(next_steps)
+            except:
+                next_steps = []
+        if next_steps:
+            system_parts.append(f"{len(next_steps)} next steps from last session.")
+
         if state.get('current_focus'):
-            system_parts.append(f"Focus: {state['current_focus'][:80]}...")
+            system_parts.append(f"Focus: {state['current_focus'][:60]}...")
+
         if state.get('todo_list'):
             todo_list = state['todo_list']
             if isinstance(todo_list, str):

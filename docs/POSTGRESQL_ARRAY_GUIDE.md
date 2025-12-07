@@ -1,6 +1,8 @@
 # PostgreSQL Array Insertion Guide
 
-## CRITICAL: How to Insert Arrays Properly
+> **Note**: This is a reference guide, moved from `.claude/commands/`.
+
+## How to Insert Arrays Properly
 
 ### ❌ WRONG - These Will Fail:
 
@@ -12,43 +14,43 @@ tasks = "'Task 1, Task 2, Task 3'"  # WRONG!
 related = "ARRAY['some-text', 'other-text']"  # WRONG for uuid[] columns!
 ```
 
-### ✅ CORRECT - Use These Patterns:
+### CORRECT - Use These Patterns:
 
 #### For Text Arrays (tasks_completed, learnings_gained, etc.):
 
 ```sql
 -- Using ARRAY constructor (RECOMMENDED)
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET tasks_completed = ARRAY['Task 1', 'Task 2', 'Task 3']
 WHERE session_id = 'uuid-here'::uuid;
 
 -- Using curly braces (alternative)
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET tasks_completed = '{"Task 1", "Task 2", "Task 3"}'
 WHERE session_id = 'uuid-here'::uuid;
 ```
 
-#### For UUID Arrays (related_knowledge):
+#### For UUID Arrays:
 
 ```sql
--- MUST cast text to UUID
-INSERT INTO claude_family.shared_knowledge (related_knowledge)
+-- MUST cast text to UUID when needed
+INSERT INTO claude.knowledge (related_ids)
 VALUES (ARRAY['uuid1'::uuid, 'uuid2'::uuid]);
 
--- Or use NULL if no related knowledge
-INSERT INTO claude_family.shared_knowledge (related_knowledge)
+-- Or use NULL if not applicable
+INSERT INTO claude.knowledge (related_ids)
 VALUES (NULL);
 ```
 
-#### From Python with psycopg2:
+#### From Python with psycopg:
 
 ```python
-import psycopg2
+import psycopg  # or psycopg2
 
-# For text arrays - use list and let psycopg2 handle it
+# For text arrays - use list and let psycopg handle it
 tasks = ['Task 1', 'Task 2', 'Task 3']
 cur.execute("""
-    UPDATE claude_family.session_history
+    UPDATE claude.sessions
     SET tasks_completed = %s
     WHERE session_id = %s
 """, (tasks, session_id))
@@ -56,15 +58,9 @@ cur.execute("""
 # For UUID arrays - must cast
 related_uuids = ['uuid1', 'uuid2']
 cur.execute("""
-    INSERT INTO claude_family.shared_knowledge (related_knowledge)
+    INSERT INTO claude.knowledge (related_ids)
     VALUES (%s::uuid[])
 """, (related_uuids,))
-
-# Or for NULL
-cur.execute("""
-    INSERT INTO claude_family.shared_knowledge (related_knowledge)
-    VALUES (NULL)
-""")
 ```
 
 ## Common Errors and Fixes:
@@ -103,17 +99,20 @@ related_knowledge = ARRAY['uuid1'::uuid, 'uuid2'::uuid]
 
 ## Best Practice:
 
-When closing a session, use the postgres MCP tool directly instead of generating Python code:
+Use the postgres MCP tool directly:
 
 ```
 mcp__postgres__execute_sql(sql="""
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET
     session_end = NOW(),
     session_summary = 'Summary here',
     tasks_completed = ARRAY['Task 1', 'Task 2'],
-    learnings_gained = ARRAY['Learning 1'],
-    challenges_encountered = ARRAY['Challenge 1']
+    learnings_gained = ARRAY['Learning 1']
 WHERE session_id = 'your-session-uuid'::uuid
 """)
 ```
+
+---
+
+**Updated**: 2025-12-07 (Migrated to `claude.*` schema)
