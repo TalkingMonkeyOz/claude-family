@@ -5,14 +5,14 @@ Purpose: Populate the MCP memory server's knowledge graph from PostgreSQL
          at the start of each Claude session to restore persistent memory.
 
 This script:
-1. Loads all Claude identities from claude_family.identities
-2. Loads universal knowledge from claude_family.shared_knowledge
-3. Loads recent sessions from claude_family.session_history
+1. Loads all Claude identities from claude.identities
+2. Loads universal knowledge from claude.knowledge
+3. Loads recent sessions from claude.sessions
 4. Creates entities and relations in MCP memory graph
 
 Usage: Run this automatically via Claude Desktop startup config
 
-Date: 2025-10-10
+Date: 2025-10-10 (Updated: 2025-12-08)
 Author: Claude Desktop & John
 """
 
@@ -24,12 +24,11 @@ import json
 # Fix Windows encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# Add ai-workspace to path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-from config import POSTGRES_CONFIG
-
 import psycopg2
 from psycopg2.extras import RealDictCursor
+
+# Default connection string
+CONN_STR = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation'
 
 def load_identities(conn):
     """Load all Claude identities"""
@@ -201,7 +200,7 @@ def main():
         print('🔄 Syncing PostgreSQL → MCP Memory Graph...\n')
 
         # Connect to PostgreSQL
-        conn = psycopg2.connect(**POSTGRES_CONFIG)
+        conn = psycopg2.connect(CONN_STR)
 
         # Load data
         print('📊 Loading data from PostgreSQL...')

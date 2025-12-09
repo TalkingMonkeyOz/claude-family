@@ -61,24 +61,12 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup",
         "hooks": [
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
             "timeout": 30,
-            "description": "Load session state and check for messages"
-          }
-        ]
-      },
-      {
-        "matcher": "resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\" --resume",
-            "timeout": 30,
-            "description": "Resume session with saved state"
+            "description": "Auto-log session and load state/messages"
           }
         ]
       }

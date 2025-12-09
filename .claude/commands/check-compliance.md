@@ -1,12 +1,13 @@
 # Check Project Compliance
 
-Check if current project has all required governance documents.
+Run a comprehensive compliance audit for the current project.
 
 ## What This Does
 
-1. Queries `claude.v_project_governance` for current project
-2. Reports which core documents exist/missing
-3. Shows compliance percentage
+1. Runs `scripts/run_compliance_audit.py` with project name
+2. Checks governance, documentation, data quality, and standards
+3. Stores results in `claude.compliance_audits`
+4. Updates audit schedule in `claude.audit_schedule`
 
 ## Instructions
 
@@ -14,49 +15,69 @@ When executing this command:
 
 1. **Detect current project** from working directory
 
-2. **Query compliance view**:
-```sql
-SELECT
-    project_name,
-    phase,
-    has_claude_md,
-    has_problem_statement,
-    has_architecture,
-    compliance_pct
-FROM claude.v_project_governance
-WHERE project_name = '{detected_project}';
+2. **Run the audit script**:
+```bash
+python "C:/Projects/claude-family/scripts/run_compliance_audit.py" {project_name} all
 ```
 
-3. **Report results** in table format:
+3. **Report the results** shown by the script
 
-| Document | Status |
-|----------|--------|
-| CLAUDE.md | [exists/missing] |
-| PROBLEM_STATEMENT.md | [exists/missing] |
-| ARCHITECTURE.md | [exists/missing] |
+4. **If failures exist**, provide remediation steps:
+   - For missing CLAUDE.md: Run `/retrofit-project`
+   - For missing hooks: Check `.claude/hooks.json` config
+   - For stale docs: Update or archive old documents
+   - For test data: Clean up test sessions
 
-**Compliance: {X}%**
+5. **Verify database record**:
+```sql
+SELECT audit_id, project_name, audit_type,
+       checks_passed, checks_failed, completed_at
+FROM claude.compliance_audits
+WHERE project_name = '{project_name}'
+ORDER BY completed_at DESC
+LIMIT 1;
+```
 
-4. **If not 100%**, suggest:
-   - Run `/retrofit-project` to add missing documents
+## Audit Types
+
+| Type | What It Checks |
+|------|----------------|
+| governance | CLAUDE.md, ARCHITECTURE.md, PROBLEM_STATEMENT.md, hooks, commands |
+| documentation | docs/ folder, file count, recent updates |
+| data_quality | Test data in sessions, session counts |
+| standards | Standards docs exist, process router configured |
+| all | All of the above |
 
 ## Example Output
 
 ```
-Project: my-app
-Phase: implementation
+Compliance Audit - my-project
+Type: all
+==================================================
+  [OK] governance/CLAUDE.md: CLAUDE.md exists with 4232 chars
+  [OK] governance/ARCHITECTURE.md: ARCHITECTURE.md exists
+  [FAIL] governance/PROBLEM_STATEMENT.md: PROBLEM_STATEMENT.md is missing
+  [OK] governance/hooks.json: Hooks configuration exists
+  [OK] governance/commands: 12 commands found
+  [OK] documentation/docs_folder: docs/ folder exists
+  [OK] documentation/file_count: 45 markdown files found
+  [WARN] documentation/recent_updates: No updates in last 30 days
+  [OK] data_quality/session_count: 8 sessions in last 30 days
+  [OK] standards/standards_docs: 6 standards documents available
+  [OK] standards/process_router: Process router configured
 
-| Document | Status |
-|----------|--------|
-| CLAUDE.md | exists |
-| PROBLEM_STATEMENT.md | MISSING |
-| ARCHITECTURE.md | exists |
-
-Compliance: 66%
-
-To fix: Run /retrofit-project to add missing documents.
+Summary: 9 passed, 1 failed, 1 warnings
+Audit ID: abc123-...
 ```
+
+## Related
+
+- `/retrofit-project` - Add missing governance docs
+- `/review-docs` - Run documentation quality review
+- `/review-data` - Run data quality review
+- `docs/standards/COMPLIANCE_CHECKLIST.md` - Manual checklist
 
 ---
 
-**Action ID**: See `claude.actions` WHERE action_name = 'check-compliance'
+**Version**: 2.0
+**Updated**: 2025-12-08

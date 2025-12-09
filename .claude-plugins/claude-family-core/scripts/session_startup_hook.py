@@ -3,6 +3,7 @@
 Session Startup Hook Script for claude-family-core plugin.
 
 This is called automatically via SessionStart hook.
+- Creates a new session record in claude.sessions (auto-logging)
 - Checks for saved session state (todo list, focus)
 - Checks for pending messages
 - Outputs JSON for Claude Code to consume
@@ -11,6 +12,7 @@ This is called automatically via SessionStart hook.
 import json
 import os
 import sys
+import uuid
 from datetime import datetime
 
 # Try to import psycopg for database access
@@ -29,12 +31,26 @@ except ImportError:
     except ImportError:
         DB_AVAILABLE = False
 
+# Default identity for claude-code-unified
+DEFAULT_IDENTITY_ID = 'ff32276f-9d05-4a18-b092-31b54c82fff9'
+
+# Default connection string - DO NOT hardcode credentials!
+# Use environment variable DATABASE_URL or ai-workspace config
+DEFAULT_CONN_STR = None  # Must be set via DATABASE_URL env var
+
+# Try to load from ai-workspace secure config
+try:
+    import sys as _sys
+    _sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+    from config import POSTGRES_CONFIG as _PG_CONFIG
+    DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
+except ImportError:
+    pass
+
 
 def get_db_connection():
-    """Get PostgreSQL connection from environment."""
-    conn_str = os.environ.get('DATABASE_URL')
-    if not conn_str:
-        return None
+    """Get PostgreSQL connection from environment or default."""
+    conn_str = os.environ.get('DATABASE_URL', DEFAULT_CONN_STR)
 
     try:
         if PSYCOPG_VERSION == 3:
@@ -42,6 +58,44 @@ def get_db_connection():
         else:
             return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
     except:
+        return None
+
+
+def create_session(project_name, identity_id=None):
+    """Create a new session record in claude.sessions.
+
+    Returns the session_id if successful, None otherwise.
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        session_id = str(uuid.uuid4())
+        identity = identity_id or os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.sessions (session_id, identity_id, project_name, session_start, created_at)
+            VALUES (%s, %s, %s, NOW(), NOW())
+            RETURNING session_id
+        """, (session_id, identity, project_name))
+
+        conn.commit()
+        result = cur.fetchone()
+        conn.close()
+
+        if result:
+            return str(result['session_id']) if PSYCOPG_VERSION == 3 else str(result[0])
+        return session_id
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
         return None
 
 
@@ -213,9 +267,16 @@ def main():
     cwd = os.getcwd()
     project_name = os.path.basename(cwd)
 
+    # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
+    session_id = None
+    if not is_resume:
+        session_id = create_session(project_name)
+
     context_lines.append(f"=== Claude Family Session {'Resumed' if is_resume else 'Started'} ===")
     context_lines.append(f"Project: {project_name}")
     context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    if session_id:
+        context_lines.append(f"Session ID: {session_id} (auto-logged)")
     context_lines.append("")
 
     # Check for saved session state
@@ -320,7 +381,13 @@ def main():
     result["hookSpecificOutput"]["additionalContext"] = "\n".join(context_lines)
 
     # Build system message - show key info to user
-    system_parts = [f"Claude Family session {'resumed' if is_resume else 'initialized'} for {project_name}."]
+    system_parts = [f"Claude Family session {'resumed' if is_resume else 'started'} for {project_name}."]
+
+    # Show session logging status
+    if session_id:
+        system_parts.append(f"Session logged ({session_id[:8]}...).")
+    elif not is_resume:
+        system_parts.append("Session NOT logged (database unavailable).")
 
     if state:
         # Show next steps count first - most important for continuity

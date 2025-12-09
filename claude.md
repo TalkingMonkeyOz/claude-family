@@ -91,6 +91,37 @@ claude-family/
 
 ---
 
+## Process Guidance (MANDATORY)
+
+When you see `<process-guidance>` tags injected by the process router hook:
+
+1. **MUST Follow Steps**: Execute each step in the order listed
+2. **MUST NOT Skip [BLOCKING]**: Blocking steps must complete before proceeding
+3. **MUST Use TodoWrite**: Add all workflow steps to your todo list immediately
+4. **MUST Track Progress**: Mark todos in_progress/completed as you work
+5. **MUST Check column_registry**: Before any database write, verify valid values
+
+**Example Response Pattern**:
+```
+I see this triggers the Bug Fix Workflow. Let me follow the steps:
+
+[TodoWrite with all steps]
+
+Step 1: Create Feedback Entry...
+[Execute step]
+[Mark todo completed]
+
+Step 2: Investigate Root Cause...
+[Execute step]
+...
+```
+
+**If Workflow Doesn't Apply**: State why and proceed normally.
+
+**Process Registry**: 32 workflows across 7 categories (COMM, DATA, DEV, DOC, PROJECT, QA, SESSION)
+
+---
+
 ## Agent Capabilities (Beta Features)
 
 **Enabled via `--betas` CLI flag** (requires API key auth):
@@ -110,6 +141,9 @@ See `docs/sops/GIT_WORKTREES_FOR_PARALLEL_WORK.md`
 
 | Date | Change |
 |------|--------|
+| 2025-12-08 | Added MANDATORY Process Guidance section - Claude must follow workflow steps |
+| 2025-12-08 | Workflow regression: All 32 processes now have steps and triggers |
+| 2025-12-08 | Added 7 new triggers (IDs 47-53) for 6 processes |
 | 2025-12-06 | Proposed Tool Search for deferred loading (ADR-004) |
 | 2025-12-06 | Added beta headers support (1M context, interleaved thinking) |
 | 2025-12-06 | Added LLM-as-Judge pattern to reviewer-sonnet |
@@ -137,7 +171,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.1 (Beta Features + Async Agents)
+**Version**: 2.2 (Mandatory Process Guidance)
 **Created**: 2025-10-21
-**Updated**: 2025-12-06
+**Updated**: 2025-12-08
 **Location**: C:\Projects\claude-family\CLAUDE.md
