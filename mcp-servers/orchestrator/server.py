@@ -351,54 +351,104 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
 
 
 def recommend_agent(task: str) -> dict:
-    """Analyze task description and recommend best agent type.
-    
+    """Analyze task description and recommend best agent type with governance hints.
+
     Args:
         task: Task description to analyze
-    
+
     Returns:
-        dict with recommended agent type, reason, and cost
+        dict with recommended agent type, reason, cost, and governance requirements
     """
     task_lower = task.lower()
-    
+
+    # Estimate task complexity for timeout/agent selection
+    complexity = "simple"
+    if any(w in task_lower for w in ['service', 'module', 'comprehensive', 'full', 'complete', 'entire']):
+        complexity = "complex"
+    elif any(w in task_lower for w in ['function', 'method', 'fix', 'update', 'add']):
+        complexity = "moderate"
+
+    # Check if task involves database writes (needs governance)
+    needs_db_governance = any(w in task_lower for w in [
+        'insert', 'update', 'delete', 'database', 'db write', 'create record',
+        'feedback', 'session', 'project', 'feature', 'task'
+    ])
+
+    # Comprehensive research - use coordinator
+    if any(w in task_lower for w in ['comprehensive research', 'thorough research', 'research and compile', 'investigate and document']):
+        return {
+            "agent": "research-coordinator-sonnet",
+            "reason": "Comprehensive research requiring multiple sub-agents",
+            "cost": "$0.35+",
+            "timeout": 1800,
+            "governance": {
+                "level": "coordinator",
+                "note": "Coordinator spawns child agents, results compiled and returned to caller for review"
+            }
+        }
+
     # Security tasks
     if any(w in task_lower for w in ['security', 'vulnerability', 'audit', 'owasp', 'penetration']):
         if 'deep' in task_lower or 'comprehensive' in task_lower:
-            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00"}
-        return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24"}
-    
+            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00", "timeout": 1200,
+                    "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
+        return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24", "timeout": 600,
+                "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
+
     # Testing tasks
     if any(w in task_lower for w in ['playwright', 'e2e', 'browser', 'selenium']):
         if 'next' in task_lower or 'react' in task_lower:
-            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06"}
-        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05"}
+            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06", "timeout": 600,
+                    "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
+        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05", "timeout": 600,
+                "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
     if any(w in task_lower for w in ['test', 'unit test', 'pytest', 'jest']):
-        return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05"}
-    
+        return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05", "timeout": 300,
+                "governance": {"level": "test-only", "note": "Can write tests, results returned to caller"}}
+
     # Code review
     if any(w in task_lower for w in ['review', 'code review', 'pr review']):
-        return {"agent": "reviewer-sonnet", "reason": "Code review", "cost": "$0.11"}
-    
-    # Python development
+        return {"agent": "reviewer-sonnet", "reason": "Code review", "cost": "$0.11", "timeout": 300,
+                "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
+
+    # Python development - check complexity
     if 'python' in task_lower and any(w in task_lower for w in ['write', 'create', 'build', 'fix', 'implement']):
-        return {"agent": "python-coder-haiku", "reason": "Python development", "cost": "$0.045"}
-    
+        if complexity == "complex":
+            return {
+                "agent": "python-coder-haiku",
+                "reason": "Python development (complex task - consider breaking down)",
+                "cost": "$0.045",
+                "timeout": 420,
+                "governance": {
+                    "level": "code-write",
+                    "note": "Code returned to caller for review before commit",
+                    "db_access": needs_db_governance,
+                    "warning": "Complex task - consider splitting into smaller sub-tasks"
+                }
+            }
+        return {"agent": "python-coder-haiku", "reason": "Python development", "cost": "$0.045", "timeout": 300,
+                "governance": {"level": "code-write", "note": "Code returned to caller for review before commit"}}
+
     # C# development
     if any(w in task_lower for w in ['c#', 'csharp', '.net', 'wpf', 'winforms']):
-        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045"}
-    
+        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045", "timeout": 300,
+                "governance": {"level": "code-write", "note": "Code returned to caller for review before commit"}}
+
     # Architecture
     if any(w in task_lower for w in ['architect', 'design', 'system design', 'refactor large']):
-        return {"agent": "architect-opus", "reason": "Architecture design", "cost": "$0.83"}
-    
+        return {"agent": "architect-opus", "reason": "Architecture design", "cost": "$0.83", "timeout": 900,
+                "governance": {"level": "advisory", "note": "Recommendations returned to caller for decision"}}
+
     # Research/analysis
     if any(w in task_lower for w in ['research', 'analyze', 'investigate', 'understand']):
-        return {"agent": "analyst-sonnet", "reason": "Research and analysis", "cost": "$0.30"}
-    
+        return {"agent": "analyst-sonnet", "reason": "Research and analysis", "cost": "$0.30", "timeout": 600,
+                "governance": {"level": "read-only", "note": "Analysis returned to caller"}}
+
     # Planning
     if any(w in task_lower for w in ['plan', 'breakdown', 'sprint', 'roadmap']):
-        return {"agent": "planner-sonnet", "reason": "Task planning", "cost": "$0.21"}
-    
+        return {"agent": "planner-sonnet", "reason": "Task planning", "cost": "$0.21", "timeout": 600,
+                "governance": {"level": "advisory", "note": "Plan returned to caller for approval"}}
+
     # Exploration/search tasks - recommend Task tool instead
     if any(w in task_lower for w in ['find', 'search', 'where is', 'locate', 'explore codebase']):
         return {
@@ -419,8 +469,31 @@ def recommend_agent(task: str) -> dict:
             "note": "Not an orchestrator agent - use built-in Task tool with model parameter"
         }
 
+    # Complex code task - warn about lightweight
+    if complexity == "complex":
+        return {
+            "agent": "coder-haiku",
+            "reason": "General coding task (complex - avoid lightweight-haiku)",
+            "cost": "$0.035",
+            "timeout": 420,
+            "governance": {
+                "level": "code-write",
+                "note": "Code returned to caller for review",
+                "warning": "Complex task detected. Do NOT use lightweight-haiku. Consider python-coder-haiku for Python or breaking into sub-tasks."
+            }
+        }
+
     # Default: general coding
-    return {"agent": "coder-haiku", "reason": "General coding task", "cost": "$0.035"}
+    return {
+        "agent": "coder-haiku",
+        "reason": "General coding task",
+        "cost": "$0.035",
+        "timeout": 300,
+        "governance": {
+            "level": "code-write",
+            "note": "Code returned to caller for review before commit"
+        }
+    }
 
 
 # ============================================================================
@@ -486,6 +559,15 @@ async def list_tools() -> List[Tool]:
                     }
                 },
                 "required": ["task"]
+            }
+        ),
+        Tool(
+            name="get_spawn_status",
+            description="Get current spawn safeguard status: active spawns, available slots, and configuration.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         ),
         Tool(
@@ -742,6 +824,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_list_agent_types()
     elif name == "recommend_agent":
         return await handle_recommend_agent(arguments)
+    elif name == "get_spawn_status":
+        return await handle_get_spawn_status()
     elif name == "spawn_agent_async":
         return await handle_spawn_agent_async(arguments)
     elif name == "check_async_task":
@@ -842,6 +926,12 @@ async def handle_recommend_agent(arguments: dict) -> List[TextContent]:
     task = arguments['task']
     result = recommend_agent(task)
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_get_spawn_status() -> List[TextContent]:
+    """Handle get_spawn_status tool call."""
+    status = orchestrator.get_spawn_status()
+    return [TextContent(type="text", text=json.dumps(status, indent=2))]
 
 
 async def handle_spawn_agent_async(arguments: dict) -> List[TextContent]:
@@ -1081,8 +1171,11 @@ async def handle_get_mcp_stats(arguments: dict) -> List[TextContent]:
                 row_dict['first_used'] = row_dict['first_used'].isoformat()
             if row_dict.get('last_used'):
                 row_dict['last_used'] = row_dict['last_used'].isoformat()
-            # Convert Decimal to float
-            if row_dict.get('avg_execution_ms'):
+            # Convert all Decimal/numeric types to float/int for JSON serialization
+            for key in ['call_count', 'success_count', 'failure_count']:
+                if row_dict.get(key) is not None:
+                    row_dict[key] = int(row_dict[key])
+            if row_dict.get('avg_execution_ms') is not None:
                 row_dict['avg_execution_ms'] = float(row_dict['avg_execution_ms'])
             stats.append(row_dict)
 
