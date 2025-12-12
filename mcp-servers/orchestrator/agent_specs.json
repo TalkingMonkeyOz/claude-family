@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "created": "2025-11-04",
   "updated": "2025-12-13",
-  "note": "Reduced from 31 to 10 agents based on usage analysis. Removed 18 unused agents.",
+  "note": "Reduced from 31 to 13 agents. Kept essential testers (tester-haiku, web-tester-haiku, ux-tax-screen-analyzer).",
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",
@@ -396,14 +396,128 @@
         "cost_per_task_usd": 0.35
       },
       "recommended_timeout_seconds": 1800
+    },
+    "tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Write unit and integration tests",
+      "use_cases": [
+        "Write unit tests",
+        "Write integration tests",
+        "Add test fixtures",
+        "Mock/stub creation",
+        "Test data generation"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Grep",
+        "Bash(pytest:*)",
+        "Bash(npm test:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/tests/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a test writer. Write comprehensive, maintainable tests with good coverage. Follow testing best practices (AAA, Given-When-Then).",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.052
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "web-tester-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "General-purpose E2E web testing with Playwright",
+      "use_cases": [
+        "E2E web application testing",
+        "Form submission testing",
+        "Navigation and routing tests",
+        "Screenshot capture for documentation",
+        "Cross-browser testing",
+        "Accessibility testing"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(npx playwright*)",
+        "Bash(npm test*)",
+        "Bash(node*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/web-tester-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are an E2E web tester using Playwright. Test web applications thoroughly: navigation, forms, buttons, modals, responsive design. Capture screenshots of issues. Write clear test reports. Focus on user flows and edge cases.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.05
+      },
+      "recommended_timeout_seconds": 600
+    },
+    "ux-tax-screen-analyzer": {
+      "model": "claude-haiku-4-5",
+      "description": "Specialized agent for analyzing ATO tax wizard screens with Playwright",
+      "use_cases": [
+        "Analyze wizard sections for UX issues",
+        "Validate fields against PDF tax pack",
+        "Check help text and cross-references",
+        "Verify database mapping",
+        "Screenshot and document issues"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(python*)",
+        "Bash(node*)",
+        "Bash(npx playwright*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "Bash(wget*)"
+      ],
+      "mcp_config": "configs/ux-tax-screen-analyzer.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "skip_all_permissions": true,
+      "system_prompt": "You are a specialized UX analyst for Australian tax software. Analyze wizard screens following the 10-step checklist in SCREEN_ANALYSIS_CHECKLIST.md. Focus on accuracy (wizard matches PDF), usability (plain language), and compliance (cross-references to supplement). Take screenshots of all issues. Write detailed findings to SCREEN_ANALYSIS_FINDINGS_{section_code}.md.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.08
+      },
+      "recommended_timeout_seconds": 900
     }
   },
   "removed_agents": {
     "note": "These agents were removed on 2025-12-13 due to zero or near-zero usage",
     "list": [
       "debugger-haiku",
-      "tester-haiku",
-      "web-tester-haiku",
       "nextjs-tester-haiku",
       "screenshot-tester-haiku",
       "csharp-coder-haiku",
@@ -418,7 +532,6 @@
       "local-coder-qwen",
       "computer-use-haiku",
       "sandbox-haiku",
-      "ux-tax-screen-analyzer",
       "security-opus"
     ],
     "can_restore": "These can be restored from git history if needed"
