@@ -534,17 +534,178 @@ Escalate if:
 
 ---
 
-## 6. Open Questions
+## 6. Unified Plan (Merged with SYSTEM_IMPROVEMENT_PLAN)
 
-1. **SYSTEM_IMPROVEMENT_PLAN** - Waiting for user to share content
-2. **pid-process.jsx** - Is this a React component? Where is it?
-3. **Nimbus API** - What level of integration detail is needed?
-4. **ScheduleShift** - Is this a priority integration?
-5. **Feedback storage** - Are screenshots currently stored? Where?
+### 6.1 PID Development Process (5-Phase)
+
+From pid-process.jsx - the systematic approach we must follow:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    PID 5-PHASE PROCESS                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Phase 1: EXPLORATION (Document Review)                         │
+│  ├── Load existing code/docs                                     │
+│  ├── Gap analysis - what's missing?                              │
+│  └── Compile questions list                                      │
+│                                                                  │
+│  Phase 2: RESOLUTION (Question Resolution)                       │
+│  ├── Answer questions with REAL data                             │
+│  ├── Validate assumptions against actual system                  │
+│  └── Iterate until all gaps resolved                             │
+│                                                                  │
+│  Phase 3: VALIDATION (Technical Validation)                      │
+│  ├── Data flow verification                                      │
+│  ├── API/DB confirmation                                         │
+│  └── Insert/Update pattern testing                               │
+│                                                                  │
+│  Phase 4: DESIGN (Application Design)                            │
+│  ├── UI specification                                            │
+│  ├── Data management approach                                    │
+│  └── Logging/debugging strategy                                  │
+│                                                                  │
+│  Phase 5: REVIEW (Final Review)                                  │
+│  ├── E2E walkthrough                                             │
+│  ├── Checklist validation                                        │
+│  └── Sign-off                                                    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key Anti-Patterns to Avoid:**
+- ❌ Don't assume - verify against real data
+- ❌ Don't batch questions endlessly - iterate
+- ❌ Don't skip edge cases - nulls, duplicates
+- ❌ Don't forget logging - needed for debugging
+- ❌ Don't hardcode - use lookups/caches
+- ❌ Don't trust field names - verify schema
+
+### 6.2 Simplification First (From SYSTEM_IMPROVEMENT_PLAN)
+
+**Before adding new features, simplify:**
+
+| Current | Target | Action |
+|---------|--------|--------|
+| 32 workflows | 8 core workflows | Archive 24 |
+| 50 tables | ~35 tables | Drop 4 empty, archive stale |
+| 12 identities | 2 active | Archive unused |
+| 23 projects | 5 active | Archive inactive |
+
+**8 Core Workflows to Keep:**
+1. Session Start/End
+2. Bug Fix
+3. Feature Development (with TDD)
+4. Code Review
+5. Documentation Update
+6. Database Change
+7. Test Suite (NEW)
+8. Deployment
+
+### 6.3 Stop Hook Enforcer (C4 - Critical)
+
+**Problem**: "I'LL FORGET TO USE IT SO WILL YOU"
+
+**Solution**: Counter-based automatic reminders via Stop hook
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 STOP HOOK ENFORCER                               │
+├─────────────────────────────────────────────────────────────────┤
+│ Interval    │ Check              │ Reminder                     │
+├─────────────┼────────────────────┼──────────────────────────────┤
+│ Every 5     │ Git status         │ "Consider committing"        │
+│ Every 10    │ Inbox check        │ "Run /inbox-check"           │
+│ Every 20    │ CLAUDE.md refresh  │ "Re-read CLAUDE.md"          │
+│ On code Δ   │ Test tracking      │ "X files changed, no tests"  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**State Storage**: `~/.claude/state/enforcement_state.json`
+
+### 6.4 Knowledge Auto-Injection (C5)
+
+**Problem**: 161 knowledge entries exist but aren't used
+
+**Solution**: Auto-query `claude.knowledge` on UserPromptSubmit
+
+**Topic Detection Keywords:**
+| Topic | Keywords |
+|-------|----------|
+| nimbus | nimbus, shift, schedule, employment, roster |
+| api | api, odata, rest, endpoint, request |
+| import | import, importer, loader, sync, migration |
+| tax | tax, ato, tfn, abn, bas, payg |
+| database | database, postgres, sql, query, schema |
+| react | react, component, hook, state, jsx |
+
+**Injection Format:**
+```xml
+<relevant-knowledge>
+Found 3 relevant entries:
+### Entry Title
+**Category**: api | **Tags**: nimbus, shifts
+Content here...
+</relevant-knowledge>
+```
+
+### 6.5 TDD Enforcement
+
+**New Command**: `/test-first`
+
+**PreCommit Hook Check:**
+```python
+if code_files_changed and not test_files_changed:
+    return BLOCK, "No tests included. Use /test-first"
+```
+
+### 6.6 Success Metrics
+
+| Metric | Current | Target |
+|--------|---------|--------|
+| Table utilization | 30% | 80% |
+| Workflow completion | Unknown | 90% |
+| Test coverage | 0% | 70% |
+| Session closure | Unknown | 95% |
+| Agent success | ~46% | 80% |
+| Context carryover | Manual | Auto |
 
 ---
 
-## 7. Context Persistence Note
+## 7. Revised Implementation Timeline
+
+| Week | Phase | Deliverables |
+|------|-------|--------------|
+| 1 | A: Cleanup | Drop empty tables, archive inactive projects |
+| 1 | B: DB Integrity | Fix 15 FK constraints, add registries |
+| 2 | C: Simplification | 8 core workflows, quick ref cards |
+| 2 | D: Stop Hook | Implement counter-based enforcer |
+| 3 | E: Knowledge | Auto-injection from claude.knowledge |
+| 3 | F: TDD | /test-first command, precommit check |
+| 4 | G: Session | Enhanced context persistence |
+| 5 | H: Documentation | Architecture diagrams, validation |
+
+---
+
+## 8. Files to Create/Modify
+
+### Already Exists (Needs Testing)
+| File | Status |
+|------|--------|
+| `scripts/stop_hook_enforcer.py` | CREATED - needs testing |
+| `scripts/process_router.py` | MODIFIED - added knowledge |
+
+### To Create
+| File | Purpose |
+|------|---------|
+| `scripts/db_integrity_fix.sql` | Fix FK constraints |
+| `scripts/cleanup_archive.sql` | Archive stale data |
+| `.claude/commands/test-first.md` | TDD slash command |
+| `docs/KNOWLEDGE_INDEX.md` | Master resource list |
+| `docs/standards/DEVELOPMENT_QUICKREF.md` | Quick reference |
+
+---
+
+## 9. Context Persistence Note
 
 **For Claude instances reading this document:**
 
