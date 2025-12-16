@@ -146,6 +146,106 @@ The Claude Family infrastructure has grown organically to include:
    - When matching workflow, include "Available resources" hint
    - Link to relevant docs for that workflow
 
+#### 3.1.1 Knowledge Auto-Injection Implementation
+
+**File to Modify**: `scripts/process_router.py`
+
+**Add Topic-to-Keyword Mapping:**
+```python
+KNOWLEDGE_TOPICS = {
+    "nimbus": ["nimbus", "shift", "schedule", "employment", "employee", "roster"],
+    "api": ["api", "odata", "rest", "endpoint", "request", "response", "http"],
+    "import": ["import", "importer", "loader", "sync", "migration", "etl"],
+    "tax": ["tax", "ato", "tfn", "abn", "bas", "payg", "super", "stp"],
+    "database": ["database", "postgres", "sql", "query", "schema", "table"],
+    "react": ["react", "component", "hook", "state", "props", "jsx", "nextjs"],
+    "mcp": ["mcp", "server", "tool", "protocol", "model context"],
+    "windows": ["windows", "winforms", "wpf", "flaui", ".net", "csharp"],
+}
+```
+
+**Add Topic Detection Function:**
+```python
+def detect_topics(user_prompt: str) -> set:
+    """Detect relevant topics from user prompt."""
+    prompt_lower = user_prompt.lower()
+    detected = set()
+    for topic, keywords in KNOWLEDGE_TOPICS.items():
+        if any(kw in prompt_lower for kw in keywords):
+            detected.add(topic)
+    return detected
+```
+
+**Add Knowledge Query Function:**
+```python
+def get_relevant_knowledge(conn, topics: set, limit: int = 5) -> list:
+    """Query knowledge base for relevant entries."""
+    if not conn or not topics:
+        return []
+
+    all_keywords = []
+    for topic in topics:
+        all_keywords.extend(KNOWLEDGE_TOPICS.get(topic, []))
+
+    if not all_keywords:
+        return []
+
+    cur = conn.cursor()
+    keyword_conditions = " OR ".join([
+        f"(LOWER(title) LIKE '%{kw}%' OR LOWER(description) LIKE '%{kw}%')"
+        for kw in all_keywords[:10]
+    ])
+
+    cur.execute(f"""
+        SELECT knowledge_id, title, description, category, tags, confidence_level
+        FROM claude.knowledge
+        WHERE {keyword_conditions}
+        ORDER BY confidence_level DESC
+        LIMIT %s
+    """, (limit,))
+
+    return [dict(row) for row in cur.fetchall()]
+```
+
+**Add Knowledge Formatting Function:**
+```python
+def build_knowledge_guidance(knowledge_entries: list) -> str:
+    """Build knowledge injection text."""
+    if not knowledge_entries:
+        return ""
+
+    parts = ["<relevant-knowledge>",
+             f"[{len(knowledge_entries)} relevant knowledge entries]", ""]
+
+    for entry in knowledge_entries:
+        parts.append(f"### {entry['title']}")
+        parts.append(f"**Category**: {entry.get('category', 'general')}")
+        parts.append(entry.get('description', '')[:500])
+        parts.append("---")
+
+    parts.append("</relevant-knowledge>")
+    return "\n".join(parts)
+```
+
+**Integrate into main()** - Add after existing process detection:
+```python
+# NEW: Detect topics and inject knowledge
+detected_topics = detect_topics(user_prompt)
+knowledge_entries = get_relevant_knowledge(conn, detected_topics)
+knowledge_guidance = build_knowledge_guidance(knowledge_entries)
+
+# Add to system message
+if knowledge_guidance:
+    guidance_parts.append(knowledge_guidance)
+```
+
+**Testing Checklist:**
+- [ ] Topic detection works for each category
+- [ ] Knowledge query returns relevant results
+- [ ] Knowledge appears in Claude context
+- [ ] Performance: < 500ms added latency
+- [ ] Handles empty knowledge table gracefully
+
 ### 3.2 Database Schema - Fixed & Expanded
 
 **Phase 1: Integrity Fixes** (SQL script to run)
