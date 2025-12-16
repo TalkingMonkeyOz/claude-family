@@ -9,12 +9,18 @@
 
 ## 1. Executive Summary
 
+### User Context
+- **Single User**: John (user_id: 1)
+- **Concurrent Instances**: 1-4 Claude instances running simultaneously
+- **Sessions**: MANDATORY - every work session must have start/end
+- **Primary Platform**: CLI (Desktop is flaky with worst context)
+
 ### Current State
 The Claude Family infrastructure has grown organically to include:
 - PostgreSQL database with 3 schemas, 13+ tables
 - 3 custom MCP servers (orchestrator, flaui-testing, tool-search)
 - 32 workflows via process router
-- 6 Claude identities
+- 6 Claude identities (3 active: claude-code-unified, claude-desktop, claude-mcw)
 - Session management (start/end/resume)
 - Hook-based enforcement system
 
@@ -443,6 +449,105 @@ CREATE TABLE claude.stored_tests (
 }
 ```
 
+### 3.5 Production Line Agent Architecture
+
+**User Request**: Use orchestrator to create specialized agent pipelines
+
+**Current Capability** (from Section 10 - WORKING):
+- Orchestrator MCP: 98 sessions logged, 13 agent types
+- Parallel spawning tested (3x speedup)
+- Database logging integrated
+
+**Proposed Pipeline Flow:**
+```
+User Request → Process Router → Task Classification
+                    ↓
+              ┌─────┴─────┐
+              │ Spawn Agent │
+              │ Pipeline    │
+              └─────┬─────┘
+                    ↓
+    ┌───────────────┼───────────────┐
+    ↓               ↓               ↓
+[Coder Agent] → [Reviewer Agent] → [Tester Agent]
+  (Haiku)         (Sonnet)          (Haiku)
+    ↓               ↓               ↓
+   Write          Review           Test
+   Code           Output          Output
+    └───────────────┴───────────────┘
+                    ↓
+            Aggregated Result
+                    ↓
+              Log to DB
+```
+
+**Implementation in process_router.py:**
+```python
+def should_spawn_pipeline(workflow: str, task_complexity: str) -> bool:
+    """Determine if task warrants agent pipeline."""
+    pipeline_workflows = ['feature_development', 'bug_fix', 'code_review']
+    return workflow in pipeline_workflows and task_complexity in ['medium', 'high']
+
+def spawn_agent_pipeline(task: str, workflow: str):
+    """Spawn sequential agent pipeline."""
+    from mcp_orchestrator import spawn_agent
+
+    # Step 1: Coder writes implementation
+    code_result = spawn_agent('coder-haiku', task)
+
+    # Step 2: Reviewer checks code quality
+    review_result = spawn_agent('reviewer-sonnet',
+        f"Review this code:\n{code_result}")
+
+    # Step 3: Tester validates (if code exists)
+    if review_result.get('approved'):
+        test_result = spawn_agent('tester-haiku',
+            f"Write tests for:\n{code_result}")
+
+    return aggregate_results(code_result, review_result, test_result)
+```
+
+**Agent Types Available** (from agent_specs.json):
+| Agent | Model | Purpose |
+|-------|-------|---------|
+| coder-haiku | Haiku | Fast code generation |
+| python-coder-haiku | Haiku | Python-specific coding |
+| reviewer-sonnet | Sonnet | Code review with depth |
+| security-sonnet | Sonnet | Security audits |
+| tester-haiku | Haiku | Test generation |
+| architect-opus | Opus | Complex architecture decisions |
+
+**Issue to Resolve**: coder-haiku has 46% failure rate - needs investigation before pipeline deployment.
+
+### 3.6 PreCommit CLAUDE.md Refresh (User Request)
+
+**Problem**: Claude loses context over long sessions and may commit without following current standards.
+
+**Solution**: PreCommit hook forces CLAUDE.md re-read before any commit.
+
+**Current PreCommit**: Only runs `pre_commit_check.py` for schema validation.
+
+**Proposed Enhancement** to `pre_commit_check.py`:
+```python
+def refresh_context():
+    """Force Claude to re-read CLAUDE.md before commit."""
+    claude_md_path = Path.cwd() / "CLAUDE.md"
+    if claude_md_path.exists():
+        content = claude_md_path.read_text()
+        # Extract key sections only (first 2000 chars)
+        return {
+            "systemPrompt": f"<precommit-context-refresh>\n"
+                           f"REVIEW BEFORE COMMITTING:\n{content[:2000]}\n"
+                           f"</precommit-context-refresh>"
+        }
+    return {}
+```
+
+**Testing Checklist:**
+- [ ] PreCommit hook returns systemPrompt with CLAUDE.md content
+- [ ] Content appears in Claude context before commit
+- [ ] Performance: < 1 second additional delay
+
 ---
 
 ## 4. User Stories
@@ -585,6 +690,32 @@ Escalate if:
   - Classification confidence < 50%
   - Multiple processes could apply
 ```
+
+### 4.3 Regression Test Results (2025-12-16)
+
+**Methodology**: Traced actual code files to verify each user story.
+
+| User Story | Status | Evidence |
+|------------|--------|----------|
+| **US-001** Session Start | **WORKING** | `session_startup_hook.py` auto-creates session, loads state, checks messages |
+| **US-002** Process Detection | **WORKING** | `process_router.py` with 2-tier classification (regex + LLM) |
+| **US-003** Test Storage | **NOT WORKING** | `stored_tests` table designed but not deployed, no `/store-test` command |
+| **US-004** Feature Discovery | **NOT WORKING** | No `/discover` command, knowledge injection not implemented |
+| **US-005** Context Persistence | **PARTIAL** | Manual SQL required; `/session-end` guides but no auto-save |
+
+**Working Components (Verified):**
+- `session_startup_hook.py`: Auto-logs sessions, loads state, checks messages/reminders/jobs
+- `process_router.py`: 2-tier classification, standards injection, logging
+- `/test-first`: TDD workflow command (created this session)
+- `/session-end`: Manual save guidance
+- `claude.knowledge`: 161 entries exist
+
+**Gaps Identified:**
+1. `/store-test`, `/run-tests` commands - NOT CREATED
+2. `/discover` command - NOT CREATED
+3. Knowledge auto-injection in process_router.py - DESIGNED but NOT IMPLEMENTED
+4. KNOWLEDGE_INDEX.md - NOT CREATED
+5. db_integrity_fix.sql - CREATED but NOT RUN on database
 
 ---
 
@@ -892,6 +1023,96 @@ This document is the working plan for the Claude Family system redesign.
 
 ---
 
-**Version**: 0.2 (Draft - Files Created)
+## 11. Database Usage Guide (For Claude)
+
+**Purpose**: Tell Claude WHEN and HOW to use each table.
+
+### 11.1 Core Tables - When to Use
+
+| Table | When to Use | Process/Command |
+|-------|-------------|-----------------|
+| `claude_family.identities` | Session start - identify yourself | `session_startup_hook.py` |
+| `claude_family.session_history` | Start/end session - log work | `/session-start`, `/session-end` |
+| `claude.session_state` | Save/restore todo list & focus | `/session-end` (save), `session_startup_hook.py` (load) |
+| `claude.knowledge` | Found a reusable pattern? Store it | `/session-end`, manual |
+| `claude_family.instance_messages` | Need to tell another Claude something | `mcp__orchestrator__send_message` |
+| `claude.process_registry` | Define a new workflow trigger | Admin only |
+| `claude.process_triggers` | Add trigger pattern to process | Admin only |
+| `claude.scheduled_jobs` | Need periodic reminder/check | Manual |
+| `claude.reminders` | Need to remember something later | Manual |
+| `claude.stored_tests` | Store reusable test definition | `/store-test` (not created yet) |
+
+### 11.2 INSERT Patterns
+
+**Session Start (auto via hook):**
+```sql
+INSERT INTO claude.sessions (session_id, identity_id, project_name, session_start)
+VALUES (gen_random_uuid(), 'ff32276f-...', 'claude-family', NOW());
+```
+
+**Save Session State:**
+```sql
+INSERT INTO claude.session_state (project_name, todo_list, current_focus, files_modified)
+VALUES ('project', '[{"content":"...", "status":"..."}]'::jsonb, 'What I was doing', ARRAY['file1.py'])
+ON CONFLICT (project_name) DO UPDATE SET
+  todo_list = EXCLUDED.todo_list,
+  current_focus = EXCLUDED.current_focus,
+  updated_at = NOW();
+```
+
+**Store Knowledge:**
+```sql
+INSERT INTO claude.knowledge (pattern_name, description, applies_to, example_code, created_by_identity_id)
+VALUES ('Pattern Name', 'Description', 'When to use', 'code example', 'ff32276f-...'::uuid);
+```
+
+**Send Message:**
+```sql
+INSERT INTO claude_family.instance_messages (from_identity_id, to_project, message_type, subject, body, priority, status)
+VALUES ('ff32276f-...'::uuid, 'target-project', 'info', 'Subject', 'Message body', 'normal', 'pending');
+```
+
+### 11.3 Query Patterns
+
+**Check for saved state:**
+```sql
+SELECT todo_list, current_focus, files_modified
+FROM claude.session_state WHERE project_name = 'my-project';
+```
+
+**Get relevant knowledge:**
+```sql
+SELECT title, description, example_code
+FROM claude.knowledge
+WHERE LOWER(title) LIKE '%keyword%' OR LOWER(description) LIKE '%keyword%'
+ORDER BY confidence_level DESC LIMIT 5;
+```
+
+**Check inbox:**
+```sql
+SELECT message_id, subject, body, priority
+FROM claude_family.instance_messages
+WHERE (to_project = 'my-project' OR to_project IS NULL) AND status = 'pending';
+```
+
+### 11.4 Table Constraints Summary
+
+| Table | Key Constraints | Notes |
+|-------|-----------------|-------|
+| `identities` | identity_name UNIQUE | Root table - no FK deps |
+| `session_history` | identity_id FK → identities | CASCADE on delete |
+| `session_state` | project_name UNIQUE | UPSERT safe |
+| `knowledge` | knowledge_type CHECK (list) | Needs standardization |
+| `instance_messages` | status CHECK (pending/read/acknowledged) | |
+| `stored_tests` | test_type CHECK (unit/integration/e2e/process/workflow) | NOT DEPLOYED YET |
+
+### 11.5 Reference: SCHEMA_DETAIL_claude_family.md
+
+For complete field-level documentation of all tables, see:
+`/home/user/claude-family/docs/SCHEMA_DETAIL_claude_family.md`
+
+---
+
+**Version**: 0.3 (Draft - Database Guide Added)
 **Last Updated**: 2025-12-16
 **Location**: /home/user/claude-family/docs/SYSTEM_REDESIGN_2025-12.md
