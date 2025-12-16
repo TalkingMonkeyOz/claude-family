@@ -24,7 +24,10 @@
         "Bash(git add:*)",
         "Bash(git commit:*)",
         "Bash(git status:*)",
-        "Bash(git diff:*)"
+        "Bash(git diff:*)",
+        "mcp__filesystem",
+        "mcp__postgres",
+        "mcp__python-repl"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -35,16 +38,18 @@
         "WebFetch"
       ],
       "mcp_config": "configs/coder-haiku.mcp.json",
-      "workspace_jail_template": "{project_root}/src/",
+      "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.\n\nTOOL USAGE EXAMPLES:\n- Read file: mcp__filesystem__read_text_file(path=\"/path/to/file.py\")\n- Write file: mcp__filesystem__write_file(path=\"/path/to/file.py\", content=\"...\")\n- List dir: mcp__filesystem__list_directory(path=\"/path\")\n- Search: mcp__filesystem__search_files(path=\"/project\", pattern=\"*.py\")",
+      "skip_all_permissions": true,
+      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture.\n\nTOOL USAGE EXAMPLES:\n- Execute Python: mcp__python-repl__execute_python(code=\"print('test')\")\n- Query DB: mcp__postgres__execute_sql(sql=\"SELECT * FROM table LIMIT 5\")\n- Read file: mcp__filesystem__read_text_file(path=\"/path/to/file.py\")\n- Write file: mcp__filesystem__write_file(path=\"/path/to/file.py\", content=\"...\")\n- List dir: mcp__filesystem__list_directory(path=\"/path\")",
       "cost_profile": {
         "input_tokens_avg": 10000,
         "output_tokens_avg": 5000,
         "cost_per_task_usd": 0.035
       },
-      "recommended_timeout_seconds": 600
+      "recommended_timeout_seconds": 600,
+      "_fix_note": "2025-12-16: Fixed 46% failure rate - expanded workspace, added postgres+python-repl, added skip_all_permissions"
     },
     "python-coder-haiku": {
       "model": "claude-haiku-4-5",
