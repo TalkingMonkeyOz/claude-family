@@ -688,20 +688,21 @@ if code_files_changed and not test_files_changed:
 
 ## 8. Files to Create/Modify
 
-### Already Exists (Needs Testing)
+### Status Check (Verified 2025-12-16)
 | File | Status |
 |------|--------|
-| `scripts/stop_hook_enforcer.py` | CREATED - needs testing |
-| `scripts/process_router.py` | MODIFIED - added knowledge |
+| `scripts/stop_hook_enforcer.py` | **CREATED** 2025-12-16 - needs hook config + testing |
+| `scripts/sql/db_integrity_fix.sql` | **CREATED** 2025-12-16 - needs running on DB |
+| `.claude/commands/test-first.md` | **CREATED** 2025-12-16 - needs testing |
+| `scripts/process_router.py` | EXISTS - has standards injection, NO knowledge auto-injection yet |
 
-### To Create
+### Still To Create
 | File | Purpose |
 |------|---------|
-| `scripts/db_integrity_fix.sql` | Fix FK constraints |
 | `scripts/cleanup_archive.sql` | Archive stale data |
-| `.claude/commands/test-first.md` | TDD slash command |
 | `docs/KNOWLEDGE_INDEX.md` | Master resource list |
 | `docs/standards/DEVELOPMENT_QUICKREF.md` | Quick reference |
+| Knowledge injection in `process_router.py` | Auto-query claude.knowledge on UserPromptSubmit |
 
 ---
 
@@ -723,6 +724,74 @@ This document is the working plan for the Claude Family system redesign.
 
 ---
 
-**Version**: 0.1 (Draft)
+## 10. Infrastructure Reality Check (What's Working NOW)
+
+**Verified 2025-12-16** - These systems are deployed and have real usage data.
+
+### 10.1 Orchestrator MCP - PRODUCTION READY
+
+| Metric | Value | Source |
+|--------|-------|--------|
+| Total Agent Sessions | 98 | claude.agent_sessions |
+| Agent Types Available | 13 (reduced from 31) | agent_specs.json |
+| Status | Production Ready | mcp-servers/orchestrator/STATUS.md |
+
+**Top Agents by Usage:**
+| Agent | Sessions | Success Rate |
+|-------|----------|--------------|
+| coder-haiku | 28 | 46% |
+| python-coder-haiku | 25 | 80% |
+| lightweight-haiku | 12 | 83% |
+| reviewer-sonnet | 8 | 50% |
+| researcher-opus | 5 | 20% |
+
+**Issue**: coder-haiku (most used) has 46% failure rate - needs investigation.
+
+### 10.2 Session System - WORKING
+
+| Component | Status | Location |
+|-----------|--------|----------|
+| session_history table | 154 sessions logged | claude_family.session_history |
+| SessionStart hook | Active | .claude/hooks.json |
+| SessionEnd hook | Active | .claude/hooks.json |
+| session_startup_hook.py | EXISTS | scripts/ |
+
+### 10.3 Messaging System - WORKING
+
+| Metric | Value |
+|--------|-------|
+| Messages in DB | 84 |
+| MCP Tool | mcp__orchestrator__check_inbox |
+
+### 10.4 Process Router - PARTIALLY WORKING
+
+| Feature | Status |
+|---------|--------|
+| 53 workflow triggers | Active |
+| Standards injection | Working |
+| Knowledge auto-injection | **NOT IMPLEMENTED** |
+| LLM fallback classification | Working |
+
+### 10.5 Database Logging - WORKING
+
+| Table | Purpose | Active |
+|-------|---------|--------|
+| claude.agent_sessions | Agent spawn/completion | YES |
+| claude_family.session_history | Session tracking | YES |
+| claude_family.shared_knowledge | 161 entries | YES (but not auto-queried) |
+
+### 10.6 What's NOT Working / Missing
+
+| Feature | Status | Action Needed |
+|---------|--------|---------------|
+| Stop Hook Enforcer | Script created, not deployed | Add to hooks.json |
+| Knowledge Auto-Injection | Designed, not implemented | Add to process_router.py |
+| TDD Enforcement | Command created, not tested | Test /test-first |
+| DB Integrity | Script created, not run | Run db_integrity_fix.sql |
+| PreCommit test check | Not implemented | Add to pre_commit_check.py |
+
+---
+
+**Version**: 0.2 (Draft - Files Created)
 **Last Updated**: 2025-12-16
 **Location**: /home/user/claude-family/docs/SYSTEM_REDESIGN_2025-12.md
