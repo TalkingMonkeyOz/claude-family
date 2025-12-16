@@ -237,6 +237,96 @@ def get_db_connection():
         return None
 
 
+def get_relevant_knowledge(conn, category: str = None, keywords: List[str] = None, limit: int = 3) -> List[Dict[str, Any]]:
+    """
+    Query shared_knowledge for patterns relevant to the current task.
+
+    Knowledge Auto-Injection: When a process is detected, this fetches
+    relevant patterns/gotchas that Claude should know about.
+
+    Args:
+        conn: Database connection
+        category: Process category to match (e.g., 'development', 'testing')
+        keywords: Keywords from user prompt to match against
+        limit: Max number of knowledge items to return
+
+    Returns:
+        List of knowledge dicts with pattern_name, description, gotchas, etc.
+    """
+    if not conn:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        # Build dynamic query based on available filters
+        conditions = ["sk.is_active = true"]
+        params = []
+
+        if category:
+            conditions.append("(sk.applies_to ILIKE %s OR sk.knowledge_type = %s)")
+            params.extend([f"%{category}%", category])
+
+        if keywords:
+            # Match any keyword in pattern_name or description
+            keyword_conditions = []
+            for kw in keywords[:5]:  # Limit to 5 keywords for performance
+                keyword_conditions.append("(sk.pattern_name ILIKE %s OR sk.description ILIKE %s)")
+                params.extend([f"%{kw}%", f"%{kw}%"])
+            if keyword_conditions:
+                conditions.append(f"({' OR '.join(keyword_conditions)})")
+
+        where_clause = " AND ".join(conditions)
+
+        cur.execute(f"""
+            SELECT
+                sk.knowledge_id,
+                sk.pattern_name,
+                sk.description,
+                sk.applies_to,
+                sk.example_code,
+                sk.gotchas,
+                sk.knowledge_type,
+                sk.confidence_score
+            FROM claude_family.shared_knowledge sk
+            WHERE {where_clause}
+            ORDER BY sk.confidence_score DESC, sk.created_at DESC
+            LIMIT %s
+        """, params + [limit])
+
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        # Knowledge lookup is best-effort - don't fail the main flow
+        return []
+
+
+def build_knowledge_guidance(knowledge_items: List[Dict[str, Any]]) -> str:
+    """Format knowledge items as guidance text."""
+    if not knowledge_items:
+        return ""
+
+    parts = ["<knowledge-injection>", "RELEVANT PATTERNS FROM KNOWLEDGE BASE:", ""]
+
+    for item in knowledge_items:
+        parts.append(f"### {item['pattern_name']}")
+        parts.append(item['description'])
+
+        if item.get('gotchas'):
+            parts.append(f"\n⚠️ GOTCHAS: {item['gotchas']}")
+
+        if item.get('example_code'):
+            # Truncate long examples
+            code = item['example_code'][:500]
+            if len(item['example_code']) > 500:
+                code += "\n... (truncated)"
+            parts.append(f"\nExample:\n```\n{code}\n```")
+
+        parts.append("")  # Blank line between items
+
+    parts.append("</knowledge-injection>")
+    return "\n".join(parts)
+
+
 def classify_with_llm_fallback(conn, user_prompt: str) -> List[Dict[str, Any]]:
     """
     Use LLM to classify user intent when regex/keywords fail.
@@ -621,11 +711,21 @@ def main():
 
     # Build process guidance (if any processes matched)
     process_guidance_result = {"guidance_text": "", "suggested_todos": []}
+    knowledge_guidance = ""
+
     if matches:
         process_guidance_result = build_process_guidance(matches, conn)
         # Log the trigger (first match only for now)
         trigger_info = f"Pattern matched: {matches[0].get('pattern', 'N/A')[:50]}"
         log_process_trigger(conn, matches[0]['process_id'], trigger_info)
+
+        # KNOWLEDGE AUTO-INJECTION: Fetch relevant patterns from shared_knowledge
+        # Extract category from first match and keywords from prompt
+        category = matches[0].get('category')
+        prompt_keywords = [w for w in user_prompt.lower().split() if len(w) > 3][:10]
+        knowledge_items = get_relevant_knowledge(conn, category=category, keywords=prompt_keywords)
+        if knowledge_items:
+            knowledge_guidance = build_knowledge_guidance(knowledge_items)
 
     if conn:
         conn.close()
@@ -668,6 +768,9 @@ You MUST:
         guidance_parts.append(f"""<standards-guidance>
 {standards_guidance}
 </standards-guidance>""")
+
+    if knowledge_guidance:
+        guidance_parts.append(knowledge_guidance)
 
     response = {
         "systemPrompt": "\n\n".join(guidance_parts)

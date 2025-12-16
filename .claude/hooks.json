@@ -112,6 +112,18 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/stop_hook_enforcer.py\"",
+            "timeout": 5,
+            "description": "Counter-based periodic reminders (git, inbox, CLAUDE.md refresh)"
+          }
+        ]
+      }
     ]
   }
 }
