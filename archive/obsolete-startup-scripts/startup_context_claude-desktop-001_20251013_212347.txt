@@ -1,0 +1,51 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 IDENTITY LOADED: claude-desktop-001
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHO AM I:
+  Platform: desktop
+  Role: Lead Architect & System Designer. Responsible for overall system architecture, complex problem solvi...
+
+MY CAPABILITIES:
+  ✅ MCP Servers: filesystem, postgres, memory...
+  ✅ Can run system commands
+  ✅ File operations enabled
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 UNIVERSAL KNOWLEDGE (Top 5 most relevant)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+2. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+3. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+4. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+5. [GOTCHA] Windows-MCP server requires uv package manager
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 1x
+   Windows-MCP MCP server fails with "spawn uv ENOENT" if uv (Universal Python package installer by Astral) is not installe...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👥 OTHER CLAUDE FAMILY MEMBERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• claude-code-001 (Code Quality & Standards Enforcer. Focuses on code...)
+  Last active: 2025-10-11
+  Recent sessions: 1
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ READY TO WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Context loaded successfully. All critical knowledge and constraints available.
+Session started: 2025-10-13 21:23:47

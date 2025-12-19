@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2025-12-09T19:52:03.893756",
+    "generated_at": "2025-12-19T19:08:46.835117",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -29,6 +29,11 @@
       "path": "C:\\Projects\\claude-mission-control",
       "type": "python-flet",
       "description": "Mission Control - AI governance hub for Claude Family. Card-based UI for project management, agent orchestration, and automated workflows."
+    },
+    "nimbus-import": {
+      "path": "C:\\Projects\\nimbus-import",
+      "type": "tauri-react",
+      "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
     },
     "ATO-tax-agent": {
       "path": "C:\\Projects\\ATO-tax-agent",

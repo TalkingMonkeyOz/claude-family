@@ -252,12 +252,9 @@ def main():
 
     is_resume = '--resume' in sys.argv
 
-    # Claude Code expects hookSpecificOutput.additionalContext for SessionStart hooks
+    # Claude Code expects additionalContext at top level (not nested in hookSpecificOutput)
     result = {
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": ""
-        },
+        "additionalContext": "",
         "systemMessage": ""
     }
 
@@ -378,7 +375,7 @@ def main():
     # Reminder about commands
     context_lines.append("Available commands: /session-start, /session-end, /inbox-check, /feedback-check, /team-status, /broadcast")
 
-    result["hookSpecificOutput"]["additionalContext"] = "\n".join(context_lines)
+    result["additionalContext"] = "\n".join(context_lines)
 
     # Build system message - show key info to user
     system_parts = [f"Claude Family session {'resumed' if is_resume else 'started'} for {project_name}."]

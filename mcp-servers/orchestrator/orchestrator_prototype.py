@@ -21,10 +21,11 @@ import sys
 import os
 import platform
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Set
 import subprocess
 from datetime import datetime
 import shutil
+import time
 
 # Optional database logging
 try:
@@ -38,12 +39,24 @@ except ImportError:
 class AgentOrchestrator:
     """Manages spawning and communication with Claude agents."""
 
+    # Safeguard constants
+    MAX_CONCURRENT_SPAWNS = 3  # Maximum agents running simultaneously
+    MIN_SPAWN_DELAY_SECONDS = 2.0  # Minimum delay between spawns
+    MAX_RETRIES = 2  # Max retry attempts for failed spawns
+    RETRY_DELAY_SECONDS = 5.0  # Delay before retry
+
     def __init__(self, specs_path: str = "agent_specs.json", enable_db_logging: bool = True):
         """Initialize orchestrator with agent specifications."""
         self.base_dir = Path(__file__).parent
         self.specs_path = self.base_dir / specs_path
         self.agent_specs = self._load_specs()
         self.claude_executable = self._find_claude_executable()
+
+        # Spawn safeguards
+        self._spawn_semaphore = asyncio.Semaphore(self.MAX_CONCURRENT_SPAWNS)
+        self._last_spawn_time: float = 0
+        self._active_spawns: Set[str] = set()  # Track active agent session IDs
+        self._spawn_lock = asyncio.Lock()  # Protect spawn timing
 
         # Initialize database logger if available
         self.db_logger = None
@@ -89,12 +102,68 @@ class AgentOrchestrator:
             )
         return self.agent_specs['agent_types'][agent_type]
 
+    # =========================================================================
+    # Spawn Safeguards
+    # =========================================================================
+
+    def validate_mcp_config(self, agent_type: str) -> tuple[bool, str]:
+        """
+        Validate MCP config exists and is valid JSON before spawning.
+
+        Returns:
+            (is_valid, error_message)
+        """
+        spec = self.get_agent_spec(agent_type)
+        mcp_config_path = self.base_dir / spec['mcp_config']
+
+        if not mcp_config_path.exists():
+            return False, f"MCP config not found: {mcp_config_path}"
+
+        try:
+            with open(mcp_config_path, 'r') as f:
+                config = json.load(f)
+
+            if 'mcpServers' not in config:
+                return False, f"Invalid MCP config: missing 'mcpServers' key"
+
+            return True, ""
+        except json.JSONDecodeError as e:
+            return False, f"Invalid JSON in MCP config: {e}"
+        except Exception as e:
+            return False, f"Error reading MCP config: {e}"
+
+    async def _enforce_spawn_delay(self):
+        """Ensure minimum delay between spawns to prevent resource contention."""
+        async with self._spawn_lock:
+            now = time.time()
+            elapsed = now - self._last_spawn_time
+            if elapsed < self.MIN_SPAWN_DELAY_SECONDS:
+                delay = self.MIN_SPAWN_DELAY_SECONDS - elapsed
+                print(f"DEBUG: Enforcing spawn delay of {delay:.1f}s", file=sys.stderr)
+                await asyncio.sleep(delay)
+            self._last_spawn_time = time.time()
+
+    def get_active_spawn_count(self) -> int:
+        """Get number of currently active spawns."""
+        return len(self._active_spawns)
+
+    def get_spawn_status(self) -> Dict[str, Any]:
+        """Get current spawn safeguard status."""
+        return {
+            "active_spawns": len(self._active_spawns),
+            "max_concurrent": self.MAX_CONCURRENT_SPAWNS,
+            "available_slots": self.MAX_CONCURRENT_SPAWNS - len(self._active_spawns),
+            "min_spawn_delay_seconds": self.MIN_SPAWN_DELAY_SECONDS,
+            "active_session_ids": list(self._active_spawns)
+        }
+
     async def spawn_agent(
         self,
         agent_type: str,
         task: str,
         workspace_dir: str,
-        timeout: Optional[int] = None
+        timeout: Optional[int] = None,
+        skip_safeguards: bool = False
     ) -> Dict[str, Any]:
         """
         Spawn a Claude agent with isolated configuration.
@@ -104,6 +173,7 @@ class AgentOrchestrator:
             task: Task description for the agent
             workspace_dir: Directory to jail the agent to
             timeout: Max execution time in seconds (default: from spec)
+            skip_safeguards: If True, skip concurrency/delay safeguards (use carefully)
 
         Returns:
             Dict with 'success', 'output', 'error', 'cost_estimate'
@@ -114,12 +184,73 @@ class AgentOrchestrator:
         if spec.get('local_model', False):
             return await self._spawn_local_agent(spec, task, timeout)
 
+        # =====================================================================
+        # SAFEGUARD 1: Validate MCP config before attempting spawn
+        # =====================================================================
+        is_valid, error_msg = self.validate_mcp_config(agent_type)
+        if not is_valid:
+            return {
+                "status": "error",
+                "success": False,
+                "output": "",
+                "error": f"Pre-spawn validation failed: {error_msg}",
+                "agent_type": agent_type,
+                "safeguard": "mcp_config_validation"
+            }
+
+        # Generate a tracking ID for this spawn
+        import uuid
+        spawn_id = str(uuid.uuid4())[:8]
+
+        if not skip_safeguards:
+            # =================================================================
+            # SAFEGUARD 2: Enforce minimum delay between spawns
+            # =================================================================
+            await self._enforce_spawn_delay()
+
+            # =================================================================
+            # SAFEGUARD 3: Limit concurrent spawns with semaphore
+            # =================================================================
+            print(f"DEBUG: [{spawn_id}] Waiting for spawn slot ({self.get_active_spawn_count()}/{self.MAX_CONCURRENT_SPAWNS} active)", file=sys.stderr)
+
+        # Acquire semaphore (will block if at max concurrent spawns)
+        async with self._spawn_semaphore:
+            # Track this spawn
+            self._active_spawns.add(spawn_id)
+            print(f"DEBUG: [{spawn_id}] Acquired spawn slot for {agent_type}", file=sys.stderr)
+
+            try:
+                result = await self._do_spawn(agent_type, task, workspace_dir, timeout, spec, spawn_id)
+                return result
+            finally:
+                # Always remove from active spawns when done
+                self._active_spawns.discard(spawn_id)
+                print(f"DEBUG: [{spawn_id}] Released spawn slot ({self.get_active_spawn_count()}/{self.MAX_CONCURRENT_SPAWNS} active)", file=sys.stderr)
+
+    async def _do_spawn(
+        self,
+        agent_type: str,
+        task: str,
+        workspace_dir: str,
+        timeout: Optional[int],
+        spec: Dict[str, Any],
+        spawn_id: str
+    ) -> Dict[str, Any]:
+        """Internal spawn implementation (called after safeguards pass)."""
+
         # Resolve paths
         mcp_config_path = self.base_dir / spec['mcp_config']
         workspace_path = Path(workspace_dir).resolve()
 
-        # Load MCP servers for logging
+        # Create unique agent workspace per spawn to avoid MCP config conflicts
+        # Claude Code loads .mcp.json from the project directory, so we need
+        # to copy the agent's MCP config there
+        agent_workspace = Path("C:/claude/agent-workspaces") / spawn_id
+        agent_workspace.mkdir(parents=True, exist_ok=True)
+
+        # Load and process MCP config
         mcp_servers = []
+        mcp_config_str = ""
         try:
             with open(mcp_config_path, 'r') as f:
                 # Read as string first to replace {workspace_dir} placeholder
@@ -130,8 +261,28 @@ class AgentOrchestrator:
                 mcp_config_str = mcp_config_str.replace('{workspace_dir}', escaped_workspace_path)
                 mcp_config = json.loads(mcp_config_str)
                 mcp_servers = list(mcp_config.get('mcpServers', {}).keys())
-        except:
-            pass
+        except Exception as e:
+            print(f"DEBUG: [{spawn_id}] Error loading MCP config: {e}", file=sys.stderr)
+
+        # Copy agent's MCP config to workspace as .mcp.json
+        # This ensures Claude Code loads the agent-specific MCP servers
+        try:
+            agent_mcp_json = agent_workspace / ".mcp.json"
+            with open(agent_mcp_json, 'w') as f:
+                f.write(mcp_config_str)
+            print(f"DEBUG: [{spawn_id}] Wrote MCP config to {agent_mcp_json}", file=sys.stderr)
+
+            # Also create .claude/settings.local.json with disableAllHooks
+            claude_dir = agent_workspace / ".claude"
+            claude_dir.mkdir(exist_ok=True)
+            settings_path = claude_dir / "settings.local.json"
+            with open(settings_path, 'w') as f:
+                json.dump({
+                    "disableAllHooks": True,
+                    "permissions": {"allow": ["mcp__*"], "deny": [], "ask": []}
+                }, f)
+        except Exception as e:
+            print(f"DEBUG: [{spawn_id}] Error setting up workspace: {e}", file=sys.stderr)
 
         # Log spawn event to database
         session_id = None
@@ -145,11 +296,11 @@ class AgentOrchestrator:
             )
 
         # Build Claude Code command
-        cmd = self._build_command(spec, mcp_config_path, workspace_path)
+        cmd = self._build_command(spec, agent_workspace, workspace_path)
 
         # Debug: print command being executed
-        print(f"DEBUG: Spawning agent with command:", file=sys.stderr)
-        print(f"DEBUG: {' '.join(str(c) for c in cmd)}", file=sys.stderr)
+        print(f"DEBUG: [{spawn_id}] Spawning {agent_type} agent", file=sys.stderr)
+        print(f"DEBUG: [{spawn_id}] Command: {' '.join(str(c) for c in cmd)[:100]}...", file=sys.stderr)
 
         # Set timeout
         timeout = timeout or spec['recommended_timeout_seconds']
@@ -176,24 +327,28 @@ TASK:
         if self.db_logger and session_id:
             self.db_logger.log_completion(session_id, result)
 
+        # Cleanup temp agent workspace
+        try:
+            shutil.rmtree(agent_workspace)
+            print(f"DEBUG: [{spawn_id}] Cleaned up workspace {agent_workspace}", file=sys.stderr)
+        except Exception as e:
+            print(f"DEBUG: [{spawn_id}] Failed to cleanup workspace: {e}", file=sys.stderr)
+
         return result
 
     def _build_command(
         self,
         spec: Dict[str, Any],
-        mcp_config_path: Path,
+        agent_workspace: Path,
         workspace_path: Path
     ) -> list:
         """Build the Claude Code CLI command."""
-        # Use isolated agent workspace to avoid inheriting hooks/plugins from target project
-        # The agent accesses the actual project files via filesystem MCP
-        agent_workspace = Path("C:/claude/agent-workspaces")
-
+        # Agent workspace contains .mcp.json with agent-specific MCP servers
+        # Claude Code will load this as the project MCP config
         cmd = [
             self.claude_executable,
             '--model', spec['model'],
-            '--mcp-config', str(mcp_config_path),
-            '--add-dir', str(agent_workspace),  # Clean workspace with disableAllHooks
+            '--add-dir', str(agent_workspace),  # Workspace with agent's .mcp.json
             '--print',  # Output to stdout
         ]
 

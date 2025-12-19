@@ -90,6 +90,17 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "mcp__*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/mcp_usage_logger.py\"",
+            "timeout": 3,
+            "description": "Log MCP tool usage for analytics"
+          }
+        ]
+      },
+      {
         "matcher": "mcp__orchestrator__check_inbox",
         "hooks": [
           {
@@ -109,6 +120,18 @@
             "timeout": 60,
             "blocking": true,
             "description": "Run Level 1 tests: schema validation, sensitive file check"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/stop_hook_enforcer.py\"",
+            "timeout": 5,
+            "description": "Self-enforcing periodic checks: git status, inbox, CLAUDE.md refresh, test reminders"
           }
         ]
       }

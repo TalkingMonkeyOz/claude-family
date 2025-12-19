@@ -1,0 +1,89 @@
+{
+  "relations": [
+    {
+      "from": "claude-code-unified",
+      "to": "session_08a4e333-fc1c-4cd5-9380-596b353f2e42",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_8a822d7b-41da-44e4-98b7-e8192d5ef416",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_44ff73ce-ca48-476b-b330-2b7c784fc10c",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_40768b50-616e-49eb-98cf-787e9b18dc5d",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_7a5605dd-1f46-4061-b23e-5fb3fc45d091",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_140b5bc2-1bd5-46a5-96c8-c9f03c328801",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_7c300764-564c-4f04-8ba7-359e25715cc5",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_f29741a8-cc3e-4b4a-b49d-5a4083b81d06",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_09876a82-afef-46cc-b996-503416302428",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_a9370c8b-eb39-4650-bd1b-8b5694da5930",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_9f24ebfe-9d40-4473-8379-367a564fd5b0",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_bdcb9710-4462-4dba-b055-e66697fbd7be",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_b2b99b98-e275-45ed-820f-8ef222a05141",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "session_7d1d291a-8749-4dae-b9e9-d324a21a182c",
+      "relationType": "worked_on"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "claude-mcw",
+      "relationType": "collaborates_with"
+    },
+    {
+      "from": "claude-code-unified",
+      "to": "claude-desktop",
+      "relationType": "collaborates_with"
+    },
+    {
+      "from": "claude-mcw",
+      "to": "claude-desktop",
+      "relationType": "collaborates_with"
+    }
+  ]
+}

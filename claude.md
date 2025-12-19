@@ -45,11 +45,19 @@ claude-family/
 ├── CLAUDE.md              # This file - AI constitution
 ├── PROBLEM_STATEMENT.md   # Problem definition
 ├── ARCHITECTURE.md        # System design
-├── .claude/commands/      # Slash commands
+├── .claude/
+│   ├── commands/          # Slash commands
+│   └── skills/            # Domain skills (nimbus-api, etc.)
 ├── docs/
 │   ├── adr/              # Architecture decisions
 │   ├── sop/              # Standard operating procedures
 │   └── *.md              # Plans, specs, guides
+├── knowledge-vault/       # Obsidian vault for knowledge capture
+│   ├── 00-Inbox/         # Quick capture
+│   ├── 10-Projects/      # Project-specific knowledge
+│   ├── 20-Domains/       # Domain knowledge (APIs, DB, etc.)
+│   ├── 30-Patterns/      # Reusable patterns, gotchas, solutions
+│   └── _templates/       # Note templates
 ├── scripts/              # Python utilities
 ├── mcp-servers/          # MCP server implementations
 └── templates/            # Project templates
@@ -137,10 +145,62 @@ See `docs/sops/GIT_WORKTREES_FOR_PARALLEL_WORK.md`
 
 ---
 
+## Knowledge System
+
+Complete knowledge lifecycle for institutional memory:
+
+```
+CAPTURE ──────> STORE ──────> DELIVER
+(Obsidian)    (PostgreSQL)   (Hooks)
+```
+
+### Components
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| **Obsidian Vault** | `knowledge-vault/` | Markdown knowledge capture with YAML frontmatter |
+| **Sync Script** | `scripts/sync_obsidian_to_db.py` | Vault → Database sync |
+| **Process Router** | `scripts/process_router.py` | Keyword-based knowledge retrieval |
+| **Retrieval Log** | `claude.knowledge_retrieval_log` | Observability for what knowledge is queried |
+| **Enforcement Log** | `claude.enforcement_log` | Tracks reminder triggers |
+
+### Key Commands
+
+- `/knowledge-capture` - Save a learning to the Obsidian vault
+- `/session-end` - Prompts for session learnings before close
+
+### Sync Knowledge
+
+```bash
+# Dry run (see what would sync)
+python scripts/sync_obsidian_to_db.py --dry-run
+
+# Actually sync
+python scripts/sync_obsidian_to_db.py
+
+# Force resync everything
+python scripts/sync_obsidian_to_db.py --force
+```
+
+### Test Suite
+
+```bash
+# Run all 15 user story tests
+python scripts/run_regression_tests.py --verbose
+
+# Quick mode (first 7 tests)
+python scripts/run_regression_tests.py --quick
+```
+
+---
+
 ## Recent Changes
 
 | Date | Change |
 |------|--------|
+| 2025-12-18 | Implemented Knowledge System (Obsidian vault, sync script, logging) |
+| 2025-12-18 | Created test suite for all 15 user stories from spec |
+| 2025-12-18 | Added skills folder (.claude/skills/) with nimbus-api placeholder |
 | 2025-12-08 | Added MANDATORY Process Guidance section - Claude must follow workflow steps |
 | 2025-12-08 | Workflow regression: All 32 processes now have steps and triggers |
 | 2025-12-08 | Added 7 new triggers (IDs 47-53) for 6 processes |
@@ -171,7 +231,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.2 (Mandatory Process Guidance)
+**Version**: 2.3 (Knowledge System)
 **Created**: 2025-10-21
-**Updated**: 2025-12-08
+**Updated**: 2025-12-18
 **Location**: C:\Projects\claude-family\CLAUDE.md

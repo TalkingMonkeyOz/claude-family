@@ -15,8 +15,36 @@ import os
 import sys
 from datetime import datetime
 
+# Try to load POSTGRES_CONFIG from central config or .env file
+POSTGRES_CONFIG = None
+try:
+    # First try to load .env file directly (in case config.py fails due to working directory)
+    config_dir = os.path.normpath(os.path.expanduser('~/OneDrive/Documents/AI_projects/ai-workspace'))
+    env_file = os.path.join(config_dir, '.env')
+    if os.path.exists(env_file):
+        with open(env_file, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ.setdefault(key.strip(), value.strip())  # Don't overwrite existing
+
+    # Now try to import config (which will use the env vars we just set)
+    sys.path.insert(0, config_dir)
+    from config import POSTGRES_CONFIG
+except (ImportError, ValueError, FileNotFoundError):
+    # Fall back to environment variables only
+    if os.environ.get('POSTGRES_PASSWORD'):
+        POSTGRES_CONFIG = {
+            'host': os.environ.get('POSTGRES_HOST', 'localhost'),
+            'database': os.environ.get('POSTGRES_DATABASE', 'ai_company_foundation'),
+            'user': os.environ.get('POSTGRES_USER', 'postgres'),
+            'password': os.environ.get('POSTGRES_PASSWORD')
+        }
+
 # Try to import psycopg for database access
 DB_AVAILABLE = False
+PSYCOPG_VERSION = None
 try:
     import psycopg
     from psycopg.rows import dict_row
@@ -38,13 +66,25 @@ IDENTITY_MAP = {
 }
 
 def get_db_connection():
-    """Get PostgreSQL connection. Tries multiple connection strings."""
+    """Get PostgreSQL connection using central config or environment variables."""
+    # Try central config first
+    if POSTGRES_CONFIG:
+        try:
+            if PSYCOPG_VERSION == 3:
+                # psycopg3 uses 'dbname' not 'database'
+                config = POSTGRES_CONFIG.copy()
+                if 'database' in config and 'dbname' not in config:
+                    config['dbname'] = config.pop('database')
+                return psycopg.connect(**config, row_factory=dict_row)
+            else:
+                return psycopg.connect(**POSTGRES_CONFIG, cursor_factory=RealDictCursor)
+        except Exception:
+            pass
+
+    # Fall back to environment variables
     conn_strings = [
         os.environ.get('DATABASE_URI'),
         os.environ.get('POSTGRES_CONNECTION_STRING'),
-        # Known working connection string
-        'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation',
-        'postgresql://postgres:postgres@localhost:5432/ai_company_foundation',
     ]
 
     last_error = None
@@ -60,26 +100,26 @@ def get_db_connection():
             last_error = e
             continue
 
-    raise last_error if last_error else Exception("No valid connection string")
+    raise last_error if last_error else Exception("No valid connection - set DATABASE_URI or POSTGRES_CONNECTION_STRING env var, or configure ai-workspace/config.py")
 
-def log_session_start(project_name: str, identity_id: str) -> str:
-    """Log session start to database, return session_id."""
+def log_session_start(project_name: str, identity_id: str) -> tuple:
+    """Log session start to database, return (session_id, error_msg)."""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO claude_family.session_history
-            (identity_id, session_start, project_name, session_summary)
-            VALUES (%s, NOW(), %s, 'Session auto-started via hook')
+            INSERT INTO claude.sessions
+            (session_id, identity_id, session_start, project_name, session_summary)
+            VALUES (gen_random_uuid(), %s, NOW(), %s, 'Session auto-started via hook')
             RETURNING session_id::text
         """, (identity_id, project_name))
         result = cur.fetchone()
         conn.commit()
         cur.close()
         conn.close()
-        return result['session_id'] if result else None
+        return (result['session_id'] if result else None, None)
     except Exception as e:
-        return None
+        return (None, str(e))
 
 def get_recent_sessions(project_name: str, limit: int = 3) -> list:
     """Get recent session summaries for this project."""
@@ -89,7 +129,7 @@ def get_recent_sessions(project_name: str, limit: int = 3) -> list:
         cur.execute("""
             SELECT session_summary, session_start,
                    COALESCE(array_to_string(tasks_completed, ', '), '') as tasks
-            FROM claude_family.session_history
+            FROM claude.sessions
             WHERE project_name = %s AND session_summary IS NOT NULL
             ORDER BY session_start DESC
             LIMIT %s
@@ -108,7 +148,7 @@ def check_pending_messages(project_name: str) -> int:
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) as count
-            FROM claude_family.instance_messages
+            FROM claude.messages
             WHERE status = 'pending'
               AND (to_project = %s OR (to_session_id IS NULL AND to_project IS NULL))
         """, (project_name,))
@@ -131,7 +171,7 @@ def get_session_state(project_name: str) -> dict:
                 files_modified,
                 pending_actions,
                 updated_at
-            FROM claude_family.session_state
+            FROM claude.session_state
             WHERE project_name = %s
         """, (project_name,))
         result = cur.fetchone()
@@ -183,12 +223,12 @@ def main():
 
     if DB_AVAILABLE:
         # Log session to database
-        session_id = log_session_start(project_name, identity_id)
+        session_id, error = log_session_start(project_name, identity_id)
         if session_id:
             context_lines.append(f"Session ID: {session_id}")
             context_lines.append("Session logged to database")
         else:
-            context_lines.append("Could not log session to database")
+            context_lines.append(f"Could not log session: {error or 'unknown error'}")
 
         # === WHERE WE LEFT OFF ===
         state = get_session_state(project_name)

@@ -1,0 +1,49 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 IDENTITY LOADED: claude-desktop
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHO AM I:
+  Platform: desktop
+  Role: GUI Interface - Claude Desktop app for visual work, strategy discussions, and design. Works across a...
+
+MY CAPABILITIES:
+  ✅ MCP Servers: postgres, memory, filesystem...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 UNIVERSAL KNOWLEDGE (Top 5 most relevant)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. [BUG-FIX] psycopg3 vs psycopg2 Connection Parameter Compatibility
+   Category: database | Confidence: ██████████████████████████████████████████████████████████████████████████████████████████ (90/10) | Applied: Nonex
+   psycopg3 uses dbname for database name, while psycopg2 uses database. When using a shared POSTGRES_CONFIG dict that was ...
+
+2. [BUG-FIX] Schema Consolidation Migration Pattern
+   Category: infrastructure | Confidence: █████████████████████████████████████████████████████████████████████████████████████ (85/10) | Applied: Nonex
+   When scripts call legacy schema functions (claude_family.*) that reference deleted tables, replace with direct SQL queri...
+
+3. [BEST-PRACTICE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+4. [BEST-PRACTICE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+5. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👥 OTHER CLAUDE FAMILY MEMBERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• claude-code-unified (Project-Aware CLI - ONE Claude Code instance for A...)
+  Last active: 2025-12-12
+  Recent sessions: 17
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ READY TO WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Context loaded successfully. All critical knowledge and constraints available.
+Session started: 2025-12-13 00:45:22

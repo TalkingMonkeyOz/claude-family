@@ -15,7 +15,7 @@ Architecture:
 
 Usage:
     Called by Claude Code hooks system with user prompt on stdin
-    Returns JSON with systemPrompt or block message
+    Returns JSON with hookSpecificOutput.additionalContext for context injection
 
 Author: claude-code-unified
 Date: 2025-12-07
@@ -36,16 +36,28 @@ from typing import Optional, Dict, List, Any, Set
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Add ai-workspace to path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+# Add scripts directory to path for local imports
+SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, SCRIPTS_DIR)
 
 try:
-    from config import POSTGRES_CONFIG
+    from config import POSTGRES_CONFIG, ANTHROPIC_API_KEY as CONFIG_ANTHROPIC_KEY
     import psycopg2
     from psycopg2.extras import RealDictCursor
     HAS_DB = True
 except ImportError:
-    HAS_DB = False
+    # Fallback to legacy path
+    sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+    try:
+        from config import POSTGRES_CONFIG
+        CONFIG_ANTHROPIC_KEY = None
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        HAS_DB = True
+    except ImportError:
+        HAS_DB = False
+        CONFIG_ANTHROPIC_KEY = None
 
 # LLM Classifier imports (optional - graceful fallback if not available)
 try:
@@ -133,6 +145,24 @@ CODE_CHANGE_KEYWORDS = [
 ]
 
 
+# Knowledge retrieval configuration
+KNOWLEDGE_ENTITY_KEYWORDS = {
+    # Nimbus-related
+    'nimbus': ['nimbus', 'shift', 'schedule', 'employment', 'employee', 'roster'],
+    'api': ['api', 'odata', 'rest', 'endpoint', 'request', 'response'],
+    'import': ['import', 'importer', 'loader', 'sync', 'migration'],
+    # ATO/Tax-related
+    'tax': ['tax', 'ato', 'tfn', 'abn', 'bas', 'payg', 'super', 'superannuation'],
+    # Technical
+    'database': ['database', 'postgres', 'sql', 'query', 'schema', 'table'],
+    'react': ['react', 'component', 'hook', 'state', 'props', 'jsx', 'tsx'],
+    'nextjs': ['next', 'nextjs', 'app router', 'page', 'layout', 'server component'],
+    # Claude-specific
+    'mcp': ['mcp', 'server', 'tool', 'protocol'],
+    'hook': ['hook', 'prehook', 'posthook', 'userpromptsubmit'],
+}
+
+
 def detect_task_standards(user_prompt: str) -> Set[str]:
     """Detect which standards are relevant to the user's prompt."""
     prompt_lower = user_prompt.lower()
@@ -205,6 +235,154 @@ def is_code_change_task(user_prompt: str) -> bool:
     """Check if the prompt indicates code changes that need testing."""
     prompt_lower = user_prompt.lower()
     return any(kw in prompt_lower for kw in CODE_CHANGE_KEYWORDS)
+
+
+def extract_knowledge_topics(user_prompt: str) -> Set[str]:
+    """Extract knowledge topics from user prompt based on entity keywords."""
+    prompt_lower = user_prompt.lower()
+    topics = set()
+
+    for topic, keywords in KNOWLEDGE_ENTITY_KEYWORDS.items():
+        if any(kw in prompt_lower for kw in keywords):
+            topics.add(topic)
+
+    return topics
+
+
+def retrieve_relevant_knowledge(conn, topics: Set[str], max_entries: int = 5) -> List[Dict[str, Any]]:
+    """
+    Query the knowledge database for entries matching the detected topics.
+
+    Args:
+        conn: Database connection
+        topics: Set of topic keywords to search for
+        max_entries: Maximum entries to return
+
+    Returns:
+        List of knowledge entries with title, content, category, source
+    """
+    if not conn or not topics:
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        # Build search pattern from topics
+        search_patterns = []
+        for topic in topics:
+            # Include the topic itself and its related keywords
+            keywords = KNOWLEDGE_ENTITY_KEYWORDS.get(topic, [topic])
+            search_patterns.extend(keywords)
+
+        # Query knowledge table with relevance ranking
+        # Using tsquery for full-text search if available, fallback to ILIKE
+        placeholders = ' | '.join(['%s'] * len(search_patterns))
+
+        cur.execute("""
+            SELECT DISTINCT
+                k.knowledge_id,
+                k.title,
+                k.description as content,
+                k.knowledge_category as category,
+                k.source,
+                k.created_at,
+                -- Simple relevance: count matching keywords
+                (
+                    SELECT COUNT(*) FROM unnest(%s::text[]) AS kw
+                    WHERE LOWER(k.title) LIKE '%%' || LOWER(kw) || '%%'
+                       OR LOWER(k.description) LIKE '%%' || LOWER(kw) || '%%'
+                ) as relevance
+            FROM claude.knowledge k
+            WHERE EXISTS (
+                SELECT 1 FROM unnest(%s::text[]) AS kw
+                WHERE LOWER(k.title) LIKE '%%' || LOWER(kw) || '%%'
+                   OR LOWER(k.description) LIKE '%%' || LOWER(kw) || '%%'
+                   OR LOWER(k.knowledge_category) LIKE '%%' || LOWER(kw) || '%%'
+            )
+            ORDER BY relevance DESC, created_at DESC
+            LIMIT %s
+        """, (search_patterns, search_patterns, max_entries))
+
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                'knowledge_id': str(row['knowledge_id']),
+                'title': row['title'],
+                'content': row['content'][:500] if row['content'] else '',  # Truncate for injection
+                'category': row['category'],
+                'source': row['source']
+            })
+
+        return results
+
+    except Exception as e:
+        print(f"Knowledge retrieval error: {e}", file=sys.stderr)
+        return []
+
+
+def build_knowledge_guidance(knowledge_entries: List[Dict[str, Any]]) -> str:
+    """Build guidance text from retrieved knowledge entries."""
+    if not knowledge_entries:
+        return ""
+
+    parts = ["[RELEVANT KNOWLEDGE RETRIEVED]"]
+    parts.append(f"Found {len(knowledge_entries)} relevant knowledge entries:\n")
+
+    for entry in knowledge_entries:
+        title = entry.get('title', 'Untitled')
+        category = entry.get('category', 'general')
+        content = entry.get('content', '')
+        source = entry.get('source', '')
+
+        parts.append(f"### {title}")
+        parts.append(f"**Category**: {category}")
+        if source:
+            parts.append(f"**Source**: {source}")
+        parts.append(f"\n{content}\n")
+        parts.append("---")
+
+    parts.append("\n**Tip**: Use this knowledge to inform your response. Query `claude.knowledge` for more details.")
+
+    return "\n".join(parts)
+
+
+def log_knowledge_retrieval(conn, prompt_excerpt: str, keywords: List[str],
+                            results: List[Dict], latency_ms: int, session_id: str = None):
+    """
+    Log knowledge retrieval to database for observability.
+
+    Writes to claude.knowledge_retrieval_log table.
+    """
+    if not conn:
+        return
+
+    try:
+        cur = conn.cursor()
+        # Cast text[] to uuid[] for results_ids column
+        result_ids = [r.get('knowledge_id') for r in results] if results else []
+        cur.execute("""
+            INSERT INTO claude.knowledge_retrieval_log
+            (prompt_excerpt, keywords, results_count, results_ids,
+             retrieval_method, latency_ms, session_id)
+            VALUES (%s, %s, %s, %s::uuid[], %s, %s, %s)
+        """, (
+            prompt_excerpt[:200] if prompt_excerpt else '',
+            list(keywords) if keywords else [],
+            len(results),
+            result_ids,
+            'keyword',
+            latency_ms,
+            session_id
+        ))
+        conn.commit()
+    except Exception as e:
+        # Rollback failed transaction so subsequent queries work
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        # Best effort logging - don't break the main flow
+        print(f"Knowledge retrieval logging error: {e}", file=sys.stderr)
 
 
 def build_standards_guidance(detected_standards: Set[str]) -> str:
@@ -609,6 +787,9 @@ def main():
         print(json.dumps({}))
         return 0
 
+    # Get session ID if available
+    session_id = hook_input.get('session_id', None)
+
     # Connect to database
     conn = get_db_connection()
 
@@ -618,6 +799,24 @@ def main():
     # Detect relevant standards based on task type
     detected_standards = detect_task_standards(user_prompt)
     standards_guidance = build_standards_guidance(detected_standards)
+
+    # Retrieve relevant knowledge based on topics in prompt
+    knowledge_topics = extract_knowledge_topics(user_prompt)
+    knowledge_start = time.time()
+    knowledge_entries = retrieve_relevant_knowledge(conn, knowledge_topics)
+    knowledge_latency_ms = int((time.time() - knowledge_start) * 1000)
+    knowledge_guidance = build_knowledge_guidance(knowledge_entries)
+
+    # Log knowledge retrieval for observability
+    if knowledge_topics:
+        log_knowledge_retrieval(
+            conn,
+            prompt_excerpt=user_prompt[:200],
+            keywords=list(knowledge_topics),
+            results=knowledge_entries,
+            latency_ms=knowledge_latency_ms,
+            session_id=session_id
+        )
 
     # Build process guidance (if any processes matched)
     process_guidance_result = {"guidance_text": "", "suggested_todos": []}
@@ -630,14 +829,20 @@ def main():
     if conn:
         conn.close()
 
-    # If no process matched AND no standards detected, allow normal flow
-    if not matches and not detected_standards:
+    # If no process matched AND no standards detected AND no knowledge found, allow normal flow
+    if not matches and not detected_standards and not knowledge_entries:
         print(json.dumps({}))
         return 0
 
     # Build combined guidance
     guidance_parts = []
     suggested_todos = process_guidance_result.get("suggested_todos", [])
+
+    # Add knowledge guidance first (context before instructions)
+    if knowledge_guidance:
+        guidance_parts.append(f"""<relevant-knowledge>
+{knowledge_guidance}
+</relevant-knowledge>""")
 
     if process_guidance_result["guidance_text"]:
         # Include suggested todos in the guidance
@@ -669,8 +874,13 @@ You MUST:
 {standards_guidance}
 </standards-guidance>""")
 
+    # Use hookSpecificOutput with additionalContext (NOT systemPrompt)
+    # This is the correct format per Claude Code docs
     response = {
-        "systemPrompt": "\n\n".join(guidance_parts)
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": "\n\n".join(guidance_parts)
+        }
     }
 
     print(json.dumps(response))

@@ -1,0 +1,49 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 IDENTITY LOADED: claude-desktop
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHO AM I:
+  Platform: desktop
+  Role: GUI Interface - Claude Desktop app for visual work, strategy discussions, and design. Works across a...
+
+MY CAPABILITIES:
+  ✅ MCP Servers: postgres, memory, filesystem...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 UNIVERSAL KNOWLEDGE (Top 5 most relevant)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+2. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+3. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+4. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+5. [GOTCHA] Windows bash paths require forward slashes in scripts
+   Category: windows | Confidence: ██████████ (10/10) | Applied: 1x
+   In bash scripts on Windows (Git Bash), use forward slashes (/) not backslashes (\) for paths. Backslashes get stripped d...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👥 OTHER CLAUDE FAMILY MEMBERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• claude-code-unified (Project-Aware CLI - ONE Claude Code instance for A...)
+  Last active: 2025-11-14
+  Recent sessions: 10
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ READY TO WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Context loaded successfully. All critical knowledge and constraints available.
+Session started: 2025-11-14 22:54:25

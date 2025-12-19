@@ -1,0 +1,817 @@
+{
+  "entities": [
+    {
+      "name": "claude-code-unified",
+      "entityType": "claude_identity",
+      "observations": [
+        "Platform: claude-code-console",
+        "Role: Project-Aware CLI - ONE Claude Code instance for ALL projects. Uses start-claude.bat launcher with project menu. Auto-loads project-specific CLAUDE.md context. Handles automation, scripting, git operations, and terminal workflows.",
+        "Capabilities: {\"interface\": \"CLI\", \"scripting\": true, \"automation\": true, \"mcp_servers\": [\"postgres\", \"memory\", \"filesystem\", \"tree-sitter\", \"github\", \"sequential-thinking\", \"py-notes-server\"], \"project_aware\": true, \"context_system\": \"global + project-specific CLAUDE.md\", \"git_operations\": true, \"uses_subagents\": true, \"project_launcher\": \"start-claude.bat\", \"terminal_workflows\": true}",
+        "Personality: {\"efficient\": true, \"command_focused\": true, \"documentation_first\": true, \"project_context_aware\": true, \"follows_official_claude_code_patterns\": true}",
+        "Status: active"
+      ]
+    },
+    {
+      "name": "claude-mcw",
+      "entityType": "claude_identity",
+      "observations": [
+        "Platform: claude-code-console",
+        "Role: Mission Control Web Developer. Dedicated to building the Next.js + shadcn/ui Mission Control dashboard. Expertise in TypeScript, React, TanStack Query/Table, Tailwind CSS, and PostgreSQL integration. Focused on migrating claude-mission-control (Flet) to modern web stack.",
+        "Capabilities: [\"Next.js App Router\", \"shadcn/ui components\", \"TypeScript\", \"TanStack Query\", \"TanStack Table\", \"Tailwind CSS\", \"PostgreSQL\", \"pnpm monorepo\", \"Zustand state management\", \"react-hook-form + zod\"]",
+        "Personality: [\"focused\", \"methodical\", \"UI/UX conscious\", \"performance-aware\"]",
+        "Status: active"
+      ]
+    },
+    {
+      "name": "claude-desktop",
+      "entityType": "claude_identity",
+      "observations": [
+        "Platform: desktop",
+        "Role: GUI Interface - Claude Desktop app for visual work, strategy discussions, and design. Works across all projects with visual context.",
+        "Capabilities: {\"design\": true, \"strategy\": true, \"interface\": \"GUI\", \"mcp_servers\": [\"postgres\", \"memory\", \"filesystem\", \"tree-sitter\", \"github\", \"sequential-thinking\", \"py-notes-server\"], \"visual_work\": true, \"project_aware\": true}",
+        "Personality: {\"thorough\": true, \"visual_oriented\": true, \"strategic_thinking\": true, \"asks_clarifying_questions\": true}",
+        "Status: active"
+      ]
+    },
+    {
+      "name": "knowledge_1d1e26d4-7ad0-434c-8965-a866866695b8",
+      "entityType": "architecture",
+      "observations": [
+        "Category: automation",
+        "Title: Reminders/Calendar System for Follow-ups",
+        "Description: Use a reminders table with check_after timestamp, check_type (manual/sql_query), and auto-reschedule logic. Session startup hook checks for due reminders. Auto-checkable via SQL conditions. Max reminders before expiry prevents infinite loops.",
+        "Applies to: claude-family",
+        "Confidence: None/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_ef9aaca5-6e97-430a-9a3a-14e502e78295",
+      "entityType": "architecture",
+      "observations": [
+        "Category: database",
+        "Title: Schema Consolidation Pattern",
+        "Description: When database schemas proliferate (claude_family, claude_pm, claude_mission_control, public), consolidate to ONE schema with governance tables (schema_registry, architecture_decisions). Use backward-compat views during transition, set reminder to remove after 7 days.",
+        "Applies to: claude-family, mission-control-web",
+        "Confidence: None/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_39caa182-1d48-4edf-91c1-c135e65acba6",
+      "entityType": "pattern",
+      "observations": [
+        "Category: hooks",
+        "Title: Claude Code Hook Response Format",
+        "Description: UserPromptSubmit hooks returning {\"systemPrompt\": \"...\"} do NOT inject content into Claude's context. Use hookSpecificOutput.additionalContext instead. Exit code 0 = success. Plain text output also works.",
+        "Applies to: claude-family, nimbus-import, ATO-Tax-Agent",
+        "Confidence: 95/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_a4360fb1-6881-4556-b0e1-11f1f8c28e8e",
+      "entityType": "reference",
+      "observations": [
+        "Category: api-design",
+        "Title: Add Pagination to Large Dataset APIs",
+        "Description: When an API endpoint returns large datasets (1000+ rows), ALWAYS add default pagination with LIMIT clause. Without pagination, getAllDocuments() returning 1727 rows caused performance issues and potential crashes.",
+        "Applies to: all",
+        "Confidence: 95/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_30387f3f-1408-4c11-b599-cbf24f2f767c",
+      "entityType": "architecture",
+      "observations": [
+        "Category: orchestrator",
+        "Title: MCP Orchestrator Stats System",
+        "Description: Created tables and tools for tracking MCP usage. Tables: claude.agent_sessions (spawned agents), claude.mcp_usage (tool calls). Views: agent_session_stats, mcp_usage_stats. MCP tools: get_agent_stats(), get_mcp_stats(). Note: agent_sessions populated by db_logger.py when spawn_agent succeeds.",
+        "Applies to: claude-family",
+        "Confidence: 90/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_cf97b283-fa74-4479-a660-145e6720de4f",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: tooling",
+        "Title: MUI MCP Installation and Best Practices",
+        "Description: Official MUI MCP provides up-to-date documentation for AI coding. Install with: claude mcp add mui-mcp -- npx -y @mui/mcp@latest. Use sx prop with theme values, individual imports for tree-shaking, theme spacing not hardcoded pixels, responsive breakpoint syntax.",
+        "Applies to: nimbus-import, mission-control-web",
+        "Confidence: 90/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_bd09b0dc-f525-4008-9e34-b7e968fb32b1",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: database",
+        "Title: psycopg3 vs psycopg2 Connection Parameter Compatibility",
+        "Description: psycopg3 uses dbname for database name, while psycopg2 uses database. When using a shared POSTGRES_CONFIG dict that was designed for psycopg2, convert the key before connecting with psycopg3.",
+        "Applies to: claude-family, all",
+        "Confidence: 90/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_9b3b1cf3-ad17-43b7-8d68-5203e908c122",
+      "entityType": "pattern",
+      "observations": [
+        "Category: database",
+        "Title: PostgreSQL Schema Consolidation Pattern",
+        "Description: When consolidating multiple schemas into one:\n1. Create new schema first\n2. Create governance tables (schema_registry, architecture_decisions) for documentation\n3. Migrate tables with CREATE TABLE AS SELECT (preserves data, NOT constraints/defaults)\n4. Add primary keys and constraints after migration\n5. Fix column defaults: ALTER TABLE x ALTER COLUMN y SET DEFAULT value\n6. Create backward-compat views in old schemas\n7. Update application code to use new schema\n8. Test thoroughly\n9. Set reminder to drop views later\n\nGOTCHA: CREATE TABLE AS does NOT copy column defaults, constraints, or indexes. Must add manually.",
+        "Applies to: claude-family, mission-control-web",
+        "Confidence: 90/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_b34d7422-12b3-4f1d-8db4-88cc9382196f",
+      "entityType": "pattern",
+      "observations": [
+        "Category: workflow-enforcement",
+        "Title: Auto-TodoWrite Pattern for Workflow Enforcement",
+        "Description: Problem: Claude sees process-guidance but does not automatically follow workflow steps. Solution: Modify process_router.py to inject SUGGESTED_TODOS JSON block with pre-formatted todo items. Include instruction \"Use TodoWrite tool immediately\". Add MANDATORY section to CLAUDE.md.",
+        "Applies to: claude-family",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_105fdb74-7a82-4d72-ad8c-b7e169d069ae",
+      "entityType": "pattern",
+      "observations": [
+        "Category: parsing",
+        "Title: Nimbus Agreement Comma Parsing",
+        "Description: Agreement fields in Excel are comma-separated strings that need to be parsed into arrays for the API. Empty strings after splitting should be filtered out.",
+        "Applies to: nimbus-import",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_37fdb644-72cb-4902-a81d-82dcc41d1374",
+      "entityType": "pattern",
+      "observations": [
+        "Category: validation",
+        "Title: Nimbus CostCentre cc/fund Format",
+        "Description: CostCentre codes in Nimbus must contain a \"/\" delimiter to separate the cost centre from the fund code for SAP payroll extraction. Without the delimiter, fund code extraction fails.",
+        "Applies to: nimbus-import, nimbus-user-loader",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_81f507cd-5123-4aec-b56e-312e98f0b415",
+      "entityType": "pattern",
+      "observations": [
+        "Category: api",
+        "Title: Nimbus Activity Type Prefixes",
+        "Description: Activity types in Nimbus use prefixes to indicate scheduling mode: TT: (timetabled), S: (scheduled), U: (unscheduled). Must match the full description including prefix.",
+        "Applies to: nimbus-import, nimbus-user-loader",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_fe4039de-0007-43c3-ad38-f311b631f93f",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: next.js",
+        "Title: Next.js Turbopack Test File Location",
+        "Description: Test files (*.test.ts, *.spec.ts) must NOT be placed in the src/ directory when using Next.js with Turbopack. Turbopack compiles all files in src/ and Jest/Vitest imports cause \"Jest worker exceeded retry limit\" errors. Move test files to a separate tests/ directory at the project root.",
+        "Applies to: all",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_ccf79462-3b2a-4cb9-bfe6-2a4d7de6141c",
+      "entityType": "pattern",
+      "observations": [
+        "Category: typescript",
+        "Title: TypeScript Service Export Pattern",
+        "Description: When creating services with barrel exports (index.ts), create service files first with all exports, then update index.ts to match actual exports. Agent-generated code may use different function names than expected - always read actual file exports before updating barrel exports.",
+        "Applies to: nimbus-import",
+        "Confidence: 90/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_950a97e9-644c-4d00-9f92-345a5052e4dd",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: infrastructure",
+        "Title: Schema Consolidation Migration Pattern",
+        "Description: When scripts call legacy schema functions (claude_family.*) that reference deleted tables, replace with direct SQL queries to the consolidated claude.* schema. Check function definitions with pg_get_functiondef() to see what tables they reference.",
+        "Applies to: claude-family, all",
+        "Confidence: 85/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_329ea253-ef67-4d56-a2cd-bbdf2c17ffad",
+      "entityType": "gotcha",
+      "observations": [
+        "Category: orchestrator",
+        "Title: MCP spawn_agent PATH issue on Windows",
+        "Description: When running MCP server via \"uv run python server.py\", the PATH environment may differ from user shell. shutil.which(\"claude\") can fail even though claude.cmd exists in npm global. Fix: Add fallback to check APPDATA/npm/claude.cmd directly.",
+        "Applies to: claude-family",
+        "Confidence: 85/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_e517348a-70e2-45fe-85ba-64ac4a5b695e",
+      "entityType": "architecture",
+      "observations": [
+        "Category: local-ai",
+        "Title: Local Reasoning with DeepSeek-r1 on RTX 5080",
+        "Description: Test results for deepseek-r1:14b as local reasoning model:\n- Accuracy: Excellent (solved trick question correctly)\n- Speed: 77 tok/s eval rate\n- Cold start: 22s model load (subsequent fast)\n- Shows chain-of-thought reasoning\n\nOptions for integration:\nA) Direct API via ollama-mcp - manual, good for testing\nB) Orchestrator agent - reusable \"local-reasoner\" type\nC) Both - test first then productionize\n\nBest for: Math/logic chains, privacy-sensitive reasoning, cost savings\nKeep Claude for: Complex multi-step, large context (200K), best quality",
+        "Applies to: all",
+        "Confidence: 85/10",
+        "Times applied: None"
+      ]
+    },
+    {
+      "name": "knowledge_c2a68975-119a-4a5f-b4bb-9c6023af1663",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: mcp",
+        "Title: MCP server logs location for diagnostics",
+        "Description: MCP servers (Model Context Protocol) log to %APPDATA%\\Claude\\logs\\ directory. Each server has its own log file (mcp-server-{name}.log). Essential for diagnosing MCP server failures. Check these logs when MCP extensions show \"failed\" status.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 5"
+      ]
+    },
+    {
+      "name": "knowledge_8bc5dd25-2db2-4db0-b1b4-5dcdd2565de2",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: mcp",
+        "Title: MCP server logs location for diagnostics",
+        "Description: MCP servers (Model Context Protocol) log to %APPDATA%\\Claude\\logs\\ directory. Each server has its own log file (mcp-server-{name}.log). Essential for diagnosing MCP server failures. Check these logs when MCP extensions show \"failed\" status.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 5"
+      ]
+    },
+    {
+      "name": "knowledge_02dbc5bf-d85e-413d-9310-95e4abcaa238",
+      "entityType": "pattern",
+      "observations": [
+        "Category: Nimbus API",
+        "Title: Nimbus OData Field Naming - Description not Name",
+        "Description: In the Nimbus WFM OData API, all entities use \"Description\" for name/label fields, NOT \"Name\". This applies to all lookup entities.\n\nAffected entities:\n- SecurityRole.Description (NOT SecurityRole.Name)\n- LocationGroup.Description (NOT LocationGroup.Name)\n- Department.Description (NOT Department.Name)\n- Skill.Description (NOT Skill.Name)\n- Location.Description (NOT Location.Name)\n\nThis is a Nimbus-specific convention that differs from typical database naming patterns. Always verify field names against the OData $metadata endpoint before constructing queries.\n\nCommon mistake: Assuming \"Name\" exists because it's a common pattern in other APIs.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 4"
+      ]
+    },
+    {
+      "name": "knowledge_c351dfe2-4be9-4686-8e97-0d5c5ccac18a",
+      "entityType": "pattern",
+      "observations": [
+        "Category: OData API",
+        "Title: OData v4 Primary Key Standard",
+        "Description: All OData v4 entities use \"Id\" as the primary key field name, NOT the EntityNameID pattern. This is an OData v4 standard requirement. When parsing JSON responses from OData endpoints, always use item.GetProperty(\"Id\") for primary keys, even if the database uses EntityNameID column names internally.\n\nCommon mistakes:\n- Using LocationGroup.LocationGroupID instead of LocationGroup.Id\n- Using User.UserID instead of User.Id\n- Using Department.DepartmentID instead of Department.Id\n\nException: Foreign key fields still use EntityNameID pattern (e.g., UserSecurityRole.SecurityRoleID, UserSecurityRole.LocationGroupID).\n\nWhen using $select queries, if you omit \"Id\" from the field list, the API will not return the primary key at all.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 3"
+      ]
+    },
+    {
+      "name": "knowledge_fd287862-d662-43ec-adf8-fa4ea98dcf8c",
+      "entityType": "pattern",
+      "observations": [
+        "Category: http",
+        "Title: HttpClient session affinity with CookieContainer",
+        "Description: Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-side caching works better when requests from same client hit same server instance. Essential for performance when uploading multiple requests in sequence.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 2"
+      ]
+    },
+    {
+      "name": "knowledge_ef53e557-cd3f-4ccc-9e8c-70a9f3392398",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: WinForms UI",
+        "Title: DataGridView ScrollBars Reset Bug",
+        "Description: Windows Forms has a known bug where setting the DataSource property on a DataGridView control resets the ScrollBars property to ScrollBars.None, even if it was previously set to ScrollBars.Both in the Designer or code.\n\nWorkaround: Always re-enable scroll bars AFTER setting the DataSource property, and call Refresh() to ensure the UI updates correctly.\n\nThis bug affects all WinForms applications using DataGridView with dynamic data binding. The symptom is that scroll bars disappear when data is loaded, making large datasets impossible to navigate.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 2"
+      ]
+    },
+    {
+      "name": "knowledge_be7c850c-2455-428d-a0da-33ab611a6af0",
+      "entityType": "pattern",
+      "observations": [
+        "Category: database-design",
+        "Title: Conditional Field Display in JSONB validation_rules",
+        "Description: How to implement conditional field visibility when database lacks a dedicated conditional_display column. Store conditional logic in validation_rules JSONB column with structure: {conditional_display: {field: \"parent_field\", value: \"trigger_value\"}}. Frontend reads this and shows/hides fields dynamically. Used in ATO Tax Wizard Section D1 for method-dependent fields (cents per km vs logbook).",
+        "Applies to: ATO-Tax-Agent",
+        "Confidence: 10/10",
+        "Times applied: 2"
+      ]
+    },
+    {
+      "name": "knowledge_bcd50a34-3b15-4b82-8958-a7461051159e",
+      "entityType": "pattern",
+      "observations": [
+        "Category: http",
+        "Title: HttpClient session affinity with CookieContainer",
+        "Description: Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-side caching works better when requests from same client hit same server instance. Essential for performance when uploading multiple requests in sequence.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 2"
+      ]
+    },
+    {
+      "name": "knowledge_8a10efa0-4fa5-44de-addd-208b6dcc0910",
+      "entityType": "gotcha",
+      "observations": [
+        "Category: flet-python",
+        "Title: Flet version compatibility: icons and colors changed in newer versions",
+        "Description: Flet API changed between versions. Older code uses ft.icons.FOLDER and ft.colors.RED, but newer versions require string literals for icons and ft.Colors (capital C) for colors. Use strings for maximum compatibility.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_923dfd52-de15-41b4-893b-a98180b9bc58",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: sql",
+        "Title: SQL Template Generator with Placeholders",
+        "Description: Generate pre-filled SQL templates with \u270f\ufe0f emoji markers for user fill-ins. Include verification queries. Prevents SQL errors, saves time, low-hallucination design.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_f982c0a8-582f-4063-88a8-512339c56004",
+      "entityType": "gotcha",
+      "observations": [
+        "Category: mcp",
+        "Title: Windows-MCP server requires uv package manager",
+        "Description: Windows-MCP MCP server fails with \"spawn uv ENOENT\" if uv (Universal Python package installer by Astral) is not installed. Install via PowerShell script. After installation, restart Claude Desktop app for Windows-MCP to connect successfully.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_1deb273b-5f15-4305-b24c-2acca738b93e",
+      "entityType": "pattern",
+      "observations": [
+        "Category: database",
+        "Title: Bulk JSONB Update Preserving Existing Values",
+        "Description: How to add a new key-value pair to JSONB columns across many rows while preserving existing content. Use COALESCE to handle NULL values, then || operator to merge objects. Applied to add minimum: 0 validation to 72 fields in tax_calculator without losing existing validation_rules.",
+        "Applies to: ATO-Tax-Agent",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_d1530e00-b302-491a-bdc2-8adda2ba65c4",
+      "entityType": "pattern",
+      "observations": [
+        "Category: flet-ui",
+        "Title: Flet Dark Theme High Contrast Pattern",
+        "Description: For Flet apps with dark theme, use 900-series backgrounds (BLUE_900, RED_900) paired with 200-series text colors (BLUE_200, RED_200) plus WHITE for content. Light backgrounds (50, 100 series) have invisible text. DataRow color sets background for ALL cells - must set text color per DataCell explicitly.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_59da260d-f2ca-4393-be02-f4366c57ef4c",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: database-development",
+        "Title: Query database schema with postgres MCP before writing queries",
+        "Description: When writing database queries, always use postgres MCP to get the actual table schema first. Prevents errors from guessing column names. Use mcp__postgres__get_object_details(schema, table, type) to see exact column names, types, and constraints.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_e72c60af-cca3-4ebc-89d8-2fdedc4c0fdf",
+      "entityType": "pattern",
+      "observations": [
+        "Category: windows-python",
+        "Title: Windows console Unicode encoding fix for Python scripts",
+        "Description: Python scripts that print Unicode characters (arrows \u2192, emojis \ud83c\udf89) fail on Windows console with cp1252 encoding, throwing UnicodeEncodeError. Solution: Encode output to ASCII with replacement character before printing. This only affects console output (print statements); file writes handle Unicode fine.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_165906fd-d1ab-4848-abc4-d94e1e8af1d6",
+      "entityType": "reference",
+      "observations": [
+        "Category: architecture",
+        "Title: Mission Control UI Review - Nov 2025",
+        "Description: FINDINGS: 1) Project ExpansionTiles take 500px each - need sidebar layout instead. 2) 30+ buttons are non-functional (on_click=lambda e: None). 3) Tasks/Knowledge tabs show ALL data, not filtered by project. 4) Build Tracker is complete pattern for CRUD features. RECOMMENDATIONS: Sidebar with project list + detail panel. Wire all buttons. Filter data by project context.",
+        "Applies to: claude-mission-control",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_ab454575-8998-43cf-8fad-fa6501833efb",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: csharp-validation",
+        "Title: MANDATORY: Use Roslyn MCP for all C# edits",
+        "Description: CRITICAL PROCESS: Roslyn MCP validation is NON-OPTIONAL for C# code.\n\nENFORCEMENT STRATEGY (5-Layer Defense):\n1. Documentation (CLAUDE.md lines 7-20): Mandatory workflow stated upfront, impossible to miss\n2. Convenience (/validate-csharp slash command): Makes compliance easy, reduces friction\n3. Visibility (Audit trail in responses): User verifies Claude followed process\n4. Configuration (.editorconfig): Roslyn analyzers enforced at IDE level (FxCop, StyleCop)\n5. Safety Net (git pre-commit hook): Catches anything that slips through\n\nWORKFLOW (6 STEPS - NON-NEGOTIABLE):\n1. Research - Use Context7 for unfamiliar APIs (specific library IDs)\n2. Analyze - Run mcp__roslyn__ValidateFile + FindUsages BEFORE editing\n3. Implement - Make code changes based on Roslyn analysis\n4. Validate - Run ValidateFile again to catch new errors\n5. Log - Output validation results: \"\u2705 ROSLYN: file.cs (0 errors, 2 warnings)\"\n6. Present - Show code only after validation passes\n\nAUDIT TRAIL FORMAT (visible in conversation):\n\u2705 ROSLYN VALIDATION COMPLETE\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\ud83d\udcc1 MainForm.cs: 0 errors, 2 warnings (CA1031, IDE0051)\n\ud83d\udcc1 ViewModel.cs: 0 errors, 0 warnings \u2713 Clean\n\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\nTimestamp: 2025-10-29 14:23:45\nSTATUS: \u2705 All files validated\n\nCONTEXT7 LIBRARY IDs:\n- WPF: use library /dotnet/wpf topic \"data-binding\"\n- WinForms: use library /dotnet/winforms topic \"threading\"\n- MVVM: use library /dotnet/mvvm, /communitytoolkit/mvvm\n- Security: NEVER for proprietary code (external API)\n\nWHEN TO SKIP:\n\u274c Skip only for design discussions (no actual code), non-C# files\n\u2705 MUST USE for all C# edits, queries, refactors\n\nFAILURE EXAMPLE (2025-10-28 Nimbus):\n6 hours wasted on duplicate InitializeComponent(). FindUsages would have caught it instantly.\n\nFILES CREATED:\n- .claude/commands/validate-csharp.md (both projects)\n- .editorconfig (both projects)  \n- .git/hooks/pre-commit (Roslyn validation added)\n- ROSLYN-WORKFLOW.md (quick reference)",
+        "Applies to: nimbus-user-loader, any-csharp-project",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_8a4ccc5c-df6f-419e-92c2-87113c2750bd",
+      "entityType": "gotcha",
+      "observations": [
+        "Category: windows",
+        "Title: Windows bash paths require forward slashes in scripts",
+        "Description: In bash scripts on Windows (Git Bash), use forward slashes (/) not backslashes (\\) for paths. Backslashes get stripped during interpretation. Example: C:/claude/shared/ works, C:\\claude\\shared\\ fails.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_f7fc8b66-7556-4d3c-8dfc-27b8fbce30ec",
+      "entityType": "pattern",
+      "observations": [
+        "Category: claude-code",
+        "Title: Slash command file format must use markdown heading",
+        "Description: Claude Code slash commands (.claude/commands/*.md) must start with # heading, not **bold**. Format: Line 1: # Command Name, Line 2: Brief description, Rest: Implementation steps.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_f6db0da1-e6c4-4802-9756-6db5683f0330",
+      "entityType": "gotcha",
+      "observations": [
+        "Category: mcp",
+        "Title: Windows-MCP server requires uv package manager",
+        "Description: Windows-MCP MCP server fails with \"spawn uv ENOENT\" if uv (Universal Python package installer by Astral) is not installed. Install via PowerShell script. After installation, restart Claude Desktop app for Windows-MCP to connect successfully.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_2097d29a-fbf5-464c-bc35-d2140e42c7ce",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: mcp",
+        "Title: Postgres MCP Migration to v0.3.0",
+        "Description: Migrated from deprecated @modelcontextprotocol/server-postgres (read-only) to postgres-mcp v0.3.0 which provides full read/write database access. Critical for session logging, pattern storage, and institutional knowledge building across all Claude Family members.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_490e72bc-bfff-4cb5-a1dd-a7281b5a55c0",
+      "entityType": "pattern",
+      "observations": [
+        "Category: documentation",
+        "Title: Service Integration Guide Pattern",
+        "Description: Template for creating comprehensive integration guides when one project provides services to other projects. \n\nSTRUCTURE (11 sections):\n1. Overview (what/why/capabilities)\n2. Prerequisites (database/file access)\n3. Registration (getting started)\n4. Core Operations (8-10 with SQL examples)\n5. Direct Database Access (MCP/C#/Python/PowerShell)\n6. File System Integration\n7. Common Workflows (4-5 real scenarios)\n8. Integration Examples (multi-platform code)\n9. Best Practices\n10. Troubleshooting (8-10 problems)\n11. Quick Reference\n\nTARGET: 1,500-2,000 lines, 4,000-6,000 words\n\nKEY FEATURES:\n- Ready-to-use SQL (copy-paste)\n- Real examples with actual data\n- Multi-platform code samples\n- End-to-end workflows\n- Problem-solution pairs\n- Quick reference tables\n\nUSED FOR: Claude PM Feedback System Integration Guide (07_FEEDBACK_SYSTEM_INTEGRATION_GUIDE.md)",
+        "Applies to: claude-pm, nimbus-user-loader, ATO-tax-agent",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_dd956188-5612-48b6-8e19-843f50d42566",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: git",
+        "Title: Git hooks best for validation not assistance on Windows",
+        "Description: Git hooks on Windows work best for BLOCKING commits (validation) not helping (database queries, auto-linking). Database queries are slow and fragile. prepare-commit-msg comment lines are stripped. Focus on commit-msg validation.",
+        "Applies to: all",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_49df0c5c-e9d1-4ea2-9cc1-2ae89f577230",
+      "entityType": "pattern",
+      "observations": [
+        "Category: WinForms",
+        "Title: Control Initialization Order Pattern",
+        "Description: CRITICAL: In WinForms Designer-generated code, all controls must be initialized with new() BEFORE any SuspendLayout() calls. GroupBox containers require their own SuspendLayout/ResumeLayout pair. Order: Create \u2192 Suspend \u2192 Configure \u2192 Resume \u2192 PerformLayout. Failure to follow this order causes null reference exceptions at runtime.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 1"
+      ]
+    },
+    {
+      "name": "knowledge_21eba3d4-f2b0-4593-9e55-c60bebec9f75",
+      "entityType": "best-practice",
+      "observations": [
+        "Category: database",
+        "Title: Schema Migration Verification Pattern",
+        "Description: After schema migrations, always query information_schema.columns to verify actual column names before writing service queries. Map model properties to actual columns or set to null if column doesn't exist.",
+        "Applies to: claude-pm, all",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_a3d64e4b-f3f6-44a8-b236-402e9d874e4f",
+      "entityType": "pattern",
+      "observations": [
+        "Category: odata-integration",
+        "Title: OData XML Namespace Auto-Detection",
+        "Description: OData v2/v3/v4 use different XML namespaces for EntityType. Hardcoded namespace finds 0 entities. Solution: Try common namespaces, fallback to LocalName search. Pass detected namespace through all parsing methods.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_01be0c5b-58f2-41ba-8e5d-d004243ec135",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: windows-forms",
+        "Title: ComboBox AutoComplete Configuration Error",
+        "Description: Windows Forms throws exception when using AutoCompleteMode.SuggestAppend with DropDownStyle.DropDownList. Framework limitation. Solution: Use DropDownStyle.DropDown instead to allow typing for autocomplete.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_edb029f6-f011-4a28-9c3f-b4ee8bf63b4b",
+      "entityType": "bug-fix",
+      "observations": [
+        "Category: dotnet-plugin",
+        "Title: .NET Plugin Dependencies Not Loading",
+        "Description: When building .NET plugin system, NuGet dependencies not automatically copied to plugin output. Solution: Add <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies> to PropertyGroup. Then copy all DLLs in post-build target excluding host assembly.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_06e328cc-744d-462e-a65f-6f25e96321a5",
+      "entityType": "pattern",
+      "observations": [
+        "Category: scripting-python",
+        "Title: Python Windows UTF-8 Console Output",
+        "Description: Python scripts with Unicode fail on Windows with UnicodeEncodeError charmap codec. Must reconfigure stdout encoding. Add at top: import sys; if sys.platform == \"win32\": sys.stdout.reconfigure(encoding=\"utf-8\"). Affects all Python automation scripts.",
+        "Applies to: claude-family, ALL",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_08cfe0a8-b554-4f8d-9f27-dfc8669acfd5",
+      "entityType": "pattern",
+      "observations": [
+        "Category: data-access",
+        "Title: Multi-field entity lookup with Dictionary.TryAdd",
+        "Description: When an entity may store identifying information in multiple fields (Code, Description, etc), build a single case-insensitive lookup dictionary using TryAdd() for each field. This allows exact matching against any of the fields without duplicate key errors. Common in legacy systems or flexible schemas where identifying codes may be in Code, Description, or alternative property names.",
+        "Applies to: nimbus-user-loader",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_59199b7b-446b-4be7-a3b3-5da7d195e6f9",
+      "entityType": "pattern",
+      "observations": [
+        "Category: scripting-windows",
+        "Title: Windows PowerShell UTF-8 Encoding Fix",
+        "Description: PowerShell scripts outputting Unicode characters (\u2713, \u2717, emojis) fail with charmap encoding errors on Windows. Solution: Use ASCII alternatives ([OK], [XX], [!!]) or reconfigure console encoding. Affects backup scripts, scheduled tasks, any automation.",
+        "Applies to: claude-family, ALL",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_9fed854a-43d0-415a-83ac-368f4c7f872f",
+      "entityType": "pattern",
+      "observations": [
+        "Category: orchestrator",
+        "Title: Orchestrator Hybrid Approach for Tool Isolation",
+        "Description: When spawned agents cannot use Playwright or Bash due to permission isolation, use a hybrid approach: agents handle database queries, file operations, and code analysis (cost-effective at ~\\/usr/bin/bash.08 per task), while main session handles browser automation and shell commands. This works around MCP permission limitations in isolated agent environments.",
+        "Applies to: ATO-tax-agent, any-project-with-orchestrator",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "knowledge_00f07bfa-9677-4290-8235-60e06f499ee4",
+      "entityType": "pattern",
+      "observations": [
+        "Category: agent-orchestration",
+        "Title: Agent Orchestration Decision Framework",
+        "Description: Framework for deciding when to use Task tool vs Agent Coordinator for delegating work. Task Tool spawns dedicated Claude instances for: complete apps, multi-file projects, code analysis across files, research + code review, work >5 min. Agent Coordinator routes single tasks to optimal path based on cost/speed for: database queries, file operations, single tasks, cost optimization, quick execution <5 min. Routing order: postgres (FREE <100ms) \u2192 claude-cli (FREE 1-3s) \u2192 cursor-mcp (FREE 5-15s) \u2192 llama (FREE 2-5s) \u2192 haiku ($0.25/1M) \u2192 sonnet ($3/1M). Best practices: Always create work package before spawning agent, check for existing work first, log to session_history.",
+        "Applies to: diana, ai-workspace, claude-family",
+        "Confidence: 10/10",
+        "Times applied: 0"
+      ]
+    },
+    {
+      "name": "session_a69d1d66-0b10-4a46-b3dc-2493b180516a",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-user-loader",
+        "Started: 2025-12-16 13:37:41.026978",
+        "Summary: ScheduleShift data fix for Monash dry run. Matched 5,717 shifts using (Location, Department, TeachingPeriod, ActivityGroup) key. Created update_scheduleshift_v2.sql (5717 UPDATEs with 50-char Descript"
+      ]
+    },
+    {
+      "name": "session_1cc6dba2-0637-460b-b317-59e2f6a7d8f8",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-user-loader",
+        "Started: 2025-12-16 10:00:00",
+        "Summary: Fixed all Task/Attendance data issues: (1) 15 Tasks with NULL ActivityTypeID via UPDATE, (2) 397 attendance records created for empty Tasks, (3) 18,952 orphaned attendance linked via UPDATE TaskID, (4"
+      ]
+    },
+    {
+      "name": "session_23170e4b-2adc-463a-8771-81ba33a54744",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-user-loader",
+        "Started: 2025-12-16 07:19:52.280316",
+        "Summary: Implemented SQL-based CostCode Setup feature in Shift Import tab. Added CostCodeSqlService.cs with 4-step process: (1) Create missing CostCentres, (2) Update Location.adhoc_CostingID, (3) Update Depar"
+      ]
+    },
+    {
+      "name": "session_957f0738-eda0-489e-bf71-140e7dd15466",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-user-loader",
+        "Started: 2025-12-14 19:16:50.779720",
+        "Summary: Fixed ScheduleShift time parsing pipeline: (1) GetCellValue returns yyyy-MM-dd HH:mm:ss format, (2) ParseShiftDates captures fullDateTime before stripping, (3) ResolveIds checks HasValue before re-par"
+      ]
+    },
+    {
+      "name": "session_08a4e333-fc1c-4cd5-9380-596b353f2e42",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-14 03:05:07.243660",
+        "Summary: Added schedule loading and shift-to-schedule matching for import. Load schedules by ScheduleGenerationGroupID, match shifts by Location + Date, ImportStep UI with ScheduleGroupID input. Created C# int"
+      ]
+    },
+    {
+      "name": "session_8a822d7b-41da-44e4-98b7-e8192d5ef416",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-14 03:04:40.060683",
+        "Summary: Fixed Playwright agent (JSON escapes + orchestrator workspace isolation), SessionStart hook format error, and reduced global MCP config from 10 to 6 servers to fix startup failures. Key changes: orche"
+      ]
+    },
+    {
+      "name": "session_44ff73ce-ca48-476b-b330-2b7c784fc10c",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-14 03:04:19.796947",
+        "Summary: No summary"
+      ]
+    },
+    {
+      "name": "session_9864903d-063f-42b6-8fcd-ffb3d0515fad",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-14 02:49:02.675470",
+        "Summary: Investigated 404 errors on OData API calls. Added /CoreApi path to OData and REST API endpoints but not auth endpoint. Session ended early due to guessing instead of proper investigation - need to ver"
+      ]
+    },
+    {
+      "name": "session_40768b50-616e-49eb-98cf-787e9b18dc5d",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-14 02:48:48.089653",
+        "Summary: No summary"
+      ]
+    },
+    {
+      "name": "session_7a5605dd-1f46-4061-b23e-5fb3fc45d091",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-13 12:13:49.389091",
+        "Summary: No summary"
+      ]
+    },
+    {
+      "name": "session_140b5bc2-1bd5-46a5-96c8-c9f03c328801",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-13 06:47:39.293094",
+        "Summary: Comprehensive orchestrator review and cleanup. Reduced agents from 31 to 13 based on usage analysis. Fixed Decimal bug, check-messages.md, session-start.md schemas. Deleted duplicate commands. Re-adde"
+      ]
+    },
+    {
+      "name": "session_7c300764-564c-4f04-8ba7-359e25715cc5",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-13 06:07:40.040563",
+        "Summary: Fixed lookup dropdowns and entity creation errors. Changed OData endpoints to REST API (/RESTApi/Timezone, Country, etc). Fixed field name mappings (Description not Name). Added execute_rest_get Rust "
+      ]
+    },
+    {
+      "name": "session_f29741a8-cc3e-4b4a-b49d-5a4083b81d06",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-13 05:59:41.615243",
+        "Summary: No summary"
+      ]
+    },
+    {
+      "name": "session_09876a82-afef-46cc-b996-503416302428",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-13 05:56:01.981451",
+        "Summary: Fixed MCP configs (Windows npx wrapper), hook injection (systemPrompt\u2192additionalContext), session commands (global slash commands, TODO file workflow). Cleaned up 4 stale sessions."
+      ]
+    },
+    {
+      "name": "session_a9370c8b-eb39-4650-bd1b-8b5694da5930",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-12 23:30:20.490241",
+        "Summary: Major infrastructure improvements: Fixed agent filesystem cross-project access (4 MCP configs), added spawn safeguards (semaphore max 3 concurrent, 2s delay, MCP validation), created 6 global skills f"
+      ]
+    },
+    {
+      "name": "session_9f24ebfe-9d40-4473-8379-367a564fd5b0",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-12 23:10:46.725129",
+        "Summary: Auto-closed: Session was not properly ended"
+      ]
+    },
+    {
+      "name": "session_bdcb9710-4462-4dba-b055-e66697fbd7be",
+      "entityType": "session",
+      "observations": [
+        "Project: nimbus-import",
+        "Started: 2025-12-12 22:59:13.221020",
+        "Summary: Completed major build phase for nimbus-import frontend. Fixed export mismatches in services/index.ts for entityCreation module. Created taskAttendanceImport.ts service for direct SQL insertion of task"
+      ]
+    },
+    {
+      "name": "session_b2b99b98-e275-45ed-820f-8ef222a05141",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-12 22:25:10.807182",
+        "Summary: Extended session: Fixed two critical startup scripts. (1) load_claude_startup_context.py - replaced broken claude_family.* function calls with direct queries to claude.* schema. (2) session_startup_ho"
+      ]
+    },
+    {
+      "name": "session_7d1d291a-8749-4dae-b9e9-d324a21a182c",
+      "entityType": "session",
+      "observations": [
+        "Project: claude-family",
+        "Started: 2025-12-10 19:30:23.963892",
+        "Summary: Comprehensive independent analysis of Claude Family infrastructure vs industry standards. Launched 4 parallel research agents (3 opus researchers timed out, 1 research-coordinator completed). Generate"
+      ]
+    },
+    {
+      "name": "session_dfc16958-6dd1-4227-ab2b-ef74f6e12f28",
+      "entityType": "session",
+      "observations": [
+        "Project: mission-control-web",
+        "Started: 2025-12-10 18:14:42.406622",
+        "Summary: Full regression test and gap analysis of Mission Control Web. Created comprehensive REGRESSION_TEST_REPORT.md and IMPLEMENTATION_PLAN.md documenting all 17 pages, user scenarios, and critical gaps."
+      ]
+    }
+  ]
+}

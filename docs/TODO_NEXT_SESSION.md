@@ -1,62 +1,79 @@
 # Next Session TODO
 
-**Last Updated**: 2025-12-13
-**Last Session**: Comprehensive orchestrator review and cleanup
+**Last Updated**: 2025-12-19
+**Last Session**: Fixed settings.local.json parser error (mismatched parentheses)
+
+## Master Plan Location
+
+**ALL PLANS ARE IN ONE DOCUMENT**: `docs/SYSTEM_IMPROVEMENT_PLAN_2025-12.md`
+
+---
 
 ## Completed This Session
-- Full MCP orchestrator analysis (98 sessions, usage data, success rates)
-- **Reduced agents from 31 to 13** (58% reduction in dead code)
-- Fixed Decimal JSON serialization bug in server.py get_mcp_stats
-- Fixed check-messages.md (mcp__messaging__ -> mcp__orchestrator__)
-- Simplified global session-start.md (removed old schema refs)
-- Deleted 6 duplicate slash commands from project folder
-- Re-added essential tester agents: tester-haiku, web-tester-haiku, ux-tax-screen-analyzer
-- Pushed all changes to remote
 
-## Key Findings from Analysis
+### Parser Error Fix
+- Fixed "Mismatched parentheses" error preventing Claude Code startup
+- Root cause: `.claude/settings.local.json` had two overly-long permission entries
+- The entries contained full git commit messages with embedded URLs like `(https://claude.com/claude-code)`
+- The parentheses in URLs broke the Claude Code settings parser
+- Solution: Removed the two problematic permission entries (lines 9 and 19)
+- JSON validated successfully after fix
 
-### Agent Usage Stats (Top 5):
-| Agent | Sessions | Success Rate | Issue |
-|-------|----------|--------------|-------|
-| coder-haiku | 28 | 46% | Investigate failures |
-| python-coder-haiku | 25 | 80% | Good |
-| lightweight-haiku | 12 | 83% | Good |
-| reviewer-sonnet | 8 | 50% | Moderate |
-| researcher-opus | 5 | 20% | Expensive failures |
+---
 
-### Agents Kept (13):
-- coder-haiku, python-coder-haiku, lightweight-haiku
-- reviewer-sonnet, security-sonnet, analyst-sonnet
-- architect-opus, planner-sonnet, researcher-opus
-- research-coordinator-sonnet
-- tester-haiku, web-tester-haiku, ux-tax-screen-analyzer
+## Next Steps (Priority Order)
 
-### Agents Removed (18):
-- All unused: debugger-haiku, nextjs-tester-haiku, screenshot-tester-haiku, etc.
-- Local models: deepseek, qwen (0 usage)
-- Most coordinators (0 usage)
+### Testing
+1. **Run regression tests**: `python scripts/run_regression_tests.py --verbose`
+2. **Test knowledge retrieval**: Prompt with "nimbus shift api" and verify knowledge injection
+3. **Test sync script**: Add new entry to vault, run sync, verify in DB
 
-## Next Steps
-1. **Investigate coder-haiku 46% failure rate** - Why is the most-used agent failing half the time?
-2. **Restart MCP servers** - Changes take effect on restart
-3. **Test ux-tax-screen-analyzer** - Verify playwright integration works
-4. **Consider removing researcher-opus** - 20% success at $3.63 per task is expensive
-5. **Run overdue jobs** - Link Checker and Orphan Document Report still pending
+### Knowledge Population
+4. **Populate Obsidian vault** with existing knowledge from database
+5. **Create additional skills** (database, testing, feature-workflow)
+
+### Documentation
+6. **Update main CLAUDE.md** with new features (knowledge vault, sync)
+7. **Prune memory graph** - May have obsolete entities
+
+### Housekeeping
+8. **Git commit** the settings.local.json fix
+9. **Review uncommitted files** - 64+ files in git status
+
+---
+
+## Key Files Modified This Session
+
+| File | Action | Purpose |
+|------|--------|---------|
+| `.claude/settings.local.json` | MODIFY | Removed 2 malformed permission entries causing parser error |
+
+---
 
 ## Notes for Next Session
-- MCP orchestrator caches agent_specs.json at startup - restart needed for changes
-- All projects share the same orchestrator via global ~/.claude/mcp.json
-- Session commands now inherit from global ~/.claude/commands/ (no project duplicates)
-- Messaging system IS being used (84 messages in DB)
 
-## Architecture Note
+- The parser error was caused by permission entries that included full commit message text
+- Proper pattern for git commit permissions: `Bash(git commit:*)` not the full message
+- Desktop shortcut `Claude Code Console.lnk` should now work correctly
+
+---
+
+## Verification Queries
+
+```sql
+-- Knowledge from Obsidian vault
+SELECT title, knowledge_category, source FROM claude.knowledge
+WHERE source LIKE 'obsidian:%';
+
+-- Check retrieval logging
+SELECT COUNT(*), MAX(retrieved_at) FROM claude.knowledge_retrieval_log;
+
+-- Active sessions
+SELECT session_id, project_name, session_start FROM claude.sessions
+WHERE session_end IS NULL;
 ```
-Global Config (~/.claude/mcp.json)
-  └── orchestrator MCP
-        └── agent_specs.json (13 agents)
-              ├── Coders: coder-haiku, python-coder-haiku, lightweight-haiku
-              ├── Reviewers: reviewer-sonnet, security-sonnet
-              ├── Research: analyst-sonnet, researcher-opus, research-coordinator-sonnet
-              ├── Planning: architect-opus, planner-sonnet
-              └── Testing: tester-haiku, web-tester-haiku, ux-tax-screen-analyzer
-```
+
+---
+
+**Version**: 3.1
+**Status**: Parser error fixed, ready for continued development

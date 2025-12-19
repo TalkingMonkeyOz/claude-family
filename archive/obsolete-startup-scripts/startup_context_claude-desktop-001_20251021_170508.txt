@@ -1,0 +1,63 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🤖 IDENTITY LOADED: claude-desktop-001
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHO AM I:
+  Platform: desktop
+  Role: Lead Architect & System Designer. Responsible for overall system architecture, complex problem solvi...
+
+MY CAPABILITIES:
+  ✅ MCP Servers: filesystem, postgres, memory...
+  ✅ Can run system commands
+  ✅ File operations enabled
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📚 UNIVERSAL KNOWLEDGE (Top 5 most relevant)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+2. [TECHNIQUE] MCP server logs location for diagnostics
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 5x
+   MCP servers (Model Context Protocol) log to %APPDATA%\Claude\logs\ directory. Each server has its own log file (mcp-serv...
+
+3. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+4. [PATTERN] HttpClient session affinity with CookieContainer
+   Category: http | Confidence: ██████████ (10/10) | Applied: 2x
+   Use HttpClientHandler with CookieContainer to maintain session affinity (sticky sessions) across HTTP requests. Server-s...
+
+5. [TECHNIQUE] Postgres MCP Migration to v0.3.0
+   Category: mcp | Confidence: ██████████ (10/10) | Applied: 1x
+   Migrated from deprecated @modelcontextprotocol/server-postgres (read-only) to postgres-mcp v0.3.0 which provides full re...
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+👥 OTHER CLAUDE FAMILY MEMBERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• claude-code-console-001 (Terminal & CLI Specialist. Command-line interface ...)
+  Last active: 2025-10-21
+  Recent sessions: 11
+
+• claude-code-console-003 (Terminal & CLI Specialist (Tertiary). Third parall...)
+  Last active: 2025-10-20
+  Recent sessions: 4
+
+• claude-pm-001 (Project Management Specialist. Dedicated to develo...)
+  Last active: 2025-10-19
+  Recent sessions: 1
+
+• claude-code-console-002 (Terminal & CLI Specialist (Secondary))
+  Last active: 2025-10-19
+  Recent sessions: 4
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ READY TO WORK
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Context loaded successfully. All critical knowledge and constraints available.
+Session started: 2025-10-21 17:05:08

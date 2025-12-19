@@ -434,11 +434,114 @@ Before shipping any UI:
 
 ---
 
+## 9. Material UI (MUI) Standards
+
+### 9.1 MCP Server (REQUIRED for MUI Projects)
+
+Install the official MUI MCP for accurate, up-to-date documentation:
+```bash
+claude mcp add mui-mcp -- npx -y @mui/mcp@latest
+```
+
+### 9.2 Styling Approach
+
+**Use sx prop for most cases:**
+```tsx
+// Preferred: sx prop with theme values
+<Box sx={{
+  p: 2,                    // theme.spacing(2)
+  mt: 3,                   // margin-top
+  bgcolor: 'primary.main', // theme color
+  borderRadius: 1          // theme shape
+}}>
+
+// For transparency
+<Box sx={{ bgcolor: alpha(theme.palette.primary.main, 0.1) }}>
+```
+
+**When to use alternatives:**
+- `sx prop`: Single-use styling, quick customization (most common)
+- `styled()`: Reusable styled components, complex conditional styles
+- `useTheme()`: When you need theme values in logic
+
+**Avoid:**
+- Inline `style={}` props (no theme access)
+- Mixing approaches in same component
+
+### 9.3 Component Best Practices
+
+**Imports:**
+```tsx
+// Prefer individual imports (better tree-shaking)
+import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+
+// NOT
+import { Box, Button } from '@mui/material';
+```
+
+**Theme Spacing:**
+```tsx
+// Always use theme.spacing() or shorthand
+sx={{ m: 2 }}      // margin: theme.spacing(2) = 16px
+sx={{ p: 3 }}      // padding: theme.spacing(3) = 24px
+sx={{ gap: 2 }}    // gap between flex items
+
+// Never hardcode pixels for spacing
+sx={{ margin: '16px' }}  // Bad - not theme-aware
+```
+
+**Responsive Values:**
+```tsx
+<Box sx={{
+  width: { xs: '100%', sm: '50%', md: '33%' },
+  p: { xs: 1, md: 2 }
+}}>
+```
+
+### 9.4 Common Pitfalls to Avoid
+
+| Pitfall | Solution |
+|---------|----------|
+| Mixing sx, styled, and makeStyles | Pick one approach per component |
+| Hardcoded colors | Use theme palette: `color: 'text.secondary'` |
+| Hardcoded spacing | Use theme spacing: `p: 2` not `padding: '16px'` |
+| Missing ARIA labels | Add `aria-label` to icon buttons |
+| Over-customizing standard components | Use theme overrides instead |
+| Ignoring MUI's responsive system | Use breakpoint object syntax |
+
+### 9.5 Prompt Engineering for MUI
+
+When working with AI on MUI code:
+
+1. **Be specific about components:**
+   ```
+   Create a MUI DataGrid with sorting, filtering, and pagination for a user list
+   ```
+
+2. **Reference design system:**
+   ```
+   Use theme.spacing() for margins, alpha() for transparency, sx prop for styling
+   ```
+
+3. **Request accessibility:**
+   ```
+   Include ARIA labels and keyboard navigation
+   ```
+
+4. **Specify responsive behavior:**
+   ```
+   Mobile-first with breakpoints: xs, sm, md, lg, xl
+   ```
+
+---
+
 ## Related Documents
 
 - DEVELOPMENT_STANDARDS.md - Coding conventions
 - API_STANDARDS.md - Backend patterns
 - ARCHITECTURE.md (per project) - System design
+- MUI_MCP_RESEARCH_2025-12-12.md - Full MCP research
 
 ---
 
@@ -447,3 +550,4 @@ Before shipping any UI:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2025-12-07 | Initial version |
+| 1.1 | 2025-12-12 | Added Section 9: Material UI (MUI) Standards |
