@@ -6,7 +6,7 @@ projects:
 - nimbus-import
 - nimbus-user-loader
 synced: true
-synced_at: '2025-12-20T11:08:45.261020'
+synced_at: '2025-12-20T13:15:19.795739'
 tags:
 - nimbus
 - rest

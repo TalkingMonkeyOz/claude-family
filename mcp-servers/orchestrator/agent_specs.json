@@ -472,6 +472,44 @@
       },
       "recommended_timeout_seconds": 600
     },
+    "doc-keeper-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Documentation maintenance agent - verifies and updates vault/registry entries",
+      "use_cases": [
+        "Verify MCP Registry against actual configs",
+        "Check vault entries are up-to-date",
+        "Validate agent_specs.json matches reality",
+        "Flag stale documentation",
+        "Update token estimates",
+        "Cross-check skill paths exist"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "mcp__filesystem",
+        "mcp__postgres"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/doc-keeper-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are the Documentation Keeper. Your job is to maintain documentation accuracy.\n\nCHECK SEQUENCE:\n1. Read MCP Registry from vault\n2. Compare against actual ~/.claude.json and .mcp.json files\n3. Verify agent_specs.json matches orchestrator\n4. Check skill paths exist\n5. Flag any discrepancies\n\nOUTPUT:\n- Update stale entries directly\n- Create feedback items for major issues\n- Report findings via broadcast or feedback table\n\nFOCUS: Accuracy over completeness. Better to flag issues than silently ignore them.",
+      "cost_profile": {
+        "input_tokens_avg": 8000,
+        "output_tokens_avg": 4000,
+        "cost_per_task_usd": 0.03
+      },
+      "recommended_timeout_seconds": 600
+    },
     "ux-tax-screen-analyzer": {
       "model": "claude-haiku-4-5",
       "description": "Specialized agent for analyzing ATO tax wizard screens with Playwright",

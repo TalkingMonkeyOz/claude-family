@@ -1,8 +1,8 @@
 ---
-synced: true
-synced_at: 2025-12-19T19:19:48.284755
 projects:
-  - claude-family
+- claude-family
+synced: true
+synced_at: '2025-12-20T13:15:19.773851'
 ---
 
 Claude Family is to look after all the other claudes and make sure that there set ups are consistent. 
@@ -34,4 +34,3 @@ Claude's Toolbox Features
 [[Project - Mission Control Web]]
 
 ### Archived
-

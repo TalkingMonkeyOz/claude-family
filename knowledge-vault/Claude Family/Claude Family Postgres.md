@@ -2,7 +2,7 @@
 projects:
 - claude-family
 synced: true
-synced_at: '2025-12-20T12:04:35.208822'
+synced_at: '2025-12-20T13:15:19.752066'
 ---
 
 # Claude Family Postgres

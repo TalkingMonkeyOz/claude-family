@@ -1,60 +1,51 @@
 # Next Session TODO
 
 **Last Updated**: 2025-12-20
-**Last Session**: Populated knowledge vault, created 3 skills, pruned memory graph
+**Last Session**: Observability fixes - added slash command regex triggers, documented task breakdown pattern
 
 ## Completed This Session
 
-### Knowledge Vault Population
-- Added 12 new knowledge entries to vault:
-  - 5 Nimbus API patterns (time-fields, CRUD, activity-prefixes, idorfilter, field-naming)
-  - 1 ATO pattern (tax-section-service-pattern)
-  - 3 gotchas (hook-response-format, psycopg3-vs-psycopg2, typescript-generic-constraint)
-  - 2 solutions (schema-consolidation-migration, typescript-barrel-exports)
-  - 1 tooling (mui-mcp-installation, local-reasoning-deepseek)
-
-### Skills Created
-- `database/SKILL.md` - Database operations, Data Gateway, common queries
-- `testing/SKILL.md` - pytest, vitest, regression testing patterns
-- `feature-workflow/SKILL.md` - Work item routing, feature lifecycle
-
-### Memory Graph Pruning
-- Deleted 40 obsolete session entities (pre-Dec-15)
-- Kept 82 useful entities (patterns, features, insights)
-- Reduced graph from 122 to ~82 entities
+- Added 14 regex triggers (IDs 55-68) for slash commands to bypass slow LLM classification
+- Increased doc-keeper-haiku timeout from 300s to 600s in agent_specs.json
+- Fixed process_triggers sequence (was out of sync at 45, now at 54)
+- Documented task breakdown pattern in Observability.md (planner→haiku swarm→reviewer)
+- Updated Observability.md with fixes and marked action items complete
+- Previous session: Fixed ATO MCP token budget, created doc-keeper agent, improved vault interlinking
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Sync vault to DB** - Run `python scripts/sync_obsidian_to_db.py` to sync new entries
-2. **Commit changes** - ~15 new files created this session
-3. **Add Frontend/Testing domain entries** - These vault folders are still empty
-4. **Enhance nimbus-api skill** - Expand from placeholder to full content
+1. **Verify orchestrator uses spec timeouts** - Failures showed different timeouts than specs; need to check orchestrator code
+2. **Implement enforcement_log writes** - Table has 0 rows, violations not being logged
+3. **Add MCP usage tracking** - mcp_usage_stats table barely used (2 rows)
+4. **Create MCW dashboard** - Data exists but no visualization
 
 ---
 
 ## Notes for Next Session
 
-- All original TODO items from 2025-12-19 are complete
-- Knowledge vault now has 13 total entries (was 1)
-- Skills folder now has 4 directories with content (was 1 placeholder)
-- Memory graph is cleaner - sessions now logged to DB, not memory graph
+- Observability analysis showed:
+  - Agent success rate declining: 75% → 54% → 0% over 3 weeks
+  - 100% of recent failures were timeouts
+  - LLM classification was 81% (slow path) - fixed with regex triggers
+- Task breakdown pattern recommended:
+  1. Use planner-sonnet first to break down complex tasks
+  2. Spawn multiple lightweight-haiku/coder-haiku in parallel
+  3. Use reviewer-sonnet to validate combined work
+- Don't use researcher-opus for large tasks (17% success rate)
 
 ---
 
-## Key Files Modified This Session
+## Key Fixes This Session
 
-| File | Change |
-|------|--------|
-| `.claude/skills/database/SKILL.md` | Created - DB operations guide |
-| `.claude/skills/testing/SKILL.md` | Created - Testing patterns guide |
-| `.claude/skills/feature-workflow/SKILL.md` | Created - Feature workflow guide |
-| `knowledge-vault/20-Domains/APIs/*.md` | Created 5 Nimbus API entries |
-| `knowledge-vault/30-Patterns/gotchas/*.md` | Created 3 gotcha entries |
-| `knowledge-vault/30-Patterns/solutions/*.md` | Created 2 solution entries |
+| Fix | Details |
+|-----|---------|
+| Slash command triggers | 14 regex patterns, priority 1, ~600x faster |
+| Agent timeout | doc-keeper-haiku 300→600s |
+| Sequence fix | process_triggers trigger_id seq reset |
 
 ---
 
-**Version**: 3.3
-**Status**: Ready for sync and commit
+**Version**: 3.5
+**Status**: Observability system improved, ready for verification

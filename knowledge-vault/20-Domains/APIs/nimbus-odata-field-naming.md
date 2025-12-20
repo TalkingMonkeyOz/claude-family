@@ -3,15 +3,15 @@ category: nimbus-api
 confidence: 95
 created: 2025-12-18
 projects:
-  - nimbus-import
-  - nimbus-user-loader
+- nimbus-import
+- nimbus-user-loader
 synced: true
-synced_at: 2025-12-18T23:08:24.531985
+synced_at: '2025-12-20T13:15:19.798187'
 tags:
-  - nimbus
-  - odata
-  - api
-  - field-naming
+- nimbus
+- odata
+- api
+- field-naming
 title: Nimbus OData Field Naming
 type: gotcha
 ---

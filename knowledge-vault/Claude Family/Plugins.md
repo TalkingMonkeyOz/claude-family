@@ -2,7 +2,7 @@
 projects:
 - claude-family
 synced: true
-synced_at: '2025-12-20T12:04:35.237027'
+synced_at: '2025-12-20T13:15:19.766746'
 ---
 
 # Plugins

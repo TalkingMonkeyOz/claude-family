@@ -5,7 +5,7 @@ created: 2025-12-19
 projects:
 - claude-family
 synced: true
-synced_at: '2025-12-20T11:08:45.248147'
+synced_at: '2025-12-20T13:15:19.783940'
 tags:
 - python
 - postgresql
