@@ -1,34 +1,34 @@
 # Next Session TODO
 
 **Last Updated**: 2025-12-20
-**Last Session**: Observability fixes - added slash command regex triggers, documented task breakdown pattern
+**Last Session**: Fixed startup commands, orchestrator timeouts, enforcement logging, MCP usage tracking
 
 ## Completed This Session
 
-- Added 14 regex triggers (IDs 55-68) for slash commands to bypass slow LLM classification
-- Increased doc-keeper-haiku timeout from 300s to 600s in agent_specs.json
-- Fixed process_triggers sequence (was out of sync at 45, now at 54)
-- Documented task breakdown pattern in Observability.md (planner→haiku swarm→reviewer)
-- Updated Observability.md with fixes and marked action items complete
-- Previous session: Fixed ATO MCP token budget, created doc-keeper agent, improved vault interlinking
+- Fixed Unix-style `wc -l` command in session-resume.md (was breaking on Windows)
+- Fixed orchestrator timeout schema: max was 600s but specs go up to 1800s (server.py)
+- Implemented enforcement_log writes in process_router.py (was 0 rows)
+- Fixed MCP usage tracking: removed broken `mcp__*` wildcard matcher, now uses no-matcher approach
+- Previous: Added 14 regex triggers for slash commands, fixed agent timeouts
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Verify orchestrator uses spec timeouts** - Failures showed different timeouts than specs; need to check orchestrator code
-2. **Implement enforcement_log writes** - Table has 0 rows, violations not being logged
-3. **Add MCP usage tracking** - mcp_usage_stats table barely used (2 rows)
-4. **Create MCW dashboard** - Data exists but no visualization
+1. **Create MCW dashboard** - Data exists but no visualization
+2. **Verify enforcement_log is populating** - Check after a few sessions
+3. **Verify MCP usage logging works** - Check claude.mcp_usage after next session
+4. **Agent success rate monitoring** - Was 0% recently, check if fixes helped
 
 ---
 
 ## Notes for Next Session
 
-- Observability analysis showed:
-  - Agent success rate declining: 75% → 54% → 0% over 3 weeks
-  - 100% of recent failures were timeouts
-  - LLM classification was 81% (slow path) - fixed with regex triggers
+- Observability fixes completed:
+  - Orchestrator now allows timeouts up to 1800s (was capped at 600)
+  - enforcement_log now logs process/standard/knowledge injection
+  - MCP usage hook fixed (removed invalid `mcp__*` glob pattern)
+  - session-resume.md fixed for Windows compatibility
 - Task breakdown pattern recommended:
   1. Use planner-sonnet first to break down complex tasks
   2. Spawn multiple lightweight-haiku/coder-haiku in parallel
@@ -41,11 +41,12 @@
 
 | Fix | Details |
 |-----|---------|
-| Slash command triggers | 14 regex patterns, priority 1, ~600x faster |
-| Agent timeout | doc-keeper-haiku 300→600s |
-| Sequence fix | process_triggers trigger_id seq reset |
+| session-resume.md | Removed `wc -l` (Unix only), platform-agnostic now |
+| server.py timeout | max 600 → 1800 (matches agent specs) |
+| enforcement_log | Added `log_enforcement()` function, logs 3 types |
+| MCP usage hook | Removed broken `mcp__*` matcher, logs all then filters |
 
 ---
 
-**Version**: 3.5
-**Status**: Observability system improved, ready for verification
+**Version**: 3.6
+**Status**: Observability fixes deployed, pending verification

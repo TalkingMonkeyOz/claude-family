@@ -135,8 +135,13 @@ def main():
     tool_output = hook_input.get('tool_output', '')
     tool_error = hook_input.get('tool_error')
 
-    # Skip if not an MCP tool (or skip certain tools to reduce noise)
-    skip_tools = ['TodoWrite', 'AskUserQuestion', 'EnterPlanMode', 'ExitPlanMode']
+    # Only log MCP tools (start with mcp__) - skip built-in tools to reduce noise
+    if not tool_name.startswith('mcp__'):
+        print(json.dumps({}))
+        return 0
+
+    # Also skip certain MCP tools that are too noisy
+    skip_tools = ['mcp__memory__search_nodes']  # Add noisy tools here if needed
     if tool_name in skip_tools:
         print(json.dumps({}))
         return 0

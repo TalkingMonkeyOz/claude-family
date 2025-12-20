@@ -90,23 +90,12 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__*",
         "hooks": [
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/scripts/mcp_usage_logger.py\"",
             "timeout": 3,
-            "description": "Log MCP tool usage for analytics"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__orchestrator__check_inbox",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "echo '{\"systemMessage\": \"Messages checked. Acknowledge important ones.\"}'",
-            "timeout": 5
+            "description": "Log all tool usage for analytics"
           }
         ]
       }

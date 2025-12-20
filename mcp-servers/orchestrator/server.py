@@ -532,7 +532,7 @@ async def list_tools() -> List[Tool]:
                         "type": "number",
                         "description": "Optional timeout in seconds (default: from agent spec)",
                         "minimum": 1,
-                        "maximum": 600
+                        "maximum": 1800
                     }
                 },
                 "required": ["agent_type", "task", "workspace_dir"]
@@ -599,9 +599,9 @@ async def list_tools() -> List[Tool]:
                     },
                     "timeout": {
                         "type": "number",
-                        "description": "Optional timeout in seconds",
+                        "description": "Optional timeout in seconds (default: from agent spec)",
                         "minimum": 1,
-                        "maximum": 600
+                        "maximum": 1800
                     }
                 },
                 "required": ["agent_type", "task", "workspace_dir"]

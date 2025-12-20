@@ -771,6 +771,48 @@ def log_process_trigger(conn, process_id: str, triggered_by: str, session_id: st
         pass  # Logging is best-effort
 
 
+def log_enforcement(conn, session_id: str, reminder_type: str, reminder_message: str,
+                    action_taken: str = 'injected', interaction_count: int = None):
+    """
+    Log enforcement/reminder action to enforcement_log table.
+
+    This tracks when the system injects guidance, standards, or knowledge
+    into the conversation context.
+
+    Args:
+        conn: Database connection
+        session_id: Current session UUID (may be None)
+        reminder_type: Type of reminder (process, standard, knowledge)
+        reminder_message: Brief description of what was injected
+        action_taken: What happened (injected, skipped, user_bypassed)
+        interaction_count: Which interaction in the session (optional)
+    """
+    if not conn:
+        return
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.enforcement_log
+            (session_id, interaction_count, reminder_type, reminder_message, action_taken)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            session_id,
+            interaction_count,
+            reminder_type,
+            reminder_message[:500] if reminder_message else None,  # Truncate for storage
+            action_taken
+        ))
+        conn.commit()
+    except Exception as e:
+        # Rollback and continue - logging is best-effort
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print(f"Enforcement logging error: {e}", file=sys.stderr)
+
+
 def main():
     """Main entry point for the hook."""
     # Read hook input from stdin
@@ -825,6 +867,36 @@ def main():
         # Log the trigger (first match only for now)
         trigger_info = f"Pattern matched: {matches[0].get('pattern', 'N/A')[:50]}"
         log_process_trigger(conn, matches[0]['process_id'], trigger_info)
+
+        # Log enforcement for each matched process
+        for match in matches:
+            log_enforcement(
+                conn,
+                session_id=session_id,
+                reminder_type='process',
+                reminder_message=f"Process: {match['process_name']} ({match.get('enforcement', 'suggested')})",
+                action_taken='injected'
+            )
+
+    # Log enforcement for standards injection
+    if detected_standards:
+        log_enforcement(
+            conn,
+            session_id=session_id,
+            reminder_type='standard',
+            reminder_message=f"Standards: {', '.join(detected_standards)}",
+            action_taken='injected'
+        )
+
+    # Log enforcement for knowledge injection
+    if knowledge_entries:
+        log_enforcement(
+            conn,
+            session_id=session_id,
+            reminder_type='knowledge',
+            reminder_message=f"Knowledge: {len(knowledge_entries)} entries on {', '.join(knowledge_topics)}",
+            action_taken='injected'
+        )
 
     if conn:
         conn.close()
