@@ -1,79 +1,60 @@
 # Next Session TODO
 
-**Last Updated**: 2025-12-19
-**Last Session**: Fixed settings.local.json parser error (mismatched parentheses)
-
-## Master Plan Location
-
-**ALL PLANS ARE IN ONE DOCUMENT**: `docs/SYSTEM_IMPROVEMENT_PLAN_2025-12.md`
-
----
+**Last Updated**: 2025-12-20
+**Last Session**: Populated knowledge vault, created 3 skills, pruned memory graph
 
 ## Completed This Session
 
-### Parser Error Fix
-- Fixed "Mismatched parentheses" error preventing Claude Code startup
-- Root cause: `.claude/settings.local.json` had two overly-long permission entries
-- The entries contained full git commit messages with embedded URLs like `(https://claude.com/claude-code)`
-- The parentheses in URLs broke the Claude Code settings parser
-- Solution: Removed the two problematic permission entries (lines 9 and 19)
-- JSON validated successfully after fix
+### Knowledge Vault Population
+- Added 12 new knowledge entries to vault:
+  - 5 Nimbus API patterns (time-fields, CRUD, activity-prefixes, idorfilter, field-naming)
+  - 1 ATO pattern (tax-section-service-pattern)
+  - 3 gotchas (hook-response-format, psycopg3-vs-psycopg2, typescript-generic-constraint)
+  - 2 solutions (schema-consolidation-migration, typescript-barrel-exports)
+  - 1 tooling (mui-mcp-installation, local-reasoning-deepseek)
+
+### Skills Created
+- `database/SKILL.md` - Database operations, Data Gateway, common queries
+- `testing/SKILL.md` - pytest, vitest, regression testing patterns
+- `feature-workflow/SKILL.md` - Work item routing, feature lifecycle
+
+### Memory Graph Pruning
+- Deleted 40 obsolete session entities (pre-Dec-15)
+- Kept 82 useful entities (patterns, features, insights)
+- Reduced graph from 122 to ~82 entities
 
 ---
 
 ## Next Steps (Priority Order)
 
-### Testing
-1. **Run regression tests**: `python scripts/run_regression_tests.py --verbose`
-2. **Test knowledge retrieval**: Prompt with "nimbus shift api" and verify knowledge injection
-3. **Test sync script**: Add new entry to vault, run sync, verify in DB
-
-### Knowledge Population
-4. **Populate Obsidian vault** with existing knowledge from database
-5. **Create additional skills** (database, testing, feature-workflow)
-
-### Documentation
-6. **Update main CLAUDE.md** with new features (knowledge vault, sync)
-7. **Prune memory graph** - May have obsolete entities
-
-### Housekeeping
-8. **Git commit** the settings.local.json fix
-9. **Review uncommitted files** - 64+ files in git status
-
----
-
-## Key Files Modified This Session
-
-| File | Action | Purpose |
-|------|--------|---------|
-| `.claude/settings.local.json` | MODIFY | Removed 2 malformed permission entries causing parser error |
+1. **Sync vault to DB** - Run `python scripts/sync_obsidian_to_db.py` to sync new entries
+2. **Commit changes** - ~15 new files created this session
+3. **Add Frontend/Testing domain entries** - These vault folders are still empty
+4. **Enhance nimbus-api skill** - Expand from placeholder to full content
 
 ---
 
 ## Notes for Next Session
 
-- The parser error was caused by permission entries that included full commit message text
-- Proper pattern for git commit permissions: `Bash(git commit:*)` not the full message
-- Desktop shortcut `Claude Code Console.lnk` should now work correctly
+- All original TODO items from 2025-12-19 are complete
+- Knowledge vault now has 13 total entries (was 1)
+- Skills folder now has 4 directories with content (was 1 placeholder)
+- Memory graph is cleaner - sessions now logged to DB, not memory graph
 
 ---
 
-## Verification Queries
+## Key Files Modified This Session
 
-```sql
--- Knowledge from Obsidian vault
-SELECT title, knowledge_category, source FROM claude.knowledge
-WHERE source LIKE 'obsidian:%';
-
--- Check retrieval logging
-SELECT COUNT(*), MAX(retrieved_at) FROM claude.knowledge_retrieval_log;
-
--- Active sessions
-SELECT session_id, project_name, session_start FROM claude.sessions
-WHERE session_end IS NULL;
-```
+| File | Change |
+|------|--------|
+| `.claude/skills/database/SKILL.md` | Created - DB operations guide |
+| `.claude/skills/testing/SKILL.md` | Created - Testing patterns guide |
+| `.claude/skills/feature-workflow/SKILL.md` | Created - Feature workflow guide |
+| `knowledge-vault/20-Domains/APIs/*.md` | Created 5 Nimbus API entries |
+| `knowledge-vault/30-Patterns/gotchas/*.md` | Created 3 gotcha entries |
+| `knowledge-vault/30-Patterns/solutions/*.md` | Created 2 solution entries |
 
 ---
 
-**Version**: 3.1
-**Status**: Parser error fixed, ready for continued development
+**Version**: 3.3
+**Status**: Ready for sync and commit

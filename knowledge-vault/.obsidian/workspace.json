@@ -13,7 +13,7 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Purpose.md",
+                "file": "Claude Family/Purpose.md",
                 "mode": "source",
                 "source": false
               },
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "Purpose.md",
+                "file": "Claude Family/Purpose.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -156,13 +156,13 @@
             "state": {
               "type": "outline",
               "state": {
-                "file": "20-Domains/APIs/nimbus-odata-field-naming.md",
+                "file": "Claude Family/Purpose.md",
                 "followCursor": false,
                 "showSearch": false,
                 "searchQuery": ""
               },
               "icon": "lucide-list",
-              "title": "Outline of nimbus-odata-field-naming"
+              "title": "Outline of Purpose"
             }
           }
         ]
@@ -184,12 +184,22 @@
   },
   "active": "8162ca52957398c3",
   "lastOpenFiles": [
-    "20-Domains/APIs/nimbus-odata-field-naming.md",
-    "Purpose.md",
-    "2025-12-18.md",
-    "Claude Family",
+    "Claude Family/Project - Claude Family.md",
+    "20-Domains/Database/mui-mcp-installation.md",
+    "20-Domains/Database/local-reasoning-deepseek.md",
+    "Claude Family/Purpose.md",
     "_templates/session-learning.md",
     "_templates/knowledge-entry.md",
-    "_templates/gotcha.md"
+    "_templates/gotcha.md",
+    "10-Projects/ato-tax-agent/ato-tax-section-service-pattern.md",
+    "20-Domains/APIs/nimbus-activity-type-prefixes.md",
+    "30-Patterns/gotchas/psycopg3-vs-psycopg2.md",
+    "30-Patterns/gotchas/claude-hook-response-format.md",
+    "20-Domains/APIs/nimbus-time-fields.md",
+    "20-Domains/APIs/nimbus-rest-crud-pattern.md",
+    "20-Domains/APIs/nimbus-idorfilter-patterns.md",
+    "20-Domains/APIs/nimbus-odata-field-naming.md",
+    "2025-12-18.md",
+    "Claude Family"
   ]
 }
