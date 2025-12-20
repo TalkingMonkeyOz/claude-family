@@ -57,6 +57,7 @@ claude-family/
 │   ├── 10-Projects/      # Project-specific knowledge
 │   ├── 20-Domains/       # Domain knowledge (APIs, DB, etc.)
 │   ├── 30-Patterns/      # Reusable patterns, gotchas, solutions
+│   ├── 40-Procedures/    # SOPs, Family Rules, workflows
 │   └── _templates/       # Note templates
 ├── scripts/              # Python utilities
 ├── mcp-servers/          # MCP server implementations
@@ -198,6 +199,8 @@ python scripts/run_regression_tests.py --quick
 
 | Date | Change |
 |------|--------|
+| 2025-12-20 | Config restructure: Created Family Rules.md, updated global CLAUDE.md with vault refs, removed stale shared CLAUDE.md |
+| 2025-12-20 | Fixed P0 postgres password bug, timeout single source of truth, PostToolUse hook |
 | 2025-12-18 | Implemented Knowledge System (Obsidian vault, sync script, logging) |
 | 2025-12-18 | Created test suite for all 15 user stories from spec |
 | 2025-12-18 | Added skills folder (.claude/skills/) with nimbus-api placeholder |
@@ -231,7 +234,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.3 (Knowledge System)
+**Version**: 2.4 (Config restructure, vault integration)
 **Created**: 2025-10-21
-**Updated**: 2025-12-18
+**Updated**: 2025-12-20
 **Location**: C:\Projects\claude-family\CLAUDE.md
