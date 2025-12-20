@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2025-12-20T11:01:31.168618",
+    "generated_at": "2025-12-20T13:46:17.522889",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -39,6 +39,11 @@
       "path": "C:\\Projects\\ATO-tax-agent",
       "type": "work-research",
       "description": "ATO tax agent tools (private work project)"
+    },
+    "claude-family-manager": {
+      "path": "C:\\Projects\\claude-family-manager",
+      "type": "electron-react",
+      "description": "Desktop launcher and dashboard for Claude Family. Replaces batch startup and MCW."
     }
   }
 }

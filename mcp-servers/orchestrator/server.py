@@ -350,6 +350,18 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
     )
 
 
+def get_spec_timeout(agent_type: str) -> int:
+    """Get recommended timeout from agent_specs.json.
+
+    Single source of truth for timeouts - no more hardcoding!
+    """
+    try:
+        spec = orchestrator.agent_specs['agent_types'].get(agent_type, {})
+        return spec.get('recommended_timeout_seconds', 600)  # Default 600s if not found
+    except Exception:
+        return 600  # Safe default
+
+
 def recommend_agent(task: str) -> dict:
     """Analyze task description and recommend best agent type with governance hints.
 
@@ -380,7 +392,7 @@ def recommend_agent(task: str) -> dict:
             "agent": "research-coordinator-sonnet",
             "reason": "Comprehensive research requiring multiple sub-agents",
             "cost": "$0.35+",
-            "timeout": 1800,
+            "timeout": get_spec_timeout("research-coordinator-sonnet"),
             "governance": {
                 "level": "coordinator",
                 "note": "Coordinator spawns child agents, results compiled and returned to caller for review"
@@ -390,25 +402,25 @@ def recommend_agent(task: str) -> dict:
     # Security tasks
     if any(w in task_lower for w in ['security', 'vulnerability', 'audit', 'owasp', 'penetration']):
         if 'deep' in task_lower or 'comprehensive' in task_lower:
-            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00", "timeout": 1200,
+            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00", "timeout": get_spec_timeout("security-opus"),
                     "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
-        return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24", "timeout": 600,
+        return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24", "timeout": get_spec_timeout("security-sonnet"),
                 "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
 
     # Testing tasks
     if any(w in task_lower for w in ['playwright', 'e2e', 'browser', 'selenium']):
         if 'next' in task_lower or 'react' in task_lower:
-            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06", "timeout": 600,
+            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06", "timeout": get_spec_timeout("nextjs-tester-haiku"),
                     "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
-        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05", "timeout": 600,
+        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05", "timeout": get_spec_timeout("web-tester-haiku"),
                 "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
     if any(w in task_lower for w in ['test', 'unit test', 'pytest', 'jest']):
-        return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05", "timeout": 300,
+        return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05", "timeout": get_spec_timeout("tester-haiku"),
                 "governance": {"level": "test-only", "note": "Can write tests, results returned to caller"}}
 
     # Code review
     if any(w in task_lower for w in ['review', 'code review', 'pr review']):
-        return {"agent": "reviewer-sonnet", "reason": "Code review", "cost": "$0.11", "timeout": 300,
+        return {"agent": "reviewer-sonnet", "reason": "Code review", "cost": "$0.11", "timeout": get_spec_timeout("reviewer-sonnet"),
                 "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
 
     # Python development - check complexity
@@ -418,7 +430,7 @@ def recommend_agent(task: str) -> dict:
                 "agent": "python-coder-haiku",
                 "reason": "Python development (complex task - consider breaking down)",
                 "cost": "$0.045",
-                "timeout": 420,
+                "timeout": get_spec_timeout("python-coder-haiku"),
                 "governance": {
                     "level": "code-write",
                     "note": "Code returned to caller for review before commit",
@@ -426,27 +438,27 @@ def recommend_agent(task: str) -> dict:
                     "warning": "Complex task - consider splitting into smaller sub-tasks"
                 }
             }
-        return {"agent": "python-coder-haiku", "reason": "Python development", "cost": "$0.045", "timeout": 300,
+        return {"agent": "python-coder-haiku", "reason": "Python development", "cost": "$0.045", "timeout": get_spec_timeout("python-coder-haiku"),
                 "governance": {"level": "code-write", "note": "Code returned to caller for review before commit"}}
 
     # C# development
     if any(w in task_lower for w in ['c#', 'csharp', '.net', 'wpf', 'winforms']):
-        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045", "timeout": 300,
+        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045", "timeout": get_spec_timeout("csharp-coder-haiku"),
                 "governance": {"level": "code-write", "note": "Code returned to caller for review before commit"}}
 
     # Architecture
     if any(w in task_lower for w in ['architect', 'design', 'system design', 'refactor large']):
-        return {"agent": "architect-opus", "reason": "Architecture design", "cost": "$0.83", "timeout": 900,
+        return {"agent": "architect-opus", "reason": "Architecture design", "cost": "$0.83", "timeout": get_spec_timeout("architect-opus"),
                 "governance": {"level": "advisory", "note": "Recommendations returned to caller for decision"}}
 
     # Research/analysis
     if any(w in task_lower for w in ['research', 'analyze', 'investigate', 'understand']):
-        return {"agent": "analyst-sonnet", "reason": "Research and analysis", "cost": "$0.30", "timeout": 600,
+        return {"agent": "analyst-sonnet", "reason": "Research and analysis", "cost": "$0.30", "timeout": get_spec_timeout("analyst-sonnet"),
                 "governance": {"level": "read-only", "note": "Analysis returned to caller"}}
 
     # Planning
     if any(w in task_lower for w in ['plan', 'breakdown', 'sprint', 'roadmap']):
-        return {"agent": "planner-sonnet", "reason": "Task planning", "cost": "$0.21", "timeout": 600,
+        return {"agent": "planner-sonnet", "reason": "Task planning", "cost": "$0.21", "timeout": get_spec_timeout("planner-sonnet"),
                 "governance": {"level": "advisory", "note": "Plan returned to caller for approval"}}
 
     # Exploration/search tasks - recommend Task tool instead
@@ -475,7 +487,7 @@ def recommend_agent(task: str) -> dict:
             "agent": "coder-haiku",
             "reason": "General coding task (complex - avoid lightweight-haiku)",
             "cost": "$0.035",
-            "timeout": 420,
+            "timeout": get_spec_timeout("coder-haiku"),
             "governance": {
                 "level": "code-write",
                 "note": "Code returned to caller for review",
@@ -488,7 +500,7 @@ def recommend_agent(task: str) -> dict:
         "agent": "coder-haiku",
         "reason": "General coding task",
         "cost": "$0.035",
-        "timeout": 300,
+        "timeout": get_spec_timeout("coder-haiku"),
         "governance": {
             "level": "code-write",
             "note": "Code returned to caller for review before commit"

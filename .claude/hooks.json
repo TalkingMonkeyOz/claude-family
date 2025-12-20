@@ -90,12 +90,12 @@
     ],
     "PostToolUse": [
       {
+        "matcher": "mcp__.*",
         "hooks": [
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/scripts/mcp_usage_logger.py\"",
-            "timeout": 3,
-            "description": "Log all tool usage for analytics"
+            "timeout": 30
           }
         ]
       }

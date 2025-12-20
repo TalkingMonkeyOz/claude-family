@@ -18,8 +18,20 @@ import os
 import io
 import json
 import time
+import uuid
 from datetime import datetime
 from typing import Optional
+
+
+def is_valid_uuid(val: str) -> bool:
+    """Check if string is a valid UUID."""
+    if not val:
+        return False
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, AttributeError):
+        return False
 
 # Fix Windows encoding
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
@@ -129,11 +141,12 @@ def main():
         print(json.dumps({}))
         return 0
 
-    # Extract tool info from PostToolUse format
+    # Extract tool info from PostToolUse format (per Claude Code docs)
     tool_name = hook_input.get('tool_name', '')
     tool_input = hook_input.get('tool_input', {})
-    tool_output = hook_input.get('tool_output', '')
-    tool_error = hook_input.get('tool_error')
+    tool_response = hook_input.get('tool_response', {})  # Correct field name per docs
+    # Check for error in response
+    tool_error = tool_response.get('error') if isinstance(tool_response, dict) else None
 
     # Only log MCP tools (start with mcp__) - skip built-in tools to reduce noise
     if not tool_name.startswith('mcp__'):
@@ -148,21 +161,28 @@ def main():
 
     # Calculate sizes
     input_size = len(json.dumps(tool_input)) if tool_input else 0
-    output_size = len(str(tool_output)) if tool_output else 0
+    output_size = len(json.dumps(tool_response)) if tool_response else 0
 
-    # Determine success
+    # Determine success (no error in response)
     success = tool_error is None
 
     # Extract MCP server
     mcp_server = extract_mcp_server(tool_name)
 
-    # Get session info from environment if available
-    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    # Get session info - prefer hook input (per docs: session_id is passed directly)
+    raw_session_id = hook_input.get('session_id') or os.environ.get('CLAUDE_SESSION_ID')
+    # Validate UUID - column has FK constraint, so invalid UUIDs will fail
+    session_id = raw_session_id if is_valid_uuid(raw_session_id) else None
     project_name = os.environ.get('CLAUDE_PROJECT_NAME')
 
-    # If not in env, try to get from hook input metadata
+    # Extract project from cwd if not in env
     if not project_name:
-        project_name = hook_input.get('project_name')
+        cwd = hook_input.get('cwd', '')
+        # Try to extract project name from path like C:\Projects\project-name
+        if 'Projects' in cwd:
+            parts = cwd.split('Projects')
+            if len(parts) > 1:
+                project_name = parts[1].strip('\\/ ').split('\\')[0].split('/')[0]
 
     # Calculate execution time (approximate - from hook call, not actual tool)
     execution_time_ms = int((time.time() - start_time) * 1000)
