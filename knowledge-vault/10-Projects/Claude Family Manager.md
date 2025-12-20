@@ -1,16 +1,18 @@
 ---
+created: 2025-12-20
+path: C:\Projects\claude-family-manager
+project_id: 5c893d12-33c9-41a2-a805-f6d6c1d7f87e
+status: planning
+synced: true
+synced_at: '2025-12-20T23:29:45.910403'
+tech_stack:
+- Electron
+- React
+- MUI Community
+- PostgreSQL
+- Vite
 title: Claude Family Manager
 type: project
-status: planning
-tech_stack:
-  - Electron
-  - React
-  - MUI Community
-  - PostgreSQL
-  - Vite
-created: 2025-12-20
-project_id: 5c893d12-33c9-41a2-a805-f6d6c1d7f87e
-path: C:\Projects\claude-family-manager
 ---
 
 # Claude Family Manager

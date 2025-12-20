@@ -2,35 +2,60 @@
 projects:
 - claude-family
 synced: true
-synced_at: '2025-12-20T13:15:19.773851'
+synced_at: '2025-12-20T23:29:45.932135'
 ---
 
-Claude Family is to look after all the other claudes and make sure that there set ups are consistent. 
+# Claude Family Vault
 
-This is done by giving context and Structure:
+The Claude Family manages coordination across multiple Claude instances with shared knowledge persistence.
 
-1. Claud.md and the heirarchy of the layers of  [[claud.md structure]]
-2. Postgres and sessions storage. [[Claude Family Postgres]]
-3. Memory graph [[Claude Family Memory Graph]]
-4. Todo lists. [[Claude Family todo Session Start]] and [[session End]]
-5. [[MCP configuration]]
-6. [[Plugins]]
-7. [[Claude Hooks]]
-8. [[Slash command's]]
-9. [[Setting's File]]
+---
 
+## Core System Components
 
-The main challenge is to give claude as much structure to follow.
+| Component | Documentation |
+|-----------|---------------|
+| CLAUDE.md hierarchy | [[claud.md structure]] |
+| Database | [[Claude Family Postgres]], [[Database Architecture]] |
+| Knowledge System | [[Knowledge System]] |
+| Session Workflows | [[Claude Family todo Session Start]], [[session End]] |
+| MCP Servers | [[MCP configuration]], [[MCP Registry]], [[Orchestrator MCP]] |
+| Plugins | [[Plugins]] |
+| Hooks | [[Claude Hooks]] |
+| Commands | [[Slash command's]] |
+| Settings | [[Setting's File]] |
+| Observability | [[Observability]] |
 
-Claude's Toolbox Features
+---
 
+## Vault Structure
 
+| Folder | Purpose |
+|--------|---------|
+| `00-Inbox/` | Quick capture (unsorted) |
+| `10-Projects/` | Project-specific knowledge |
+| `20-Domains/` | Domain expertise (APIs, Database) |
+| `30-Patterns/` | Gotchas, solutions |
+| `40-Procedures/` | SOPs, [[Family Rules]], [[Documentation Standards]] |
+| `Claude Family/` | Core system docs (this folder) |
 
-### Current Projects
+---
 
-[[Project - Claude Family]]
-[[Project - Claude Family]]
-[[Project - ATO-tax-agent]]
-[[Project - Mission Control Web]]
+## Key Procedures
 
-### Archived
+- [[Family Rules]] - Coordination rules (MANDATORY)
+- [[Documentation Standards]] - How to write vault docs
+- [[Knowledge Capture SOP]] - How to capture knowledge
+
+---
+
+## Current Projects
+
+- [[Project - Claude Family]] - Infrastructure
+- [[Project - ATO-tax-agent]] - Tax agent
+- [[Project - Mission Control Web]] - Dashboard UI
+
+---
+
+**Version**: 2.0
+**Updated**: 2025-12-20

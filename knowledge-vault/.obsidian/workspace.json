@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Claude Family/Observability.md",
+                "file": "40-Procedures/Documentation Standards.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Observability"
+              "title": "Documentation Standards"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "Claude Family/Observability.md",
+                "file": "40-Procedures/Documentation Standards.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Observability"
+              "title": "Backlinks for Documentation Standards"
             }
           },
           {
@@ -169,7 +169,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 200
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -184,40 +184,41 @@
   },
   "active": "8162ca52957398c3",
   "lastOpenFiles": [
-    "Claude Family/Claude Family Postgres.md",
+    "Claude Family/MCP configuration.md",
+    "Claude Family/Knowledge System.md",
     "Claude Family/Claude Hooks.md",
     "Claude Family/Claude Family todo Session Start.md",
+    "Claude Family/Claude Family Postgres.md",
+    "Claude Family/Claude Tools Reference.md",
     "Claude Family/Claude Family Memory Graph.md",
-    "Claude Family/claud.md structure.md",
-    "Claude Family/MCP Registry.md",
+    "40-Procedures/Family Rules.md",
+    "Claude Family/Purpose.md.tmp.52776.1766228247410",
+    "40-Procedures/Knowledge Capture SOP.md",
+    "40-Procedures/Knowledge Capture SOP.md.tmp.52776.1766228078035",
+    "40-Procedures/Documentation Standards.md",
+    "40-Procedures/Documentation Standards.md.tmp.52776.1766228045561",
+    "Claude Family/Knowledge System.md.tmp.52776.1766228000380",
+    "20-Domains/Database Architecture.md",
+    "20-Domains/Database Architecture.md.tmp.52776.1766227949470",
+    "20-Domains/Database Integration Guide.md",
+    "Claude Family/Purpose.md",
+    "Claude Family/Slash command's.md",
+    "Claude Family/Setting's File.md",
+    "Claude Family/session End.md",
+    "Claude Family/Plugins.md",
     "Claude Family/Orchestrator MCP.md",
     "Claude Family/Observability.md",
+    "Claude Family/claud.md structure.md",
+    "Claude Family/MCP Registry.md",
     "Claude Family/Observability.md.tmp.41692.1766197017208",
     "Claude Family/Claude Tools Reference.md.tmp.41692.1766196906979",
     "Claude Family/Project - Claude Family.md.tmp.41692.1766196883020",
     "Claude Family/Project - ATO-tax-agent.md.tmp.41692.1766196881925",
     "Claude Family/MCP configuration.md.tmp.41692.1766196837349",
-    "Claude Family/Claude Tools Reference.md",
-    "Claude Family/Slash command's.md",
-    "Claude Family/session End.md",
-    "Claude Family/MCP configuration.md",
-    "Claude Family/MCP Registry.md.tmp.41692.1766195869437",
-    "Claude Family/MCP Registry.md.tmp.41692.1766195861540",
-    "Claude Family/MCP Registry.md.tmp.41692.1766195851707",
-    "Claude Family/Plugins.md",
-    "Claude Family/Setting's File.md",
     "Claude Family/Project - ATO-tax-agent.md",
-    "Claude Family/Purpose.md",
     "Claude Family/Project - Mission Control Web.md",
     "Claude Family/Project - Claude Family.md",
     "20-Domains/Database/mui-mcp-installation.md",
-    "20-Domains/Database/local-reasoning-deepseek.md",
-    "_templates/session-learning.md",
-    "_templates/knowledge-entry.md",
-    "_templates/gotcha.md",
-    "10-Projects/ato-tax-agent/ato-tax-section-service-pattern.md",
-    "20-Domains/APIs/nimbus-activity-type-prefixes.md",
-    "30-Patterns/gotchas/psycopg3-vs-psycopg2.md",
-    "Claude Family"
+    "20-Domains/Database/local-reasoning-deepseek.md"
   ]
 }

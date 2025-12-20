@@ -73,8 +73,13 @@ def log_mcp_usage(
     project_name: Optional[str] = None
 ):
     """Log MCP tool usage to database."""
+    debug_mode = os.environ.get('MCP_LOGGER_DEBUG', '0') == '1'
+    if debug_mode:
+        print(f"DEBUG: log_mcp_usage() entered", file=sys.stderr)
     conn = get_db_connection()
     if not conn:
+        if debug_mode:
+            print(f"DEBUG: no DB connection", file=sys.stderr)
         return
 
     try:
@@ -148,8 +153,14 @@ def main():
     # Check for error in response
     tool_error = tool_response.get('error') if isinstance(tool_response, dict) else None
 
+    if debug_mode:
+        print(f"DEBUG: tool_name={tool_name}", file=sys.stderr)
+        print(f"DEBUG: HAS_DB={HAS_DB}", file=sys.stderr)
+
     # Only log MCP tools (start with mcp__) - skip built-in tools to reduce noise
     if not tool_name.startswith('mcp__'):
+        if debug_mode:
+            print(f"DEBUG: skipping non-MCP tool", file=sys.stderr)
         print(json.dumps({}))
         return 0
 
@@ -188,6 +199,8 @@ def main():
     execution_time_ms = int((time.time() - start_time) * 1000)
 
     # Log to database
+    if debug_mode:
+        print(f"DEBUG: calling log_mcp_usage({tool_name}, {mcp_server})", file=sys.stderr)
     log_mcp_usage(
         tool_name=tool_name,
         mcp_server=mcp_server,
@@ -199,6 +212,8 @@ def main():
         session_id=session_id,
         project_name=project_name
     )
+    if debug_mode:
+        print(f"DEBUG: log_mcp_usage completed", file=sys.stderr)
 
     # Return empty response (don't modify tool output)
     print(json.dumps({}))

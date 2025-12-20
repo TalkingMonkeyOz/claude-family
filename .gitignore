@@ -52,3 +52,4 @@ output/
 
 # MCP config (use .mcp.json.template instead)
 .mcp.json
+nul

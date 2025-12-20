@@ -1,3 +1,8 @@
+---
+synced: true
+synced_at: '2025-12-20T23:29:45.920629'
+---
+
 # Claude Family Rules
 
 **Category**: governance

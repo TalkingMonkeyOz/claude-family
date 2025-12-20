@@ -8,7 +8,7 @@ synced_at: '2025-12-20T13:15:19.752066'
 # Claude Family Postgres
 
 Database: `ai_company_foundation`
-Schema: `claude` (consolidated - 36 tables)
+Schema: `claude` (consolidated - 52 tables)
 
 ## Key Tables
 
