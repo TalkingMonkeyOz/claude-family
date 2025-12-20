@@ -79,13 +79,11 @@ def get_db_connection():
     if not POSTGRES_AVAILABLE:
         raise RuntimeError("PostgreSQL not available - neither psycopg nor psycopg2 installed")
 
-    conn_string = os.environ.get(
-        'DATABASE_URI',
-        os.environ.get(
-            'POSTGRES_CONNECTION_STRING',
-            'postgresql://postgres:postgres@localhost:5432/ai_company_foundation'
-        )
-    )
+    # Try environment variables first, fall back to correct local dev connection
+    conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
+    if not conn_string:
+        # Local development fallback - use correct password
+        conn_string = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation'
 
     if PSYCOPG_VERSION == 3:
         # psycopg3 syntax
