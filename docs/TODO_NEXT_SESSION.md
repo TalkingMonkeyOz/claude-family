@@ -1,53 +1,43 @@
 # Next Session TODO
 
 **Last Updated**: 2025-12-21
-**Last Session**: Startup hook fixes, deprecated schema migration, Blazor project finalization
+**Last Session**: Agent timeout investigation, hot-reload implementation
 
 ## Completed This Session
 
-- **Blazor Project Finalized**
-  - Installed NuGet packages: MudBlazor 8.15.0, Npgsql 10.0.1, Markdig 0.44.0
-  - Added to `claude.workspaces` table and `workspaces.json`
-  - Created `docs/TODO_NEXT_SESSION.md` for Blazor project
-  - Sent handoff message with full porting instructions
+- **Agent Timeout Investigation**
+  - Root cause: Agent specs cached at MCP server startup
+  - agent_specs.json changes (600s timeouts) weren't picked up
+  - Old cached values (60/120/300s) causing timeouts
 
-- **Startup Hook Error - FIXED**
-  - Root cause: `check_messages_hook.py` used deprecated `claude_family.instance_messages`
-  - Fixed to use `claude.messages`
+- **Hot-Reload Implemented**
+  - Added `reload_specs()` method to `AgentOrchestrator`
+  - Added `reload_agent_specs` MCP tool to orchestrator server
+  - Now can reload specs without restarting Claude Code
 
-- **Duplicate Commands - FIXED**
-  - Removed `session-start.md` and `session-end.md` from `~/.claude/commands/`
-  - Project-level commands in plugins now sole source
+- **Agent Metrics Reviewed**
+  - coder-haiku: 41% → 83% success (improved after Dec 12)
+  - lightweight-haiku: 60% → 100% success
+  - python-coder-haiku: Degraded due to old cached timeouts
 
-- **Deprecated Schema Migration - COMPLETE**
-  - Fixed 8 scripts from `claude_family.*` to `claude.*`:
-    - `C:/claude/shared/scripts/check_messages_hook.py`
-    - `C:/claude/shared/scripts/show_startup_notification.py`
-    - `C:/claude/shared/scripts/sync_postgres_to_mcp.py`
-    - `scripts/end_current_session.py`
-    - `scripts/deploy_optimized_mcps.py`
-    - `scripts/orchestrate_mission_control_build.py`
-    - `scripts/sync_anthropic_usage.py`
-    - `scripts/view_usage.py`
-
-- **Knowledge Captured**
-  - Created `knowledge-vault/30-Patterns/Windows Bash and MCP Gotchas.md`
-  - Documents: dir/ls issue, startup hooks, duplicate commands, MCP exit errors
-
-- **Broadcast Sent** - Notified all Claude instances of fixes
+- **Committed Leftover Files**
+  - 13 files from prior session (schema fixes, slash commands, knowledge)
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **P1: Migrate claude-mission-control** - Update code to use `claude.*` instead of deprecated schemas
+1. **P1: Restart Claude Code & reload specs** - Pick up new hot-reload tool, then call `reload_agent_specs`
+   - This will fix python-coder-haiku timeouts (600s instead of 300s)
+
+2. **P2: Migrate claude-mission-control** - Update code to use `claude.*` instead of deprecated schemas
    - 64 files reference `claude_family.` or `claude_pm.`
    - BLOCKED: Can't drop deprecated tables until MCW migrated
 
-2. **P2: Fix Roslyn MSBuild issue** - Some machines fail to locate MSBuild
+3. **P3: Fix Roslyn MSBuild issue** - Some machines fail to locate MSBuild
    - Options: VS Build Tools install, explicit MSBuild path, or switch to OmniSharp
 
-3. **P3: Sync knowledge vault** - Install psycopg2 in MCP venv, run sync_obsidian_to_db.py
+4. **P4: Sync knowledge vault** - Install psycopg2 in MCP venv, run sync_obsidian_to_db.py
 
 ---
 
@@ -55,10 +45,10 @@
 
 | Learning | Details |
 |----------|---------|
+| MCP config cached at startup | Agent specs loaded once - need hot-reload for changes |
+| Agent metrics improved | coder-haiku 41%→83% after Dec 12 config changes |
+| Timeout root cause | Old cached values (60/120/300) vs spec values (600) |
 | Use `ls` not `dir` | Git Bash on Windows uses Unix commands |
-| Startup hook = schema issue | `claude_family.*` refs cause hook failures |
-| Duplicate commands = user vs project | Commands in both locations cause duplicates |
-| MCP exit errors = bug #1935 | External dependency, cosmetic only |
 
 ---
 
@@ -66,20 +56,10 @@
 
 | File | Change |
 |------|--------|
-| `C:/claude/shared/scripts/check_messages_hook.py` | Schema fix |
-| `C:/claude/shared/scripts/show_startup_notification.py` | Schema fix |
-| `C:/claude/shared/scripts/sync_postgres_to_mcp.py` | Schema fix |
-| `scripts/end_current_session.py` | Schema fix |
-| `scripts/deploy_optimized_mcps.py` | Schema fix |
-| `scripts/orchestrate_mission_control_build.py` | Schema fix |
-| `scripts/sync_anthropic_usage.py` | Schema fix |
-| `scripts/view_usage.py` | Schema fix |
-| `workspaces.json` | Added claude-launcher-blazor |
-| `knowledge-vault/30-Patterns/Windows Bash and MCP Gotchas.md` | **NEW** |
-| `~/.claude/commands/session-start.md` | **DELETED** |
-| `~/.claude/commands/session-end.md` | **DELETED** |
+| `mcp-servers/orchestrator/orchestrator_prototype.py` | Added `reload_specs()` method |
+| `mcp-servers/orchestrator/server.py` | Added `reload_agent_specs` MCP tool |
 
 ---
 
-**Version**: 8.0
-**Status**: Hook fixes deployed, schema migration complete, Blazor ready for development
+**Version**: 9.0
+**Status**: Hot-reload implemented, agent timeouts will be fixed after restart
