@@ -1,0 +1,113 @@
+# System Agents Collection
+# Maintenance and governance agents for Claude Family
+# Format inspired by github.com/github/awesome-copilot
+
+name: System Agents
+description: Dedicated maintenance and governance agents for the Claude Family ecosystem
+version: "1.0.0"
+created: "2025-12-21"
+tags:
+  - maintenance
+  - governance
+  - system
+
+agents:
+  - name: librarian
+    display_name: Librarian
+    agent_type: doc-keeper-haiku
+    description: Knowledge vault maintenance, stale doc detection, verify MCP registry accuracy
+    purpose: |
+      Maintains the knowledge vault by:
+      - Checking for stale documentation (>30 days without update)
+      - Verifying MCP registry matches actual configs
+      - Validating agent_specs.json accuracy
+      - Flagging broken links in markdown files
+    schedule: daily
+    skill: /doc-keeper
+    config:
+      vault_path: "C:/Projects/claude-family/knowledge-vault"
+      check_links: true
+      stale_threshold_days: 30
+    estimated_duration_minutes: 5
+
+  - name: config-auditor
+    display_name: Config Auditor
+    agent_type: lightweight-haiku
+    description: Validate CLAUDE.md, hooks.json, .mcp.json across all projects
+    purpose: |
+      Audits configuration consistency by:
+      - Checking CLAUDE.md exists and follows template
+      - Validating hooks.json references existing scripts
+      - Ensuring .mcp.json server paths are correct
+      - Comparing project configs against global standards
+    schedule: on-startup
+    skill: /check-compliance
+    config:
+      workspaces_path: "C:/Projects/claude-family/workspaces.json"
+      check_hooks: true
+      check_mcp: true
+      check_claude_md: true
+    estimated_duration_minutes: 3
+
+  - name: session-cleanup
+    display_name: Session Cleanup
+    agent_type: python-coder-haiku
+    description: Archive old sessions, find orphans in claude.sessions
+    purpose: |
+      Maintains session hygiene by:
+      - Archiving sessions older than retention period
+      - Finding orphaned session_state entries
+      - Cleaning up stale todo lists
+      - Generating session statistics report
+    schedule: weekly
+    skill: /session-management
+    config:
+      retention_days: 30
+      archive_table: "claude.sessions_archive"
+      cleanup_orphans: true
+    estimated_duration_minutes: 10
+
+  - name: inbox-monitor
+    display_name: Inbox Monitor
+    agent_type: lightweight-haiku
+    description: Check for urgent/stale messages, alert on pending items
+    purpose: |
+      Monitors inter-Claude messaging by:
+      - Checking for urgent unread messages
+      - Alerting on messages pending >24 hours
+      - Summarizing inbox status across projects
+      - Flagging messages that need escalation
+    schedule: hourly
+    skill: /check-messages
+    config:
+      stale_threshold_hours: 24
+      alert_on_urgent: true
+      include_broadcasts: true
+    estimated_duration_minutes: 2
+
+  - name: build-validator
+    display_name: Build Validator
+    agent_type: tester-haiku
+    description: Run builds across registered projects, report failures
+    purpose: |
+      Validates project health by:
+      - Running dotnet build for C# projects
+      - Running pnpm build for JS/TS projects
+      - Checking for type errors and warnings
+      - Generating build status report
+    schedule: nightly
+    skill: null  # Direct task, no skill
+    config:
+      projects:
+        - claude-family-manager-v2
+        - nimbus-import
+      fail_fast: false
+      report_warnings: true
+    estimated_duration_minutes: 15
+
+# How Launcher should use this file:
+# 1. Parse YAML to get agent list
+# 2. Display cards with: display_name, description, schedule, estimated_duration
+# 3. On "Run" click: spawn_agent(agent_type, purpose, workspace_dir)
+# 4. Track last_run timestamp per agent
+# 5. Show status: idle, running, success, failed

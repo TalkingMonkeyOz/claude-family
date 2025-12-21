@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Claude Family/Purpose.md",
+                "file": "Claude Family/Setting's File.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Purpose"
+              "title": "Setting's File"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "Claude Family/Purpose.md",
+                "file": "Claude Family/Setting's File.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Purpose"
+              "title": "Backlinks for Setting's File"
             }
           },
           {
@@ -184,41 +184,41 @@
   },
   "active": "8162ca52957398c3",
   "lastOpenFiles": [
-    "30-Patterns/Windows Bash and MCP Gotchas.md",
-    "30-Patterns/Windows Bash and MCP Gotchas.md.tmp.29132.1766274914981",
-    "Claude Family/claud.md structure.md",
-    "40-Procedures/Documentation Standards.md",
-    "Claude Family/MCP configuration.md",
-    "Claude Family/Knowledge System.md",
-    "Claude Family/Claude Hooks.md",
-    "Claude Family/Claude Family todo Session Start.md",
-    "Claude Family/Claude Family Postgres.md",
-    "Claude Family/Claude Tools Reference.md",
-    "Claude Family/Claude Family Memory Graph.md",
-    "40-Procedures/Family Rules.md",
-    "Claude Family/Purpose.md.tmp.52776.1766228247410",
-    "40-Procedures/Knowledge Capture SOP.md",
-    "40-Procedures/Knowledge Capture SOP.md.tmp.52776.1766228078035",
-    "40-Procedures/Documentation Standards.md.tmp.52776.1766228045561",
-    "Claude Family/Knowledge System.md.tmp.52776.1766228000380",
-    "20-Domains/Database Architecture.md",
-    "20-Domains/Database Architecture.md.tmp.52776.1766227949470",
-    "20-Domains/Database Integration Guide.md",
-    "Claude Family/Purpose.md",
     "Claude Family/Slash command's.md",
+    "40-Procedures/Documentation Standards.md",
+    "Claude Family/Orchestrator MCP.md",
+    "30-Patterns/gotchas/mcp-orphan-processes-windows.md",
     "Claude Family/Setting's File.md",
     "Claude Family/session End.md",
-    "Claude Family/Plugins.md",
-    "Claude Family/Orchestrator MCP.md",
-    "Claude Family/Observability.md",
-    "Claude Family/MCP Registry.md",
-    "Claude Family/Observability.md.tmp.41692.1766197017208",
-    "Claude Family/Claude Tools Reference.md.tmp.41692.1766196906979",
-    "Claude Family/Project - Claude Family.md.tmp.41692.1766196883020",
-    "Claude Family/Project - ATO-tax-agent.md.tmp.41692.1766196881925",
-    "Claude Family/Project - ATO-tax-agent.md",
-    "Claude Family/Project - Mission Control Web.md",
-    "Claude Family/Project - Claude Family.md",
-    "20-Domains/Database/mui-mcp-installation.md"
+    "20-Domains/WinForms/winforms-layout-patterns.md",
+    "20-Domains/WinForms/winforms-designer-rules.md",
+    "20-Domains/WinForms/winforms-databinding.md",
+    "20-Domains/WinForms/winforms-async-patterns.md",
+    "20-Domains/Database/mui-mcp-installation.md",
+    "20-Domains/Database/local-reasoning-deepseek.md",
+    "20-Domains/CSharp/csharp-expert-rules.md",
+    "20-Domains/APIs/nimbus-time-fields.md",
+    "20-Domains/APIs/nimbus-rest-crud-pattern.md",
+    "20-Domains/APIs/nimbus-odata-field-naming.md",
+    "20-Domains/APIs/nimbus-idorfilter-patterns.md",
+    "20-Domains/APIs/nimbus-activity-type-prefixes.md",
+    "10-Projects/Claude Family Manager.md",
+    "10-Projects/ato-tax-agent/ato-tax-section-service-pattern.md",
+    "30-Patterns/Windows Bash and MCP Gotchas.md",
+    "40-Procedures/Knowledge Capture SOP.md",
+    "40-Procedures/Family Rules.md",
+    "Claude Family/Purpose.md",
+    "20-Domains/CSharp/csharp-expert-rules.md.tmp.27696.1766288424317",
+    "20-Domains/CSharp",
+    "20-Domains/WinForms/winforms-databinding.md.tmp.27696.1766288397920",
+    "20-Domains/WinForms/winforms-layout-patterns.md.tmp.27696.1766288349220",
+    "20-Domains/WinForms/winforms-designer-rules.md.tmp.27696.1766288323221",
+    "20-Domains/WinForms",
+    "30-Patterns/Windows Bash and MCP Gotchas.md.tmp.29132.1766274914981",
+    "Claude Family/claud.md structure.md",
+    "Claude Family/MCP configuration.md",
+    "Claude Family/Purpose.md.tmp.52776.1766228247410",
+    "40-Procedures/Knowledge Capture SOP.md.tmp.52776.1766228078035",
+    "40-Procedures/Documentation Standards.md.tmp.52776.1766228045561"
   ]
 }

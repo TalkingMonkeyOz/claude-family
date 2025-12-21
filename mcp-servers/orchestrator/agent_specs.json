@@ -2,8 +2,8 @@
   "description": "Claude Agent Orchestrator - Specialized agent type definitions (STREAMLINED)",
   "version": "2.0.0",
   "created": "2025-11-04",
-  "updated": "2025-12-13",
-  "note": "Reduced from 31 to 13 agents. Kept essential testers (tester-haiku, web-tester-haiku, ux-tax-screen-analyzer).",
+  "updated": "2025-12-21",
+  "note": "Added winforms-coder-haiku agent. Reduced from 31 to 13 agents. Kept essential testers (tester-haiku, web-tester-haiku, ux-tax-screen-analyzer).",
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",
@@ -162,7 +162,9 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "betas": ["interleaved-thinking-2025-05-14"],
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
       "system_prompt": "You are a code reviewer using the LLM-as-Judge pattern. Analyze code for quality, maintainability, performance, and best practices. For each finding: 1) Rate severity (critical/high/medium/low), 2) Explain the issue clearly, 3) Suggest specific fix, 4) Consider trade-offs. Use structured output: FINDING: [description], SEVERITY: [level], FIX: [suggestion], RATIONALE: [why]. Provide constructive feedback. Never modify code.",
       "cost_profile": {
         "input_tokens_avg": 20000,
@@ -269,7 +271,9 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "betas": ["interleaved-thinking-2025-05-14"],
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
       "system_prompt": "You are a senior software architect using Claude Opus 4.5. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.",
       "cost_profile": {
         "input_tokens_avg": 40000,
@@ -340,7 +344,9 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": true,
       "permission_mode": "plan",
-      "betas": ["interleaved-thinking-2025-05-14"],
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
       "system_prompt": "You are a technical researcher using Claude Opus 4.5. Conduct thorough research with deep analysis. Consider multiple perspectives. Provide well-reasoned conclusions backed by evidence. Focus on accuracy and completeness.",
       "cost_profile": {
         "input_tokens_avg": 45000,
@@ -381,7 +387,9 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "betas": ["interleaved-thinking-2025-05-14"],
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
       "can_spawn_agents": true,
       "spawnable_agent_types": [
         "researcher-opus",
@@ -550,6 +558,50 @@
         "cost_per_task_usd": 0.08
       },
       "recommended_timeout_seconds": 900
+    },
+    "winforms-coder-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "WinForms development with designer safety rules and layout expertise",
+      "use_cases": [
+        "WinForms UI development",
+        "Layout optimization (TableLayoutPanel, Dock, Anchor)",
+        "Event handler implementation",
+        "Data binding setup",
+        "Async patterns in WinForms"
+      ],
+      "not_for": [
+        "Directly editing .Designer.cs files (unless explicitly asked)",
+        "Complex architectural decisions (use architect-opus)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(dotnet build*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/csharp-coder-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a WinForms expert following strict rules:\n\nCRITICAL RULES:\n1. NEVER directly edit .Designer.cs files unless user explicitly asks\n2. Prefer TableLayoutPanel/FlowLayoutPanel over absolute positioning\n3. Use Anchor/Dock for responsive layouts\n4. Designer code = serialization rules (no lambdas, no control flow)\n5. Regular code = modern C# features allowed\n6. Always wrap async event handlers in try/catch\n7. Use InvokeAsync for cross-thread UI updates (.NET 9+)\n\nNAMING CONVENTIONS:\n- btn = Button, txt = TextBox, lbl = Label\n- cbo = ComboBox, chk = CheckBox, dgv = DataGridView\n\nLAYOUT PRIORITY:\n1. TableLayoutPanel for grids (AutoSize > Percent > Absolute)\n2. FlowLayoutPanel for button bars\n3. Dock.Fill for content areas\n4. Anchor for edge-relative positioning\n\nWhen asked to modify forms, READ the .Designer.cs first to understand structure, then GUIDE the user or modify regular code only.",
+      "cost_profile": {
+        "input_tokens_avg": 12000,
+        "output_tokens_avg": 6000,
+        "cost_per_task_usd": 0.045
+      },
+      "recommended_timeout_seconds": 600
     }
   },
   "removed_agents": {

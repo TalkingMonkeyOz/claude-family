@@ -47,7 +47,9 @@ claude-family/
 ├── ARCHITECTURE.md        # System design
 ├── .claude/
 │   ├── commands/          # Slash commands
-│   └── skills/            # Domain skills (nimbus-api, etc.)
+│   ├── instructions/      # Auto-apply coding standards
+│   ├── collections/       # Agent/resource groupings
+│   └── skills/            # Domain skills
 ├── docs/
 │   ├── adr/              # Architecture decisions
 │   ├── sop/              # Standard operating procedures
@@ -100,34 +102,67 @@ claude-family/
 
 ---
 
-## Process Guidance (MANDATORY)
+## Skills System (ADR-005)
 
-When you see `<process-guidance>` tags injected by the process router hook:
+**Architecture**: Skills-First (replaced process_router)
 
-1. **MUST Follow Steps**: Execute each step in the order listed
-2. **MUST NOT Skip [BLOCKING]**: Blocking steps must complete before proceeding
-3. **MUST Use TodoWrite**: Add all workflow steps to your todo list immediately
-4. **MUST Track Progress**: Mark todos in_progress/completed as you work
-5. **MUST Check column_registry**: Before any database write, verify valid values
+A forced-eval hook prompts skill consideration on each request. Core skills:
 
-**Example Response Pattern**:
+| Skill | Purpose |
+|-------|---------|
+| database-operations | SQL validation, column_registry checks |
+| work-item-routing | Feedback, features, build_tasks routing |
+| session-management | Session lifecycle (start/end/resume) |
+| code-review | Pre-commit review, testing |
+| project-ops | Project init, retrofit, phases |
+| messaging | Inter-Claude communication |
+| agentic-orchestration | Agent spawning, parallel work |
+| testing-patterns | Test writing and execution |
+
+**Usage**: When a skill applies, use the `Skill` tool to invoke it.
+
+**Legacy**: Process registry archived (25 active, 7 deprecated). See ADR-005 for migration details
+
+---
+
+## Auto-Apply Instructions (awesome-copilot pattern)
+
+Coding standards auto-inject based on file patterns. No manual invocation needed.
+
+| Instruction | Applies To | Purpose |
+|-------------|-----------|---------|
+| `csharp.instructions.md` | `**/*.cs` | C# conventions, async patterns |
+| `winforms.instructions.md` | `**/*.Designer.cs`, `**/Forms/**/*.cs` | WinForms rules, layout strategy |
+| `winforms-dark-theme.instructions.md` | `**/*Form.cs`, `**/*Control.cs` | Dark theme colors, contrast |
+| `a11y.instructions.md` | `**/*.cs`, `**/*.tsx` | WCAG AA, contrast ratios |
+| `sql-postgres.instructions.md` | `**/*.sql` | PostgreSQL best practices |
+| `playwright.instructions.md` | `**/*.spec.ts`, `**/tests/**/*.ts` | E2E testing patterns |
+| `nimbus-api.instructions.md` | `**/nimbus-*/**/*` | Nimbus WFM API gotchas |
+
+**How it works**: `instruction_matcher.py` hook runs on Edit/Write, matches file path against `applyTo` patterns, injects matching instructions into context.
+
+**Adding new instructions**: Create `.claude/instructions/[name].instructions.md` with YAML frontmatter:
+```yaml
+---
+description: 'What these guidelines cover'
+applyTo: '**/*.ext'
+---
 ```
-I see this triggers the Bug Fix Workflow. Let me follow the steps:
 
-[TodoWrite with all steps]
+---
 
-Step 1: Create Feedback Entry...
-[Execute step]
-[Mark todo completed]
+## Collections (System Agents)
 
-Step 2: Investigate Root Cause...
-[Execute step]
-...
+Collections group related agents for the Launcher UI:
+
+```yaml
+# .claude/collections/system-agents.collection.yml
+- librarian (doc-keeper-haiku) - Knowledge vault maintenance
+- config-auditor (lightweight-haiku) - Validate configs across projects
+- session-cleanup (python-coder-haiku) - Archive old sessions
+- inbox-monitor (lightweight-haiku) - Check for stale messages
+- build-validator (tester-haiku) - Run builds, report failures
 ```
-
-**If Workflow Doesn't Apply**: State why and proceed normally.
-
-**Process Registry**: 32 workflows across 7 categories (COMM, DATA, DEV, DOC, PROJECT, QA, SESSION)
 
 ---
 
@@ -148,50 +183,14 @@ See `docs/sops/GIT_WORKTREES_FOR_PARALLEL_WORK.md`
 
 ## Knowledge System
 
-Complete knowledge lifecycle for institutional memory:
-
 ```
-CAPTURE ──────> STORE ──────> DELIVER
-(Obsidian)    (PostgreSQL)   (Hooks)
+CAPTURE (Obsidian) ──> STORE (PostgreSQL) ──> DELIVER (Hooks)
 ```
 
-### Components
-
-| Component | Location | Purpose |
-|-----------|----------|---------|
-| **Obsidian Vault** | `knowledge-vault/` | Markdown knowledge capture with YAML frontmatter |
-| **Sync Script** | `scripts/sync_obsidian_to_db.py` | Vault → Database sync |
-| **Process Router** | `scripts/process_router.py` | Keyword-based knowledge retrieval |
-| **Retrieval Log** | `claude.knowledge_retrieval_log` | Observability for what knowledge is queried |
-| **Enforcement Log** | `claude.enforcement_log` | Tracks reminder triggers |
-
-### Key Commands
-
-- `/knowledge-capture` - Save a learning to the Obsidian vault
-- `/session-end` - Prompts for session learnings before close
-
-### Sync Knowledge
-
-```bash
-# Dry run (see what would sync)
-python scripts/sync_obsidian_to_db.py --dry-run
-
-# Actually sync
-python scripts/sync_obsidian_to_db.py
-
-# Force resync everything
-python scripts/sync_obsidian_to_db.py --force
-```
-
-### Test Suite
-
-```bash
-# Run all 15 user story tests
-python scripts/run_regression_tests.py --verbose
-
-# Quick mode (first 7 tests)
-python scripts/run_regression_tests.py --quick
-```
+- **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter
+- **Sync**: `python scripts/sync_obsidian_to_db.py`
+- **Commands**: `/knowledge-capture`, `/session-end`
+- **Tests**: `python scripts/run_regression_tests.py --verbose`
 
 ---
 
@@ -199,21 +198,13 @@ python scripts/run_regression_tests.py --quick
 
 | Date | Change |
 |------|--------|
-| 2025-12-20 | Config restructure: Created Family Rules.md, updated global CLAUDE.md with vault refs, removed stale shared CLAUDE.md |
-| 2025-12-20 | Fixed P0 postgres password bug, timeout single source of truth, PostToolUse hook |
-| 2025-12-18 | Implemented Knowledge System (Obsidian vault, sync script, logging) |
-| 2025-12-18 | Created test suite for all 15 user stories from spec |
-| 2025-12-18 | Added skills folder (.claude/skills/) with nimbus-api placeholder |
-| 2025-12-08 | Added MANDATORY Process Guidance section - Claude must follow workflow steps |
-| 2025-12-08 | Workflow regression: All 32 processes now have steps and triggers |
-| 2025-12-08 | Added 7 new triggers (IDs 47-53) for 6 processes |
-| 2025-12-06 | Proposed Tool Search for deferred loading (ADR-004) |
-| 2025-12-06 | Added beta headers support (1M context, interleaved thinking) |
-| 2025-12-06 | Added LLM-as-Judge pattern to reviewer-sonnet |
-| 2025-12-06 | Created git worktrees SOP for parallel work |
-| 2025-12-06 | Implemented async agent workflow (ADR-003) |
-| 2025-12-04 | Created Claude Governance System Plan |
-| 2025-12-04 | Added Data Gateway (column_registry, CHECK constraints) |
+| 2025-12-21 | **Auto-apply instructions**: instruction_matcher.py hook, 7 instruction files |
+| 2025-12-21 | **Skills-First** (ADR-005): Replaced process_router, 8 core skills |
+| 2025-12-21 | WinForms support: knowledge notes, agent, skill, dark theme instructions |
+| 2025-12-20 | Config restructure: Family Rules.md, global CLAUDE.md update |
+| 2025-12-18 | Knowledge System: Obsidian vault, sync script, test suite |
+
+**Full changelog**: See git log or `docs/CHANGELOG.md`
 
 ---
 
@@ -234,7 +225,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.4 (Config restructure, vault integration)
+**Version**: 2.6 (Skills-First architecture, ADR-005)
 **Created**: 2025-10-21
-**Updated**: 2025-12-20
+**Updated**: 2025-12-21
 **Location**: C:\Projects\claude-family\CLAUDE.md

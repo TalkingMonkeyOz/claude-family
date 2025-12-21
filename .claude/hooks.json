@@ -4,10 +4,10 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "python \"C:/Projects/claude-family/scripts/process_router.py\"",
-            "timeout": 5,
-            "description": "Route user prompt to appropriate process workflow"
+            "type": "prompt",
+            "prompt": "Evaluate: Does this task benefit from a skill? Check: database-operations (SQL), work-routing (feedback/features), code-review (commits), session-management (start/end), project-ops (setup), messaging (coordination). Use Skill tool if applicable.",
+            "timeout": 2,
+            "description": "Skills-first evaluation (replaces process_router)"
           }
         ]
       }
@@ -16,6 +16,12 @@
       {
         "matcher": "Write",
         "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/instruction_matcher.py\"",
+            "timeout": 5,
+            "description": "Auto-apply coding standards based on file pattern (awesome-copilot inspired)"
+          },
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_claude_md.py\" \"$FILE_PATH\"",
@@ -27,6 +33,12 @@
       {
         "matcher": "Edit",
         "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/instruction_matcher.py\"",
+            "timeout": 5,
+            "description": "Auto-apply coding standards based on file pattern (awesome-copilot inspired)"
+          },
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/validate_claude_md.py\" \"$FILE_PATH\"",
@@ -74,6 +86,12 @@
     "SessionEnd": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/cleanup_mcp_processes.py\"",
+            "timeout": 15,
+            "description": "Clean up orphaned MCP server processes"
+          },
           {
             "type": "command",
             "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/check_doc_updates.py\"",
