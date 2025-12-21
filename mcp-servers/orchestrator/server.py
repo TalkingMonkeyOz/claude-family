@@ -581,6 +581,15 @@ async def list_tools() -> List[Tool]:
             }
         ),
         Tool(
+            name="reload_agent_specs",
+            description="Reload agent specifications from disk. Use after modifying agent_specs.json to pick up changes without restarting.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        ),
+        Tool(
             name="spawn_agent_async",
             description=(
                 "Spawn an agent asynchronously - returns immediately with task_id. "
@@ -836,6 +845,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_recommend_agent(arguments)
     elif name == "get_spawn_status":
         return await handle_get_spawn_status()
+    elif name == "reload_agent_specs":
+        return await handle_reload_agent_specs()
     elif name == "spawn_agent_async":
         return await handle_spawn_agent_async(arguments)
     elif name == "check_async_task":
@@ -942,6 +953,12 @@ async def handle_get_spawn_status() -> List[TextContent]:
     """Handle get_spawn_status tool call."""
     status = orchestrator.get_spawn_status()
     return [TextContent(type="text", text=json.dumps(status, indent=2))]
+
+
+async def handle_reload_agent_specs() -> List[TextContent]:
+    """Handle reload_agent_specs tool call."""
+    result = orchestrator.reload_specs()
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
 async def handle_spawn_agent_async(arguments: dict) -> List[TextContent]:

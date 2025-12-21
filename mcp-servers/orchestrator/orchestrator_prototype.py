@@ -93,6 +93,30 @@ class AgentOrchestrator:
         with open(self.specs_path, 'r') as f:
             return json.load(f)
 
+    def reload_specs(self) -> Dict[str, Any]:
+        """Reload agent specs from disk (hot-reload for config changes).
+
+        Call this after modifying agent_specs.json to pick up changes
+        without restarting the MCP server.
+
+        Returns:
+            Dict with reload status and agent count
+        """
+        old_count = len(self.agent_specs.get('agent_types', {}))
+        self.agent_specs = self._load_specs()
+        new_count = len(self.agent_specs.get('agent_types', {}))
+
+        # Log the reload
+        print(f"INFO: Reloaded agent specs. Agents: {old_count} -> {new_count}", file=sys.stderr)
+
+        return {
+            "reloaded": True,
+            "previous_agent_count": old_count,
+            "current_agent_count": new_count,
+            "specs_path": str(self.specs_path),
+            "agent_types": list(self.agent_specs['agent_types'].keys())
+        }
+
     def get_agent_spec(self, agent_type: str) -> Dict[str, Any]:
         """Get specification for a specific agent type."""
         if agent_type not in self.agent_specs['agent_types']:
