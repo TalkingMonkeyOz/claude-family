@@ -1,72 +1,54 @@
 ---
 created: 2025-12-20
-path: C:\Projects\claude-family-manager
-project_id: 5c893d12-33c9-41a2-a805-f6d6c1d7f87e
-status: planning
-synced: true
-synced_at: '2025-12-20T23:29:45.910403'
+updated: 2025-12-21
+path: C:\Projects\claude-family-manager-v2
+status: implementation
 tech_stack:
-- Electron
-- React
-- MUI Community
+- C# WinForms
+- .NET 9
 - PostgreSQL
-- Vite
-title: Claude Family Manager
+title: Claude Family Manager v2
 type: project
+aliases:
+- CFM v2
+- claude-family-manager-v2
 ---
 
-# Claude Family Manager
+# Claude Family Manager v2
 
-Desktop application that replaces batch file startup and MCW dashboard.
+Desktop application for Claude Family management. WinForms C# replacement for abandoned Electron and MAUI Blazor approaches.
+
+## History
+
+| Version | Tech Stack | Status |
+|---------|------------|--------|
+| v1 | Electron + React | Archived |
+| v1.5 | MAUI Blazor Hybrid | Abandoned |
+| **v2** | **C# WinForms** | **Active** |
 
 ## Purpose
 
 1. **Launcher**: Replace batch files with proper desktop app for launching Claude Code
-2. **Dashboard**: Migrate working MCW features (sessions, agents, projects, feedback)
+2. **Dashboard**: Session management, agent monitoring, project overview
 3. **Config View**: Visualize CLAUDE.md hierarchy and inheritance
 
 ## Tech Stack
 
-- **Electron**: Desktop shell
-- **React 18**: UI framework
-- **MUI Community**: Component library (free tier)
-- **Direct pg**: PostgreSQL via IPC (no HTTP API)
-- **Vite**: Fast builds
+- **C# WinForms**: Desktop UI (works with VS2026)
+- **.NET 9**: Runtime
+- **PostgreSQL**: Direct database access via Npgsql
+- **No MCP dependency**: Direct DB queries for simplicity
 
-## Key Features
+## Folder
 
-### Phase 1: Launcher MVP
-- Project selector from workspaces.json
-- Health checks (DB, MCP servers)
-- Message preview (pending count)
-- TODO preview from previous session
-- Launch button with env var setup
-
-### Phase 2: Config Tree View
-- Visualize CLAUDE.md hierarchy
-- Show global -> project -> plugin inheritance
-- Highlight overrides
-
-### Phase 3+: Dashboard Migration
-- Migrate working MCW features
-- Skip broken features (scheduler CRUD, reminders create, project tasks)
+Location: `C:\Projects\claude-family-manager-v2`
 
 ## Links
 
 - [[Claude Family]] - Parent infrastructure project
-- [[Mission Control Web]] - Being replaced by this
-- Implementation Plan: `docs/IMPLEMENTATION_PLAN.md`
-
-## Status
-
-| Phase | Status |
-|-------|--------|
-| Scaffolding | In Progress |
-| Launcher MVP | Pending |
-| Config Tree | Pending |
-| Dashboard | Pending |
+- [[WinForms Designer Rules]] - Designer safety rules
 
 ---
 
 **Created**: 2025-12-20
-**Last Updated**: 2025-12-20
+**Updated**: 2025-12-21

@@ -1,54 +1,54 @@
 {
   "_metadata": {
-    "generated_at": "2025-12-21T13:51:26.907492",
+    "generated_at": "2025-12-21T19:23:50.192982",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
   "workspaces": {
-    "nimbus-user-loader": {
-      "path": "C:\\Projects\\nimbus-user-loader",
-      "type": "csharp-winforms",
-      "description": "Nimbus user import tool (private work project)"
-    },
-    "claude-pm": {
-      "path": "C:\\Projects\\claude-pm",
-      "type": "csharp-wpf",
-      "description": "New simplified project management system (WIP, replacing Diana)"
-    },
-    "claude-family-manager": {
-      "path": "C:\\Projects\\claude-family-manager",
-      "type": "electron-react",
-      "description": "Desktop launcher and dashboard for Claude Family. Replaces batch startup and MCW."
+    "ATO-tax-agent": {
+      "path": "C:\\Projects\\ATO-tax-agent",
+      "type": "work-research",
+      "description": "ATO tax agent tools (private work project)"
     },
     "claude-family": {
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
     },
-    "claude-launcher-blazor": {
-      "path": "C:\\Projects\\claude-launcher-blazor",
-      "type": "maui-blazor",
-      "description": "MAUI Blazor Hybrid app replacing Electron claude-family-manager"
+    "claude-family-manager": {
+      "path": "C:\\Projects\\claude-family-manager",
+      "type": "electron-react",
+      "description": "Desktop launcher and dashboard for Claude Family. Replaces batch startup and MCW."
+    },
+    "claude-family-manager-v2": {
+      "path": "C:\\Projects\\claude-family-manager-v2",
+      "type": "csharp-winforms",
+      "description": "WinForms C# desktop app for Claude Family management. Replaced MAUI Blazor Hybrid approach."
+    },
+    "claude-mission-control": {
+      "path": "C:\\Projects\\claude-mission-control",
+      "type": "python-flet",
+      "description": "Mission Control - AI governance hub for Claude Family."
+    },
+    "claude-pm": {
+      "path": "C:\\Projects\\claude-pm",
+      "type": "csharp-wpf",
+      "description": "New simplified project management system (WIP, replacing Diana)"
     },
     "mission-control-web": {
       "path": "C:\\Projects\\mission-control-web",
       "type": "nextjs-typescript",
       "description": "Web-based Mission Control using Next.js, shadcn/ui, TanStack"
     },
-    "claude-mission-control": {
-      "path": "C:\\Projects\\claude-mission-control",
-      "type": "python-flet",
-      "description": "Mission Control - AI governance hub for Claude Family. Card-based UI for project management, agent orchestration, and automated workflows."
-    },
     "nimbus-import": {
       "path": "C:\\Projects\\nimbus-import",
       "type": "tauri-react",
       "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
     },
-    "ATO-tax-agent": {
-      "path": "C:\\Projects\\ATO-tax-agent",
-      "type": "work-research",
-      "description": "ATO tax agent tools (private work project)"
+    "nimbus-user-loader": {
+      "path": "C:\\Projects\\nimbus-user-loader",
+      "type": "csharp-winforms",
+      "description": "Nimbus user import tool (private work project)"
     }
   }
 }
