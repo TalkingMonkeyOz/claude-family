@@ -63,7 +63,7 @@ def get_last_sync_date(conn, sync_type):
     cur = conn.cursor(cursor_factory=RealDictCursor)
     cur.execute("""
         SELECT MAX(end_date) as last_sync
-        FROM claude_family.usage_sync_status
+        FROM claude.usage_sync_status
         WHERE sync_type = %s AND sync_status = 'success'
     """, (sync_type,))
     result = cur.fetchone()
@@ -223,7 +223,7 @@ def import_usage_data(conn, records):
 
             # Insert with ON CONFLICT to handle duplicates
             cur.execute("""
-                INSERT INTO claude_family.api_usage_data (
+                INSERT INTO claude.api_usage_data (
                     bucket_start_time, bucket_end_time, bucket_width,
                     model, workspace_id, workspace_name,
                     service_tier, context_window, api_key_id,
@@ -274,7 +274,7 @@ def import_cost_data(conn, records):
 
             # Insert with ON CONFLICT to handle duplicates
             cur.execute("""
-                INSERT INTO claude_family.api_cost_data (
+                INSERT INTO claude.api_cost_data (
                     date, workspace_id, workspace_name, description, cost_cents
                 ) VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (date, workspace_id, description)
@@ -311,7 +311,7 @@ def log_sync_status(conn, sync_type, start_date, end_date, imported, skipped, st
 
     try:
         cur.execute("""
-            INSERT INTO claude_family.usage_sync_status (
+            INSERT INTO claude.usage_sync_status (
                 sync_type, start_date, end_date,
                 records_imported, records_skipped,
                 sync_status, error_message, completed_at

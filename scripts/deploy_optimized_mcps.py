@@ -108,7 +108,7 @@ def log_to_database(deployment_summary):
         cursor = conn.cursor()
 
         cursor.execute("""
-            INSERT INTO claude_family.shared_knowledge
+            INSERT INTO claude.shared_knowledge
             (knowledge_type, knowledge_category, title, description, code_example, confidence_level)
             VALUES ('procedure', 'mcp', %s, %s, %s, 10)
         """, (

@@ -96,7 +96,7 @@ def show_summary(conn):
             MIN(date) as first_date,
             MAX(date) as last_date,
             COUNT(DISTINCT date) as days_tracked
-        FROM claude_family.api_cost_data
+        FROM claude.api_cost_data
     """)
     cost_summary = cur.fetchone()
 
@@ -108,7 +108,7 @@ def show_summary(conn):
             SUM(cached_input_tokens) as cached_input,
             SUM(output_tokens) as output,
             COUNT(*) as total_requests
-        FROM claude_family.api_usage_data
+        FROM claude.api_usage_data
         WHERE bucket_start_time >= NOW() - INTERVAL '30 days'
     """)
     usage_summary = cur.fetchone()
@@ -119,7 +119,7 @@ def show_summary(conn):
             SUM(CASE WHEN date >= CURRENT_DATE - INTERVAL '1 day' THEN cost_usd ELSE 0 END) as today,
             SUM(CASE WHEN date >= CURRENT_DATE - INTERVAL '7 days' THEN cost_usd ELSE 0 END) as week,
             SUM(CASE WHEN date >= CURRENT_DATE - INTERVAL '30 days' THEN cost_usd ELSE 0 END) as month
-        FROM claude_family.api_cost_data
+        FROM claude.api_cost_data
     """)
     recent_costs = cur.fetchone()
 
@@ -161,7 +161,7 @@ def show_daily(conn, days=30):
             date,
             SUM(cost_usd) as daily_cost,
             COUNT(DISTINCT workspace_id) as workspaces
-        FROM claude_family.api_cost_data
+        FROM claude.api_cost_data
         WHERE date >= CURRENT_DATE - INTERVAL '%s days'
         GROUP BY date
         ORDER BY date DESC
@@ -217,7 +217,7 @@ def show_models(conn, sort_by='tokens'):
                 END,
                 1
             ) as cache_hit_rate
-        FROM claude_family.api_usage_data
+        FROM claude.api_usage_data
         WHERE bucket_start_time >= NOW() - INTERVAL '30 days'
         GROUP BY model
         ORDER BY {sort_column} DESC
@@ -251,7 +251,7 @@ def show_projects(conn):
             COUNT(*) as sessions,
             SUM(total_tokens) as total_tokens,
             AVG(total_tokens) as avg_tokens
-        FROM claude_family.api_usage_data
+        FROM claude.api_usage_data
         WHERE bucket_start_time >= NOW() - INTERVAL '30 days'
         GROUP BY project_name
         ORDER BY total_tokens DESC
@@ -288,7 +288,7 @@ def show_alerts(conn):
             ROUND((current_value / NULLIF(threshold_value, 0)) * 100, 1) as percent_of_threshold,
             threshold_exceeded,
             last_checked
-        FROM claude_family.budget_alerts
+        FROM claude.budget_alerts
         WHERE is_active = TRUE
         ORDER BY percent_of_threshold DESC
     """)
@@ -299,7 +299,7 @@ def show_alerts(conn):
     if not rows:
         print("  No active alerts configured.")
         print(f"\n  {Colors.YELLOW}💡 TIP: Create alerts to monitor your spending!{Colors.ENDC}")
-        print("  Example: INSERT INTO claude_family.budget_alerts")
+        print("  Example: INSERT INTO claude.budget_alerts")
         print("           (alert_name, alert_type, threshold_type, threshold_value)")
         print("           VALUES ('Daily Budget', 'daily', 'cost', 10.00);")
         return
@@ -334,7 +334,7 @@ def export_to_csv(conn, output_file='usage_export.csv'):
             uncached_input_tokens,
             cached_input_tokens,
             output_tokens
-        FROM claude_family.api_usage_data
+        FROM claude.api_usage_data
         ORDER BY bucket_start_time DESC
     """)
 

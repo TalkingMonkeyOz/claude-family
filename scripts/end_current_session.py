@@ -68,7 +68,7 @@ NEXT STEPS:
         # Get latest session
         cur.execute("""
             SELECT id, session_start, project_name
-            FROM claude_family.session_history
+            FROM claude.sessions
             WHERE identity_id = 5
             ORDER BY session_start DESC
             LIMIT 1
@@ -85,7 +85,7 @@ NEXT STEPS:
 
         # Update session
         cur.execute("""
-            UPDATE claude_family.session_history
+            UPDATE claude.sessions
             SET
                 session_end = NOW(),
                 summary = %s,

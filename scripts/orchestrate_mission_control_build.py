@@ -53,14 +53,14 @@ Create these 6 files:
    - Load credentials from .env file (dotenv)
 
 2. **projects.py** - Project workspace queries
-   Schema: claude_family.project_workspaces
+   Schema: claude.project_workspaces
    Functions:
    - get_all_projects() -> list[dict]
    - get_project_by_name(project_name: str) -> dict | None
    - get_project_summary() -> list[dict]  # With last session + open feedback count
 
 3. **sessions.py** - Session history queries
-   Schema: claude_family.session_history
+   Schema: claude.session_history
    Functions:
    - get_recent_sessions(limit: int = 20) -> list[dict]
    - get_sessions_by_project(project_name: str) -> list[dict]
@@ -79,7 +79,7 @@ Create these 6 files:
    - get_comments(feedback_id: uuid) -> list[dict]
 
 5. **procedures.py** - Procedure registry queries
-   Schema: claude_family.procedure_registry
+   Schema: claude.procedure_registry
    Functions:
    - get_all_procedures() -> list[dict]
    - get_procedures_for_project(project_name: str) -> list[dict]
@@ -87,7 +87,7 @@ Create these 6 files:
    - get_procedure_by_id(procedure_id: uuid) -> dict | None
 
 6. **knowledge.py** - Shared knowledge queries
-   Schema: claude_family.shared_knowledge
+   Schema: claude.shared_knowledge
    Functions:
    - search_knowledge(query: str) -> list[dict]
    - get_knowledge_by_category(category: str) -> list[dict]

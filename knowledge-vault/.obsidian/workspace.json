@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "40-Procedures/Documentation Standards.md",
+                "file": "Claude Family/Purpose.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Documentation Standards"
+              "title": "Purpose"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "40-Procedures/Documentation Standards.md",
+                "file": "Claude Family/Purpose.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Documentation Standards"
+              "title": "Backlinks for Purpose"
             }
           },
           {
@@ -184,6 +184,10 @@
   },
   "active": "8162ca52957398c3",
   "lastOpenFiles": [
+    "30-Patterns/Windows Bash and MCP Gotchas.md",
+    "30-Patterns/Windows Bash and MCP Gotchas.md.tmp.29132.1766274914981",
+    "Claude Family/claud.md structure.md",
+    "40-Procedures/Documentation Standards.md",
     "Claude Family/MCP configuration.md",
     "Claude Family/Knowledge System.md",
     "Claude Family/Claude Hooks.md",
@@ -195,7 +199,6 @@
     "Claude Family/Purpose.md.tmp.52776.1766228247410",
     "40-Procedures/Knowledge Capture SOP.md",
     "40-Procedures/Knowledge Capture SOP.md.tmp.52776.1766228078035",
-    "40-Procedures/Documentation Standards.md",
     "40-Procedures/Documentation Standards.md.tmp.52776.1766228045561",
     "Claude Family/Knowledge System.md.tmp.52776.1766228000380",
     "20-Domains/Database Architecture.md",
@@ -208,17 +211,14 @@
     "Claude Family/Plugins.md",
     "Claude Family/Orchestrator MCP.md",
     "Claude Family/Observability.md",
-    "Claude Family/claud.md structure.md",
     "Claude Family/MCP Registry.md",
     "Claude Family/Observability.md.tmp.41692.1766197017208",
     "Claude Family/Claude Tools Reference.md.tmp.41692.1766196906979",
     "Claude Family/Project - Claude Family.md.tmp.41692.1766196883020",
     "Claude Family/Project - ATO-tax-agent.md.tmp.41692.1766196881925",
-    "Claude Family/MCP configuration.md.tmp.41692.1766196837349",
     "Claude Family/Project - ATO-tax-agent.md",
     "Claude Family/Project - Mission Control Web.md",
     "Claude Family/Project - Claude Family.md",
-    "20-Domains/Database/mui-mcp-installation.md",
-    "20-Domains/Database/local-reasoning-deepseek.md"
+    "20-Domains/Database/mui-mcp-installation.md"
   ]
 }
