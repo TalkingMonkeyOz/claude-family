@@ -1,43 +1,36 @@
 # Next Session TODO
 
 **Last Updated**: 2025-12-21
-**Last Session**: Agent timeout investigation, hot-reload implementation
+**Last Session**: MCW schema migration completed
 
 ## Completed This Session
 
-- **Agent Timeout Investigation**
-  - Root cause: Agent specs cached at MCP server startup
-  - agent_specs.json changes (600s timeouts) weren't picked up
-  - Old cached values (60/120/300s) causing timeouts
+- **P1: Agent Specs Reloaded** - Called `reload_agent_specs` MCP tool
+  - All 14 agents now have 600s timeouts active
 
-- **Hot-Reload Implemented**
-  - Added `reload_specs()` method to `AgentOrchestrator`
-  - Added `reload_agent_specs` MCP tool to orchestrator server
-  - Now can reload specs without restarting Claude Code
+- **P2: MCW Schema Migration** - Migrated claude-mission-control to `claude.*` schema
+  - 121 replacements across 19 files
+  - All `claude_family.*` → `claude.*` with correct table names
+  - All `claude_pm.*` → `claude.*` with correct table names
+  - **Exception**: `procedures.py` reverted to use `claude_family.procedure_registry` (different schema than `claude.process_registry`)
+  - All 9 database modules tested and passing
 
-- **Agent Metrics Reviewed**
-  - coder-haiku: 41% → 83% success (improved after Dec 12)
-  - lightweight-haiku: 60% → 100% success
-  - python-coder-haiku: Degraded due to old cached timeouts
-
-- **Committed Leftover Files**
-  - 13 files from prior session (schema fixes, slash commands, knowledge)
+- **P4: Knowledge Vault Synced** - 1 new file synced
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **P1: Restart Claude Code & reload specs** - Pick up new hot-reload tool, then call `reload_agent_specs`
-   - This will fix python-coder-haiku timeouts (600s instead of 300s)
+1. **Test MCW End-to-End** - Run the app and verify all tabs work with new schema
+   - Location: `C:\Projects\claude-mission-control`
+   - Run: `python src/main.py` or `run.bat`
 
-2. **P2: Migrate claude-mission-control** - Update code to use `claude.*` instead of deprecated schemas
-   - 64 files reference `claude_family.` or `claude_pm.`
-   - BLOCKED: Can't drop deprecated tables until MCW migrated
+2. **Drop Deprecated Views (Optional)** - Once MCW confirmed working
+   - Views in `claude_family` and `claude_pm` schemas can be dropped
+   - Keep tables: `claude_family.procedure_registry`, `claude_pm.project_feedback_comments`
 
-3. **P3: Fix Roslyn MSBuild issue** - Some machines fail to locate MSBuild
-   - Options: VS Build Tools install, explicit MSBuild path, or switch to OmniSharp
-
-4. **P4: Sync knowledge vault** - Install psycopg2 in MCP venv, run sync_obsidian_to_db.py
+3. **P3: Fix Roslyn MSBuild issue** - Environment issue on some machines
+   - Low priority - only affects machines without Visual Studio
 
 ---
 
@@ -45,21 +38,10 @@
 
 | Learning | Details |
 |----------|---------|
-| MCP config cached at startup | Agent specs loaded once - need hot-reload for changes |
-| Agent metrics improved | coder-haiku 41%→83% after Dec 12 config changes |
-| Timeout root cause | Old cached values (60/120/300) vs spec values (600) |
-| Use `ls` not `dir` | Git Bash on Windows uses Unix commands |
+| Views provide backwards compat | Deprecated schemas have views pointing to `claude.*` tables |
+| Table name changes | `session_history` → `sessions`, `project_workspaces` → `workspaces`, etc. |
 
 ---
 
-## Files Changed
-
-| File | Change |
-|------|--------|
-| `mcp-servers/orchestrator/orchestrator_prototype.py` | Added `reload_specs()` method |
-| `mcp-servers/orchestrator/server.py` | Added `reload_agent_specs` MCP tool |
-
----
-
-**Version**: 9.0
-**Status**: Hot-reload implemented, agent timeouts will be fixed after restart
+**Version**: 11.0
+**Status**: MCW migrated to claude.* schema, needs E2E testing

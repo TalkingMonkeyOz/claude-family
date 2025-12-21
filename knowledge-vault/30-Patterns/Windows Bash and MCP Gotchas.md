@@ -1,3 +1,8 @@
+---
+synced: true
+synced_at: '2025-12-21T13:55:56.214237'
+---
+
 # Windows Bash and MCP Gotchas
 
 **Category**: troubleshooting
