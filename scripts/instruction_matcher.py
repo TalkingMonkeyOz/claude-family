@@ -8,6 +8,10 @@ relevant coding standards into the context automatically.
 
 Inspired by: github.com/github/awesome-copilot instructions system
 
+Search Order (first match wins for same-named files):
+    1. {project}/.claude/instructions/  - Project-specific overrides
+    2. ~/.claude/instructions/          - Global shared instructions
+
 Usage:
     Called by Claude Code hooks with file path as argument
     Returns JSON with additionalContext for matching instructions
@@ -22,6 +26,7 @@ File Format (.instructions.md):
 
 Author: Claude Family
 Date: 2025-12-21
+Updated: 2025-12-22 - Added global instruction support
 """
 
 import sys
@@ -38,13 +43,9 @@ import fnmatch
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Instruction file locations (searched in order)
-INSTRUCTION_PATHS = [
-    # Project-specific instructions
-    ".claude/instructions",
-    # Global instructions (claude-family)
-    "C:/Projects/claude-family/.claude/instructions",
-]
+# Instruction file locations (searched in order, first match wins for same-named files)
+# Project-specific instructions are added dynamically from CWD in main()
+GLOBAL_INSTRUCTION_PATH = Path.home() / ".claude" / "instructions"
 
 # Cache for parsed instructions (per-session)
 _instruction_cache: Dict[str, Dict] = {}
@@ -244,11 +245,12 @@ def main():
         print(json.dumps({}))
         return 0
 
-    # Get current working directory for project-specific instructions
-    cwd = os.getcwd()
+    # Build search paths: project-specific first (highest priority), then global
+    cwd = Path.cwd()
     search_paths = [
-        os.path.join(cwd, ".claude/instructions"),
-    ] + INSTRUCTION_PATHS
+        str(cwd / ".claude" / "instructions"),  # Project-specific (highest priority)
+        str(GLOBAL_INSTRUCTION_PATH),            # Global ~/.claude/instructions/
+    ]
 
     # Load all instructions
     instructions = load_instructions(search_paths)

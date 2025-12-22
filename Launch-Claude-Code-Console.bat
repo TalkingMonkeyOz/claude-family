@@ -1,6 +1,7 @@
 @echo off
-REM Launch Claude Code Console in a new terminal window
-REM This opens Windows Terminal (or cmd) with Claude Code Console running
+REM Launch Claude Code Console with centralized config deployment
+REM Usage: Launch-Claude-Code-Console.bat [project_path]
+REM   If no path provided, uses current directory
 
 title Claude Code Console
 
@@ -9,10 +10,32 @@ echo ===========================================================================
 echo Claude Code Console - Terminal AI Assistant
 echo ================================================================================
 echo.
-echo Starting Claude Code Console v2.0.13...
+
+REM Determine project path
+if "%~1"=="" (
+    set "PROJECT_PATH=%CD%"
+) else (
+    set "PROJECT_PATH=%~1"
+)
+
+echo Project: %PROJECT_PATH%
 echo.
 
-REM Launch claude in interactive mode (uses npm global installation)
+REM Deploy configs from database before launching
+echo Deploying configs from database...
+python "C:\Projects\claude-family\scripts\deploy_project_configs.py" "%PROJECT_PATH%" 2>nul
+if %ERRORLEVEL% NEQ 0 (
+    echo Warning: Config deployment had issues, continuing anyway...
+)
+echo.
+
+REM Change to project directory
+cd /d "%PROJECT_PATH%"
+
+echo Starting Claude Code Console...
+echo.
+
+REM Launch claude in interactive mode
 claude
 
 REM Keep window open if claude exits

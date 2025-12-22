@@ -129,6 +129,12 @@ A forced-eval hook prompts skill consideration on each request. Core skills:
 
 Coding standards auto-inject based on file patterns. No manual invocation needed.
 
+**Search Order** (project-specific overrides global):
+1. `{project}/.claude/instructions/` - Project-specific
+2. `~/.claude/instructions/` - Global (shared across all projects)
+
+**Global Instructions** (`~/.claude/instructions/`):
+
 | Instruction | Applies To | Purpose |
 |-------------|-----------|---------|
 | `csharp.instructions.md` | `**/*.cs` | C# conventions, async patterns |
@@ -137,11 +143,16 @@ Coding standards auto-inject based on file patterns. No manual invocation needed
 | `a11y.instructions.md` | `**/*.cs`, `**/*.tsx` | WCAG AA, contrast ratios |
 | `sql-postgres.instructions.md` | `**/*.sql` | PostgreSQL best practices |
 | `playwright.instructions.md` | `**/*.spec.ts`, `**/tests/**/*.ts` | E2E testing patterns |
+
+**Project-Specific Instructions** (`.claude/instructions/`):
+
+| Instruction | Applies To | Purpose |
+|-------------|-----------|---------|
 | `nimbus-api.instructions.md` | `**/nimbus-*/**/*` | Nimbus WFM API gotchas |
 
 **How it works**: `instruction_matcher.py` hook runs on Edit/Write, matches file path against `applyTo` patterns, injects matching instructions into context.
 
-**Adding new instructions**: Create `.claude/instructions/[name].instructions.md` with YAML frontmatter:
+**Adding new instructions**: Create `~/.claude/instructions/[name].instructions.md` for global, or `.claude/instructions/[name].instructions.md` for project-specific:
 ```yaml
 ---
 description: 'What these guidelines cover'
@@ -225,7 +236,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.6 (Skills-First architecture, ADR-005)
+**Version**: 2.7 (Global instructions support)
 **Created**: 2025-10-21
-**Updated**: 2025-12-21
+**Updated**: 2025-12-22
 **Location**: C:\Projects\claude-family\CLAUDE.md

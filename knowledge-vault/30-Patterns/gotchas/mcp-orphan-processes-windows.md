@@ -1,6 +1,8 @@
 ---
-created: 2025-12-21
 category: mcp
+created: 2025-12-21
+synced: true
+synced_at: '2025-12-21T23:23:15.095546'
 tags:
 - mcp
 - windows

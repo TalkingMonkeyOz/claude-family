@@ -1,36 +1,42 @@
 # Next Session TODO
 
-**Last Updated**: 2025-12-21
-**Last Session**: MCW schema migration completed
+**Last Updated**: 2025-12-22
+**Last Session**: Claude Desktop integration + handoff system
 
 ## Completed This Session
 
-- **P1: Agent Specs Reloaded** - Called `reload_agent_specs` MCP tool
-  - All 14 agents now have 600s timeouts active
+- **Claude Desktop Integration**
+  - Updated `%APPDATA%/Claude/claude_desktop_config.json`
+  - Added filesystem access to vault and `C:\Projects`
+  - Desktop can now read all CLAUDE.md files and knowledge vault
 
-- **P2: MCW Schema Migration** - Migrated claude-mission-control to `claude.*` schema
-  - 121 replacements across 19 files
-  - All `claude_family.*` → `claude.*` with correct table names
-  - All `claude_pm.*` → `claude.*` with correct table names
-  - **Exception**: `procedures.py` reverted to use `claude_family.procedure_registry` (different schema than `claude.process_registry`)
-  - All 9 database modules tested and passing
+- **Handoff System Created**
+  - `C:\Projects\claude-family\handoff\` directory
+  - `README.md` - Protocol documentation
+  - `CLAUDE-DESKTOP-START-HERE.md` - Desktop onboarding
 
-- **P4: Knowledge Vault Synced** - 1 new file synced
+- **Inter-Claude Messaging**
+  - Desktop can INSERT into `claude.messages` to reach Code
+  - Code can reply with `to_project = 'claude-desktop'`
+  - File-based handoff with prefixes: SPEC-, REQ-, QUESTION-, DONE-
 
 ---
 
 ## Next Steps (Priority Order)
 
-1. **Test MCW End-to-End** - Run the app and verify all tabs work with new schema
-   - Location: `C:\Projects\claude-mission-control`
-   - Run: `python src/main.py` or `run.bat`
+1. **Test Desktop Integration**
+   - Restart Desktop
+   - Tell it to read `CLAUDE-DESKTOP-START-HERE.md`
+   - Try sending a message to claude-family
 
-2. **Drop Deprecated Views (Optional)** - Once MCW confirmed working
-   - Views in `claude_family` and `claude_pm` schemas can be dropped
-   - Keep tables: `claude_family.procedure_registry`, `claude_pm.project_feedback_comments`
+2. **Personal Finance App**
+   - Get spec from Desktop's Projects/Artifacts
+   - Save to `handoff/SPEC-personal-finance.md`
+   - Plan the implementation
 
-3. **P3: Fix Roslyn MSBuild issue** - Environment issue on some machines
-   - Low priority - only affects machines without Visual Studio
+3. **Unarchive claude-desktop-config Project**
+   - Re-register as active project
+   - Track Desktop configuration and updates
 
 ---
 
@@ -38,10 +44,12 @@
 
 | Learning | Details |
 |----------|---------|
-| Views provide backwards compat | Deprecated schemas have views pointing to `claude.*` tables |
-| Table name changes | `session_history` → `sessions`, `project_workspaces` → `workspaces`, etc. |
+| Desktop config location | `%APPDATA%/Claude/claude_desktop_config.json` |
+| Projects/Artifacts are cloud | Not accessible locally - must export to handoff |
+| Desktop has postgres | Can message via INSERT INTO claude.messages |
+| Handoff protocol | File drops + database messages |
 
 ---
 
-**Version**: 11.0
-**Status**: MCW migrated to claude.* schema, needs E2E testing
+**Version**: 12.0
+**Status**: Desktop integration complete, needs user testing
