@@ -81,6 +81,8 @@ WHERE project_name = 'claude-family'
 ORDER BY session_start DESC LIMIT 5;
 ```
 
+**Detailed Documentation**: See [[Database Schema - Core Tables]] for column-level details, constraints, and data quality analysis.
+
 ---
 
 ## Projects
@@ -270,6 +272,9 @@ These tables exist in legacy schemas and will be dropped:
 
 ## Related Documents
 
+- [[Database Schema - Core Tables]] - Detailed core tables documentation (NEW)
+- [[Identity System]] - Identity resolution and per-project identities (NEW)
+- [[Session Lifecycle]] - Complete session flow documentation (NEW)
 - [[Claude Family Postgres]] - Quick reference
 - [[Claude Hooks]] - Enforcement layer
 - [[Data Gateway]] - Constraint patterns
@@ -277,7 +282,7 @@ These tables exist in legacy schemas and will be dropped:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-20
-**Updated**: 2025-12-20
+**Updated**: 2025-12-26
 **Location**: knowledge-vault/20-Domains/Database Architecture.md

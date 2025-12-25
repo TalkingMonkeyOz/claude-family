@@ -1,0 +1,531 @@
+---
+projects:
+  - claude-family
+tags:
+  - identity
+  - architecture
+  - design
+synced: false
+---
+
+# Identity System
+
+**Status**: Needs Implementation
+**Current**: Hardcoded identity (all CLI sessions = claude-code-unified)
+**Target**: Identity per project (claude-ato-agent, claude-nimbus, etc.)
+
+This document describes the current identity system, its problems, and the target design for identity-per-project.
+
+---
+
+## Current State (Problems)
+
+### Hardcoded Identity Assignment
+
+**Location**: `C:\Projects\claude-family\scripts\session_startup_hook_enhanced.py` (lines 63-66)
+
+```python
+IDENTITY_MAP = {
+    'claude-code-unified': 'ff32276f-9d05-4a18-b092-31b54c82fff9',
+    'claude-desktop': '3be37dfb-c3bb-4303-9bf1-952c7287263f'
+}
+
+# Later in create_session():
+identity = identity_id or os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+```
+
+**Problems**:
+1. Only 2 identities mapped (code-unified, desktop)
+2. **All CLI sessions use same identity** regardless of project
+3. No way to distinguish Claude working on ATO-tax-agent vs nimbus-import
+4. Identity is never passed contextually from launcher
+
+---
+
+### Data Quality Issues
+
+#### Sessions Missing Identity
+
+```sql
+SELECT
+    COUNT(*) FILTER (WHERE identity_id IS NULL) as missing,
+    COUNT(*) as total,
+    ROUND(100.0 * COUNT(*) FILTER (WHERE identity_id IS NULL) / COUNT(*), 1) as pct
+FROM claude.sessions;
+```
+
+**Results**: 39 of 395 sessions (10%) have NULL identity_id
+
+#### Per-Project Analysis
+
+```sql
+SELECT
+    project_name,
+    COUNT(*) as sessions,
+    COUNT(identity_id) as with_identity,
+    COUNT(*) - COUNT(identity_id) as missing_identity
+FROM claude.sessions
+GROUP BY project_name
+ORDER BY missing_identity DESC;
+```
+
+**Worst offenders**:
+- **claude-family-manager-v2**: 0% have identity (all NULL)
+- **ato-tax-agent**: 10% missing
+- **claude-family**: 5% missing
+
+---
+
+### Identity Table Analysis
+
+```sql
+SELECT
+    identity_name,
+    platform,
+    status,
+    last_active_at
+FROM claude.identities
+ORDER BY status, last_active_at DESC NULLS LAST;
+```
+
+**Active** (3):
+- **claude-code-unified** - Primary CLI identity (ff32276f-9d05-4a18-b092-31b54c82fff9)
+- **claude-desktop** - Desktop app (3be37dfb-c3bb-4303-9bf1-952c7287263f)
+- **claude-mcw** - Mission Control Web (d0b514b9-0f0e-4fc5-a1f6-d793c6768dec)
+
+**Archived** (9):
+- diana, claude-cursor-001, claude-vscode-001, claude-code-console-001, etc.
+
+---
+
+### No Foreign Key Enforcement
+
+```sql
+-- This shows sessions.identity_id has NO FK to identities
+SELECT c.constraint_name, c.constraint_type
+FROM information_schema.table_constraints c
+WHERE c.table_schema = 'claude'
+  AND c.table_name = 'sessions'
+  AND c.constraint_type = 'FOREIGN KEY';
+```
+
+**Result**: No foreign keys found
+
+**Impact**:
+- Sessions can reference non-existent identities
+- No cascade delete protection
+- Orphaned references possible
+
+---
+
+## Target State (Design)
+
+### Identity Per Project
+
+**Concept**: Each project has its own dedicated Claude identity.
+
+```
+Project               Identity
+---------             ----------
+claude-family    →    claude-family-lead
+ATO-tax-agent    →    claude-ato-agent
+nimbus-import    →    claude-nimbus
+```
+
+**Benefits**:
+1. ✅ **Clear attribution**: "Who worked on this?" = check identity
+2. ✅ **Better analytics**: Session/cost tracking per project
+3. ✅ **Work isolation**: Different projects = different "personas"
+4. ✅ **Message routing**: Can target specific project's Claude
+
+---
+
+### Identity Resolution Flow
+
+When a session starts, determine identity in this order:
+
+```
+1. Check CLAUDE.md for identity field
+   ↓
+2. Check projects.default_identity_id
+   ↓
+3. Fall back to claude-code-unified
+```
+
+#### Step 1: CLAUDE.md Header (Preferred)
+
+```markdown
+---
+project_id: 20b5627c-e72c-4501-8537-95b559731b59
+identity: claude-family-lead
+identity_id: ff32276f-9d05-4a18-b092-31b54c82fff9
+---
+
+# Claude Family - Infrastructure Project
+...
+```
+
+The session startup hook should:
+1. Read CLAUDE.md YAML frontmatter
+2. Extract `identity_id` if present
+3. Use that for session.identity_id
+
+#### Step 2: projects.default_identity_id (New Column)
+
+```sql
+ALTER TABLE claude.projects
+ADD COLUMN default_identity_id uuid;
+
+ALTER TABLE claude.projects
+ADD CONSTRAINT projects_identity_fkey
+FOREIGN KEY (default_identity_id) REFERENCES claude.identities(identity_id);
+```
+
+When CLAUDE.md doesn't specify identity:
+1. Look up project by name in projects table
+2. Use projects.default_identity_id
+3. Fall back to claude-code-unified if NULL
+
+#### Step 3: Fallback
+
+If neither CLAUDE.md nor projects table provides identity:
+- Use `claude-code-unified` (ff32276f-9d05-4a18-b092-31b54c82fff9)
+- Log a warning that identity defaulted
+
+---
+
+### Launcher Integration
+
+**Update**: `ClaudeLauncherWinForms\Services\LaunchService.cs`
+
+When launching Claude, the launcher should:
+
+```csharp
+// 1. Look up project in workspaces table
+var workspace = GetWorkspace(projectName);
+
+// 2. Look up project identity
+var project = GetProject(workspace.project_name);
+var identityId = project?.default_identity_id ?? DEFAULT_IDENTITY_ID;
+
+// 3. Set environment variable BEFORE starting Claude
+Environment.SetEnvironmentVariable("CLAUDE_IDENTITY_ID", identityId.ToString());
+
+// 4. Launch Claude
+Process.Start("wt.exe", $"-d \"{projectPath}\" claude");
+```
+
+**Benefit**: Identity is set before Claude Code starts, picked up by session hook.
+
+---
+
+## Required Changes
+
+### 1. Database Schema
+
+```sql
+-- Add default_identity_id to projects
+ALTER TABLE claude.projects
+ADD COLUMN default_identity_id uuid;
+
+ALTER TABLE claude.projects
+ADD CONSTRAINT projects_identity_fkey
+FOREIGN KEY (default_identity_id) REFERENCES claude.identities(identity_id);
+
+-- Add FK constraint to sessions
+ALTER TABLE claude.sessions
+ADD CONSTRAINT sessions_identity_id_fkey
+FOREIGN KEY (identity_id) REFERENCES claude.identities(identity_id);
+
+-- Add FK constraint to workspaces
+ALTER TABLE claude.workspaces
+ADD CONSTRAINT workspaces_identity_fkey
+FOREIGN KEY (added_by_identity_id) REFERENCES claude.identities(identity_id);
+```
+
+### 2. Update Session Startup Hook
+
+**File**: `scripts/session_startup_hook_enhanced.py`
+
+**Changes**:
+1. Read CLAUDE.md YAML frontmatter (if exists)
+2. Extract `identity_id` from frontmatter
+3. If not found, look up project in projects table → use default_identity_id
+4. If still not found, use DEFAULT_IDENTITY_ID
+5. **Export** `CLAUDE_SESSION_ID` and `CLAUDE_IDENTITY_ID` to environment for downstream tools
+
+```python
+def determine_identity(project_name: str) -> str:
+    """Determine identity in priority order."""
+    # 1. Try CLAUDE.md frontmatter
+    claude_md_path = os.path.join(os.getcwd(), 'CLAUDE.md')
+    if os.path.exists(claude_md_path):
+        with open(claude_md_path) as f:
+            content = f.read()
+            if content.startswith('---'):
+                yaml_match = re.search(r'---\n(.*?)\n---', content, re.DOTALL)
+                if yaml_match:
+                    frontmatter = yaml.safe_load(yaml_match.group(1))
+                    if 'identity_id' in frontmatter:
+                        return frontmatter['identity_id']
+
+    # 2. Try projects.default_identity_id
+    conn = get_db_connection()
+    if conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT default_identity_id
+            FROM claude.projects
+            WHERE project_name = %s
+            AND default_identity_id IS NOT NULL
+        """, (project_name,))
+        row = cursor.fetchone()
+        if row:
+            return str(row[0])
+
+    # 3. Fallback
+    return DEFAULT_IDENTITY_ID
+```
+
+### 3. Create Project Identities
+
+Create dedicated identities for each active project:
+
+```sql
+-- Insert new project identities
+INSERT INTO claude.identities (identity_id, identity_name, platform, status)
+VALUES
+  (gen_random_uuid(), 'claude-ato-agent', 'claude-code-console', 'active'),
+  (gen_random_uuid(), 'claude-nimbus', 'claude-code-console', 'active'),
+  (gen_random_uuid(), 'claude-family-manager', 'claude-code-console', 'active');
+
+-- Link projects to identities
+UPDATE claude.projects
+SET default_identity_id = (SELECT identity_id FROM claude.identities WHERE identity_name = 'claude-ato-agent')
+WHERE project_name = 'ATO-Tax-Agent';
+
+UPDATE claude.projects
+SET default_identity_id = (SELECT identity_id FROM claude.identities WHERE identity_name = 'claude-nimbus')
+WHERE project_name = 'nimbus-import';
+```
+
+### 4. Update CLAUDE.md Files
+
+Add identity to each project's CLAUDE.md:
+
+```markdown
+---
+project_id: 20b5627c-e72c-4501-8537-95b559731b59
+identity_id: ff32276f-9d05-4a18-b092-31b54c82fff9
+---
+
+# Project Name
+...
+```
+
+---
+
+## Migration Plan
+
+### Phase 1: Document Current State ✅
+- [x] Document identity problems
+- [x] Document target design
+- [x] This document created
+
+### Phase 2: Create Project Identities
+1. Query for active projects
+2. Create identity for each (or use claude-code-unified as default)
+3. Update projects.default_identity_id
+
+### Phase 3: Add Database Constraints
+1. Add FK: projects.default_identity_id → identities
+2. Add FK: sessions.identity_id → identities
+3. Add FK: workspaces.added_by_identity_id → identities
+
+### Phase 4: Update Session Hook
+1. Implement determine_identity() function
+2. Export CLAUDE_IDENTITY_ID to environment
+3. Export CLAUDE_SESSION_ID to environment (for MCP logging)
+
+### Phase 5: Update Launcher
+1. Add identity lookup in LaunchService.cs
+2. Set CLAUDE_IDENTITY_ID environment variable before launching
+
+### Phase 6: Backfill NULL Identities
+1. Update sessions with NULL identity_id:
+   - Match by project_name
+   - Use project's default_identity_id
+   - Or use claude-code-unified
+
+---
+
+## Benefits of Identity Per Project
+
+### 1. Clear Work Attribution
+
+```sql
+-- Which identity worked on which projects?
+SELECT
+    i.identity_name,
+    COUNT(DISTINCT s.project_name) as projects,
+    COUNT(*) as sessions,
+    SUM(array_length(s.tasks_completed, 1)) as tasks
+FROM claude.sessions s
+JOIN claude.identities i ON s.identity_id = i.identity_id
+GROUP BY i.identity_name
+ORDER BY projects DESC;
+```
+
+### 2. Cost Tracking Per Project
+
+```sql
+-- Total cost per project (sessions + agents)
+SELECT
+    s.project_name,
+    COUNT(DISTINCT s.session_id) as sessions,
+    COUNT(a.session_id) as agents_spawned,
+    SUM(a.estimated_cost_usd) as total_cost_usd
+FROM claude.sessions s
+LEFT JOIN claude.agent_sessions a ON a.created_by = s.identity_id::text
+GROUP BY s.project_name
+ORDER BY total_cost_usd DESC;
+```
+
+### 3. Message Routing
+
+```sql
+-- Send message to specific project's Claude
+INSERT INTO claude.messages (to_project, message_type, body)
+VALUES ('ato-tax-agent', 'task_request', 'Please run the test suite');
+
+-- Identity-based routing
+INSERT INTO claude.messages (to_identity_id, message_type, body)
+VALUES (
+    (SELECT identity_id FROM claude.identities WHERE identity_name = 'claude-ato-agent'),
+    'task_request',
+    'Run tests'
+);
+```
+
+### 4. Analytics Dashboard
+
+```sql
+-- Session activity by identity
+SELECT
+    i.identity_name,
+    DATE(s.session_start) as date,
+    COUNT(*) as sessions,
+    SUM(EXTRACT(EPOCH FROM (s.session_end - s.session_start)) / 3600) as hours
+FROM claude.sessions s
+JOIN claude.identities i ON s.identity_id = i.identity_id
+WHERE s.session_start >= NOW() - INTERVAL '30 days'
+GROUP BY i.identity_name, DATE(s.session_start)
+ORDER BY date DESC, identity_name;
+```
+
+---
+
+## Identity Naming Convention
+
+### Format
+
+```
+claude-{project-code}-{role}
+```
+
+### Examples
+
+| Project | Identity Name | Role |
+|---------|---------------|------|
+| claude-family | claude-family-lead | Infrastructure lead |
+| ATO-tax-agent | claude-ato-agent | Tax agent developer |
+| nimbus-import | claude-nimbus | Nimbus integration |
+| claude-family-manager-v2 | claude-cfm | Family manager developer |
+
+### Special Identities
+
+| Identity | Purpose |
+|----------|---------|
+| claude-code-unified | Default fallback for CLI |
+| claude-desktop | Desktop app |
+| diana | Master orchestrator (archived) |
+
+---
+
+## Environment Variables Reference
+
+| Variable | Set By | Used By | Purpose |
+|----------|--------|---------|---------|
+| `CLAUDE_IDENTITY_ID` | Launcher or session hook | Session hook, MCP loggers | Which Claude instance |
+| `CLAUDE_SESSION_ID` | Session hook | MCP usage logger | Link MCP calls to session |
+| `CLAUDE_PROJECT_NAME` | Session hook (from cwd) | MCP usage logger | Project context |
+| `DATABASE_URI` | Global config | All DB scripts | DB connection |
+
+---
+
+## Testing the Identity System
+
+### Test 1: Verify Identity from CLAUDE.md
+
+```bash
+# 1. Add identity_id to CLAUDE.md
+cat <<EOF > CLAUDE.md
+---
+identity_id: ff32276f-9d05-4a18-b092-31b54c82fff9
+---
+# Test Project
+EOF
+
+# 2. Start Claude
+claude
+
+# 3. Check session was created with correct identity
+psql -d ai_company_foundation -c "
+SELECT session_id::text, identity_id::text, project_name
+FROM claude.sessions
+ORDER BY session_start DESC LIMIT 1;
+"
+```
+
+### Test 2: Verify Fallback to projects.default_identity_id
+
+```sql
+-- 1. Set default identity for project
+UPDATE claude.projects
+SET default_identity_id = 'ff32276f-9d05-4a18-b092-31b54c82fff9'::uuid
+WHERE project_name = 'test-project';
+
+-- 2. Start Claude (without CLAUDE.md identity field)
+-- 3. Verify session uses project's default_identity_id
+```
+
+### Test 3: Verify Environment Variable
+
+```bash
+# In session, check environment
+echo $CLAUDE_IDENTITY_ID
+echo $CLAUDE_SESSION_ID
+
+# Should match database
+psql -d ai_company_foundation -c "
+SELECT session_id::text, identity_id::text
+FROM claude.sessions
+WHERE session_id = '$CLAUDE_SESSION_ID'::uuid;
+"
+```
+
+---
+
+## Related Documents
+
+- [[Database Schema - Core Tables]] - Sessions and identities tables
+- [[Session Lifecycle]] - How identity is determined at session start
+- [[Family Rules]] - Identity usage rules
+- [[Database Architecture]] - Full schema overview
+
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: knowledge-vault/10-Projects/claude-family/Identity System.md

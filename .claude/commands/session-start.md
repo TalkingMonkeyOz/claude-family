@@ -30,19 +30,21 @@ This generates `workspaces.json` from PostgreSQL, mapping project names to locat
 
 ## Step 3: Log Session Start (postgres MCP)
 
+**NOTE**: This is typically done automatically by the SessionStart hook (`session_startup_hook.py`).
+Only run manually if the hook didn't fire.
+
 ```sql
 -- Get your identity_id first (check CLAUDE.md for your identity)
--- claude-desktop-001: Use appropriate ID
--- claude-code-console-001: Use appropriate ID
--- diana: Use appropriate ID
+-- claude-code-unified: ff32276f-9d05-4a18-b092-31b54c82fff9
+-- claude-desktop: 3be37dfb-c3bb-4303-9bf1-952c7287263f
 
 -- Then log the session start
-INSERT INTO claude_family.session_history
-(identity_id, session_start, project_name, task_description)
-VALUES ('<your-identity-uuid>', NOW(), 'project-name', 'Brief task description')
-RETURNING id;
+INSERT INTO claude.sessions
+(session_id, identity_id, project_name, session_start)
+VALUES (gen_random_uuid(), '<your-identity-uuid>'::uuid, 'project-name', NOW())
+RETURNING session_id;
 
--- Save the returned ID - you'll need it for session end
+-- Save the returned session_id - you'll need it for session end
 ```
 
 ---
@@ -64,15 +66,14 @@ NEVER propose new solutions without checking if we've solved this before:
 ```sql
 -- Check universal knowledge
 SELECT pattern_name, description, example_code, gotchas
-FROM claude_family.universal_knowledge
+FROM claude.universal_knowledge
 WHERE pattern_name ILIKE '%relevant-keyword%'
    OR description ILIKE '%relevant-keyword%';
 
 -- Check past sessions for similar work
-SELECT summary, outcome, files_modified, project_name
-FROM claude_family.session_history
-WHERE task_description ILIKE '%relevant-keyword%'
-   OR summary ILIKE '%relevant-keyword%'
+SELECT session_summary, tasks_completed, project_name
+FROM claude.sessions
+WHERE session_summary ILIKE '%relevant-keyword%'
 ORDER BY session_start DESC
 LIMIT 10;
 ```
@@ -89,18 +90,17 @@ If working on a registered project, check for open feedback items:
 SELECT
     feedback_type,
     COUNT(*) as count
-FROM claude_pm.project_feedback
+FROM claude.feedback
 WHERE project_id = 'PROJECT-ID'::uuid
   AND status IN ('new', 'in_progress')
 GROUP BY feedback_type;
 ```
 
-**If open items exist:** Briefly mention them to user: "📋 Note: This project has X open feedback items. Use `/feedback-check` to view details."
+**If open items exist:** Briefly mention them to user: "Note: This project has X open feedback items. Use `/feedback-check` to view details."
 
-**Registered Projects:**
-- claude-pm: `a3097e59-7799-4114-86a7-308702115905`
-- nimbus-user-loader: `07206097-4caf-423b-9eb8-541d4c25da6c`
-- ATO-Tax-Agent: `7858ecf4-4550-456d-9509-caea0339ec0d`
+**Registered Projects** (check `claude.projects` for current list):
+- claude-family: `20b5627c-e72c-4501-8537-95b559731b59`
+- ATO-Tax-Agent: Check CLAUDE.md for project_id
 
 ---
 

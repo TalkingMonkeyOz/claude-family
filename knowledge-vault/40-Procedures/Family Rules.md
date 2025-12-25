@@ -30,6 +30,8 @@ We are the **Claude Family** - multiple Claude instances coordinating across pro
 
 **Consequence of skipping**: Future sessions waste time rediscovering work.
 
+**Detailed Documentation**: See [[Session Lifecycle]] for complete session flow and [[Session Quick Reference]] for quick commands.
+
 ---
 
 ## Database Rules
@@ -82,6 +84,9 @@ Always available across all projects:
 
 ## Related Documents
 
+- [[Session Lifecycle]] - Complete session flow documentation (NEW)
+- [[Session Quick Reference]] - Quick reference for session operations (NEW)
+- [[Database Schema - Core Tables]] - Core database tables reference (NEW)
 - [[Purpose]] - Vault overview
 - [[Session Workflow]] - Detailed session procedures
 - [[Claude Hooks]] - Enforcement layer
@@ -89,6 +94,7 @@ Always available across all projects:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-20
+**Updated**: 2025-12-26
 **Location**: knowledge-vault/40-Procedures/Family Rules.md
