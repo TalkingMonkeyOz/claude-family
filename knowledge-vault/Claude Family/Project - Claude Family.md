@@ -3,6 +3,9 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.770384'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Project - Claude Family
@@ -95,3 +98,9 @@ Governance infrastructure for all Claude instances - shared database, hooks, com
 ---
 
 See also: [[claud.md structure]], [[Purpose]], [[MCP Registry]], [[Orchestrator MCP]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Project - Claude Family.md

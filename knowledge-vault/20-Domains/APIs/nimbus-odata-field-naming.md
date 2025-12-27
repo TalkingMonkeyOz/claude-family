@@ -42,3 +42,9 @@ var label = employee.Description;
 ## Related
 - [[nimbus-rest-crud-pattern]]
 - [[nimbus-time-fields]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 20-Domains/APIs/nimbus-odata-field-naming.md

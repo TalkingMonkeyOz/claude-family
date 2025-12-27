@@ -3,6 +3,10 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.755745'
+tags:
+- hooks
+- quick-reference
+- claude-family
 ---
 
 # Claude Hooks
@@ -31,3 +35,9 @@ Enforcement layer for governance.
 `.claude/settings.local.json` → hooks array
 
 See also: [[Setting's File]], [[claud.md structure]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Claude Hooks.md

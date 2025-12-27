@@ -91,3 +91,9 @@ if __name__ == "__main__":
 ## Related
 - [[claude-code-hooks-overview]]
 - [[process-router-implementation]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 30-Patterns/gotchas/claude-hook-response-format.md

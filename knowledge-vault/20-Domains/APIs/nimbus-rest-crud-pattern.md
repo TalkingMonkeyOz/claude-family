@@ -68,3 +68,9 @@ Do NOT use PUT for updates - it will likely return a 405 Method Not Allowed.
 ## Related
 - [[nimbus-odata-field-naming]]
 - [[nimbus-time-fields]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 20-Domains/APIs/nimbus-rest-crud-pattern.md

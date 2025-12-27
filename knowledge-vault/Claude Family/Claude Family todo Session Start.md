@@ -3,6 +3,10 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.753880'
+tags:
+- session
+- quick-reference
+- claude-family
 ---
 
 # Session Start Workflow
@@ -25,3 +29,9 @@ synced_at: '2025-12-20T13:15:19.753880'
 Run at start of EVERY session - see [[claud.md structure]]
 
 See also: [[session End]], [[Claude Hooks]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Claude Family todo Session Start.md

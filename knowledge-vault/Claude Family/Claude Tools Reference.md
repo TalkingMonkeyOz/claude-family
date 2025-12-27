@@ -3,6 +3,9 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.757592'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Claude Tools Reference
@@ -109,3 +112,9 @@ See **[[Orchestrator MCP]]** for full agent documentation and tools.
 - [[MCP configuration]] - How MCPs are configured
 - [[Setting's File]] - Settings file locations
 - [[Claude Hooks]] - Process enforcement
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Claude Tools Reference.md

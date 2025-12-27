@@ -103,3 +103,9 @@ def calculate_fmd(deposits: list[dict]) -> dict:
 ## Related
 - [[ato-cgt-calculations]]
 - [[ato-deduction-patterns]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 10-Projects/ato-tax-agent/ato-tax-section-service-pattern.md

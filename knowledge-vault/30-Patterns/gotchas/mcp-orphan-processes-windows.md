@@ -8,6 +8,7 @@ tags:
 - windows
 - gotcha
 - process-management
+projects: []
 ---
 
 # MCP Orphan Processes on Windows
@@ -66,3 +67,9 @@ python cleanup_mcp_processes.py --aggressive
 
 **Created**: 2025-12-21
 **Issue**: Claude Code doesn't terminate child processes on Windows
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 30-Patterns/gotchas/mcp-orphan-processes-windows.md

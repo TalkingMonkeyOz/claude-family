@@ -1,4 +1,10 @@
 ---
+tags:
+- session
+- template
+projects: []
+---
+---
 title: Session Learning - {{date}}
 category: session-learning
 type: learning
@@ -28,3 +34,9 @@ synced: false
 
 ## Related
 - [[Related Note 1]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: _templates/session-learning.md

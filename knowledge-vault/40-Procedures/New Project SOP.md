@@ -4,7 +4,11 @@ category: procedure
 status: active
 created: 2025-12-27
 updated: 2025-12-27
-tags: [sop, project-setup, onboarding]
+tags:
+- sop
+- project-setup
+- onboarding
+projects: []
 ---
 
 # New Project SOP
@@ -290,23 +294,7 @@ Create missing documents using templates above.
 
 ---
 
-## Next Steps After Creation
-
-1. **Test configuration**: Start Claude Code in project, verify hooks fire
-2. **Check hooks.log**: `~/.claude/hooks.log` should show config sync
-3. **Create first feature**: Use `/feedback-create` to add your first idea
-4. **Plan implementation**: Run `/project-init` triggers automatic phase advancement
-
----
-
-## Related Procedures
-
-- [[Add MCP Server SOP]] - Adding new MCP servers to project
-- [[Config Management SOP]] - Managing database-driven configuration
-- [[Session Lifecycle - Session Start]] - Starting work on project
-
----
-
 **Version**: 1.0
-**Author**: Claude Family
-**Last Review**: 2025-12-27
+**Created**: 2025-12-27
+**Updated**: 2025-12-27
+**Location**: 40-Procedures/New Project SOP.md

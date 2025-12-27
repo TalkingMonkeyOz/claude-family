@@ -53,3 +53,9 @@ Do NOT send UTC times - the API calculates them automatically from local times u
 ## Related
 - [[nimbus-odata-field-naming]]
 - [[nimbus-rest-crud-pattern]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 20-Domains/APIs/nimbus-time-fields.md

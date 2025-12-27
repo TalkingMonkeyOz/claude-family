@@ -3,6 +3,9 @@ projects:
 - mission-control-web
 synced: true
 synced_at: '2025-12-20T13:15:19.772047'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Project - Mission Control Web
@@ -33,3 +36,9 @@ Uses claude-family infrastructure:
 - [[MCP configuration]] - API access
 
 See also: [[Purpose]], [[Claude Hooks]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Project - Mission Control Web.md

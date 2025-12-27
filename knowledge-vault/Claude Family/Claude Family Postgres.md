@@ -3,6 +3,10 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.752066'
+tags:
+- database
+- quick-reference
+- claude-family
 ---
 
 # Claude Family Postgres
@@ -35,3 +39,9 @@ WHERE table_name = 'X' AND column_name = 'Y';
 Via MCP postgres server - see [[MCP configuration]]
 
 See also: [[Claude Hooks]] (validates writes)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Claude Family Postgres.md

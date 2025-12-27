@@ -1,6 +1,12 @@
 ---
 synced: true
 synced_at: '2025-12-21T14:40:40.022781'
+tags:
+- winforms
+- domain-knowledge
+projects:
+- claude-family-manager-v2
+- mission-control-web
 ---
 
 # WinForms Layout Patterns

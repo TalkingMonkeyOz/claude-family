@@ -1,6 +1,10 @@
 ---
 synced: true
 synced_at: '2025-12-20T23:29:45.916709'
+tags:
+- database
+- domain-knowledge
+projects: []
 ---
 
 # Database Integration Guide

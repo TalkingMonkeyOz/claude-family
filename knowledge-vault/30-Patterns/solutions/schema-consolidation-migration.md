@@ -85,3 +85,9 @@ def log_session_new(project_name: str):
 ## Related
 - [[psycopg3-vs-psycopg2]]
 - [[database-connection-patterns]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 30-Patterns/solutions/schema-consolidation-migration.md

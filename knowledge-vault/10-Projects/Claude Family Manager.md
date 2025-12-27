@@ -15,6 +15,12 @@ tech_stack:
 title: Claude Family Manager v2
 type: project
 updated: 2025-12-22
+tags:
+- quick-reference
+- claude-family
+- project
+projects:
+- claude-family-manager-v2
 ---
 
 # Claude Family Manager v2
@@ -95,3 +101,9 @@ Location: `C:\Projects\claude-family-manager-v2`
 
 **Created**: 2025-12-20
 **Updated**: 2025-12-22
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 10-Projects/Claude Family Manager.md

@@ -3,6 +3,9 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T23:29:45.932135'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Claude Family Vault
@@ -17,7 +20,7 @@ The Claude Family manages coordination across multiple Claude instances with sha
 |-----------|---------------|
 | CLAUDE.md hierarchy | [[claud.md structure]] |
 | Database | [[Claude Family Postgres]], [[Database Architecture]] |
-| Session Architecture | [[Session Architecture]] - How sessions work (NEW) |
+| Session Architecture | [[Session Architecture]] - How sessions work |
 | Knowledge System | [[Knowledge System]] |
 | Session Workflows | [[Claude Family todo Session Start]], [[session End]] |
 | MCP Servers | [[MCP configuration]], [[MCP Registry]], [[Orchestrator MCP]] |
@@ -26,6 +29,7 @@ The Claude Family manages coordination across multiple Claude instances with sha
 | Commands | [[Slash command's]] |
 | Settings | [[Setting's File]] |
 | Observability | [[Observability]] |
+| Documentation System | [[Auto-Apply Instructions]], [[Documentation Philosophy]] |
 
 ---
 
@@ -58,5 +62,5 @@ The Claude Family manages coordination across multiple Claude instances with sha
 
 ---
 
-**Version**: 2.0
-**Updated**: 2025-12-20
+**Version**: 2.1
+**Updated**: 2025-12-26

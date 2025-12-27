@@ -1,6 +1,10 @@
 ---
 synced: true
 synced_at: '2025-12-21T14:40:40.014080'
+tags:
+- domain-knowledge
+- csharp
+projects: []
 ---
 
 # C# Expert Rules

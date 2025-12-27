@@ -93,3 +93,9 @@ function MyComponent() {
 ## Related
 - [[react-component-patterns]]
 - [[typescript-generic-constraint]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 20-Domains/Database/mui-mcp-installation.md

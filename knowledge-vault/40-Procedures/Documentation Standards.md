@@ -13,6 +13,10 @@ tags:
 
 Standards for creating and maintaining documentation across the Claude Family ecosystem.
 
+> **Enforcement**: Standards are automatically enforced via `markdown.instructions.md` (auto-apply instructions)
+> **Philosophy**: See [[Documentation Philosophy]] for research-backed rationale
+> **System**: See [[Auto-Apply Instructions]] for how enforcement works
+
 ---
 
 ## Document Locations
@@ -238,13 +242,15 @@ Move project doc to vault when:
 
 ## Related Documents
 
+- [[Documentation Philosophy]] - Why we structure docs this way (research-backed)
+- [[Auto-Apply Instructions]] - How standards are automatically enforced
 - [[Knowledge System]] - How vault syncs to database
 - [[Knowledge Capture SOP]] - Step-by-step capture process
 - [[Purpose]] - Vault overview
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-20
-**Updated**: 2025-12-20
+**Updated**: 2025-12-26
 **Location**: knowledge-vault/40-Procedures/Documentation Standards.md

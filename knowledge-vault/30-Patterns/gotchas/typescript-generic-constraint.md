@@ -83,3 +83,9 @@ TypeScript interfaces are "open" types without index signatures. `Record<string,
 ## Related
 - [[typescript-utility-types]]
 - [[react-generic-hooks]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 30-Patterns/gotchas/typescript-generic-constraint.md

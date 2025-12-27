@@ -70,3 +70,9 @@ Agent-generated code may use different naming conventions than your project. Alw
 
 ## Related
 - [[typescript-generic-constraint]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 30-Patterns/solutions/typescript-barrel-exports.md

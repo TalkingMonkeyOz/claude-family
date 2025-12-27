@@ -3,6 +3,9 @@ projects:
 - ato-tax-agent
 synced: true
 synced_at: '2025-12-20T13:15:19.768879'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Project - ATO Tax Agent
@@ -77,3 +80,9 @@ Via [[Orchestrator MCP]]:
 - Next.js 14+ frontend (planned)
 
 See also: [[Purpose]], [[MCP Registry]], [[Orchestrator MCP]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Project - ATO-tax-agent.md

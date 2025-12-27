@@ -73,3 +73,9 @@ ollama run deepseek-r1:14b "Your reasoning prompt here"
 ## Related
 - [[ollama-mcp-setup]]
 - [[local-llm-comparison]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: 20-Domains/Database/local-reasoning-deepseek.md

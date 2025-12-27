@@ -10,11 +10,14 @@ synced: false
 
 # Identity System
 
-**Status**: Needs Implementation
-**Current**: Hardcoded identity (all CLI sessions = claude-code-unified)
-**Target**: Identity per project (claude-ato-agent, claude-nimbus, etc.)
+**Status**: ✅ IMPLEMENTED (2025-12-26)
+**Current**: Identity per project (5 active projects have dedicated identities)
+**See**: [[Identity Per Project]] - Quick-reference guide to the implemented system
 
-This document describes the current identity system, its problems, and the target design for identity-per-project.
+This document describes the original identity system problems and the implementation of identity-per-project.
+
+> **Note**: This document was written as planning documentation. It has now been IMPLEMENTED.
+> For usage guide, see [[Identity Per Project]]
 
 ---
 
@@ -332,30 +335,38 @@ identity_id: ff32276f-9d05-4a18-b092-31b54c82fff9
 - [x] Document target design
 - [x] This document created
 
-### Phase 2: Create Project Identities
-1. Query for active projects
-2. Create identity for each (or use claude-code-unified as default)
-3. Update projects.default_identity_id
+### Phase 2: Create Project Identities ✅
+- [x] Query for active projects (5 found)
+- [x] Create identity for each:
+  - claude-ato-tax-agent (ATO-Tax-Agent)
+  - claude-claude-family (claude-family)
+  - claude-manager-v2 (Claude Family Manager v2)
+  - claude-nimbus-import (nimbus-import)
+  - claude-nimbus-user-loader (nimbus-user-loader)
+- [x] Update projects.default_identity_id for all 5 projects
 
-### Phase 3: Add Database Constraints
-1. Add FK: projects.default_identity_id → identities
-2. Add FK: sessions.identity_id → identities
-3. Add FK: workspaces.added_by_identity_id → identities
+### Phase 3: Add Database Constraints ✅
+- [x] Add FK: projects.default_identity_id → identities
+- [x] Add FK: sessions.identity_id → identities
+- [x] Add FK: agent_sessions.parent_session_id → sessions
+- [x] Add FK: async_tasks.parent_session_id → sessions
+- [x] Add FK: mcp_usage.session_id → sessions
 
-### Phase 4: Update Session Hook
-1. Implement determine_identity() function
-2. Export CLAUDE_IDENTITY_ID to environment
-3. Export CLAUDE_SESSION_ID to environment (for MCP logging)
+### Phase 4: Update Session Hook ✅
+- [x] Implement resolve_identity_for_project() function
+- [x] Update create_session() to use project identity
+- [x] Export CLAUDE_SESSION_ID to environment (for MCP logging)
+- [x] Export CLAUDE_PROJECT_NAME to environment
 
-### Phase 5: Update Launcher
-1. Add identity lookup in LaunchService.cs
-2. Set CLAUDE_IDENTITY_ID environment variable before launching
+### Phase 5: Update Launcher ⏳
+- [ ] Add identity lookup in LaunchService.cs (FUTURE)
+- [ ] Set CLAUDE_IDENTITY_ID environment variable before launching (FUTURE)
+- Note: Currently identity resolution happens in session hook, not launcher
 
-### Phase 6: Backfill NULL Identities
-1. Update sessions with NULL identity_id:
-   - Match by project_name
-   - Use project's default_identity_id
-   - Or use claude-code-unified
+### Phase 6: Backfill NULL Identities ✅
+- [x] Updated 39 sessions with NULL identity_id
+- [x] All backfilled to claude-code-unified
+- [x] 100% data integrity achieved
 
 ---
 
@@ -525,7 +536,7 @@ WHERE session_id = '$CLAUDE_SESSION_ID'::uuid;
 
 ---
 
-**Version**: 1.0
+**Version**: 2.0 (Implemented)
 **Created**: 2025-12-26
 **Updated**: 2025-12-26
 **Location**: knowledge-vault/10-Projects/claude-family/Identity System.md

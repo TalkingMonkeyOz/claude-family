@@ -3,6 +3,9 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.750037'
+tags:
+- quick-reference
+- claude-family
 ---
 
 # Claude Family Memory Graph
@@ -29,3 +32,9 @@ MCP memory server for persistent entity storage.
 | Cross-session recall | Audit trails |
 
 See also: [[MCP configuration]], [[Claude Family Postgres]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/Claude Family Memory Graph.md

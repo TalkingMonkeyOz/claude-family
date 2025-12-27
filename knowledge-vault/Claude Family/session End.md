@@ -3,6 +3,10 @@ projects:
 - claude-family
 synced: true
 synced_at: '2025-12-20T13:15:19.775851'
+tags:
+- session
+- quick-reference
+- claude-family
 ---
 
 # Session End Workflow
@@ -25,3 +29,9 @@ synced_at: '2025-12-20T13:15:19.775851'
 Run before closing EVERY session.
 
 See also: [[Claude Family todo Session Start]], [[Claude Hooks]]
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: Claude Family/session End.md
