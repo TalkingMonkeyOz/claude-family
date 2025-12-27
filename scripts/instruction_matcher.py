@@ -26,7 +26,7 @@ File Format (.instructions.md):
 
 Author: Claude Family
 Date: 2025-12-21
-Updated: 2025-12-22 - Added global instruction support
+Updated: 2025-12-27 - Added file-based logging
 """
 
 import sys
@@ -35,9 +35,23 @@ import io
 import json
 import glob
 import re
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from datetime import datetime
 import fnmatch
+
+# Setup file-based logging
+LOG_FILE = Path.home() / ".claude" / "hooks.log"
+LOG_FILE.parent.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    filename=str(LOG_FILE),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('instruction_matcher')
 
 # Fix Windows encoding
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
@@ -225,63 +239,98 @@ def build_context(matches: List[Dict]) -> str:
 
 def main():
     """Main entry point for the hook."""
-    # Get file path from argument or stdin
-    file_path = None
+    try:
+        logger.info("Hook invoked")
 
-    if len(sys.argv) > 1:
-        file_path = sys.argv[1]
-    else:
-        # Try reading from stdin (hook input)
+        # Get file path from argument or stdin
+        file_path = None
+
+        # Try reading from stdin first (hook input from Claude Code)
         try:
-            hook_input = json.load(sys.stdin)
-            # Extract file path from tool input
-            tool_input = hook_input.get('toolInput', {})
-            file_path = tool_input.get('file_path') or tool_input.get('filePath')
-        except:
-            pass
+                stdin_data = sys.stdin.read()
+                logger.info(f"Received stdin (length={len(stdin_data)}): {stdin_data[:500]}")  # Log first 500 chars
 
-    if not file_path or file_path in ('$FILE_PATH', ''):
-        # No file path provided, exit silently
-        print(json.dumps({}))
-        return 0
+                if stdin_data:
+                    hook_input = json.loads(stdin_data)
+                    logger.info(f"Parsed hook_input keys: {list(hook_input.keys())}")
 
-    # Build search paths: project-specific first (highest priority), then global
-    cwd = Path.cwd()
-    search_paths = [
-        str(cwd / ".claude" / "instructions"),  # Project-specific (highest priority)
-        str(GLOBAL_INSTRUCTION_PATH),            # Global ~/.claude/instructions/
-    ]
+                    # Try multiple possible locations for file path
+                    # Try both snake_case (tool_input) and camelCase (toolInput)
+                    tool_input = hook_input.get('tool_input') or hook_input.get('toolInput', {})
+                    file_path = (
+                        tool_input.get('file_path') or
+                        tool_input.get('filePath') or
+                        tool_input.get('path') or
+                        hook_input.get('file_path') or
+                        hook_input.get('filePath') or
+                        hook_input.get('path')
+                    )
 
-    # Load all instructions
-    instructions = load_instructions(search_paths)
+                    logger.info(f"Extracted file_path: {file_path}")
+                    logger.info(f"toolInput keys: {list(tool_input.keys()) if tool_input else 'None'}")
+        except Exception as e:
+            logger.error(f"Failed to parse stdin: {e}", exc_info=True)
 
-    if not instructions:
-        print(json.dumps({}))
-        return 0
+        # Fallback to argv if stdin didn't provide a path
+        if not file_path and len(sys.argv) > 1:
+            file_path = sys.argv[1]
+            logger.info(f"Got file_path from argv[1]: {file_path}")
 
-    # Find matches
-    matches = find_matching_instructions(file_path, instructions)
+        if not file_path or file_path in ('$FILE_PATH', ''):
+            # No file path provided, exit silently
+            logger.warning(f"No valid file path (got: '{file_path}')")
+            print(json.dumps({}))
+            return 0
 
-    if not matches:
-        print(json.dumps({}))
-        return 0
+        logger.info(f"Processing file: {file_path}")
 
-    # Build context
-    context = build_context(matches)
+        # Build search paths: project-specific first (highest priority), then global
+        cwd = Path.cwd()
+        search_paths = [
+            str(cwd / ".claude" / "instructions"),  # Project-specific (highest priority)
+            str(GLOBAL_INSTRUCTION_PATH),            # Global ~/.claude/instructions/
+        ]
 
-    # Return hook output
-    response = {
-        "hookSpecificOutput": {
-            "additionalContext": context
+        # Load all instructions
+        instructions = load_instructions(search_paths)
+        logger.info(f"Loaded {len(instructions)} instruction files")
+
+        if not instructions:
+            logger.info("No instructions found")
+            print(json.dumps({}))
+            return 0
+
+        # Find matches
+        matches = find_matching_instructions(file_path, instructions)
+
+        if not matches:
+            logger.info(f"No matching instructions for {file_path}")
+            print(json.dumps({}))
+            return 0
+
+        # Build context
+        context = build_context(matches)
+
+        # Return hook output
+        response = {
+            "hookSpecificOutput": {
+                "additionalContext": context
+            }
         }
-    }
 
-    # Log what was matched (for debugging)
-    match_names = [m['name'] for m in matches]
-    print(f"[instruction_matcher] Applied: {', '.join(match_names)} to {file_path}", file=sys.stderr)
+        # Log what was matched
+        match_names = [m['name'] for m in matches]
+        logger.info(f"SUCCESS: Applied {len(matches)} instructions ({', '.join(match_names)}) to {file_path}")
+        print(f"[instruction_matcher] Applied: {', '.join(match_names)} to {file_path}", file=sys.stderr)
 
-    print(json.dumps(response))
-    return 0
+        print(json.dumps(response))
+        return 0
+
+    except Exception as e:
+        logger.error(f"Hook failed with error: {e}", exc_info=True)
+        # Still return empty JSON on error to not block the operation
+        print(json.dumps({}))
+        return 1
 
 
 if __name__ == "__main__":
