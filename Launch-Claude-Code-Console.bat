@@ -21,11 +21,11 @@ if "%~1"=="" (
 echo Project: %PROJECT_PATH%
 echo.
 
-REM Deploy configs from database before launching
-echo Deploying configs from database...
-python "C:\Projects\claude-family\scripts\deploy_project_configs.py" "%PROJECT_PATH%" 2>nul
+REM Sync configuration from database before launching (self-healing)
+echo Syncing configuration from database...
+python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
 if %ERRORLEVEL% NEQ 0 (
-    echo Warning: Config deployment had issues, continuing anyway...
+    echo Warning: Config sync had issues, continuing anyway...
 )
 echo.
 

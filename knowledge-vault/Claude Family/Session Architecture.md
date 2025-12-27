@@ -6,14 +6,16 @@ tags:
 - architecture
 - index
 - quick-reference
+- database-driven-config
 synced: false
+synced_at: '2025-12-27T14:30:00.000000'
 ---
 
 # Session Architecture
 
-**Purpose**: Human-friendly overview of how Claude sessions work
+**Purpose**: Human-friendly overview of how Claude sessions work, including config sync
 **Audience**: Developers and Claude instances needing to understand the system
-**Last Updated**: 2025-12-26
+**Last Updated**: 2025-12-27
 
 ---
 
@@ -133,19 +135,29 @@ SessionStart hook fires
     ↓
 session_startup_hook.py runs
     ↓
-┌─────────────────────────────┐
-│ 1. Determine project name   │ (from cwd)
-│ 2. Resolve identity         │ (hardcoded currently)
-│ 3. Create session record    │ (INSERT sessions)
-│ 4. Load saved state         │ (SELECT session_state)
-│ 5. Check messages           │ (SELECT messages)
-│ 6. Load CLAUDE.md files     │ (global + project)
-└─────────────────────────────┘
+┌──────────────────────────────────────┐
+│ 1. Sync config from database         │ (generate_project_settings.py)
+│    • Reads project_type_configs      │
+│    • Merges with project overrides   │
+│    • Generates settings.local.json   │
+│ 2. Determine project name            │ (from cwd)
+│ 3. Resolve identity                  │ (hardcoded currently)
+│ 4. Create session record             │ (INSERT sessions)
+│ 5. Load saved state                  │ (SELECT session_state)
+│ 6. Check messages                    │ (SELECT messages)
+│ 7. Load CLAUDE.md files              │ (global + project)
+└──────────────────────────────────────┘
     ↓
 Return context to Claude
     ↓
 Claude ready to work
 ```
+
+**New: Config Sync (Step 1)**
+- Automatically regenerates `.claude/settings.local.json` from database
+- Ensures all settings are up-to-date with latest project type defaults
+- This is **self-healing** - manual edits get overwritten on next session
+- See [[Config Management SOP]] for detailed configuration system documentation
 
 **What Gets Logged:**
 ```sql
@@ -155,10 +167,12 @@ VALUES (gen_random_uuid(), 'ff32276f-9d05...', 'ATO-Tax-Agent', NOW());
 
 ### During Session
 
+- **Config Synced** → Settings refreshed from database at session start (self-healing)
 - **TodoWrite** → Updates todo list (in-memory, saved at session end)
 - **Agent Spawn** → Logs to `agent_sessions` table
 - **MCP Tool Calls** → Should log to `mcp_usage` (broken, env var not exported)
 - **Work Progress** → Tracked in conversation, summarized at end
+- **Hook Events** → SessionStart/End, PreToolUse, PostToolUse all fire per settings
 
 ### Session End
 
@@ -290,6 +304,17 @@ Hook configured but not firing
 
 ---
 
-**Version**: 1.0
+## Key Points to Remember
+
+1. **Config Syncs First** - Every session starts with `generate_project_settings.py` refreshing settings
+2. **Self-Healing** - Manual edits to settings.local.json get overwritten (by design)
+3. **Database is Source of Truth** - Update database for permanent config changes
+4. **Hooks Enforce Workflows** - SessionStart creates session, SessionEnd saves state
+5. **Everything is Logged** - Sessions, agents, state all tracked for replay
+
+---
+
+**Version**: 1.1 (Added Config Sync Integration)
 **Created**: 2025-12-26
+**Updated**: 2025-12-27
 **Location**: knowledge-vault/Claude Family/Session Architecture.md

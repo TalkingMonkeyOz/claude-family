@@ -91,14 +91,34 @@ claude-family/
 
 ---
 
+## Configuration (Database-Driven)
+
+**Project Type**: `infrastructure` (inherits defaults from `project_type_configs`)
+
+**Config Flow**: Database → `generate_project_settings.py` → `.claude/settings.local.json` (generated)
+
+**Self-Healing**: Settings regenerate from database on every SessionStart. Manual file edits are temporary.
+
+**Customization**: Update `claude.workspaces.startup_config` (JSONB) to override defaults.
+
+**Details**: See [[Config Management SOP]]
+
+---
+
+## Standard Operating Procedures
+
+**Workflow**: CLAUDE.md → Vault SOP → Skill → Done
+
+- **New project**: See `knowledge-vault/40-Procedures/New Project SOP.md`
+- **Add MCP**: See `knowledge-vault/40-Procedures/Add MCP Server SOP.md`
+- **Manage config**: See `knowledge-vault/40-Procedures/Config Management SOP.md`
+
 ## Key Procedures
 
-1. **Session Start**: Run `/session-start` (auto-logs to DB)
-2. **Session End**: Run `/session-end` (saves summary)
-3. **Data Writes**: Check column_registry for valid values
-4. **Doc Changes**: Update version footer, set updated date
-
-**SOPs**: See `docs/sop/` folder
+1. `/session-start` - Auto-logs to DB, syncs config
+2. `/session-end` - Saves summary
+3. Data writes - Check column_registry
+4. Config changes - Update database, not files
 
 ---
 
@@ -125,70 +145,14 @@ A forced-eval hook prompts skill consideration on each request. Core skills:
 
 ---
 
-## Auto-Apply Instructions (awesome-copilot pattern)
+## Auto-Apply Instructions
 
-Coding standards auto-inject based on file patterns. No manual invocation needed.
+Coding standards auto-inject based on file patterns via `instruction_matcher.py` hook.
 
-**Search Order** (project-specific overrides global):
-1. `{project}/.claude/instructions/` - Project-specific
-2. `~/.claude/instructions/` - Global (shared across all projects)
+**Available**: csharp, winforms, a11y, sql-postgres, playwright (in `~/.claude/instructions/`)
 
-**Global Instructions** (`~/.claude/instructions/`):
+**Override**: Create `.claude/instructions/[name].instructions.md` for project-specific rules.
 
-| Instruction | Applies To | Purpose |
-|-------------|-----------|---------|
-| `csharp.instructions.md` | `**/*.cs` | C# conventions, async patterns |
-| `winforms.instructions.md` | `**/*.Designer.cs`, `**/Forms/**/*.cs` | WinForms rules, layout strategy |
-| `winforms-dark-theme.instructions.md` | `**/*Form.cs`, `**/*Control.cs` | Dark theme colors, contrast |
-| `a11y.instructions.md` | `**/*.cs`, `**/*.tsx` | WCAG AA, contrast ratios |
-| `sql-postgres.instructions.md` | `**/*.sql` | PostgreSQL best practices |
-| `playwright.instructions.md` | `**/*.spec.ts`, `**/tests/**/*.ts` | E2E testing patterns |
-
-**Project-Specific Instructions** (`.claude/instructions/`):
-
-| Instruction | Applies To | Purpose |
-|-------------|-----------|---------|
-| `nimbus-api.instructions.md` | `**/nimbus-*/**/*` | Nimbus WFM API gotchas |
-
-**How it works**: `instruction_matcher.py` hook runs on Edit/Write, matches file path against `applyTo` patterns, injects matching instructions into context.
-
-**Adding new instructions**: Create `~/.claude/instructions/[name].instructions.md` for global, or `.claude/instructions/[name].instructions.md` for project-specific:
-```yaml
----
-description: 'What these guidelines cover'
-applyTo: '**/*.ext'
----
-```
-
----
-
-## Collections (System Agents)
-
-Collections group related agents for the Launcher UI:
-
-```yaml
-# .claude/collections/system-agents.collection.yml
-- librarian (doc-keeper-haiku) - Knowledge vault maintenance
-- config-auditor (lightweight-haiku) - Validate configs across projects
-- session-cleanup (python-coder-haiku) - Archive old sessions
-- inbox-monitor (lightweight-haiku) - Check for stale messages
-- build-validator (tester-haiku) - Run builds, report failures
-```
-
----
-
-## Agent Capabilities (Beta Features)
-
-**Enabled via `--betas` CLI flag** (requires API key auth):
-
-| Feature | Beta Header | Agents Enabled |
-|---------|-------------|----------------|
-| 1M Token Context | `context-1m-2025-08-07` | architect-opus, researcher-opus, security-opus |
-| Interleaved Thinking | `interleaved-thinking-2025-05-14` | All coordinators, reviewer-sonnet, opus agents |
-| Token-Efficient Tools | Native in Claude 4 | All agents (no header needed) |
-
-**Parallel Work Pattern**: Use git worktrees for multiple Claude instances on same repo.
-See `docs/sops/GIT_WORKTREES_FOR_PARALLEL_WORK.md`
 
 ---
 
@@ -236,7 +200,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.7 (Global instructions support)
+**Version**: 2.8 (Database-driven config, SOP router)
 **Created**: 2025-10-21
-**Updated**: 2025-12-22
+**Updated**: 2025-12-27
 **Location**: C:\Projects\claude-family\CLAUDE.md

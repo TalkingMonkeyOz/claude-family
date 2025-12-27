@@ -3,6 +3,7 @@
 Session Startup Hook Script for claude-family-core plugin.
 
 This is called automatically via SessionStart hook.
+- Syncs configuration from database (generates .claude/settings.local.json)
 - Creates a new session record in claude.sessions (auto-logging)
 - Checks for saved session state (todo list, focus)
 - Checks for pending messages
@@ -13,7 +14,33 @@ import json
 import os
 import sys
 import uuid
+import logging
 from datetime import datetime
+from pathlib import Path
+
+# Import config generator for database-driven settings
+# Add scripts directory to path
+SCRIPTS_DIR = Path(__file__).parent.parent.parent.parent / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+try:
+    from generate_project_settings import sync_project_config
+    CONFIG_SYNC_AVAILABLE = True
+except ImportError:
+    CONFIG_SYNC_AVAILABLE = False
+
+# Setup file-based logging
+LOG_FILE = Path.home() / ".claude" / "hooks.log"
+LOG_FILE.parent.mkdir(exist_ok=True)
+
+logging.basicConfig(
+    filename=str(LOG_FILE),
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger('session_startup')
 
 # Try to import psycopg for database access
 DB_AVAILABLE = False
@@ -61,21 +88,74 @@ def get_db_connection():
         return None
 
 
+def resolve_identity_for_project(project_name):
+    """Resolve the identity for a project from projects.default_identity_id.
+
+    Falls back to environment variable or DEFAULT_IDENTITY_ID if:
+    - Project doesn't exist in projects table
+    - Project has no default_identity_id set
+    - Database connection fails
+
+    Returns the identity_id (UUID string) to use for the session.
+    """
+    if not DB_AVAILABLE:
+        return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+
+    conn = get_db_connection()
+    if not conn:
+        return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT default_identity_id
+            FROM claude.projects
+            WHERE project_name = %s
+              AND (is_archived = false OR is_archived IS NULL)
+        """, (project_name,))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            default_identity = row['default_identity_id'] if isinstance(row, dict) else row[0]
+            if default_identity:
+                return str(default_identity)
+
+        # Fall back to environment or default
+        return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+    except Exception as e:
+        try:
+            conn.close()
+        except:
+            pass
+        return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+
+
 def create_session(project_name, identity_id=None):
     """Create a new session record in claude.sessions.
 
     Returns the session_id if successful, None otherwise.
     """
     if not DB_AVAILABLE:
+        logger.warning("Database not available - cannot create session")
         return None
 
     conn = get_db_connection()
     if not conn:
+        logger.error("Failed to connect to database")
         return None
 
     try:
         session_id = str(uuid.uuid4())
-        identity = identity_id or os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
+
+        # Resolve identity: explicit parameter > project default > env var > hardcoded default
+        if identity_id:
+            identity = identity_id
+        else:
+            identity = resolve_identity_for_project(project_name)
+
+        logger.info(f"Creating session for project '{project_name}' with identity '{identity}'")
 
         cur = conn.cursor()
         cur.execute("""
@@ -89,9 +169,13 @@ def create_session(project_name, identity_id=None):
         conn.close()
 
         if result:
-            return str(result['session_id']) if PSYCOPG_VERSION == 3 else str(result[0])
+            final_id = str(result['session_id']) if PSYCOPG_VERSION == 3 else str(result[0])
+            logger.info(f"SUCCESS: Session created - ID: {final_id}")
+            return final_id
+        logger.info(f"Session created with ID: {session_id}")
         return session_id
     except Exception as e:
+        logger.error(f"Failed to create session: {e}", exc_info=True)
         try:
             conn.close()
         except:
@@ -249,31 +333,54 @@ def get_governance_compliance(project_name):
 
 def main():
     """Run startup checks and output JSON context."""
+    try:
+        is_resume = '--resume' in sys.argv
+        logger.info(f"SessionStart hook invoked (resume={is_resume})")
 
-    is_resume = '--resume' in sys.argv
+        # Claude Code expects additionalContext at top level (not nested in hookSpecificOutput)
+        result = {
+            "additionalContext": "",
+            "systemMessage": "",
+            "environment": {}  # Environment variables to export for this session
+        }
 
-    # Claude Code expects additionalContext at top level (not nested in hookSpecificOutput)
-    result = {
-        "additionalContext": "",
-        "systemMessage": ""
-    }
+        context_lines = []
 
-    context_lines = []
+        # Get current directory to determine project
+        cwd = os.getcwd()
+        project_name = os.path.basename(cwd)
+        logger.info(f"Project: {project_name}")
 
-    # Get current directory to determine project
-    cwd = os.getcwd()
-    project_name = os.path.basename(cwd)
+        # SYNC CONFIGURATION: Generate settings.local.json from database
+        # This is the self-healing step - manual file edits get overwritten
+        if CONFIG_SYNC_AVAILABLE:
+            logger.info("Syncing configuration from database...")
+            sync_success = sync_project_config(project_name, cwd)
+            if sync_success:
+                logger.info("Configuration sync completed successfully")
+            else:
+                logger.warning("Configuration sync failed - using existing settings")
+        else:
+            logger.warning("Config sync not available - generate_project_settings.py not found")
 
-    # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
-    session_id = None
-    if not is_resume:
-        session_id = create_session(project_name)
+        # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
+        session_id = None
+        if not is_resume:
+            session_id = create_session(project_name)
+            # Export session_id as environment variable for MCP usage logging
+            if session_id:
+                result["environment"]["CLAUDE_SESSION_ID"] = session_id
+                result["environment"]["CLAUDE_PROJECT_NAME"] = project_name
+                logger.info(f"Environment variables set for session")
+            else:
+                logger.warning("Session creation failed - no environment variables set")
 
-    context_lines.append(f"=== Claude Family Session {'Resumed' if is_resume else 'Started'} ===")
-    context_lines.append(f"Project: {project_name}")
-    context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        context_lines.append(f"=== Claude Family Session {'Resumed' if is_resume else 'Started'} ===")
+        context_lines.append(f"Project: {project_name}")
+        context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     if session_id:
         context_lines.append(f"Session ID: {session_id} (auto-logged)")
+        context_lines.append(f"MCP logging: enabled (session tracking active)")
     context_lines.append("")
 
     # Check for saved session state
@@ -412,19 +519,26 @@ def main():
                 if pending:
                     system_parts.append(f"{len(pending)} pending todos.")
 
-    if msg_count > 0:
-        system_parts.append(f"{msg_count} pending message(s).")
+        if msg_count > 0:
+            system_parts.append(f"{msg_count} pending message(s).")
 
-    if reminders:
-        system_parts.append(f"{len(reminders)} reminder(s) due!")
+        if reminders:
+            system_parts.append(f"{len(reminders)} reminder(s) due!")
 
-    if due_jobs:
-        system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
+        if due_jobs:
+            system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
 
-    result["systemMessage"] = " ".join(system_parts)
+        result["systemMessage"] = " ".join(system_parts)
 
-    print(json.dumps(result))
-    return 0
+        logger.info(f"SUCCESS: SessionStart hook completed for {project_name}")
+        print(json.dumps(result))
+        return 0
+
+    except Exception as e:
+        logger.error(f"SessionStart hook failed: {e}", exc_info=True)
+        # Return minimal valid output on error
+        print(json.dumps({"additionalContext": "", "systemMessage": "Session start hook failed", "environment": {}}))
+        return 1
 
 
 if __name__ == "__main__":
