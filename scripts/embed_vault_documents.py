@@ -203,6 +203,11 @@ def process_document(file_path: Path, conn, force: bool = False, doc_source: str
     if base_path is None:
         base_path = VAULT_PATH
     relative_path = str(file_path.relative_to(base_path))
+
+    # For project documents, prefix with project name to avoid conflicts
+    if doc_source == 'project' and project_name:
+        relative_path = f"{project_name}/{relative_path}"
+
     logger.info(f"ENTER process_document: {relative_path}")
 
     # Calculate file hash and get modification time
@@ -306,9 +311,9 @@ def get_active_projects(conn) -> List[Dict]:
     """Query database for active projects."""
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT project_name, workspace_path
+            SELECT project_name, project_path
             FROM claude.workspaces
-            WHERE status = 'active'
+            WHERE is_active = true
             ORDER BY project_name
         """)
         return cur.fetchall()
@@ -402,7 +407,7 @@ def main():
             total_chunks += process_project_documents(
                 conn,
                 project['project_name'],
-                project['workspace_path'],
+                project['project_path'],
                 force=args.force
             )
 
@@ -410,7 +415,7 @@ def main():
         logger.info(f"Processing project: {args.project}")
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT project_name, workspace_path
+                SELECT project_name, project_path
                 FROM claude.workspaces
                 WHERE project_name = %s
             """, (args.project,))
@@ -423,7 +428,7 @@ def main():
         total_chunks += process_project_documents(
             conn,
             project['project_name'],
-            project['workspace_path'],
+            project['project_path'],
             force=args.force
         )
 
