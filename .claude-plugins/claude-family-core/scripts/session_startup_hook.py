@@ -15,6 +15,7 @@ import os
 import sys
 import uuid
 import logging
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -331,6 +332,158 @@ def get_governance_compliance(project_name):
         return None
 
 
+def generate_embedding_for_rag(text):
+    """Generate embedding using Voyage AI REST API."""
+    try:
+        import requests
+        api_key = os.environ.get('VOYAGE_API_KEY')
+        if not api_key:
+            return None
+
+        response = requests.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "input": [text],
+                "model": "voyage-3",
+                "input_type": "document"
+            },
+            timeout=10
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result["data"][0]["embedding"]
+    except Exception as e:
+        logger.warning(f"Failed to generate embedding for RAG: {e}")
+        return None
+
+
+def preload_relevant_docs(conn, project_name, session_id, top_k=3, min_similarity=0.6):
+    """Pre-load relevant vault documents based on project type/phase.
+
+    Uses semantic search to find the most relevant docs for this project.
+    Returns formatted text to inject into context and logs usage.
+    """
+    try:
+        start_time = time.time()
+
+        # Get project type for query
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT project_type, phase
+            FROM claude.workspaces w
+            LEFT JOIN claude.projects p ON w.project_name = p.project_name
+            WHERE w.project_name = %s
+        """, (project_name,))
+        row = cur.fetchone()
+
+        if not row:
+            return None
+
+        project_type = row['project_type'] if isinstance(row, dict) else row[0]
+        phase = row['phase'] if isinstance(row, dict) else (row[1] if len(row) > 1 else 'unknown')
+
+        # Build query based on project type and phase
+        query_parts = []
+        if project_type:
+            query_parts.append(f"{project_type} project")
+        if phase:
+            query_parts.append(f"{phase} phase")
+        query_parts.append("procedures and standards")
+
+        query = " ".join(query_parts)
+        logger.info(f"RAG pre-load query: '{query}'")
+
+        # Generate embedding for query
+        query_embedding = generate_embedding_for_rag(query)
+        if not query_embedding:
+            logger.warning("Could not generate embedding - skipping RAG pre-load")
+            return None
+
+        # Search for similar documents (prefer vault docs, include project docs)
+        cur.execute("""
+            SELECT
+                doc_path,
+                doc_title,
+                chunk_text,
+                doc_source,
+                1 - (embedding <=> %s::vector) as similarity_score
+            FROM claude.vault_embeddings
+            WHERE 1 - (embedding <=> %s::vector) >= %s
+              AND (doc_source = 'vault' OR (doc_source = 'project' AND project_name = %s))
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, query_embedding, min_similarity, project_name, query_embedding, top_k))
+
+        results = cur.fetchall()
+
+        # Log usage
+        latency_ms = int((time.time() - start_time) * 1000)
+        docs_returned = [r['doc_path'] if isinstance(r, dict) else r[0] for r in results]
+        top_similarity = results[0]['similarity_score'] if results and isinstance(results[0], dict) else (results[0][4] if results else None)
+
+        cur.execute("""
+            INSERT INTO claude.rag_usage_log
+            (session_id, project_name, query_type, query_text, results_count,
+             top_similarity, docs_returned, latency_ms)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            session_id,
+            project_name,
+            "session_preload",
+            query,
+            len(results),
+            top_similarity,
+            docs_returned,
+            latency_ms
+        ))
+        conn.commit()
+
+        if not results:
+            logger.info("No relevant docs found for RAG pre-load")
+            return None
+
+        # Format results
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 60)
+        context_lines.append(f"PRE-LOADED KNOWLEDGE ({len(results)} docs, {latency_ms}ms)")
+        context_lines.append("=" * 60)
+        context_lines.append("")
+
+        for r in results:
+            if isinstance(r, dict):
+                doc_path = r['doc_path']
+                doc_title = r['doc_title']
+                chunk_text = r['chunk_text']
+                similarity = round(r['similarity_score'], 3)
+            else:
+                doc_path = r[0]
+                doc_title = r[1]
+                chunk_text = r[2]
+                similarity = round(r[4], 3)
+
+            context_lines.append(f"📄 {doc_title} ({similarity} similarity)")
+            context_lines.append(f"   Path: {doc_path}")
+            context_lines.append("")
+            # Truncate long chunks
+            preview = chunk_text[:500] + "..." if len(chunk_text) > 500 else chunk_text
+            context_lines.append(preview)
+            context_lines.append("")
+            context_lines.append("-" * 60)
+            context_lines.append("")
+
+        logger.info(f"RAG pre-load: {len(results)} docs, top similarity={top_similarity}, latency={latency_ms}ms")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"RAG pre-load failed: {e}", exc_info=True)
+        return None
+
+
 def main():
     """Run startup checks and output JSON context."""
     try:
@@ -378,161 +531,177 @@ def main():
         context_lines.append(f"=== Claude Family Session {'Resumed' if is_resume else 'Started'} ===")
         context_lines.append(f"Project: {project_name}")
         context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    if session_id:
-        context_lines.append(f"Session ID: {session_id} (auto-logged)")
-        context_lines.append(f"MCP logging: enabled (session tracking active)")
-    context_lines.append("")
-
-    # Check for saved session state
-    state = get_session_state(project_name)
-    if state:
-        context_lines.append("=" * 50)
-        context_lines.append("HERE'S WHERE WE LEFT OFF:")
-        context_lines.append("=" * 50)
+        if session_id:
+            context_lines.append(f"Session ID: {session_id} (auto-logged)")
+            context_lines.append(f"MCP logging: enabled (session tracking active)")
         context_lines.append("")
 
-        if state.get('current_focus'):
-            context_lines.append(f"Focus: {state['current_focus']}")
+        # Check for saved session state
+        state = get_session_state(project_name)
+        if state:
+            context_lines.append("=" * 50)
+            context_lines.append("HERE'S WHERE WE LEFT OFF:")
+            context_lines.append("=" * 50)
             context_lines.append("")
 
-        # Show next_steps prominently - this is the key handoff info
-        next_steps = state.get('next_steps', [])
-        if isinstance(next_steps, str):
-            try:
-                next_steps = json.loads(next_steps)
-            except:
-                next_steps = []
-        if next_steps:
-            context_lines.append("NEXT STEPS (from last session):")
-            for i, step in enumerate(next_steps, 1):
-                if isinstance(step, dict):
-                    step = step.get('content', str(step))
-                context_lines.append(f"   {i}. {step}")
-            context_lines.append("")
+            if state.get('current_focus'):
+                context_lines.append(f"Focus: {state['current_focus']}")
+                context_lines.append("")
 
-        # Show pending todos
-        if state.get('todo_list'):
-            todo_list = state['todo_list']
-            if isinstance(todo_list, str):
+            # Show next_steps prominently - this is the key handoff info
+            next_steps = state.get('next_steps', [])
+            if isinstance(next_steps, str):
                 try:
-                    todo_list = json.loads(todo_list)
+                    next_steps = json.loads(next_steps)
                 except:
-                    pass
-            if isinstance(todo_list, list):
-                pending = [t for t in todo_list if t.get('status') != 'completed']
-                if pending:
-                    context_lines.append(f"PENDING TODOS ({len(pending)} items):")
-                    for item in pending[:5]:
-                        status = item.get('status', 'pending')
-                        icon = '→' if status == 'in_progress' else '○'
-                        context_lines.append(f"   {icon} {item.get('content', 'Unknown')}")
-                    if len(pending) > 5:
-                        context_lines.append(f"   ... and {len(pending) - 5} more")
-                    context_lines.append("")
+                    next_steps = []
+            if next_steps:
+                context_lines.append("NEXT STEPS (from last session):")
+                for i, step in enumerate(next_steps, 1):
+                    if isinstance(step, dict):
+                        step = step.get('content', str(step))
+                    context_lines.append(f"   {i}. {step}")
+                context_lines.append("")
 
-        context_lines.append("=" * 50)
-        context_lines.append("")
+            # Show pending todos
+            if state.get('todo_list'):
+                todo_list = state['todo_list']
+                if isinstance(todo_list, str):
+                    try:
+                        todo_list = json.loads(todo_list)
+                    except:
+                        pass
+                if isinstance(todo_list, list):
+                    pending = [t for t in todo_list if t.get('status') != 'completed']
+                    if pending:
+                        context_lines.append(f"PENDING TODOS ({len(pending)} items):")
+                        for item in pending[:5]:
+                            status = item.get('status', 'pending')
+                            icon = '→' if status == 'in_progress' else '○'
+                            context_lines.append(f"   {icon} {item.get('content', 'Unknown')}")
+                        if len(pending) > 5:
+                            context_lines.append(f"   ... and {len(pending) - 5} more")
+                        context_lines.append("")
 
-    # Check for pending messages
-    msg_count = get_pending_messages(project_name)
-    if msg_count > 0:
-        context_lines.append(f"📬 {msg_count} pending message(s) - use /inbox-check to view")
-        context_lines.append("")
-
-    # Check for due reminders
-    reminders = get_due_reminders(project_name)
-    if reminders:
-        context_lines.append("⏰ DUE REMINDERS:")
-        for r in reminders:
-            context_lines.append(f"   - {r['title']}")
-            if r.get('description'):
-                context_lines.append(f"     {r['description'][:100]}...")
-        context_lines.append("")
-
-    # Check for due scheduled jobs
-    due_jobs = get_due_jobs(project_name)
-    if due_jobs:
-        context_lines.append("📅 JOBS DUE TO RUN:")
-        for job in due_jobs:
-            days = int(job.get('days_since_run', 0))
-            context_lines.append(f"   - {job['job_name']} (last run: {days} days ago)")
-        context_lines.append("")
-
-    # Check governance compliance
-    compliance = get_governance_compliance(project_name)
-    if compliance:
-        pct = compliance.get('compliance_pct', 0)
-        if pct < 100:
-            context_lines.append(f"⚠️  GOVERNANCE COMPLIANCE: {pct}%")
-            missing = []
-            if not compliance.get('has_claude_md'):
-                missing.append('CLAUDE.md')
-            if not compliance.get('has_problem_statement'):
-                missing.append('PROBLEM_STATEMENT.md')
-            if not compliance.get('has_architecture'):
-                missing.append('ARCHITECTURE.md')
-            if missing:
-                context_lines.append(f"   Missing: {', '.join(missing)}")
-                context_lines.append("   Run /retrofit-project to add missing documents")
-            context_lines.append("")
-        else:
-            context_lines.append(f"✓ Governance: 100% compliant (Phase: {compliance.get('phase', 'unknown')})")
+            context_lines.append("=" * 50)
             context_lines.append("")
 
-    # Reminder about commands
-    context_lines.append("Available commands: /session-start, /session-end, /inbox-check, /feedback-check, /team-status, /broadcast")
-
-    result["additionalContext"] = "\n".join(context_lines)
-
-    # Build system message - show key info to user
-    system_parts = [f"Claude Family session {'resumed' if is_resume else 'started'} for {project_name}."]
-
-    # Show session logging status
-    if session_id:
-        system_parts.append(f"Session logged ({session_id[:8]}...).")
-    elif not is_resume:
-        system_parts.append("Session NOT logged (database unavailable).")
-
-    if state:
-        # Show next steps count first - most important for continuity
-        next_steps = state.get('next_steps', [])
-        if isinstance(next_steps, str):
-            try:
-                next_steps = json.loads(next_steps)
-            except:
-                next_steps = []
-        if next_steps:
-            system_parts.append(f"{len(next_steps)} next steps from last session.")
-
-        if state.get('current_focus'):
-            system_parts.append(f"Focus: {state['current_focus'][:60]}...")
-
-        if state.get('todo_list'):
-            todo_list = state['todo_list']
-            if isinstance(todo_list, str):
-                try:
-                    todo_list = json.loads(todo_list)
-                except:
-                    pass
-            if isinstance(todo_list, list):
-                pending = [t for t in todo_list if t.get('status') != 'completed']
-                if pending:
-                    system_parts.append(f"{len(pending)} pending todos.")
-
+        # Check for pending messages
+        msg_count = get_pending_messages(project_name)
         if msg_count > 0:
-            system_parts.append(f"{msg_count} pending message(s).")
+            context_lines.append(f"📬 {msg_count} pending message(s) - use /inbox-check to view")
+            context_lines.append("")
 
+        # Check for due reminders
+        reminders = get_due_reminders(project_name)
         if reminders:
-            system_parts.append(f"{len(reminders)} reminder(s) due!")
+            context_lines.append("⏰ DUE REMINDERS:")
+            for r in reminders:
+                context_lines.append(f"   - {r['title']}")
+                if r.get('description'):
+                    context_lines.append(f"     {r['description'][:100]}...")
+            context_lines.append("")
 
+        # Check for due scheduled jobs
+        due_jobs = get_due_jobs(project_name)
         if due_jobs:
-            system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
+            context_lines.append("📅 JOBS DUE TO RUN:")
+            for job in due_jobs:
+                days = int(job.get('days_since_run', 0))
+                context_lines.append(f"   - {job['job_name']} (last run: {days} days ago)")
+            context_lines.append("")
 
-        result["systemMessage"] = " ".join(system_parts)
+        # Check governance compliance
+        compliance = get_governance_compliance(project_name)
+        if compliance:
+            pct = compliance.get('compliance_pct', 0)
+            if pct < 100:
+                context_lines.append(f"⚠️  GOVERNANCE COMPLIANCE: {pct}%")
+                missing = []
+                if not compliance.get('has_claude_md'):
+                    missing.append('CLAUDE.md')
+                if not compliance.get('has_problem_statement'):
+                    missing.append('PROBLEM_STATEMENT.md')
+                if not compliance.get('has_architecture'):
+                    missing.append('ARCHITECTURE.md')
+                if missing:
+                    context_lines.append(f"   Missing: {', '.join(missing)}")
+                    context_lines.append("   Run /retrofit-project to add missing documents")
+                context_lines.append("")
+            else:
+                context_lines.append(f"✓ Governance: 100% compliant (Phase: {compliance.get('phase', 'unknown')})")
+                context_lines.append("")
 
-        logger.info(f"SUCCESS: SessionStart hook completed for {project_name}")
-        print(json.dumps(result))
-        return 0
+        # Reminder about commands
+        context_lines.append("Available commands: /session-start, /session-end, /inbox-check, /feedback-check, /team-status, /broadcast")
+
+        # PRE-LOAD RELEVANT KNOWLEDGE: Use RAG to inject relevant vault docs
+        if session_id and DB_AVAILABLE:
+            conn = get_db_connection()
+            if conn:
+                try:
+                    rag_context = preload_relevant_docs(conn, project_name, session_id)
+                    if rag_context:
+                        context_lines.append(rag_context)
+                    conn.close()
+                except Exception as e:
+                    logger.warning(f"RAG pre-load failed: {e}")
+                    try:
+                        conn.close()
+                    except:
+                        pass
+
+        result["additionalContext"] = "\n".join(context_lines)
+
+        # Build system message - show key info to user
+        system_parts = [f"Claude Family session {'resumed' if is_resume else 'started'} for {project_name}."]
+
+        # Show session logging status
+        if session_id:
+            system_parts.append(f"Session logged ({session_id[:8]}...).")
+        elif not is_resume:
+            system_parts.append("Session NOT logged (database unavailable).")
+
+        if state:
+            # Show next steps count first - most important for continuity
+            next_steps = state.get('next_steps', [])
+            if isinstance(next_steps, str):
+                try:
+                    next_steps = json.loads(next_steps)
+                except:
+                    next_steps = []
+            if next_steps:
+                system_parts.append(f"{len(next_steps)} next steps from last session.")
+
+            if state.get('current_focus'):
+                system_parts.append(f"Focus: {state['current_focus'][:60]}...")
+
+            if state.get('todo_list'):
+                todo_list = state['todo_list']
+                if isinstance(todo_list, str):
+                    try:
+                        todo_list = json.loads(todo_list)
+                    except:
+                        pass
+                if isinstance(todo_list, list):
+                    pending = [t for t in todo_list if t.get('status') != 'completed']
+                    if pending:
+                        system_parts.append(f"{len(pending)} pending todos.")
+
+            if msg_count > 0:
+                system_parts.append(f"{msg_count} pending message(s).")
+
+            if reminders:
+                system_parts.append(f"{len(reminders)} reminder(s) due!")
+
+            if due_jobs:
+                system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
+
+            result["systemMessage"] = " ".join(system_parts)
+
+            logger.info(f"SUCCESS: SessionStart hook completed for {project_name}")
+            print(json.dumps(result))
+            return 0
 
     except Exception as e:
         logger.error(f"SessionStart hook failed: {e}", exc_info=True)
