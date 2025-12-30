@@ -10,19 +10,19 @@ Before ending this session, complete ALL of the following:
 
 ```sql
 -- 1. Get your latest session ID
-SELECT id FROM claude_family.session_history
-WHERE identity_id = 5
+SELECT session_id FROM claude.sessions
+WHERE identity_id = '<your-identity-uuid>'::uuid
 ORDER BY session_start DESC LIMIT 1;
 
 -- 2. Update session with summary
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET
     session_end = NOW(),
-    summary = 'What was accomplished',
-    files_modified = ARRAY['file1.cs', 'file2.cs'],
-    outcome = 'success',
-    tokens_used = <estimated_tokens>
-WHERE id = <session_id>;
+    session_summary = 'What was accomplished',
+    tasks_completed = ARRAY['Task 1', 'Task 2', 'Task 3'],
+    learnings_gained = ARRAY['Learning 1', 'Learning 2'],
+    challenges_encountered = ARRAY['Challenge 1']
+WHERE session_id = '<session_id>'::uuid;
 ```
 
 ### ✅ Store Reusable Knowledge (postgres MCP)
@@ -30,15 +30,19 @@ WHERE id = <session_id>;
 **If you discovered a reusable pattern:**
 
 ```sql
-INSERT INTO claude_family.universal_knowledge
-(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
+INSERT INTO claude.knowledge
+(knowledge_id, title, description, knowledge_type, knowledge_category, code_example,
+ learned_by_identity_id, confidence_level, created_at)
 VALUES (
+    gen_random_uuid(),
     'Pattern Name',
-    'Clear description',
-    'When to use this',
-    'Code example',
-    'Things to watch out for',
-    5
+    'Clear description of the pattern and when to use it',
+    'pattern',
+    'bug-fix',  -- or 'technique', 'gotcha', 'best-practice'
+    'Code example here',
+    '<your-identity-uuid>'::uuid,
+    90,  -- confidence 1-100
+    NOW()
 );
 ```
 
