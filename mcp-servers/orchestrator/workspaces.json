@@ -1,0 +1,34 @@
+{
+  "_metadata": {
+    "generated_at": "2025-12-26T22:03:24.095498",
+    "source": "PostgreSQL (claude.workspaces)",
+    "description": "Auto-generated workspace mappings. Do not edit manually."
+  },
+  "workspaces": {
+    "claude-family-manager-v2": {
+      "path": "C:\\Projects\\claude-family-manager-v2",
+      "type": "csharp-winforms",
+      "description": "WinForms C# desktop app for Claude Family management. Replaced MAUI Blazor Hybrid approach."
+    },
+    "nimbus-user-loader": {
+      "path": "C:\\Projects\\nimbus-user-loader",
+      "type": "csharp-winforms",
+      "description": "Nimbus user import tool (private work project)"
+    },
+    "claude-family": {
+      "path": "C:\\Projects\\claude-family",
+      "type": "infrastructure",
+      "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "nimbus-import": {
+      "path": "C:\\Projects\\nimbus-import",
+      "type": "tauri-react",
+      "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
+    },
+    "ATO-tax-agent": {
+      "path": "C:\\Projects\\ATO-tax-agent",
+      "type": "work-research",
+      "description": "ATO tax agent tools (private work project)"
+    }
+  }
+}

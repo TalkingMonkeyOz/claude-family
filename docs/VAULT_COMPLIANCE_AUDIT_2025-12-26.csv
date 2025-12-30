@@ -1,0 +1,61 @@
+File Path,Folder,Line Count,Size Limit,Oversized,Has YAML,Has Projects,Has Tags,Has Synced,Has Footer,Issues
+C:\Projects\claude-family\knowledge-vault\10-Projects\Claude Family Manager.md,Claude Family,97,150,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\10-Projects\ato-tax-agent\ato-tax-section-service-pattern.md,Other,105,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\10-Projects\claude-family\Database Schema - Core Tables.md,Other,691,300,YES,YES,YES,YES,YES,YES,Exceeds 300 line limit (691 lines)
+C:\Projects\claude-family\knowledge-vault\10-Projects\claude-family\Identity System.md,Other,532,300,YES,YES,YES,YES,YES,YES,Exceeds 300 line limit (532 lines)
+C:\Projects\claude-family\knowledge-vault\10-Projects\claude-family\Session User Stories.md,Other,1374,300,YES,YES,YES,YES,YES,YES,Exceeds 300 line limit (1374 lines)
+C:\Projects\claude-family\knowledge-vault\20-Domains\Database Architecture.md,Other,288,300,NO,YES,YES,YES,YES,YES,
+C:\Projects\claude-family\knowledge-vault\20-Domains\Database Integration Guide.md,Other,272,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\20-Domains\APIs\nimbus-activity-type-prefixes.md,Other,49,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\APIs\nimbus-idorfilter-patterns.md,Other,57,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\APIs\nimbus-odata-field-naming.md,Other,44,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\APIs\nimbus-rest-crud-pattern.md,Other,70,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\APIs\nimbus-time-fields.md,Other,55,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\CSharp\csharp-expert-rules.md,Other,182,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\20-Domains\Database\local-reasoning-deepseek.md,Other,75,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\Database\mui-mcp-installation.md,Other,95,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\20-Domains\WinForms\winforms-async-patterns.md,Other,199,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\20-Domains\WinForms\winforms-databinding.md,Other,198,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\20-Domains\WinForms\winforms-designer-rules.md,Other,122,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\20-Domains\WinForms\winforms-layout-patterns.md,Other,151,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\30-Patterns\auto-apply-instructions.md,Other,153,300,NO,YES,NO,YES,YES,NO,Missing version footer; YAML missing 'projects:' field
+C:\Projects\claude-family\knowledge-vault\30-Patterns\post-compaction-claude-md-refresh.md,Other,158,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\30-Patterns\Windows Bash and MCP Gotchas.md,Other,118,300,NO,YES,NO,NO,YES,NO,Missing version footer; YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\30-Patterns\gotchas\claude-hook-response-format.md,Other,93,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\30-Patterns\gotchas\mcp-orphan-processes-windows.md,Other,68,300,NO,YES,NO,YES,YES,NO,Missing version footer; YAML missing 'projects:' field
+C:\Projects\claude-family\knowledge-vault\30-Patterns\gotchas\psycopg3-vs-psycopg2.md,Other,82,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\30-Patterns\gotchas\typescript-generic-constraint.md,Other,85,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\30-Patterns\solutions\schema-consolidation-migration.md,Other,87,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\30-Patterns\solutions\typescript-barrel-exports.md,Other,72,300,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\40-Procedures\Documentation Standards.md,Other,256,300,NO,YES,YES,YES,YES,YES,
+C:\Projects\claude-family\knowledge-vault\40-Procedures\Family Rules.md,Other,100,300,NO,YES,NO,NO,YES,YES,YAML missing 'projects:' field; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\40-Procedures\Knowledge Capture SOP.md,Other,238,300,NO,YES,YES,YES,YES,YES,
+C:\Projects\claude-family\knowledge-vault\40-Procedures\Session Lifecycle.md,Other,674,300,YES,YES,YES,YES,YES,YES,Exceeds 300 line limit (674 lines)
+C:\Projects\claude-family\knowledge-vault\40-Procedures\Session Quick Reference.md,Other,263,300,NO,YES,YES,YES,YES,YES,
+C:\Projects\claude-family\knowledge-vault\Claude Family\Auto-Apply Instructions.md,Claude Family,299,150,YES,YES,YES,YES,YES,YES,Exceeds 150 line limit (299 lines)
+C:\Projects\claude-family\knowledge-vault\Claude Family\claud.md structure.md,Claude Family,32,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Claude Family Memory Graph.md,Claude Family,31,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Claude Family Postgres.md,Claude Family,37,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Claude Family todo Session Start.md,Claude Family,27,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Claude Hooks.md,Claude Family,33,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Claude Tools Reference.md,Claude Family,111,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Documentation Philosophy.md,Claude Family,370,150,YES,YES,YES,YES,YES,YES,Exceeds 150 line limit (370 lines)
+C:\Projects\claude-family\knowledge-vault\Claude Family\Knowledge System.md,Claude Family,213,150,YES,YES,YES,YES,YES,YES,Exceeds 150 line limit (213 lines)
+C:\Projects\claude-family\knowledge-vault\Claude Family\MCP configuration.md,Claude Family,90,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\MCP Registry.md,Claude Family,232,150,YES,YES,YES,NO,YES,NO,Exceeds 150 line limit (232 lines); Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Observability.md,Claude Family,192,150,YES,YES,YES,NO,YES,NO,Exceeds 150 line limit (192 lines); Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Orchestrator MCP.md,Claude Family,213,150,YES,YES,YES,NO,YES,NO,Exceeds 150 line limit (213 lines); Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Plugins.md,Claude Family,31,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Project - ATO-tax-agent.md,Claude Family,79,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Project - Claude Family.md,Claude Family,97,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Project - Mission Control Web.md,Claude Family,35,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Purpose.md,Claude Family,63,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Session Architecture.md,Claude Family,296,150,YES,YES,YES,YES,YES,NO,Exceeds 150 line limit (296 lines); Missing version footer
+C:\Projects\claude-family\knowledge-vault\Claude Family\session End.md,Claude Family,27,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Setting's File.md,Claude Family,36,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\Claude Family\Slash command's.md,Claude Family,36,150,NO,YES,YES,NO,YES,NO,Missing version footer; YAML missing 'tags:' field
+C:\Projects\claude-family\knowledge-vault\John's Notes\AI_READABLE_DOCUMENTATION_RESEARCH.md,Other,391,300,YES,NO,NO,NO,NO,NO,Exceeds 300 line limit (391 lines); Missing version footer; Missing YAML frontmatter
+C:\Projects\claude-family\knowledge-vault\John's Notes\Copiliot awsome Git hub.md,Other,15,300,NO,NO,NO,NO,NO,NO,Missing version footer; Missing YAML frontmatter
+C:\Projects\claude-family\knowledge-vault\_templates\gotcha.md,_templates,32,150,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\_templates\knowledge-entry.md,_templates,27,150,NO,YES,YES,YES,YES,NO,Missing version footer
+C:\Projects\claude-family\knowledge-vault\_templates\session-learning.md,_templates,31,150,NO,YES,YES,YES,YES,NO,Missing version footer

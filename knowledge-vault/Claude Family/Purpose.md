@@ -24,6 +24,7 @@ The Claude Family manages coordination across multiple Claude instances with sha
 | Knowledge System | [[Knowledge System]] |
 | Session Workflows | [[Claude Family todo Session Start]], [[session End]] |
 | MCP Servers | [[MCP configuration]], [[MCP Registry]], [[Orchestrator MCP]] |
+| Claude Desktop | [[Claude Desktop Setup]] - GUI interface setup |
 | Plugins | [[Plugins]] |
 | Hooks | [[Claude Hooks]] |
 | Commands | [[Slash command's]] |
@@ -62,5 +63,8 @@ The Claude Family manages coordination across multiple Claude instances with sha
 
 ---
 
-**Version**: 2.1
-**Updated**: 2025-12-26
+**Version**: 2.2
+**Updated**: 2025-12-29
+**Changelog**:
+- Added [[Claude Desktop Setup]] documentation
+- Integrated Desktop as full Family member

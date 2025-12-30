@@ -116,3 +116,9 @@ WHERE session_id = 'your-session-uuid'::uuid
 ---
 
 **Updated**: 2025-12-07 (Migrated to `claude.*` schema)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/POSTGRESQL_ARRAY_GUIDE.md

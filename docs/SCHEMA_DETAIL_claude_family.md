@@ -375,3 +375,9 @@ The `claude_family` schema contains infrastructure tables for managing Claude in
 
 **Document Version:** 1.0
 **Next Review:** After MCW analysis received
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/SCHEMA_DETAIL_claude_family.md

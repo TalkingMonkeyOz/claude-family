@@ -306,3 +306,9 @@ Run `/context` and check if any `mcp__tree-sitter__*` tools appear in the usage 
 ---
 
 **Ready to deploy?** Run `python scripts/deploy_optimized_mcps.py --dry-run` to test first.
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MCP_OPTIMIZATION_DEPLOYMENT_GUIDE.md

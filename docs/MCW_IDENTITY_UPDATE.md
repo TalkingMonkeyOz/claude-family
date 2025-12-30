@@ -82,3 +82,9 @@ RETURNING session_id;
 2. **Session Tracking**: Your sessions are logged under your own identity
 3. **Context**: CLAUDE.md reminds you who you are at session start
 4. **Clean Config**: No Python REPL for a TypeScript project
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MCW_IDENTITY_UPDATE.md

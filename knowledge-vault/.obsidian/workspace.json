@@ -27,12 +27,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "Claude Family/Orchestrator MCP.md",
+                "file": "README.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "Orchestrator MCP"
+              "title": "README"
             }
           }
         ],
@@ -68,7 +68,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "password",
+                "query": "tag:claude-family",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -93,7 +93,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 472.5
+    "width": 292.5
   },
   "right": {
     "id": "b19cbc385219a58f",
@@ -109,7 +109,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "Claude Family/Orchestrator MCP.md",
+                "file": "README.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -119,7 +119,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Orchestrator MCP"
+              "title": "Backlinks for README"
             }
           },
           {
@@ -199,41 +199,41 @@
   },
   "active": "82d88316c449f0ab",
   "lastOpenFiles": [
-    "Claude Family/Plugins.md",
-    "Claude Family/Project - ATO-tax-agent.md",
-    "Claude Family/session End.md",
-    "Claude Family/Setting's File.md",
-    "Claude Family/Slash command's.md.tmp.80632.1766816621132",
-    "10-Projects/claude-family/Identity System - Implementation.md.tmp.80632.1766816527722",
-    "10-Projects/claude-family/Session User Story - Cross-Project Message.md.tmp.80632.1766816512559",
-    "40-Procedures/New Project SOP.md.tmp.80632.1766816495006",
-    "Claude Family/Observability.md.tmp.80632.1766816488252",
-    "10-Projects/claude-family/Identity System - Implementation.md.tmp.80632.1766816331758",
-    "Claude Family/Identity Per Project.md.tmp.80632.1766815992462",
-    "Claude Family/MCP Registry.md.tmp.80632.1766815941619",
-    "Claude Family/MCP Registry.md.tmp.80632.1766815932812",
-    "Claude Family/Orchestrator MCP.md.tmp.80632.1766814799511",
+    "Claude Family/claud.md structure.md",
+    "40-Procedures/Family Rules.md.tmp.66804.1767013111946",
+    "40-Procedures/Family Rules.md.tmp.66804.1767013110834",
+    "40-Procedures/Family Rules.md.tmp.66804.1767013109762",
+    "Claude Family/Purpose.md.tmp.66804.1767013092225",
+    "Claude Family/Purpose.md.tmp.66804.1767013091269",
+    "Claude Family/Claude Desktop Setup.md",
+    "Claude Family/Claude Desktop Setup.md.tmp.66804.1767013071448",
+    "Claude Family/Claude Hooks.md.tmp.18092.1767012936829",
+    "Claude Family/Claude Hooks.md.tmp.18092.1767012929577",
+    "Claude Family/Claude Hooks.md.tmp.18092.1767012919787",
+    "Claude Family/Claude Hooks.md.tmp.18092.1767012902464",
+    "Claude Family/Claude Hooks.md",
+    "Claude Family/Purpose.md",
+    "Claude Family/MCP Registry.md",
+    "Claude Family/Claude Tools Reference.md",
+    "Claude Family/Documentation Philosophy.md",
+    "Claude Family/Auto-Apply Instructions.md",
     "10-Projects/claude-family/Identity System - Implementation.md",
+    "20-Domains/Infrastructure Stats and Monitoring.md",
     "10-Projects/claude-family/Identity System - Overview.md",
-    "40-Procedures/Session Lifecycle - Reference.md",
-    "40-Procedures/Collections SOP.md",
-    "John's Notes/Personal Finance Orig/CDR_OPEN_BANKING.md",
-    "Claude Family/Settings File.md",
-    "40-Procedures/Config Management SOP.md",
-    "40-Procedures/Add MCP Server SOP.md",
-    "40-Procedures/New Project SOP.md",
+    "10-Projects/Claude Family Manager.md",
+    "20-Domains/APIs/nimbus-time-fields.md",
+    "20-Domains/APIs/nimbus-rest-crud-pattern.md",
+    "20-Domains/APIs/nimbus-odata-field-naming.md",
+    "20-Domains/APIs/nimbus-idorfilter-patterns.md",
     "40-Procedures/Family Rules.md",
-    "40-Procedures/Knowledge Capture SOP.md",
-    "40-Procedures/Session Quick Reference.md",
-    "10-Projects/claude-family/Database Schema - Overview.md",
-    "10-Projects/ato-tax-agent/ato-tax-section-service-pattern.md",
-    "John's Notes/Personal Finance Orig/prd-smsf-portfolio-manager.md",
+    "John's Notes/AI_READABLE_DOCUMENTATION_RESEARCH.md",
+    "John's Notes/Copiliot awsome Git hub.md",
+    "John's Notes/Personal Finance Orig/README.md",
+    "John's Notes/Personal Finance Orig/CDR_OPEN_BANKING.md",
     "John's Notes/Personal Finance Orig/DATABASE_SCHEMA.md",
     "John's Notes/Personal Finance Orig/ORM_COMPARISON.md",
-    "John's Notes/Personal Finance Orig/README.md",
+    "John's Notes/Personal Finance Orig/prd-smsf-portfolio-manager.md",
     "John's Notes/Personal Finance Orig/prd-personal-finance-system.md",
-    "John's Notes/Copiliot awsome Git hub.md",
-    "40-Procedures/Session Lifecycle - Session End.md",
-    "40-Procedures/Session Lifecycle - Session Start.md"
+    "20-Domains/Database Architecture.md"
   ]
 }

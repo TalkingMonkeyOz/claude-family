@@ -3,7 +3,7 @@ title: Add MCP Server SOP
 category: procedure
 status: active
 created: 2025-12-27
-updated: 2025-12-27
+updated: 2025-12-30
 tags:
 - sop
 - mcp
@@ -22,6 +22,62 @@ Standard procedure for adding MCP servers to Claude Family projects.
 **Install globally** if: Used by multiple projects, core infrastructure, rarely changes
 
 **Install project-specific** if: Only used by one project, project-specific config, experimental
+
+---
+
+## Method 0: Add Global MCP (All Claude Instances)
+
+**Use this for**: Core infrastructure MCPs (postgres, orchestrator, vault-rag, etc.)
+
+**Location**: `~/.claude/mcp.json` (manually maintained)
+
+### 1. Edit Global MCP Config
+
+```bash
+# Edit ~/.claude/mcp.json
+code ~/.claude/mcp.json
+```
+
+Add entry following the pattern:
+
+```json
+{
+  "mcpServers": {
+    "your-mcp-name": {
+      "type": "stdio",
+      "command": "C:/venvs/mcp/Scripts/python.exe",
+      "args": ["C:/Projects/claude-family/mcp-servers/your-mcp/server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://..."
+      }
+    }
+  }
+}
+```
+
+### 2. Add Audit Trail
+
+```sql
+INSERT INTO claude.mcp_configs (
+    config_id, project_name, mcp_server_name, mcp_package,
+    install_date, is_active, reason, installed_by_identity_id
+) VALUES (
+    gen_random_uuid(),
+    'global',
+    'your-mcp-name',
+    'local:mcp-servers/your-mcp',
+    NOW(),
+    true,
+    'Purpose and expected impact',
+    (SELECT identity_id FROM claude.identities WHERE identity_name = 'Claude Sonnet 4.5' LIMIT 1)
+);
+```
+
+### 3. Restart Claude Code
+
+Global MCPs are loaded at startup, not during SessionStart hook.
+
+**Effect**: All Claude instances get the MCP immediately on next restart.
 
 ---
 
@@ -50,13 +106,13 @@ WHERE project_type = 'infrastructure';
 UPDATE claude.workspaces
 SET startup_config = jsonb_set(
     COALESCE(startup_config, '{}'::jsonb),
-    '{enabledMcpjsonServers}',
-    COALESCE(startup_config->'enabledMcpjsonServers', '[]'::jsonb) || '["custom-api"]'::jsonb
+    '{mcp_servers}',
+    COALESCE(startup_config->'mcp_servers', '[]'::jsonb) || '["custom-api"]'::jsonb
 )
 WHERE project_name = 'personal-finance-system';
 
 -- Verify
-SELECT project_name, startup_config->'enabledMcpjsonServers'
+SELECT project_name, startup_config->'mcp_servers'
 FROM claude.workspaces WHERE project_name = 'personal-finance-system';
 ```
 
@@ -71,13 +127,13 @@ FROM claude.workspaces WHERE project_name = 'personal-finance-system';
 UPDATE claude.config_templates
 SET content = jsonb_set(
     content,
-    '{enabledMcpjsonServers}',
-    content->'enabledMcpjsonServers' || '["new-global-mcp"]'::jsonb
+    '{mcp_servers}',
+    content->'mcp_servers' || '["new-global-mcp"]'::jsonb
 )
 WHERE template_name = 'hooks-base';
 
 -- Verify
-SELECT template_name, content->'enabledMcpjsonServers'
+SELECT template_name, content->'mcp_servers'
 FROM claude.config_templates WHERE template_name = 'hooks-base';
 ```
 
@@ -146,7 +202,7 @@ INSERT INTO claude.mcp_configs (
 
 **1. Check generated settings**:
 ```bash
-cat .claude/settings.local.json | grep -A 10 enabledMcpjsonServers
+cat .claude/settings.local.json | grep -A 10 mcp_servers
 ```
 
 **2. Check MCP server starts**: Look for `[MCP] Server ready: custom-api` in Claude output
@@ -176,8 +232,8 @@ WHERE project_type = 'infrastructure';
 UPDATE claude.workspaces
 SET startup_config = jsonb_set(
     startup_config,
-    '{enabledMcpjsonServers}',
-    (SELECT jsonb_agg(elem) FROM jsonb_array_elements_text(startup_config->'enabledMcpjsonServers') elem
+    '{mcp_servers}',
+    (SELECT jsonb_agg(elem) FROM jsonb_array_elements_text(startup_config->'mcp_servers') elem
      WHERE elem != 'old-mcp')
 )
 WHERE project_name = 'project-name';
@@ -197,12 +253,14 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 
 | MCP Server | Purpose | Projects Using |
 |------------|---------|----------------|
-| postgres | Database access, session logging | All infrastructure |
-| memory | Persistent memory graph | All projects |
-| orchestrator | Agent spawning, messaging | Infrastructure only |
-| sequential-thinking | Complex problem solving | As needed |
-| filesystem | File operations | Built-in |
-| mui-mcp | Material-UI docs | nimbus-import |
+| postgres | Database access, session logging | All (global) |
+| memory | Persistent memory graph | All (global) |
+| orchestrator | Agent spawning, messaging | All (global) |
+| vault-rag | Semantic knowledge search | All (global) |
+| sequential-thinking | Complex problem solving | All (global) |
+| python-repl | Python code execution | All (global) |
+| filesystem | File operations | All (global) |
+| mui | Material-UI docs | claude-manager-mui |
 
 ---
 
@@ -252,7 +310,7 @@ cat ~/.claude/hooks.log | tail -50
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 2.1 (Added Method 0: Global MCP)
 **Created**: 2025-12-27
-**Updated**: 2025-12-27
+**Updated**: 2025-12-30
 **Location**: 40-Procedures/Add MCP Server SOP.md

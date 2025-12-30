@@ -120,3 +120,9 @@ Once configured, you'll be able to:
 **Created:** 2025-11-16
 **By:** claude-code-unified
 **Project:** claude-family (infrastructure)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MCP_PYTHON_REPL_INSTALL.md

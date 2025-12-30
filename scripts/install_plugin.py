@@ -165,7 +165,7 @@ def install_plugin(plugin_key: str, target_dir: Path, verbose: bool = True):
             settings_data = {
                 "hooks": hooks_config,
                 "permissions": {"allow": [], "deny": [], "ask": []},
-                "enabledMcpjsonServers": []
+                "mcp_servers": []
             }
             with open(settings_file, 'w') as f:
                 json.dump(settings_data, f, indent=2)

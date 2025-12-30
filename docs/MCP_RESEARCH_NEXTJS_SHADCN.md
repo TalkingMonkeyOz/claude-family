@@ -321,3 +321,9 @@ The shadcn registry best practices are for **publishing component registries** -
 **Created:** 2025-11-29
 **Updated:** 2025-11-29
 **Author:** claude-code-unified (claude-family session)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MCP_RESEARCH_NEXTJS_SHADCN.md

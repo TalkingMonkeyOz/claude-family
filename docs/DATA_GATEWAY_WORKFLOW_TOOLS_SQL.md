@@ -816,3 +816,9 @@ GRANT SELECT ON claude.open_feedback_summary TO claude_agents;
 **Last Updated**: 2025-12-04
 **Next Review**: 2026-01-04
 **Related**: DATA_GATEWAY_DOMAIN_ANALYSIS.md
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/DATA_GATEWAY_WORKFLOW_TOOLS_SQL.md

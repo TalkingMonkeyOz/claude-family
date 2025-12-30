@@ -372,3 +372,9 @@ Or add back to global if used frequently across all projects.
 All projects now have correct, optimized MCP configurations.
 
 **Restart required to activate!**
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MCP_CONFIG_FINAL_2025-11-04.md

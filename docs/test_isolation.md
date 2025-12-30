@@ -26,3 +26,9 @@
 This file is in MY workspace only. Other Claude instances working in their own workspaces won't see this file unless they explicitly navigate here.
 
 **Status**: Isolated Workspace Architecture v3.0 - WORKING
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/test_isolation.md

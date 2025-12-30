@@ -84,7 +84,7 @@ WHERE project_type = 'infrastructure';
 -- Add custom hook to one project
 UPDATE claude.workspaces
 SET startup_config = '{
-  "enabledMcpjsonServers": ["postgres", "custom-mcp"],
+  "mcp_servers": ["postgres", "custom-mcp"],
   "hooks": {...}
 }'::jsonb
 WHERE project_name = 'project-name';

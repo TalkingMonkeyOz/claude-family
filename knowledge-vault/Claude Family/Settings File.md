@@ -63,7 +63,7 @@ WHERE project_type = 'infrastructure';
 **One project only**:
 ```sql
 UPDATE claude.workspaces
-SET startup_config = '{"enabledMcpjsonServers": ["postgres", "custom"]}'::jsonb
+SET startup_config = '{"mcp_servers": ["postgres", "custom"]}'::jsonb
 WHERE project_name = 'claude-family';
 ```
 

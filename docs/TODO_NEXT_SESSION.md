@@ -1,203 +1,219 @@
-# Next Session TODO
+# Next Session Handoff
 
-**Last Updated**: 2025-12-26
-**Last Session**: WPF UI Skill Comprehensive Enhancement
+**Last Updated**: 2025-12-29 (Session End)
+**Last Session**: SessionStart Hook Fix + Duplicate Commands Audit + New MUI Project + SOP Analysis
+**Session ID**: 02bfd7c8-1b86-4320-9b9b-83ebab1fd69b
+
+---
 
 ## Completed This Session
 
-### WPF UI Skill - Comprehensive Enhancement ✅
+### 1. SessionStart Hook Fix ✅
+- **Problem**: Python indentation error in `session_startup_hook.py` (lines 381-384)
+- **Fix**: Corrected indentation to nest within try block
+- **Status**: Fixed, **requires restart to verify**
+- **File**: `.claude-plugins/claude-family-core/scripts/session_startup_hook.py`
 
-**Problem Identified**:
-- Current wpf-ui.instructions.md: Only 153 lines, basic patterns
-- Claude Desktop had better skill: 628 lines with real examples
-- claude-family-manager-v2 UI is "ok but could do better"
-- User wanted "real-world solutions, not pie in the sky" like MUI success
+### 2. Duplicate Commands Audit ✅
+- **Scope**: Audited 8 Claude projects for command conflicts
+- **Finding**: Only 1 duplicate (`session-resume.md` in claude-family)
+- **Resolution**: Renamed to `session-status.md` per Option A
+- **Files Modified**:
+  - `.claude/commands/session-resume.md` → `session-status.md`
+  - `.claude/skills/session-management/skill.md` (updated reference)
+- **Result**: **ZERO duplicates** across all projects
 
-**Research Conducted**:
-- ✅ Extracted Claude Desktop WPF UI skill (628 lines, 3 XAML examples)
-- ✅ Fetched wpfui.lepo.co documentation (getting-started, themes, SystemThemeWatcher)
-- ✅ Fetched GitHub lepoco/wpfui README and Gallery app structure
-- ✅ Found Gallery app source code (src/Wpf.Ui.Gallery)
-- ✅ Analyzed MainWindow.xaml and DashboardPage.xaml from Gallery
+### 3. New Project: claude-manager-mui ✅
+- **Tech Stack**: Tauri 2 + React 19 + MUI 7 + TypeScript
+- **Purpose**: Native desktop app for Claude Family management
+- **Initial Error**: Failed to follow New Project SOP (mental categorization failure)
+- **Correction**: Completed full SOP compliance
+  - ✅ Registered in database (projects, workspaces, identities)
+  - ✅ Created governance docs (CLAUDE.md, PROBLEM_STATEMENT.md, ARCHITECTURE.md)
+  - ✅ Generated `.claude/settings.local.json` via script
+  - ✅ Created `.mcp.json` (empty - no MUI MCPs found)
+- **Project IDs**:
+  - Project: `a796c1e8-ff53-4595-99b1-82e2ad438c9e`
+  - Identity: `602627d4-2530-46d8-9af9-a62e5bc4da45`
+  - Workspace: ID 14
+- **Location**: `C:\Projects\claude-manager-mui\`
 
-**Created**:
-1. **Comprehensive WPF UI Skill** (`.claude/skills/wpf-ui/skill.md`)
-   - 1,050 lines of comprehensive guidance
-   - Combined Desktop skill + Web docs + Gallery app patterns
-   - Real dashboard layout examples (stats cards, activity feeds, sidebar)
-   - NavigationView shell pattern from Gallery app
-   - Theme management (Mica/Acrylic backdrops, SystemThemeWatcher)
-   - MVVM with Dependency Injection setup
-   - All WPF UI controls with examples
-   - Icons reference (Fluent System Icons)
-   - Best practices and gotchas
+### 4. Ultra Think Analysis ✅
+- **Question**: Why did I skip the New Project SOP?
+- **Root Causes**:
+  1. Mental categorization error (saw as "scaffold app" not "Claude project")
+  2. Skill routing failure (didn't check if project-ops skill applied)
+  3. Context switching (was focused on duplicate commands)
+  4. Pattern matching miss (didn't trigger on "new project" keywords)
+- **Language Assessment**: Bold "FIRST" is weaker than "MANDATORY"
+- **Recommendations**:
+  1. Strengthen language to "MANDATORY" in CLAUDE.md
+  2. Add PreToolUse hook to detect new project creation
+  3. Hard mental trigger: "new project" + C:\Projects → check project-ops skill
 
-2. **Updated wpf-ui.instructions.md** (~200 lines)
-   - Focused quick-reference for auto-apply
-   - Critical setup requirements (App.xaml)
-   - Essential patterns (FluentWindow, NavigationView, Cards)
-   - Common gotchas with solutions
-   - "When to Use What" decision table
-   - Points to skill.md for comprehensive patterns
+### 5. Project Cleanup ✅
+- **Archived**:
+  - `finance-htmx` (superseded by finance-mui)
+  - `personal-finance-system` (superseded by finance-mui)
+  - `claude-family-manager` (Electron, memory leaks)
+- **Deleted**: Duplicate "Claude Family Manager" test entry
+- **Activated**: `claude-desktop-config` (was archived with inconsistent status)
+- **Fixed**: Naming mismatches (ATO-Tax-Agent, claude-family-manager-v2)
 
-3. **Example XAML Files** (`.claude/skills/wpf-ui/examples/`)
-   - DashboardPage.xaml (17KB) - Stats cards, activity feed, sidebar
-   - SettingsPage.xaml (9KB) - Settings patterns
-   - DataPage.xaml (8KB) - Data display patterns
-   - MainWindow.xaml (3KB) - NavigationView shell
-   - MainWindow.xaml.cs (1KB) - Code-behind
-   - App.xaml (784B) - Theme setup
-
-4. **Claude Family Manager v2 Improvements Doc** (`docs/CFM_UI_IMPROVEMENTS_WPF_UI.md`)
-   - 7 specific improvements for current manager UI
-   - Before/after comparisons
-   - Priority 1: Stats card grid (replace plain text stats)
-   - Priority 2: Session activity feed pattern
-   - Priority 3: Quick actions sidebar card
-   - Priority 4: Messages activity feed
-   - Priority 5: Feedback status indicators
-   - Priority 6: InfoBar for status messages
-   - Priority 7: CardExpander for project details
-   - Complete code examples for each improvement
-
-**Impact**:
-- ✨ Comprehensive WPF UI guidance (4x larger than before)
-- 🎨 Real-world examples, not theoretical
-- 📚 Desktop skill + web docs + Gallery patterns combined
-- 🚀 Ready to build better Windows 11 UIs
-- 🎯 Specific improvements for claude-family-manager-v2
-
-**Web Sources Used**:
-- [WPF UI Documentation](https://wpfui.lepo.co/documentation/)
-- [Application Themes](https://wpfui.lepo.co/documentation/themes.html)
-- [GitHub - lepoco/wpfui](https://github.com/lepoco/wpfui)
-- [Gallery App Source](https://github.com/lepoco/wpfui/tree/main/src/Wpf.Ui.Gallery)
-- [SystemThemeWatcher](https://wpfui.lepo.co/documentation/system-theme-watcher.html)
+### 6. Batch File ✅
+- **Finding**: `C:\claude\start-claude.bat` doesn't need updating
+- **Reason**: Queries database dynamically via `select_project.py`
+- **Result**: Auto-shows all active projects (self-healing design)
 
 ---
 
-## Next Steps (Priority Order)
+## Current Active Projects (8 Total)
 
-### High Priority
-
-1. **Test WPF UI Skill in Real Work**
-   - Use skill when working on claude-family-manager-v2
-   - Verify patterns work as expected
-   - Gather feedback on what's missing
-
-2. **Implement CFM UI Improvements** (When working on manager)
-   - Start with Priority 1: Stats card grid
-   - Roll out incrementally
-   - Use examples from skill
-
-3. **Monitor Agent Spawns** (From previous session)
-   - Run queries from TIMEOUT_FIX_MONITORING.md after ~20 spawns
-   - Track timeout adherence and success rates
-   - Verify coder-haiku (1200s), python-coder-haiku (900s), lightweight-haiku (600s)
-
-4. **Investigate researcher-opus Failures** (From previous session)
-   - 83% failure rate (1/6 success)
-   - Review failed task prompts
-   - Decision: improve or deprecate
-
-### Medium Priority
-
-5. **Knowledge Vault Compliance** (From audit)
-   - 93% non-compliant files
-   - 80% missing version footers
-   - 20% oversized files
-   - Split large files (Session User Stories: 1,374 lines!)
-
-6. **Missing Agent Configs** (Deferred)
-   - Create `research-coordinator-sonnet.mcp.json`
-   - Create `winforms-coder-haiku.mcp.json`
-   - Both referenced in agent_specs.json but missing
-
-7. **Cleanup Stale Agent Configs** (Deferred)
-   - 8 configs for removed agents
-   - Move to `configs/deprecated/` or delete
-
-### Low Priority
-
-8. **Claude Desktop Config Integration** (User Decision Pending)
-   - Directory exists at `C:\Projects\claude-desktop-config`
-   - NOT in workspaces table
-   - Options: Add to launcher, sync scripts, or Desktop launch option
+1. **ATO-tax-agent** - Tax agent research
+2. **claude-desktop-config** - Claude Desktop & Code Console config
+3. **claude-family** - Core infrastructure
+4. **claude-family-manager-v2** - WPF desktop manager
+5. **claude-manager-mui** - MUI desktop manager (NEW!)
+6. **finance-mui** - MUI finance app
+7. **nimbus-import** - Staff shift bulk importer
+8. **nimbus-user-loader** - User loader tool
 
 ---
 
-## Recent Achievements
+## 🚨 CRITICAL: Restart Required
 
-### Session 2025-12-26 (Today)
-- ✅ **Agent Timeout Analysis**: Analyzed 147 sessions, fixed 4 timeouts
-- ✅ **Timeout Validation**: Added override warnings, improved termination
-- ✅ **6 Missing Skills Created**: session-management, work-item-routing, code-review, agentic-orchestration, project-ops, messaging
-- ✅ **Skill Documentation Complete**: 10/10 core skills (1,928 lines)
-- ✅ **WPF UI Skill Enhanced**: Desktop skill + web docs + Gallery examples (1,050 lines)
-- ✅ **wpf-ui.instructions.md Updated**: Focused quick-reference (200 lines)
-- ✅ **6 Example XAML Files**: Real patterns from Desktop skill and Gallery app
-- ✅ **CFM UI Improvements Doc**: 7 specific enhancements with code examples
+**YOU MUST RESTART CLAUDE CODE** for SessionStart hook fix to take effect!
 
-### Files Modified Today
-- ✅ `mcp-servers/orchestrator/orchestrator_prototype.py` - Timeout validation & enforcement
-- ✅ `mcp-servers/orchestrator/agent_specs.json` - 4 timeout adjustments, version 2.1.0
-- ✅ `mcp-servers/orchestrator/configs/csharp-coder-haiku.mcp.json` - Removed roslyn
-- ✅ `.claude/skills/session-management/skill.md` (283 lines)
-- ✅ `.claude/skills/work-item-routing/skill.md` (277 lines)
-- ✅ `.claude/skills/code-review/skill.md` (327 lines)
-- ✅ `.claude/skills/agentic-orchestration/skill.md` (370 lines)
-- ✅ `.claude/skills/project-ops/skill.md` (323 lines)
-- ✅ `.claude/skills/messaging/skill.md` (348 lines)
-- ✅ `.claude/skills/wpf-ui/skill.md` (1,050 lines)
-- ✅ `~/.claude/instructions/wpf-ui.instructions.md` (200 lines)
-- ✅ `.claude/skills/wpf-ui/examples/` (6 XAML files)
-- ✅ `docs/CFM_UI_IMPROVEMENTS_WPF_UI.md`
-
-### Documentation Created Today
-- ✅ `docs/AGENT_TIMEOUT_ANALYSIS.md`
-- ✅ `docs/RESEARCHER_OPUS_FAILURE_ANALYSIS.md`
-- ✅ `docs/TIMEOUT_OVERRIDE_ISSUE.md`
-- ✅ `docs/TIMEOUT_FIX_MONITORING.md`
-- ✅ `docs/AGENT_CONFIG_AND_TIMEOUT_FIX_SUMMARY.md`
-- ✅ `docs/SESSION_SUMMARY_2025-12-26.md`
-- ✅ `docs/VAULT_COMPLIANCE_AUDIT_2025-12-26.md`
-- ✅ `docs/CFM_UI_IMPROVEMENTS_WPF_UI.md`
+After restart, verify:
+- ✅ SessionStart hook executes without error
+- ✅ Session ID displayed on startup
+- ✅ MCP logging enabled message shown
+- ✅ Check `~/.claude/hooks.log` for success
 
 ---
 
-## Key Metrics
+## Next Steps
 
-### Agent Timeout Improvements
-- 4 timeouts optimized based on 147 sessions
-- coder-haiku: 600s → 1200s (P95=855s)
-- python-coder-haiku: 600s → 900s (max=3343s observed)
-- lightweight-haiku: 180s → 600s (max=470s)
-- research-coordinator-sonnet: 1800s → 600s (was 5.5× too high)
+### Immediate (After Restart)
+1. **Verify SessionStart hook** - Check hooks.log and session auto-creation
+2. **Test /session-status** - Verify renamed command works
+3. **Delete dead code** - Remove `.claude/hooks.json` (it's ignored, database is source)
 
-### Skill Documentation
-- 10/10 core skills documented (100% coverage)
-- 1,928 lines of skill documentation (6 skills created today)
-- 1,050 lines WPF UI skill (comprehensive)
-- 6 XAML example files (40KB total)
+### claude-manager-mui Development
+4. **Tauri Backend Setup**:
+   - Add `tokio-postgres` to Cargo.toml
+   - Create database connection module (`src-tauri/src/database.rs`)
+   - Define Tauri commands for queries
+5. **React Frontend**:
+   - Set up App layout with MUI (AppBar, Drawer, routing)
+   - Implement Project List feature
+   - Build Launch Controls
+6. **Integration**:
+   - Connect frontend to Tauri backend
+   - Test database queries
+   - Verify MUI theme
 
-### WPF UI Enhancement
-- Instructions: 153 lines → 200 lines (focused)
-- Skill: 0 lines → 1,050 lines (comprehensive)
-- Examples: 0 → 6 files (real patterns)
-- Improvement docs: 7 specific enhancements for CFM
+### Documentation Improvements
+7. **Update CLAUDE.md** (claude-family):
+   - Change "FIRST" to "MANDATORY" for New Project SOP
+   - Add explicit warning about skipping SOPs
+   - Make it more visually distinct
+8. **Create Command Management SOP**:
+   - When to create global vs project commands
+   - Naming conventions
+   - Conflict detection procedure
+9. **Fix vault wiki-links** (14 files reference old `/session-resume`)
 
 ---
 
-## Questions / Decisions Needed
+## Key Learnings
 
-1. **Monitor Agent Spawns**: Run monitoring queries after ~20 more spawns?
-2. **researcher-opus**: Investigate failures or deprecate? (83% failure rate)
-3. **Knowledge Vault**: Tackle compliance issues now or later?
-4. **Claude Desktop Config**: Integrate into launcher or keep separate?
-5. **WPF UI Skill**: Any missing patterns or examples needed?
+### What Worked ✅
+1. Database-driven launcher = self-healing (no batch file edits)
+2. Ultra Think analysis identified real root causes
+3. New Project SOP works perfectly when followed
+4. Memory graph + session logging captures institutional knowledge
+
+### What Needs Improvement ⚠️
+1. SOP enforcement relies on documentation (need technical barriers)
+2. Language strength: "FIRST" < "MANDATORY" for critical procedures
+3. No automated detection when creating projects under C:\Projects
+4. Mental categorization errors bypass even clear documentation
+
+### Recommendations for System
+1. **Add PreToolUse Hook**: Detect `mkdir C:\Projects\*` and warn
+2. **Strengthen CLAUDE.md**: Use "MANDATORY" for all critical SOPs
+3. **Skill Activation Prompt**: More explicit about when to use project-ops
+4. **Document Failure Case**: Add to SOP as cautionary example
 
 ---
 
-**Version**: 15.0
-**Status**: WPF UI skill comprehensive enhancement complete
-**Next Focus**: Test skill in real work, monitor agent timeouts, CFM UI improvements
+## Files Modified
+
+### claude-family
+1. `.claude-plugins/claude-family-core/scripts/session_startup_hook.py` - Indentation fix
+2. `.claude/commands/session-resume.md` → `session-status.md` - Renamed
+3. `.claude/skills/session-management/skill.md` - Updated command reference
+4. `docs/SESSION_START_AND_DUPLICATE_COMMANDS_FIX_2025-12-29.md` - Created
+5. `docs/DUPLICATE_COMMANDS_AUDIT_2025-12-29.md` - Created
+6. `docs/PROPER_PROJECT_SETUP_COMPLETE_2025-12-29.md` - Created
+7. `docs/SESSION_SUMMARY_2025-12-29.md` - Created
+8. `docs/TODO_NEXT_SESSION.md` - This file
+
+### claude-manager-mui (NEW PROJECT)
+1. `CLAUDE.md` - Project specification
+2. `PROBLEM_STATEMENT.md` - Problem definition
+3. `ARCHITECTURE.md` - System design
+4. `README.md` - Project overview
+5. `.claude/settings.local.json` - Generated from database
+6. `.mcp.json` - Created (empty)
+7. `docs/TODO_NEXT_SESSION.md` - Next steps
+8. `src/theme/theme.ts` - Copied from finance-mui
+9. Full project structure (features/, components/, services/, etc.)
+
+### Database
+- Updated `claude.projects` - 4 archived, 1 activated, 2 created, naming fixes
+- Updated `claude.workspaces` - 4 deactivated, 2 added
+- Updated `claude.identities` - 1 created
+- Created session record: `02bfd7c8-1b86-4320-9b9b-83ebab1fd69b`
+
+---
+
+## Statistics
+
+- **Projects Audited**: 8
+- **Duplicates Found**: 1
+- **Duplicates Fixed**: 1
+- **New Projects Created**: 1
+- **Projects Archived**: 4
+- **Projects Deleted**: 1
+- **NPM Packages Installed**: 343
+- **Documentation Files Created**: 8+
+- **Uncommitted Files**: 147+
+- **Session Duration**: ~2 hours
+- **Tokens Used**: ~130,000
+
+---
+
+## For Next Claude
+
+**What You Inherit**:
+- ✅ SessionStart hook fixed (verify after restart)
+- ✅ Zero duplicate commands across all projects
+- ✅ New claude-manager-mui project fully compliant
+- ✅ Clean project database (only active projects shown)
+- ✅ Comprehensive documentation of failures and fixes
+- ✅ Knowledge stored in memory graph and database
+
+**What You Must Do**:
+1. **Restart verification** - SessionStart hook must work
+2. **Follow SOPs** - Read vault docs FIRST before acting
+3. **Continue claude-manager-mui** - Start with Tauri backend
+
+**Key Insight**: Mental categorization errors bypass documentation. When you see "new project" + C:\Projects location, **ALWAYS** check project-ops skill and read New Project SOP **FIRST**.
+
+---
+
+**Version**: 21.0
+**Status**: Session ended, restart required for hook verification
+**Next Focus**: Verify SessionStart hook, then begin claude-manager-mui Tauri backend

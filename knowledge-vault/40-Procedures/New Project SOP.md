@@ -3,11 +3,13 @@ title: New Project SOP
 category: procedure
 status: active
 created: 2025-12-27
-updated: 2025-12-27
+updated: 2025-12-28
+version: 1.1
 tags:
 - sop
 - project-setup
 - onboarding
+- mcp-configuration
 projects: []
 ---
 
@@ -51,6 +53,11 @@ This will:
 4. ✓ Create identity record
 5. ✓ Generate `.claude/settings.local.json` from project type defaults
 6. ✓ Run compliance check
+
+**IMPORTANT - Additional Manual Steps Required:**
+7. ⚠️ Create `.mcp.json` for project-specific MCPs (see below)
+8. ⚠️ Add MCP configs to database (`mcp_configs` table)
+9. ⚠️ Update workspaces entry with MCP server list
 
 **Verify**: Run `/check-compliance` to ensure 100% governance
 
@@ -207,6 +214,116 @@ Should show:
 
 ---
 
+## 6. Configure Project-Specific MCPs
+
+**Why**: Some projects need specialized MCPs (Tailwind, MUI, Playwright, etc.) not in global config.
+
+### Step A: Create .mcp.json in Project Root
+
+Create `C:\Projects\{project-name}\.mcp.json`:
+
+```json
+{
+  "_comment": "{project-name} Project MCP Config",
+  "_purpose": "Project-specific MCPs for this tech stack",
+  "_updated": "YYYY-MM-DD",
+  "mcpServers": {
+    "example-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "package-name"],
+      "env": {},
+      "metadata": {
+        "description": "What this MCP does",
+        "why_needed": "Why this project needs it",
+        "sources": ["https://..."]
+      }
+    }
+  }
+}
+```
+
+**Examples:**
+
+**For Tailwind/DaisyUI projects:**
+```json
+{
+  "mcpServers": {
+    "tailwindcss": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "tailwindcss-mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+**For React/MUI projects:**
+```json
+{
+  "mcpServers": {
+    "mui": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@mui/mcp@latest"],
+      "env": {}
+    }
+  }
+}
+```
+
+### Step B: Register MCPs in Database
+
+```sql
+-- Add MCP to mcp_configs table
+INSERT INTO claude.mcp_configs (
+  config_id,
+  project_name,
+  mcp_server_name,
+  mcp_package,
+  install_date,
+  is_active,
+  reason
+) VALUES (
+  gen_random_uuid(),
+  'project-name',
+  'tailwindcss',
+  'tailwindcss-mcp-server (via npx)',
+  NOW(),
+  true,
+  'Provides Tailwind utilities and DaisyUI component documentation'
+);
+```
+
+### Step C: Update Workspaces with MCP List
+
+```sql
+-- Update workspaces startup_config with MCP server list
+UPDATE claude.workspaces
+SET startup_config = jsonb_set(
+  COALESCE(startup_config, '{}'::jsonb),
+  '{mcp_servers}',
+  '["tailwindcss", "playwright"]'::jsonb
+)
+WHERE project_name = 'project-name';
+```
+
+### Step D: Verify MCP Configuration
+
+The launcher script (`C:\claude\start-claude.bat`) will:
+1. Check for `.mcp.json` in project root
+2. Load it when launching Claude Code
+3. Warn if missing
+
+**Test it:**
+```bash
+# Launch via desktop shortcut
+# Should see: "[OK] Project MCP config found"
+```
+
+---
+
 ## Project Type Defaults
 
 What you get automatically based on project type:
@@ -246,7 +363,7 @@ To override defaults for a specific project:
 -- Add project-specific config overrides
 UPDATE claude.workspaces
 SET startup_config = '{
-  "enabledMcpjsonServers": ["postgres", "memory", "custom-mcp"],
+  "mcp_servers": ["postgres", "memory", "custom-mcp"],
   "hooks": {
     "PostToolUse": [{
       "matcher": "Bash",
@@ -294,7 +411,11 @@ Create missing documents using templates above.
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-27
-**Updated**: 2025-12-27
+**Updated**: 2025-12-28
 **Location**: 40-Procedures/New Project SOP.md
+
+**Changelog**:
+- v1.1 (2025-12-28): Added Section 6 - Configure Project-Specific MCPs (.mcp.json, database registration, workspaces update)
+- v1.0 (2025-12-27): Initial version

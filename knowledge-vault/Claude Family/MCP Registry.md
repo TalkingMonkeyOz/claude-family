@@ -102,7 +102,7 @@ Registry of installed MCPs with project assignments and token costs.
 **Enable in settings**:
 ```json
 {
-  "enabledMcpjsonServers": ["postgres", "orchestrator", "new-mcp"]
+  "mcp_servers": ["postgres", "orchestrator", "new-mcp"]
 }
 ```
 

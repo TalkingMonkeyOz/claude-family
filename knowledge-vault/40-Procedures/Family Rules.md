@@ -74,15 +74,18 @@ We are the **Claude Family** - multiple Claude instances coordinating across pro
 
 ## MCP Servers
 
-Always available across all projects:
+Available across all projects (varies by platform):
 
-| Server | Purpose |
-|--------|---------|
-| postgres | Database access, session logging |
-| memory | Persistent memory graph |
-| filesystem | File operations |
-| orchestrator | Agent spawning, messaging |
-| sequential-thinking | Complex problem solving |
+| Server | Code | Desktop | Purpose |
+|--------|------|---------|---------|
+| postgres | ✅ | ✅ | Database access, session logging |
+| memory | ✅ | ✅ | Persistent memory graph |
+| filesystem | ✅ | ✅ | File operations (scoped) |
+| orchestrator | ✅ | ❌ | Agent spawning, messaging |
+| sequential-thinking | ✅ | ✅ | Complex problem solving |
+| python-repl | ✅ | ❌ | Code execution |
+
+**Note**: Desktop has narrower filesystem scope (knowledge-vault only) and cannot spawn agents or execute code.
 
 ---
 
@@ -91,6 +94,7 @@ Always available across all projects:
 - [[Session Lifecycle]] - Complete session flow documentation (NEW)
 - [[Session Quick Reference]] - Quick reference for session operations (NEW)
 - [[Database Schema - Core Tables]] - Core database tables reference (NEW)
+- [[Claude Desktop Setup]] - Desktop configuration and workflows (NEW)
 - [[Purpose]] - Vault overview
 - [[Session Workflow]] - Detailed session procedures
 - [[Claude Hooks]] - Enforcement layer
@@ -98,7 +102,10 @@ Always available across all projects:
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2025-12-20
-**Updated**: 2025-12-26
+**Updated**: 2025-12-29
 **Location**: knowledge-vault/40-Procedures/Family Rules.md
+**Changelog**:
+- Added Desktop platform to MCP servers table
+- Added [[Claude Desktop Setup]] to related docs

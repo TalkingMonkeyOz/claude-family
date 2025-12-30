@@ -639,3 +639,9 @@ New document_projects junction table available.
 3. **`C:\Projects\claude-family\templates\CLAUDE.md`** - Template to expand with additional project types
 4. **`C:\Projects\claude-family\.docs-manifest.json`** - Reference for manifest structure
 5. **`C:\Projects\claude-family\scripts\sync_slash_commands.py`** - Pattern to follow for distributing core files
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/CORE_DOCUMENTATION_SYSTEM_PLAN.md

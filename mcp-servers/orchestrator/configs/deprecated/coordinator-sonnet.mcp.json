@@ -10,15 +10,18 @@
       ],
       "env": {}
     },
-    "roslyn": {
+    "postgres": {
       "type": "stdio",
-      "command": "dotnet",
-      "args": [
-        "run",
-        "--no-build",
-        "--project",
-        "C:\\Projects\\roslyn-mcp\\RoslynMCP\\RoslynMCP.csproj"
-      ],
+      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
+      "args": ["--access-mode=unrestricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "sequential-thinking": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
       "env": {}
     },
     "orchestrator": {

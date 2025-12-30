@@ -62,3 +62,9 @@ Every time you reboot or start a fresh Claude Desktop session, you'll need to ru
 ---
 
 **Current Status:** JSON files are ready, MCP graph needs populating in Claude Desktop
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/POPULATE_MCP_NOW.md

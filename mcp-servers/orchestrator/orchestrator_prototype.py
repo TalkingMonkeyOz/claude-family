@@ -40,7 +40,7 @@ class AgentOrchestrator:
     """Manages spawning and communication with Claude agents."""
 
     # Safeguard constants
-    MAX_CONCURRENT_SPAWNS = 3  # Maximum agents running simultaneously
+    MAX_CONCURRENT_SPAWNS = 6  # Maximum agents running simultaneously
     MIN_SPAWN_DELAY_SECONDS = 2.0  # Minimum delay between spawns
     MAX_RETRIES = 2  # Max retry attempts for failed spawns
     RETRY_DELAY_SECONDS = 5.0  # Delay before retry
@@ -311,12 +311,17 @@ class AgentOrchestrator:
         # Log spawn event to database
         session_id = None
         if self.db_logger:
+            # Get parent session ID from environment (set by session startup hook)
+            import os
+            parent_session_id = os.environ.get('CLAUDE_SESSION_ID')
+
             session_id = self.db_logger.log_spawn(
                 agent_type=agent_type,
                 task=task,
                 workspace_dir=str(workspace_path),
                 model=spec['model'],
-                mcp_servers=mcp_servers
+                mcp_servers=mcp_servers,
+                parent_session_id=parent_session_id
             )
 
         # Build Claude Code command
@@ -326,8 +331,19 @@ class AgentOrchestrator:
         print(f"DEBUG: [{spawn_id}] Spawning {agent_type} agent", file=sys.stderr)
         print(f"DEBUG: [{spawn_id}] Command: {' '.join(str(c) for c in cmd)[:100]}...", file=sys.stderr)
 
-        # Set timeout
-        timeout = timeout or spec['recommended_timeout_seconds']
+        # Set timeout with validation
+        spec_timeout = spec['recommended_timeout_seconds']
+        if timeout is not None and timeout != spec_timeout:
+            # User explicitly overriding timeout - validate and warn
+            if timeout < spec_timeout * 0.5:
+                print(f"⚠️  WARNING: [{spawn_id}] {agent_type} timeout override {timeout}s is <50% of spec {spec_timeout}s",
+                      file=sys.stderr)
+            elif timeout > spec_timeout * 2:
+                print(f"⚠️  WARNING: [{spawn_id}] {agent_type} timeout override {timeout}s is >200% of spec {spec_timeout}s",
+                      file=sys.stderr)
+            print(f"INFO: [{spawn_id}] Using timeout override: {timeout}s (spec: {spec_timeout}s)", file=sys.stderr)
+
+        timeout = timeout or spec_timeout
 
         # Prepend workspace context to task so agent knows where to work
         # Agent accesses files via filesystem MCP, not local filesystem
@@ -453,8 +469,19 @@ TASK:
                     timeout=timeout
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                # Agent timed out - forcefully terminate
+                print(f"⚠️  Agent timeout reached ({timeout}s) - terminating process", file=sys.stderr)
+
+                # Try graceful termination first
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    # Process didn't terminate gracefully, force kill
+                    print(f"⚠️  Process didn't terminate gracefully - force killing", file=sys.stderr)
+                    proc.kill()
+                    await proc.wait()
+
                 return {
                     'success': False,
                     'output': None,
@@ -523,15 +550,25 @@ TASK:
                     timeout=timeout
                 )
             except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                # Local agent timed out - forcefully terminate
+                print(f"⚠️  Local agent timeout reached ({timeout}s) - terminating process", file=sys.stderr)
+
+                try:
+                    proc.terminate()
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    print(f"⚠️  Process didn't terminate gracefully - force killing", file=sys.stderr)
+                    proc.kill()
+                    await proc.wait()
+
+                execution_time = (datetime.now() - start_time).total_seconds()
                 return {
                     'success': False,
                     'output': None,
                     'error': f'Local agent timed out after {timeout} seconds',
                     'stderr': None,
                     'agent_type': f"local-{ollama_model}",
-                    'execution_time_seconds': timeout,
+                    'execution_time_seconds': execution_time,  # Use actual time, not timeout value
                     'estimated_cost_usd': 0.0
                 }
 
@@ -593,12 +630,17 @@ TASK:
 
         # Log to async_tasks table
         if self.db_logger:
+            # Get parent session ID from environment (set by session startup hook)
+            import os
+            parent_session_id = os.environ.get('CLAUDE_SESSION_ID')
+
             self.db_logger.log_async_spawn(
                 task_id=task_id,
                 agent_type=agent_type,
                 task=task,
                 workspace_dir=workspace_dir,
-                callback_project=callback_project
+                callback_project=callback_project,
+                parent_session_id=parent_session_id
             )
 
         # Wrap task to include completion reporting instructions

@@ -126,20 +126,25 @@ def check_inbox(
 
         # Build WHERE clause for recipients
         or_conditions = []
-        if include_broadcasts:
-            or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
+        has_specific_recipient = False
+
         if project_name:
             or_conditions.append("to_project = %s")
             params.append(project_name)
+            has_specific_recipient = True
         if session_id:
             or_conditions.append("to_session_id = %s")
             params.append(session_id)
+            has_specific_recipient = True
 
-        # If no recipient filters specified, show all messages to any project/session
-        # This prevents returning 0 when user forgets to pass project_name
-        if not or_conditions:
-            # Show broadcasts + any messages to any project (but not direct session messages)
+        # If no specific recipient filter, show all non-session-specific messages
+        # This includes broadcasts AND project-targeted messages
+        if not has_specific_recipient:
+            # Show all messages where to_session_id IS NULL (broadcasts + project messages)
             or_conditions.append("to_session_id IS NULL")
+        elif include_broadcasts:
+            # Also include true broadcasts when specific recipient is provided
+            or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
 
         conditions.append(f"({' OR '.join(or_conditions)})")
 
@@ -243,8 +248,31 @@ def broadcast(body: str, subject: Optional[str] = None, from_session_id: Optiona
     )
 
 
-def acknowledge(message_id: str, action: str = "read") -> dict:
-    """Mark a message as read or acknowledged."""
+def acknowledge(message_id: str, action: str = "read", project_id: str = None, defer_reason: str = None, priority: int = 3) -> dict:
+    """Mark a message as read, acknowledged, actioned, or deferred.
+
+    Args:
+        message_id: UUID of the message
+        action: One of 'read', 'acknowledged', 'actioned', 'deferred'
+        project_id: Required for 'actioned' - project to create todo in
+        defer_reason: Required for 'deferred' - reason for deferral
+        priority: Optional priority for created todo (default 3)
+
+    Returns:
+        dict with success status and optional todo_id
+    """
+    # For 'actioned' and 'deferred', delegate to the specific functions
+    if action == "actioned":
+        if not project_id:
+            return {"success": False, "error": "project_id required for actioned messages"}
+        return action_message(message_id, project_id, priority)
+
+    if action == "deferred":
+        if not defer_reason:
+            return {"success": False, "error": "defer_reason required for deferred messages"}
+        return defer_message(message_id, defer_reason)
+
+    # Handle 'read' and 'acknowledged' as before
     conn = get_db_connection()
     try:
         cur = conn.cursor()
@@ -255,7 +283,7 @@ def acknowledge(message_id: str, action: str = "read") -> dict:
                 WHERE message_id = %s
                 RETURNING message_id::text
             """, (message_id,))
-        else:
+        else:  # acknowledged
             cur.execute("""
                 UPDATE claude.messages
                 SET status = 'acknowledged', acknowledged_at = NOW()
@@ -346,6 +374,171 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
         from_session_id=from_session_id,
         metadata={"reply_to": original_message_id}
     )
+
+
+def action_message(message_id: str, project_id: str, priority: int = 3) -> dict:
+    """Convert a message into an actionable todo.
+
+    Args:
+        message_id: UUID of the message to action
+        project_id: UUID of the project to create todo for
+        priority: Priority level 1-5 (default 3)
+
+    Returns:
+        dict with success status and todo_id
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # 1. Fetch message details
+        cur.execute("""
+            SELECT subject, body, message_type
+            FROM claude.messages
+            WHERE message_id = %s
+        """, (message_id,))
+        message = cur.fetchone()
+
+        if not message:
+            cur.close()
+            conn.close()
+            return {"success": False, "error": "Message not found"}
+
+        message_dict = dict(message) if not isinstance(message, dict) else message
+
+        # 2. Create todo content from message
+        content = message_dict.get('subject', 'Unnamed task')
+        active_form = f"Working on: {content}"
+
+        # 3. Create todo with message link
+        cur.execute("""
+            INSERT INTO claude.todos
+            (project_id, content, active_form, status, priority, source_message_id)
+            VALUES (%s, %s, %s, 'pending', %s, %s)
+            RETURNING todo_id::text
+        """, (project_id, content, active_form, priority, message_id))
+
+        todo_result = cur.fetchone()
+        todo_dict = dict(todo_result) if not isinstance(todo_result, dict) else todo_result
+        todo_id = todo_dict['todo_id']
+
+        # 4. Update message status to 'actioned'
+        cur.execute("""
+            UPDATE claude.messages
+            SET status = 'actioned', acknowledged_at = NOW()
+            WHERE message_id = %s
+        """, (message_id,))
+
+        cur.close()
+        conn.commit()
+
+        return {
+            "success": True,
+            "todo_id": todo_id,
+            "message": "Message converted to todo successfully"
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def defer_message(message_id: str, reason: str) -> dict:
+    """Explicitly defer a message with a reason.
+
+    Args:
+        message_id: UUID of the message to defer
+        reason: Explanation for why message is being deferred
+
+    Returns:
+        dict with success status
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Update message status and store defer reason in metadata
+        cur.execute("""
+            UPDATE claude.messages
+            SET status = 'deferred',
+                acknowledged_at = NOW(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('defer_reason', %s, 'deferred_at', NOW()::text)
+            WHERE message_id = %s
+            RETURNING message_id::text
+        """, (reason, message_id))
+
+        result = cur.fetchone()
+        cur.close()
+        conn.commit()
+
+        if not result:
+            return {"success": False, "error": "Message not found"}
+
+        return {
+            "success": True,
+            "message": "Message deferred successfully",
+            "reason": reason
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def get_unactioned_messages(project_name: str) -> dict:
+    """Get actionable messages that haven't been actioned or deferred.
+
+    Args:
+        project_name: Name of the project to check
+
+    Returns:
+        dict with count and list of unactioned messages
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+                message_id::text,
+                from_session_id::text,
+                message_type,
+                priority,
+                subject,
+                body,
+                created_at
+            FROM claude.messages
+            WHERE to_project = %s
+              AND message_type IN ('task_request', 'question', 'handoff')
+              AND status NOT IN ('actioned', 'deferred')
+            ORDER BY
+                CASE priority
+                    WHEN 'urgent' THEN 1
+                    WHEN 'normal' THEN 2
+                    ELSE 3
+                END,
+                created_at ASC
+        """, (project_name,))
+
+        messages = cur.fetchall()
+        cur.close()
+
+        # Convert to list of dicts and handle datetime
+        result_messages = []
+        for msg in messages:
+            msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+            if msg_dict.get('created_at'):
+                msg_dict['created_at'] = msg_dict['created_at'].isoformat()
+            result_messages.append(msg_dict)
+
+        return {
+            "count": len(result_messages),
+            "messages": result_messages
+        }
+    finally:
+        conn.close()
 
 
 def get_spec_timeout(agent_type: str) -> int:
@@ -738,7 +931,7 @@ async def list_tools() -> List[Tool]:
             ),
             Tool(
                 name="acknowledge",
-                description="Mark a message as read or acknowledged",
+                description="Mark a message as read, acknowledged, actioned (converted to todo), or deferred (explicitly skipped)",
                 inputSchema={
                     "type": "object",
                     "properties": {
@@ -748,8 +941,22 @@ async def list_tools() -> List[Tool]:
                         },
                         "action": {
                             "type": "string",
-                            "enum": ["read", "acknowledged"],
-                            "description": "Mark as read or fully acknowledged"
+                            "enum": ["read", "acknowledged", "actioned", "deferred"],
+                            "description": "Action to take: read, acknowledged, actioned (create todo), or deferred (skip with reason)"
+                        },
+                        "project_id": {
+                            "type": "string",
+                            "description": "Required if action='actioned' - UUID of project to create todo in"
+                        },
+                        "defer_reason": {
+                            "type": "string",
+                            "description": "Required if action='deferred' - Explanation for why message is being deferred"
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "description": "Optional priority for created todo (1-5, default 3). Only used if action='actioned'",
+                            "minimum": 1,
+                            "maximum": 5
                         }
                     },
                     "required": ["message_id"]
@@ -823,6 +1030,20 @@ async def list_tools() -> List[Tool]:
                     }
                 }
             ),
+            Tool(
+                name="get_unactioned_messages",
+                description="Get actionable messages (task_request/question/handoff) that haven't been actioned or deferred for a project",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "project_name": {
+                            "type": "string",
+                            "description": "Name of the project to check for unactioned messages"
+                        }
+                    },
+                    "required": ["project_name"]
+                }
+            ),
         ])
 
     return tools
@@ -871,6 +1092,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_get_agent_stats(arguments)
     elif name == "get_mcp_stats":
         return await handle_get_mcp_stats(arguments)
+    elif name == "get_unactioned_messages":
+        return await handle_get_unactioned_messages(arguments)
 
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -1056,7 +1279,10 @@ async def handle_acknowledge(arguments: dict) -> List[TextContent]:
     """Handle acknowledge tool call."""
     result = acknowledge(
         message_id=arguments['message_id'],
-        action=arguments.get('action', 'read')
+        action=arguments.get('action', 'read'),
+        project_id=arguments.get('project_id'),
+        defer_reason=arguments.get('defer_reason'),
+        priority=arguments.get('priority', 3)
     )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
@@ -1214,6 +1440,13 @@ async def handle_get_mcp_stats(arguments: dict) -> List[TextContent]:
 
     finally:
         conn.close()
+
+
+async def handle_get_unactioned_messages(arguments: dict) -> List[TextContent]:
+    """Handle get_unactioned_messages tool call."""
+    project_name = arguments['project_name']
+    result = get_unactioned_messages(project_name)
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
 # ============================================================================

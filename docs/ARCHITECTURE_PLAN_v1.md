@@ -612,3 +612,9 @@ MCW should display:
 
 **Document Version:** 1.0
 **Next Review:** After implementation of Phase 1
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/ARCHITECTURE_PLAN_v1.md

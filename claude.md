@@ -30,8 +30,9 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
-- **MCP Servers**: orchestrator, postgres, memory, filesystem
+- **MCP Servers**: orchestrator, postgres, memory, filesystem, vault-rag
 - **Enforcement**: Hooks, database constraints, column_registry
+- **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
 
 **Full details**: See `ARCHITECTURE.md`
@@ -159,13 +160,42 @@ Coding standards auto-inject based on file patterns via `instruction_matcher.py`
 ## Knowledge System
 
 ```
-CAPTURE (Obsidian) ──> STORE (PostgreSQL) ──> DELIVER (Hooks)
+CAPTURE (Obsidian) ──> EMBED (Voyage AI) ──> SEARCH (RAG) ──> DELIVER (On-Demand)
 ```
 
-- **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter
-- **Sync**: `python scripts/sync_obsidian_to_db.py`
+- **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter, Obsidian-compatible
+- **Embeddings**: Voyage AI (voyage-3, 1024 dimensions) → PostgreSQL pgvector
+- **RAG**: `vault-rag` MCP server - Semantic search over vault (85% token reduction)
+- **Versioning**: File hash tracking - only re-embed changed files
 - **Commands**: `/knowledge-capture`, `/session-end`
-- **Tests**: `python scripts/run_regression_tests.py --verbose`
+
+### Using RAG
+
+**When to search vault**:
+- User asks "how do I..." procedural questions → Search SOPs
+- Looking for domain knowledge (APIs, DB, WinForms, etc.) → Search 20-Domains/
+- Need patterns or gotchas → Search 30-Patterns/
+- Unsure which vault doc has the answer → Use semantic search
+
+**Tools** (`vault-rag` MCP):
+- `semantic_search(query)` - Find relevant chunks by natural language
+- `get_document(path)` - Retrieve full document
+- `list_vault_documents(folder)` - Browse available docs
+- `vault_stats()` - Check embedding status
+
+**Details**: See `knowledge-vault/Claude Family/RAG Usage Guide.md`
+
+### Maintaining Embeddings
+
+```bash
+# Update embeddings (incremental - only changed files)
+python scripts/embed_vault_documents.py
+
+# Force re-embed everything
+python scripts/embed_vault_documents.py --force
+```
+
+**Details**: See `knowledge-vault/40-Procedures/Vault Embeddings Management SOP.md`
 
 ---
 
@@ -173,6 +203,7 @@ CAPTURE (Obsidian) ──> STORE (PostgreSQL) ──> DELIVER (Hooks)
 
 | Date | Change |
 |------|--------|
+| 2025-12-30 | **RAG System**: vault-rag MCP, Voyage AI embeddings, file versioning, 85% token reduction |
 | 2025-12-21 | **Auto-apply instructions**: instruction_matcher.py hook, 7 instruction files |
 | 2025-12-21 | **Skills-First** (ADR-005): Replaced process_router, 8 core skills |
 | 2025-12-21 | WinForms support: knowledge notes, agent, skill, dark theme instructions |

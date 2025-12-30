@@ -204,3 +204,9 @@ SELECT
 **Document Version:** 2.0
 **Previous Version:** 1.0 (2025-12-01)
 **Next Review:** 2025-12-10
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/ARCHITECTURE_PLAN_v2.md

@@ -133,10 +133,19 @@ class AgentLogger:
         task: str,
         workspace_dir: str,
         model: str,
-        mcp_servers: list
+        mcp_servers: list,
+        parent_session_id: Optional[str] = None
     ) -> Optional[str]:
         """
         Log agent spawn event.
+
+        Args:
+            agent_type: Type of agent being spawned
+            task: Task description
+            workspace_dir: Working directory
+            model: Model name (e.g., 'sonnet', 'haiku')
+            mcp_servers: List of MCP servers available to agent
+            parent_session_id: Session ID of the parent Claude session spawning this agent
 
         Returns:
             session_id (UUID) for tracking, or None if logging fails
@@ -153,8 +162,8 @@ class AgentLogger:
 
             cursor.execute("""
                 INSERT INTO claude.agent_sessions
-                (agent_type, task_description, workspace_dir, spawned_at, model, mcp_servers)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                (agent_type, task_description, workspace_dir, spawned_at, model, mcp_servers, parent_session_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 RETURNING session_id;
             """, (
                 agent_type,
@@ -162,7 +171,8 @@ class AgentLogger:
                 workspace_dir,
                 datetime.now(),
                 model,
-                Json(mcp_servers)
+                Json(mcp_servers),
+                parent_session_id
             ))
 
             session_id = cursor.fetchone()[0]
@@ -297,7 +307,8 @@ class AgentLogger:
         agent_type: str,
         task: str,
         workspace_dir: str,
-        callback_project: Optional[str] = None
+        callback_project: Optional[str] = None,
+        parent_session_id: Optional[str] = None
     ):
         """Log async agent spawn to async_tasks table."""
         if psycopg is None:
@@ -310,14 +321,15 @@ class AgentLogger:
 
             cursor.execute("""
                 INSERT INTO claude.async_tasks
-                (task_id, agent_type, task_description, workspace_dir, callback_project, status, spawned_at)
-                VALUES (%s, %s, %s, %s, %s, 'pending', %s)
+                (task_id, agent_type, task_description, workspace_dir, callback_project, parent_session_id, status, spawned_at)
+                VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s)
             """, (
                 task_id,
                 agent_type,
                 task,
                 workspace_dir,
                 callback_project,
+                parent_session_id,
                 datetime.now()
             ))
 

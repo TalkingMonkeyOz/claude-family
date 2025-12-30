@@ -228,3 +228,9 @@ npx -y @modelcontextprotocol/server-github
 **Status After Remediation:** 🔒 Secure
 **Estimated Time:** 10-15 minutes
 **Impact:** Zero (MCP continues working with env var)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/GITHUB_TOKEN_SECURITY.md

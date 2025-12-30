@@ -4,6 +4,7 @@ Pre-Commit Check Script
 
 Runs Level 1 tests before allowing commits:
 - Schema validation (if schema files changed)
+- Sensitive file detection (.env, credentials, etc.)
 - Type checking hints
 - Basic validation
 
@@ -15,7 +16,9 @@ Exit codes:
     1 = Checks failed (block commit)
     2 = Warnings only (allow commit)
 
-This script is called by hooks.json before git commits.
+This script is called by .git/hooks/pre-commit (native Git hook).
+Note: Claude Code does NOT support a "PreCommit" hook type. This uses
+      native Git hooks instead.
 """
 
 import json

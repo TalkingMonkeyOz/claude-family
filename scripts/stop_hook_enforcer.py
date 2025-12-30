@@ -56,7 +56,7 @@ STATE_FILE = STATE_DIR / "enforcement_state.json"
 INTERVALS = {
     "git_check": 5,          # Every 5 interactions
     "inbox_check": 10,       # Every 10 interactions
-    "claude_md_refresh": 20, # Every 20 interactions
+    "claude_md_refresh": 5,  # Every 5 interactions - check vault for answers
 }
 
 # Code file extensions that trigger test tracking
@@ -218,11 +218,12 @@ def build_reminders(state: Dict[str, Any], analysis: Dict[str, Any]) -> List[str
         )
         state["last_inbox_check"] = count
 
-    # CLAUDE.md refresh (every 20 interactions)
+    # CLAUDE.md refresh (every 5 interactions)
     if count - state["last_claude_md_check"] >= INTERVALS["claude_md_refresh"]:
         reminders.append(
-            "CONTEXT REFRESH: Re-read CLAUDE.md to ensure you're following "
-            "project guidelines. Context can drift over long sessions."
+            "VAULT CHECK: Re-read CLAUDE.md and check knowledge-vault/ for answers. "
+            "Almost any question (configuration, procedures, patterns) likely has an answer in the vault. "
+            "Context can drift - refresh your understanding."
         )
         state["last_claude_md_check"] = count
 

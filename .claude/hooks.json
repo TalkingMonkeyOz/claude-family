@@ -1,17 +1,6 @@
 {
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "prompt",
-            "prompt": "Evaluate: Does this task benefit from a skill? Check: database-operations (SQL), work-routing (feedback/features), code-review (commits), session-management (start/end), project-ops (setup), messaging (coordination). Use Skill tool if applicable.",
-            "timeout": 2,
-            "description": "Skills-first evaluation (replaces process_router)"
-          }
-        ]
-      }
-    ],
+    "UserPromptSubmit": [],
     "PreToolUse": [
       {
         "matcher": "Write",
@@ -118,19 +107,6 @@
         ]
       }
     ],
-    "PreCommit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python \"C:/Projects/claude-family/scripts/pre_commit_check.py\"",
-            "timeout": 60,
-            "blocking": true,
-            "description": "Run Level 1 tests: schema validation, sensitive file check"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -139,6 +115,30 @@
             "command": "python \"C:/Projects/claude-family/scripts/stop_hook_enforcer.py\"",
             "timeout": 5,
             "description": "Self-enforcing periodic checks: git status, inbox, CLAUDE.md refresh, test reminders"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/precompact_hook.py\"",
+            "timeout": 5,
+            "description": "Re-examine CLAUDE.md and vault before compaction (manual /compact)"
+          }
+        ]
+      },
+      {
+        "matcher": "auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/precompact_hook.py\"",
+            "timeout": 5,
+            "description": "Re-examine CLAUDE.md and vault before compaction (auto-compact)"
           }
         ]
       }

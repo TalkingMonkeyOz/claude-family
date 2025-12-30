@@ -147,3 +147,9 @@ You should see all 5 Claude identities and 12 knowledge items!
 **Created:** 2025-10-10
 **Author:** Claude Desktop & John
 **Last Updated:** 2025-10-10
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/STARTUP_INSTRUCTIONS.md

@@ -53,7 +53,7 @@ WHERE project_type = 'infrastructure';
 UPDATE claude.workspaces
 SET startup_config = jsonb_set(
   COALESCE(startup_config, '{}'::jsonb),
-  '{enabledMcpjsonServers}',
+  '{mcp_servers}',
   jsonb_build_array('postgres', 'orchestrator', 'custom-mcp')
 )
 WHERE project_name = 'claude-family';
@@ -84,7 +84,7 @@ WHERE project_type = 'infrastructure';
 
 **Current loaded MCPs**:
 ```bash
-cat .claude/settings.local.json | jq '.enabledMcpjsonServers'
+cat .claude/settings.local.json | jq '.mcp_servers'
 ```
 
 **Project type defaults**:
@@ -109,7 +109,7 @@ python scripts/generate_project_settings.py claude-family
 
 | Issue | Fix |
 |-------|-----|
-| MCP won't load | Check `enabledMcpjsonServers` in settings.local.json |
+| MCP won't load | Check `mcp_servers` in settings.local.json |
 | Changes not applying | Regenerate or wait for next SessionStart |
 | Wrong MCPs loaded | Check project type matches expected |
 | Database update ignored | Verify `project_type_configs` was updated, check logs |
@@ -117,7 +117,7 @@ python scripts/generate_project_settings.py claude-family
 **Debug**:
 ```bash
 # Check what's loaded
-cat .claude/settings.local.json | grep -A 10 enabledMcpjsonServers
+cat .claude/settings.local.json | grep -A 10 mcp_servers
 
 # Check database
 psql -d ai_company_foundation -c "SELECT default_mcp_servers FROM claude.project_type_configs"

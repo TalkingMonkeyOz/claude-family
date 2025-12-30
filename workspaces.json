@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2025-12-23T07:09:26.795853",
+    "generated_at": "2025-12-30T21:38:12.409705",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -15,15 +15,30 @@
       "type": "csharp-winforms",
       "description": "Nimbus user import tool (private work project)"
     },
+    "claude-desktop-config": {
+      "path": "C:\\Projects\\claude-desktop-config",
+      "type": "infrastructure",
+      "description": "Configuration and documentation for Claude Desktop app and Claude Code Console integration"
+    },
     "claude-family": {
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
     },
+    "claude-manager-mui": {
+      "path": "C:\\Projects\\claude-manager-mui",
+      "type": "tauri-react",
+      "description": "Modern desktop app for Claude Family management using Material-UI"
+    },
     "nimbus-import": {
       "path": "C:\\Projects\\nimbus-import",
       "type": "tauri-react",
       "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
+    },
+    "finance-mui": {
+      "path": "C:\\Projects\\finance-mui",
+      "type": "web",
+      "description": "Personal Finance Management - React + TypeScript + Material-UI + Tauri implementation"
     },
     "ATO-tax-agent": {
       "path": "C:\\Projects\\ATO-tax-agent",

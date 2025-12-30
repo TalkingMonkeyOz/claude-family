@@ -38,17 +38,17 @@ User edits file → PreToolUse hook → instruction_matcher.py → Matched instr
 
 **Location**: `~/.claude/instructions/`
 
-| File | Applies To | Purpose |
-|------|-----------|---------|
-| `csharp.instructions.md` | `**/*.cs` | C# conventions, async patterns |
-| `markdown.instructions.md` | `**/*.md` | Doc standards (size, structure) |
-| `a11y.instructions.md` | `**/*.cs`, `**/*.tsx` | WCAG AA accessibility |
-| `sql-postgres.instructions.md` | `**/*.sql` | PostgreSQL best practices |
-| `playwright.instructions.md` | `**/*.spec.ts` | E2E testing patterns |
-| `winforms.instructions.md` | `**/*.Designer.cs` | WinForms layout |
-| `winforms-dark-theme.instructions.md` | `**/*Form.cs` | Dark theme colors |
-| `wpf-ui.instructions.md` | `**/*.xaml` | WPF UI patterns |
-| `mvvm.instructions.md` | `**/ViewModels/**/*.cs` | MVVM architecture |
+| File                                  | Applies To              | Purpose                         |
+| ------------------------------------- | ----------------------- | ------------------------------- |
+| `csharp.instructions.md`              | `**/*.cs`               | C# conventions, async patterns  |
+| `markdown.instructions.md`            | `**/*.md`               | Doc standards (size, structure) |
+| `a11y.instructions.md`                | `**/*.cs`, `**/*.tsx`   | WCAG AA accessibility           |
+| `sql-postgres.instructions.md`        | `**/*.sql`              | PostgreSQL best practices       |
+| `playwright.instructions.md`          | `**/*.spec.ts`          | E2E testing patterns            |
+| `winforms.instructions.md`            | `**/*.Designer.cs`      | WinForms layout                 |
+| `winforms-dark-theme.instructions.md` | `**/*Form.cs`           | Dark theme colors               |
+| `wpf-ui.instructions.md`              | `**/*.xaml`             | WPF UI patterns                 |
+| `mvvm.instructions.md`                | `**/ViewModels/**/*.cs` | MVVM architecture               |
 
 ---
 

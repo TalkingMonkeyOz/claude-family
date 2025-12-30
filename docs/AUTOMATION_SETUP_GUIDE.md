@@ -269,3 +269,9 @@ Must run PowerShell as Administrator:
 
 **Last Updated**: 2025-10-23
 **Status**: Ready for admin setup
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/AUTOMATION_SETUP_GUIDE.md

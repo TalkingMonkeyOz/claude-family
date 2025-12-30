@@ -428,3 +428,9 @@ Global:
 
 **Document Version:** 1.0
 **Next Review:** 2025-12-09 (after backward-compat views cleanup)
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MASTER_TODO_2025-12-02.md

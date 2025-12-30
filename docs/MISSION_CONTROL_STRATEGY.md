@@ -353,3 +353,9 @@ CREATE TABLE claude_family.sop_triggers (
 ---
 
 *This document should be the north star for Mission Control development.*
+---
+
+**Version**: 1.0
+**Created**: 2025-12-26
+**Updated**: 2025-12-26
+**Location**: docs/MISSION_CONTROL_STRATEGY.md

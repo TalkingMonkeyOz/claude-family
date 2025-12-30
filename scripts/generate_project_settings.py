@@ -112,6 +112,37 @@ def deep_merge(base: Dict, override: Dict) -> Dict:
     return result
 
 
+def validate_hooks(hooks_config: Dict) -> Dict:
+    """Validate and clean hook configuration, removing invalid hook types.
+
+    Valid Claude Code hook types (as of 2025-12-29):
+    - PreToolUse, PostToolUse, PostToolUseFailure
+    - UserPromptSubmit, PermissionRequest
+    - SessionStart, SessionEnd
+    - Stop, SubagentStart, SubagentStop
+    - PreCompact, Notification
+    """
+    VALID_HOOK_TYPES = {
+        'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
+        'UserPromptSubmit', 'PermissionRequest',
+        'SessionStart', 'SessionEnd',
+        'Stop', 'SubagentStart', 'SubagentStop',
+        'PreCompact', 'Notification'
+    }
+
+    if not hooks_config:
+        return hooks_config
+
+    invalid = set(hooks_config.keys()) - VALID_HOOK_TYPES
+    if invalid:
+        logger.warning(f"Removing invalid hook types: {invalid}")
+        logger.warning("Note: PreCommit/PostCommit are NOT valid Claude Code hooks (use native Git hooks)")
+        for key in invalid:
+            del hooks_config[key]
+
+    return hooks_config
+
+
 def get_base_template(conn) -> Optional[Dict]:
     """Get the base hooks template from config_templates."""
     try:
@@ -148,7 +179,7 @@ def get_project_type_defaults(conn, project_type: str) -> Optional[Dict]:
         if row:
             data = dict(row) if PSYCOPG_VERSION == 3 else dict(row)
             return {
-                'enabledMcpjsonServers': data.get('default_mcp_servers', []),
+                'mcp_servers': data.get('default_mcp_servers', []),
                 'skills': data.get('default_skills', []),
                 'instructions': data.get('default_instructions', [])
             }
@@ -258,9 +289,13 @@ def generate_settings(project_name: str, project_path: Optional[str] = None) -> 
                 'ask': []
             }
 
+        # 8. Validate and clean hooks configuration
+        if 'hooks' in final_config:
+            final_config['hooks'] = validate_hooks(final_config['hooks'])
+
         logger.info(f"Successfully generated settings for {project_name}")
         logger.info(f"  - Hook types: {list(final_config.get('hooks', {}).keys())}")
-        logger.info(f"  - MCP servers: {final_config.get('enabledMcpjsonServers', [])}")
+        logger.info(f"  - MCP servers: {final_config.get('mcp_servers', [])}")
 
         conn.close()
         return final_config
