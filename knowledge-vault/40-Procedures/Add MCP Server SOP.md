@@ -3,12 +3,14 @@ title: Add MCP Server SOP
 category: procedure
 status: active
 created: 2025-12-27
-updated: 2025-12-30
+updated: 2025-12-31
 tags:
 - sop
 - mcp
 - configuration
-projects: []
+- windows
+projects:
+- nimbus-mui
 ---
 
 # Add MCP Server SOP
@@ -25,7 +27,82 @@ Standard procedure for adding MCP servers to Claude Family projects.
 
 ---
 
-## Method 0: Add Global MCP (All Claude Instances)
+## Method 0: Add Project-Specific MCP (Single Project Only)
+
+**Use this for**: Project-specific tools (MUI docs, Playwright, project-specific APIs)
+
+**Location**: `<project-root>/.mcp.json` (project-specific, not centralized)
+
+### 1. Create .mcp.json in Project Root
+
+Create file at project root (e.g., `C:\Projects\nimbus-mui\.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "mui": {
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@mui/mcp"],
+      "type": "stdio"
+    }
+  }
+}
+```
+
+**IMPORTANT: Windows requires `cmd /c` wrapper for npx commands**
+
+❌ **Wrong (will fail on Windows)**:
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@mui/mcp"]
+}
+```
+
+✅ **Correct (Windows-compatible)**:
+```json
+{
+  "command": "cmd",
+  "args": ["/c", "npx", "-y", "@mui/mcp"]
+}
+```
+
+**Unix/macOS** can use npx directly (no cmd wrapper needed):
+```json
+{
+  "command": "npx",
+  "args": ["-y", "@mui/mcp"]
+}
+```
+
+### 2. Add to Database Configuration (Optional)
+
+For centralized system tracking, also add to `claude.workspaces`:
+
+```sql
+UPDATE claude.workspaces
+SET startup_config = jsonb_set(
+    COALESCE(startup_config, '{}'::jsonb),
+    '{enabledMcpjsonServers}',
+    COALESCE(startup_config->'enabledMcpjsonServers', '[]'::jsonb) || '["mui"]'::jsonb
+)
+WHERE project_name = 'nimbus-mui';
+```
+
+This tracks which .mcp.json servers should be active but doesn't replace the .mcp.json file itself.
+
+### 3. Reload Claude Code
+
+Restart Claude Code or run `/mcp reload` (if available) to pick up .mcp.json.
+
+**Verification**:
+```bash
+/mcp list  # Should show mui in the list
+```
+
+---
+
+## Method 1: Add Global MCP (All Claude Instances)
 
 **Use this for**: Core infrastructure MCPs (postgres, orchestrator, vault-rag, etc.)
 
@@ -251,16 +328,16 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 
 ## Available MCP Servers
 
-| MCP Server | Purpose | Projects Using |
-|------------|---------|----------------|
-| postgres | Database access, session logging | All (global) |
-| memory | Persistent memory graph | All (global) |
-| orchestrator | Agent spawning, messaging | All (global) |
-| vault-rag | Semantic knowledge search | All (global) |
-| sequential-thinking | Complex problem solving | All (global) |
-| python-repl | Python code execution | All (global) |
-| filesystem | File operations | All (global) |
-| mui | Material-UI docs | claude-manager-mui |
+| MCP Server | Purpose | Scope | Projects Using |
+|------------|---------|-------|----------------|
+| postgres | Database access, session logging | Global | All |
+| memory | Persistent memory graph | Global | All |
+| orchestrator | Agent spawning, messaging | Global | All |
+| vault-rag | Semantic knowledge search | Global | All |
+| sequential-thinking | Complex problem solving | Global | All |
+| python-repl | Python code execution | Global | All |
+| filesystem | File operations | Global | All |
+| mui | Material-UI docs/components | Project (.mcp.json) | nimbus-mui |
 
 ---
 
@@ -272,6 +349,9 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 | MCP in settings but not starting | Check `mcpServers.json` config, verify command path, test manually |
 | MCP disappears after regenerate | Added to file manually, not database - update database instead |
 | Settings not updating | Regenerate: `python scripts/generate_project_settings.py PROJECT` |
+| **Windows: "npx not found" error** | **Use `cmd /c` wrapper**: Change `"command": "npx"` to `"command": "cmd", "args": ["/c", "npx", ...]` |
+| **Project-specific MCP not loading** | **Check .mcp.json exists in project root**, not in .claude/ folder |
+| MCP shows in /doctor but not /mcp list | Restart Claude Code to pick up .mcp.json changes |
 
 **Debug Commands**:
 ```sql
@@ -310,7 +390,7 @@ cat ~/.claude/hooks.log | tail -50
 
 ---
 
-**Version**: 2.1 (Added Method 0: Global MCP)
+**Version**: 2.2 (Added project-specific MCP config, Windows cmd /c wrapper)
 **Created**: 2025-12-27
-**Updated**: 2025-12-30
+**Updated**: 2025-12-31
 **Location**: 40-Procedures/Add MCP Server SOP.md
