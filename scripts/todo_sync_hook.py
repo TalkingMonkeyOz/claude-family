@@ -299,20 +299,19 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                 processed_todo_ids.add(new_todo_id)
                 logger.info(f"Inserted new todo {new_todo_id}: {content[:50]}...")
 
-        # Handle todos that were in DB but not in TodoWrite call
-        # These might have been removed - mark as deleted
-        for existing_todo in existing_todos:
-            if existing_todo['todo_id'] not in processed_todo_ids:
-                # Only soft-delete if it was pending/in_progress
-                if existing_todo['status'] in ('pending', 'in_progress'):
-                    cur.execute("""
-                        UPDATE claude.todos
-                        SET is_deleted = true,
-                            deleted_at = NOW(),
-                            updated_at = NOW()
-                        WHERE todo_id = %s::uuid
-                    """, (existing_todo['todo_id'],))
-                    logger.info(f"Soft-deleted todo {existing_todo['todo_id']}: {existing_todo['content'][:50]}...")
+        # DON'T auto-delete missing todos!
+        # Todos missing from TodoWrite call might just not have been restored yet (session start)
+        # or Claude is working on a subset of todos.
+        #
+        # To delete a todo, explicitly mark it: {"content": "...", "status": "deleted"}
+        # or use SQL: UPDATE claude.todos SET is_deleted = true WHERE todo_id = '...'
+        #
+        # This prevents accidental deletion when:
+        # 1. Session starts and Claude hasn't called TodoWrite yet to restore todos
+        # 2. Claude creates new todos for a specific task
+        # 3. User is working with a subset of todos
+
+        logger.info(f"Skipped auto-deletion check - {len(existing_todos) - len(processed_todo_ids)} todos not in current call (expected behavior)")
 
         conn.commit()
         logger.info(f"Todo sync complete: processed {len(todos)} todos")
