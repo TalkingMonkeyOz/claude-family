@@ -10,6 +10,8 @@ tags:
 
 # CLAUDE.md Hierarchy
 
+**Note**: This applies to **Claude Code** only. Claude Desktop v1.0.2339 does not support CLAUDE.md files - see [[Claude Desktop Setup]] for details.
+
 Three-level merge (loaded in order):
 
 | Level      | Path                              | Scope            |

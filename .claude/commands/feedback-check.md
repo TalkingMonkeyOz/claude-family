@@ -23,7 +23,7 @@ Map the directory to a project code using `workspaces.json` or the directory nam
 ```sql
 -- Find project_id for the current project
 SELECT project_id, project_code, project_name
-FROM claude.projects
+FROM claude_pm.projects
 WHERE project_code ILIKE '%current-project-keyword%'
    OR project_name ILIKE '%current-project-keyword%'
 LIMIT 1;
@@ -46,9 +46,9 @@ SELECT
     status,
     description,
     created_at,
-    (SELECT COUNT(*) FROM claude.feedback_comments c
+    (SELECT COUNT(*) FROM claude_pm.project_feedback_comments c
      WHERE c.feedback_id = f.feedback_id) as comments
-FROM claude.feedback f
+FROM claude_pm.project_feedback f
 WHERE project_id = 'PROJECT-ID-FROM-STEP-2'::uuid
   AND status IN ('new', 'in_progress')
 ORDER BY
@@ -85,9 +85,9 @@ Format the results in a user-friendly summary:
 Total Open: X items
 
 ---
-To view details: SELECT * FROM claude.feedback WHERE feedback_id = 'id'::uuid
-To add comment: INSERT INTO claude.feedback_comments (comment_id, feedback_id, author, comment_text, created_at) VALUES (gen_random_uuid(), 'id'::uuid, 'claude', 'your comment', NOW())
-To mark fixed: UPDATE claude.feedback SET status = 'fixed', notes = 'summary', resolved_at = NOW() WHERE feedback_id = 'id'::uuid
+To view details: SELECT * FROM claude_pm.project_feedback WHERE feedback_id = 'id'::uuid
+To add comment: INSERT INTO claude_pm.project_feedback_comments (feedback_id, author, content) VALUES ('id'::uuid, 'claude', 'your comment')
+To mark fixed: UPDATE claude_pm.project_feedback SET status = 'fixed', notes = 'summary' WHERE feedback_id = 'id'::uuid
 ```
 
 ---
@@ -103,7 +103,7 @@ SELECT
     feedback_type,
     description,
     resolved_at
-FROM claude.feedback
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
   AND status IN ('fixed', 'wont_fix')
   AND resolved_at > NOW() - INTERVAL '7 days'

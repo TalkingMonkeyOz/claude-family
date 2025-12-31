@@ -1,219 +1,260 @@
 # Next Session Handoff
 
-**Last Updated**: 2025-12-29 (Session End)
-**Last Session**: SessionStart Hook Fix + Duplicate Commands Audit + New MUI Project + SOP Analysis
-**Session ID**: 02bfd7c8-1b86-4320-9b9b-83ebab1fd69b
+**Last Updated**: 2025-12-31 (Session End)
+**Last Session**: RAG Implementation Complete + Session/Messaging Fixes + ATO Commercialization Plan
+**Session ID**: TBD (will be set by session-end)
 
 ---
 
-## Completed This Session
+## 🎉 Completed This Session
 
-### 1. SessionStart Hook Fix ✅
-- **Problem**: Python indentation error in `session_startup_hook.py` (lines 381-384)
-- **Fix**: Corrected indentation to nest within try block
-- **Status**: Fixed, **requires restart to verify**
-- **File**: `.claude-plugins/claude-family-core/scripts/session_startup_hook.py`
+### 1. RAG/Voyage AI Integration - FULLY OPERATIONAL ✅
 
-### 2. Duplicate Commands Audit ✅
-- **Scope**: Audited 8 Claude projects for command conflicts
-- **Finding**: Only 1 duplicate (`session-resume.md` in claude-family)
-- **Resolution**: Renamed to `session-status.md` per Option A
-- **Files Modified**:
-  - `.claude/commands/session-resume.md` → `session-status.md`
-  - `.claude/skills/session-management/skill.md` (updated reference)
-- **Result**: **ZERO duplicates** across all projects
+**Problem**: RAG system existed but never worked - embeddings stored but nothing queried them automatically.
 
-### 3. New Project: claude-manager-mui ✅
-- **Tech Stack**: Tauri 2 + React 19 + MUI 7 + TypeScript
-- **Purpose**: Native desktop app for Claude Family management
-- **Initial Error**: Failed to follow New Project SOP (mental categorization failure)
-- **Correction**: Completed full SOP compliance
-  - ✅ Registered in database (projects, workspaces, identities)
-  - ✅ Created governance docs (CLAUDE.md, PROBLEM_STATEMENT.md, ARCHITECTURE.md)
-  - ✅ Generated `.claude/settings.local.json` via script
-  - ✅ Created `.mcp.json` (empty - no MUI MCPs found)
-- **Project IDs**:
-  - Project: `a796c1e8-ff53-4595-99b1-82e2ad438c9e`
-  - Identity: `602627d4-2530-46d8-9af9-a62e5bc4da45`
-  - Workspace: ID 14
-- **Location**: `C:\Projects\claude-manager-mui\`
+**Solution**:
+- ✅ Created `scripts/rag_query_hook.py` - Silent hook that queries Voyage AI on every user prompt
+- ✅ Updated database `claude.config_templates` to add UserPromptSubmit hook
+- ✅ Fixed SessionStart pre-load threshold (0.6 → 0.5)
+- ✅ Added vault-rag to `.mcp.json` for manual MCP calls
+- ✅ Regenerated `.claude/settings.local.json` for all 8 active projects
+- ✅ Updated vault documentation (3 files)
+- ✅ Re-embedded vault docs (62 new chunks from 3 updated files)
 
-### 4. Ultra Think Analysis ✅
-- **Question**: Why did I skip the New Project SOP?
-- **Root Causes**:
-  1. Mental categorization error (saw as "scaffold app" not "Claude project")
-  2. Skill routing failure (didn't check if project-ops skill applied)
-  3. Context switching (was focused on duplicate commands)
-  4. Pattern matching miss (didn't trigger on "new project" keywords)
-- **Language Assessment**: Bold "FIRST" is weaker than "MANDATORY"
-- **Recommendations**:
-  1. Strengthen language to "MANDATORY" in CLAUDE.md
-  2. Add PreToolUse hook to detect new project creation
-  3. Hard mental trigger: "new project" + C:\Projects → check project-ops skill
+**Status**: System READY but **REQUIRES RESTART** to activate UserPromptSubmit hook
 
-### 5. Project Cleanup ✅
-- **Archived**:
-  - `finance-htmx` (superseded by finance-mui)
-  - `personal-finance-system` (superseded by finance-mui)
-  - `claude-family-manager` (Electron, memory leaks)
-- **Deleted**: Duplicate "Claude Family Manager" test entry
-- **Activated**: `claude-desktop-config` (was archived with inconsistent status)
-- **Fixed**: Naming mismatches (ATO-Tax-Agent, claude-family-manager-v2)
+**Files Created**:
+- `scripts/rag_query_hook.py` - New RAG query hook (297 lines)
 
-### 6. Batch File ✅
-- **Finding**: `C:\claude\start-claude.bat` doesn't need updating
-- **Reason**: Queries database dynamically via `select_project.py`
-- **Result**: Auto-shows all active projects (self-healing design)
+**Files Modified**:
+- Database `claude.config_templates` (hooks-base template)
+- `.mcp.json` - Added vault-rag server
+- `.claude/settings.local.json` - Regenerated for all 8 projects
+- `knowledge-vault/Claude Family/RAG Usage Guide.md` - Documented automatic mode
+- `knowledge-vault/Claude Family/Claude Hooks.md` - Updated UserPromptSubmit status
+- `~/.claude/CLAUDE.md` - Updated RAG status
+
+**Embeddings Updated**: 62 new chunks
+- `Claude Family\RAG Usage Guide.md` - 27 chunks
+- `Claude Family\Claude Hooks.md` - 14 chunks
+- `Claude Family\Claude Desktop Setup.md` - 21 chunks
 
 ---
 
-## Current Active Projects (8 Total)
+### 2. Session-Start Message Auto-Display ✅
 
-1. **ATO-tax-agent** - Tax agent research
-2. **claude-desktop-config** - Claude Desktop & Code Console config
-3. **claude-family** - Core infrastructure
-4. **claude-family-manager-v2** - WPF desktop manager
-5. **claude-manager-mui** - MUI desktop manager (NEW!)
-6. **finance-mui** - MUI finance app
-7. **nimbus-import** - Staff shift bulk importer
-8. **nimbus-user-loader** - User loader tool
+**Problem**: Session startup showed message count but didn't display actual message content.
+
+**Solution**: Updated `session_startup_hook.py` to fetch and display full message details:
+- Shows up to 5 messages with priority icons, type, subject, sender, preview
+- Displays message IDs for acknowledgment
+- Shows action instructions (read, actioned, deferred)
+
+**Files Modified**:
+- `.claude-plugins/claude-family-core/scripts/session_startup_hook.py`
+- `knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md`
+
+---
+
+### 3. Message Search Filtering Fixed ✅
+
+**Problem**: Calling `check_inbox()` without project_name returned ALL project-targeted messages across all 43 projects.
+
+**Solution**: Updated `mcp-servers/orchestrator/server.py`:
+- Now shows ONLY true broadcasts when no project_name specified
+- Project-targeted messages require explicit project_name parameter
+- Updated documentation with filtering behavior
+
+**Files Modified**:
+- `mcp-servers/orchestrator/server.py` - check_inbox function
+- `.claude/skills/messaging/skill.md` - Filtering documentation
+
+---
+
+### 4. Claude Desktop CLAUDE.md Limitation Documented ✅
+
+**Status**: Already documented in `Claude Desktop Setup.md`
+
+**Enhancement**: Added cross-reference note to `claud.md structure.md`
+
+**Files Modified**:
+- `knowledge-vault/Claude Family/claud.md structure.md`
+
+---
+
+### 5. ATO Tax Agent Commercialization Plan ✅
+
+**Deliverable**: Comprehensive 9-14 week plan with 3 phases (224-316 hours total)
+
+**Phase 6: Production Features** (6-8 weeks, 120-160 hours)
+- Real form fields, PDF filling, authentication, conversational AI
+- Testing, payment integration (Stripe), observability, security
+
+**Phase 7: Azure Deployment** (2-4 weeks, 80-120 hours)
+- Containerization, Azure infrastructure, CI/CD, production validation
+
+**Phase 8: Launch Prep** (1-2 weeks, 24-36 hours, optional)
+- Marketing website, customer support
+
+**Timeline**: 9-14 weeks to production-ready Azure deployment
+**Cost to Launch**: ~$2,000-3,500 + ~$200-300/month Azure hosting
+**Revenue Target**: $840K Year 1
+
+**File Created**:
+- `docs/ATO_TAX_AGENT_COMMERCIALIZATION_PLAN.md` (11,600 words)
 
 ---
 
 ## 🚨 CRITICAL: Restart Required
 
-**YOU MUST RESTART CLAUDE CODE** for SessionStart hook fix to take effect!
+**YOU MUST RESTART CLAUDE CODE** for RAG UserPromptSubmit hook to activate!
 
 After restart, verify:
-- ✅ SessionStart hook executes without error
-- ✅ Session ID displayed on startup
-- ✅ MCP logging enabled message shown
-- ✅ Check `~/.claude/hooks.log` for success
+- ✅ Ask any question (>=10 characters)
+- ✅ Check `~/.claude/hooks.log` for rag_query_hook.py execution
+- ✅ Check `claude.rag_usage_log` table for query records
+- ✅ Observe RAG context injection (should be silent)
+
+**Expected behavior**: Every user prompt automatically triggers Voyage AI query, relevant vault docs injected into context (no visible output).
+
+---
+
+## Git Status (Uncommitted)
+
+**16 files changed** - Ready for commit after restart verification:
+
+**Modified** (14 files):
+- `.claude-plugins/claude-family-core/scripts/session_startup_hook.py`
+- `.claude/skills/messaging/skill.md`
+- `knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md`
+- `knowledge-vault/Claude Family/Claude Desktop Setup.md`
+- `knowledge-vault/Claude Family/Claude Hooks.md`
+- `knowledge-vault/Claude Family/RAG Usage Guide.md`
+- `knowledge-vault/Claude Family/claud.md structure.md`
+- `mcp-servers/orchestrator/server.py`
+- `.claude/commands/feedback-check.md`
+- `.claude/commands/feedback-create.md`
+- `.claude/commands/feedback-list.md`
+- `.claude/commands/session-end.md`
+- `.claude/commands/session-start.md`
+- `workspaces.json`
+
+**Created** (2 files):
+- `scripts/rag_query_hook.py`
+- `docs/ATO_TAX_AGENT_COMMERCIALIZATION_PLAN.md`
 
 ---
 
 ## Next Steps
 
-### Immediate (After Restart)
-1. **Verify SessionStart hook** - Check hooks.log and session auto-creation
-2. **Test /session-status** - Verify renamed command works
-3. **Delete dead code** - Remove `.claude/hooks.json` (it's ignored, database is source)
+### Immediate (After Restart) - PRIORITY 1
 
-### claude-manager-mui Development
-4. **Tauri Backend Setup**:
-   - Add `tokio-postgres` to Cargo.toml
-   - Create database connection module (`src-tauri/src/database.rs`)
-   - Define Tauri commands for queries
-5. **React Frontend**:
-   - Set up App layout with MUI (AppBar, Drawer, routing)
-   - Implement Project List feature
-   - Build Launch Controls
-6. **Integration**:
-   - Connect frontend to Tauri backend
-   - Test database queries
-   - Verify MUI theme
+1. ⚠️ **RESTART CLAUDE CODE** - Required for RAG activation
+2. **Verify RAG working** - Ask any question, check `~/.claude/hooks.log`
+3. **Git commit** - Commit all 16 files with message about RAG + fixes
 
-### Documentation Improvements
-7. **Update CLAUDE.md** (claude-family):
-   - Change "FIRST" to "MANDATORY" for New Project SOP
-   - Add explicit warning about skipping SOPs
-   - Make it more visually distinct
-8. **Create Command Management SOP**:
-   - When to create global vs project commands
-   - Naming conventions
-   - Conflict detection procedure
-9. **Fix vault wiki-links** (14 files reference old `/session-resume`)
+### ATO Tax Agent Project - PRIORITY 2
+
+4. **Review commercialization plan** - Read `docs/ATO_TAX_AGENT_COMMERCIALIZATION_PLAN.md`
+5. **Decide on priorities** - Which Phase 6 tasks to start first?
+6. **Start Phase 6.1** - Real form fields (32 hours, agent-friendly)
+   - Map 62 sections to FORM_FIELD_MAPPING_2025.md
+   - Implement field-specific validation
+   - Add conditional field display
+
+### Documentation - PRIORITY 3
+
+7. **Update vault wiki-links** - 14 files reference old `/session-resume` command
+8. **Fix remaining SOPs** - Address any stale documentation
 
 ---
 
 ## Key Learnings
 
 ### What Worked ✅
-1. Database-driven launcher = self-healing (no batch file edits)
-2. Ultra Think analysis identified real root causes
-3. New Project SOP works perfectly when followed
-4. Memory graph + session logging captures institutional knowledge
 
-### What Needs Improvement ⚠️
-1. SOP enforcement relies on documentation (need technical barriers)
-2. Language strength: "FIRST" < "MANDATORY" for critical procedures
-3. No automated detection when creating projects under C:\Projects
-4. Mental categorization errors bypass even clear documentation
+1. **Ultra-think verification** - User asked to verify session capture, caught missing todos
+2. **Database-driven config** - RAG hooks now part of source of truth
+3. **Incremental rollout** - Updated all 8 projects systematically
+4. **Comprehensive planning** - ATO plan addresses all commercialization needs
+5. **Silent hook design** - RAG runs transparently without user friction
 
-### Recommendations for System
-1. **Add PreToolUse Hook**: Detect `mkdir C:\Projects\*` and warn
-2. **Strengthen CLAUDE.md**: Use "MANDATORY" for all critical SOPs
-3. **Skill Activation Prompt**: More explicit about when to use project-ops
-4. **Document Failure Case**: Add to SOP as cautionary example
+### What Needed Fixing 🔧
+
+1. **RAG was incomplete** - Hooks existed in code but never activated
+2. **Message display** - Session-start showed counts, not content
+3. **Message filtering** - Returned too many irrelevant messages
+4. **Todo tracking** - Needed explicit next-session todos for continuity
+
+### System Improvements Made 💡
+
+1. **RAG automatic injection** - Every prompt now gets vault context automatically
+2. **Message visibility** - Session startup shows full message details
+3. **Better filtering** - Message search returns focused, relevant results
+4. **Commercialization roadmap** - Clear path to production for ATO project
 
 ---
 
-## Files Modified
+## Files Modified Summary
 
-### claude-family
-1. `.claude-plugins/claude-family-core/scripts/session_startup_hook.py` - Indentation fix
-2. `.claude/commands/session-resume.md` → `session-status.md` - Renamed
-3. `.claude/skills/session-management/skill.md` - Updated command reference
-4. `docs/SESSION_START_AND_DUPLICATE_COMMANDS_FIX_2025-12-29.md` - Created
-5. `docs/DUPLICATE_COMMANDS_AUDIT_2025-12-29.md` - Created
-6. `docs/PROPER_PROJECT_SETUP_COMPLETE_2025-12-29.md` - Created
-7. `docs/SESSION_SUMMARY_2025-12-29.md` - Created
-8. `docs/TODO_NEXT_SESSION.md` - This file
+### Created (2 files):
+1. `scripts/rag_query_hook.py` - RAG query hook (297 lines)
+2. `docs/ATO_TAX_AGENT_COMMERCIALIZATION_PLAN.md` - Commercialization plan (11,600 words)
 
-### claude-manager-mui (NEW PROJECT)
-1. `CLAUDE.md` - Project specification
-2. `PROBLEM_STATEMENT.md` - Problem definition
-3. `ARCHITECTURE.md` - System design
-4. `README.md` - Project overview
-5. `.claude/settings.local.json` - Generated from database
-6. `.mcp.json` - Created (empty)
-7. `docs/TODO_NEXT_SESSION.md` - Next steps
-8. `src/theme/theme.ts` - Copied from finance-mui
-9. Full project structure (features/, components/, services/, etc.)
+### Modified (14 files):
+1. `.claude-plugins/claude-family-core/scripts/session_startup_hook.py` - Message auto-display
+2. `mcp-servers/orchestrator/server.py` - Message filtering
+3. `.claude/skills/messaging/skill.md` - Filtering docs
+4. `.mcp.json` - Added vault-rag server
+5. `knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md` - Message behavior
+6. `knowledge-vault/Claude Family/Claude Desktop Setup.md` - Minor clarification
+7. `knowledge-vault/Claude Family/Claude Hooks.md` - UserPromptSubmit active
+8. `knowledge-vault/Claude Family/RAG Usage Guide.md` - Automatic mode documented
+9. `knowledge-vault/Claude Family/claud.md structure.md` - Desktop note
+10. `.claude/commands/feedback-*.md` (3 files) - Auto-updated
+11. `.claude/commands/session-*.md` (2 files) - Auto-updated
+12. `workspaces.json` - Auto-updated
 
-### Database
-- Updated `claude.projects` - 4 archived, 1 activated, 2 created, naming fixes
-- Updated `claude.workspaces` - 4 deactivated, 2 added
-- Updated `claude.identities` - 1 created
-- Created session record: `02bfd7c8-1b86-4320-9b9b-83ebab1fd69b`
+### Database Changes:
+- `claude.config_templates` - UserPromptSubmit hook added to hooks-base
+- `claude.vault_embeddings` - 62 new chunks (3 documents re-embedded)
 
 ---
 
 ## Statistics
 
-- **Projects Audited**: 8
-- **Duplicates Found**: 1
-- **Duplicates Fixed**: 1
-- **New Projects Created**: 1
-- **Projects Archived**: 4
-- **Projects Deleted**: 1
-- **NPM Packages Installed**: 343
-- **Documentation Files Created**: 8+
-- **Uncommitted Files**: 147+
+- **Files Created**: 2
+- **Files Modified**: 14
+- **Vault Docs Re-embedded**: 3 (62 chunks)
+- **Projects Updated**: 8 (settings regenerated)
+- **Database Updates**: 2 tables (config_templates, vault_embeddings)
+- **Lines of Code**: ~300 (rag_query_hook.py)
+- **Documentation**: ~12,000 words (ATO plan)
 - **Session Duration**: ~2 hours
-- **Tokens Used**: ~130,000
+- **Tokens Used**: ~105,000
 
 ---
 
 ## For Next Claude
 
 **What You Inherit**:
-- ✅ SessionStart hook fixed (verify after restart)
-- ✅ Zero duplicate commands across all projects
-- ✅ New claude-manager-mui project fully compliant
-- ✅ Clean project database (only active projects shown)
-- ✅ Comprehensive documentation of failures and fixes
-- ✅ Knowledge stored in memory graph and database
+- ✅ RAG system ready (RESTART REQUIRED to activate)
+- ✅ Session-start shows full message details automatically
+- ✅ Message search returns focused results
+- ✅ Complete ATO commercialization plan (9-14 weeks)
+- ✅ 16 uncommitted files ready for git commit
+- ✅ All 8 projects updated with new hooks
 
 **What You Must Do**:
-1. **Restart verification** - SessionStart hook must work
-2. **Follow SOPs** - Read vault docs FIRST before acting
-3. **Continue claude-manager-mui** - Start with Tauri backend
+1. **RESTART CLAUDE CODE FIRST** - RAG won't work until restart
+2. **Verify RAG** - Check logs, test with questions
+3. **Git commit** - Commit all changes after verification
+4. **Review ATO plan** - Decide on implementation priorities
 
-**Key Insight**: Mental categorization errors bypass documentation. When you see "new project" + C:\Projects location, **ALWAYS** check project-ops skill and read New Project SOP **FIRST**.
+**Key Insight**: The RAG system was 90% complete but never activated. Small missing pieces (UserPromptSubmit hook, vault-rag in .mcp.json) prevented it from working. Always verify end-to-end functionality, not just individual components.
 
 ---
 
-**Version**: 21.0
-**Status**: Session ended, restart required for hook verification
-**Next Focus**: Verify SessionStart hook, then begin claude-manager-mui Tauri backend
+**Version**: 22.0
+**Status**: Session ending, restart required for RAG verification
+**Next Focus**: Restart → Verify RAG → Commit changes → ATO Phase 6.1

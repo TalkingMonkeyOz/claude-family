@@ -37,18 +37,12 @@ This generates `workspaces.json` from PostgreSQL, mapping project names to locat
 -- diana: Use appropriate ID
 
 -- Then log the session start
-INSERT INTO claude.sessions
-(session_id, identity_id, session_start, project_name, session_metadata)
-VALUES (
-    gen_random_uuid(),
-    '<your-identity-uuid>',
-    NOW(),
-    'project-name',
-    jsonb_build_object('initial_task', 'Brief task description')
-)
-RETURNING session_id;
+INSERT INTO claude_family.session_history
+(identity_id, session_start, project_name, task_description)
+VALUES ('<your-identity-uuid>', NOW(), 'project-name', 'Brief task description')
+RETURNING id;
 
--- Save the returned session_id - you'll need it for session end
+-- Save the returned ID - you'll need it for session end
 ```
 
 ---
@@ -69,16 +63,16 @@ NEVER propose new solutions without checking if we've solved this before:
 
 ```sql
 -- Check universal knowledge
-SELECT title, description, code_example, knowledge_category
-FROM claude.knowledge
-WHERE title ILIKE '%relevant-keyword%'
+SELECT pattern_name, description, example_code, gotchas
+FROM claude_family.universal_knowledge
+WHERE pattern_name ILIKE '%relevant-keyword%'
    OR description ILIKE '%relevant-keyword%';
 
 -- Check past sessions for similar work
-SELECT session_summary, tasks_completed, project_name, session_metadata
-FROM claude.sessions
-WHERE session_summary ILIKE '%relevant-keyword%'
-   OR session_metadata::text ILIKE '%relevant-keyword%'
+SELECT summary, outcome, files_modified, project_name
+FROM claude_family.session_history
+WHERE task_description ILIKE '%relevant-keyword%'
+   OR summary ILIKE '%relevant-keyword%'
 ORDER BY session_start DESC
 LIMIT 10;
 ```
@@ -95,7 +89,7 @@ If working on a registered project, check for open feedback items:
 SELECT
     feedback_type,
     COUNT(*) as count
-FROM claude.feedback
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
   AND status IN ('new', 'in_progress')
 GROUP BY feedback_type;
@@ -118,7 +112,7 @@ Before starting work, verify:
 - [ ] Synced `workspaces.json` from database
 - [ ] Logged session start to PostgreSQL
 - [ ] Queried memory graph for context
-- [ ] Checked for existing solutions in knowledge table
+- [ ] Checked for existing solutions in universal_knowledge
 - [ ] Checked past sessions for similar work
 - [ ] Checked open feedback (if applicable)
 

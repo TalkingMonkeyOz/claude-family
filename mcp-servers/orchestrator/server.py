@@ -137,11 +137,11 @@ def check_inbox(
             params.append(session_id)
             has_specific_recipient = True
 
-        # If no specific recipient filter, show all non-session-specific messages
-        # This includes broadcasts AND project-targeted messages
+        # If no specific recipient filter, show ONLY true broadcasts
+        # (not all project-targeted messages across all projects)
         if not has_specific_recipient:
-            # Show all messages where to_session_id IS NULL (broadcasts + project messages)
-            or_conditions.append("to_session_id IS NULL")
+            # Show ONLY true broadcasts (both to_session_id and to_project are NULL)
+            or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
         elif include_broadcasts:
             # Also include true broadcasts when specific recipient is provided
             or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")

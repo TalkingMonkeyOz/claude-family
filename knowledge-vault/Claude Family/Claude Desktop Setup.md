@@ -74,16 +74,18 @@ Claude Desktop is the GUI member of the **Claude Family** - a coordinated team o
 
 ### 1. CLAUDE.md Instructions
 
-**Location**: `%APPDATA%\Claude\CLAUDE.md`
-**Purpose**: Defines Desktop's identity, role, capabilities, and common workflows
-**Size**: ~200 lines (lean, focused)
+**Status**: ❌ **NOT SUPPORTED in v1.0.2339**
+**Location**: `%APPDATA%\Claude\CLAUDE.md` (when supported)
+**Issue**: Any CLAUDE.md file (even minimal) causes Claude Desktop to crash on startup
 
-**Key Sections**:
-- Identity and role definition
-- Database query examples
-- Vault access patterns
-- Handoff pattern to Code
-- Example interactions
+**Tested**: 2025-12-30
+- Minimal version (~20 lines) - crashes
+- Full version (~113 lines with code blocks/tables) - crashes
+- No file - works fine
+
+**Conclusion**: Desktop v1.0.2339 does not support CLAUDE.md identity files like Claude Code does. Feature may be added in future versions.
+
+**Workaround**: Desktop uses default behavior without custom identity/instructions.
 
 ### 2. MCP Server Configuration
 

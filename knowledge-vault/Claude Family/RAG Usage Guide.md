@@ -9,24 +9,49 @@ updated: 2025-12-30
 
 ## Purpose
 
-Guide for Claude instances on when to use the `vault-rag` MCP server for semantic search instead of loading all vault documentation into context.
+Guide for Claude instances on when RAG (semantic search) is used for vault knowledge retrieval.
 
 **Key benefit**: 85% reduction in vault documentation tokens by loading only relevant docs on-demand.
 
----
-
-## Quick Decision Tree
-
-```
-User asks a question
-    ├─ Is answer in current conversation? → Use conversation context
-    ├─ Is it about code in current project? → Use Grep/Read tools
-    └─ Is it a "how-to" or knowledge question? → Use RAG semantic search ✓
-```
+**NEW (2025-12-31)**: RAG now works **AUTOMATICALLY** via UserPromptSubmit hook! No manual tool calls needed for most questions.
 
 ---
 
-## When to Use RAG (vault-rag MCP)
+## How RAG Works (Two Modes)
+
+### 1. **AUTOMATIC Mode** (Primary - UserPromptSubmit Hook) ✨
+
+**Trigger**: Every user prompt (>=10 characters) automatically triggers RAG query
+
+**What happens**:
+1. Hook (`rag_query_hook.py`) runs silently on every user question
+2. Generates Voyage AI embedding for your question
+3. Searches vault embeddings with pgvector similarity
+4. Returns top 3 docs with similarity >= 0.45
+5. **Silently injects context** into Claude's view (no visible output!)
+
+**User experience**: Completely transparent - you won't see any RAG activity, but Claude will have relevant vault docs in context automatically.
+
+**Logs**:
+- `~/.claude/hooks.log` (execution logs)
+- `claude.rag_usage_log` table (query analytics)
+
+**Threshold**: `min_similarity = 0.45` (lower = more results, higher = more precise)
+
+### 2. **MANUAL Mode** (vault-rag MCP Tools)
+
+Use manual MCP tools when you need:
+- Deeper searches (top_k > 3)
+- Lower similarity thresholds
+- Full document retrieval
+- Folder browsing
+- Vault statistics
+
+---
+
+## When to Use Manual RAG (vault-rag MCP)
+
+**Note**: Most common questions are now handled AUTOMATICALLY! Only use manual tools for specialized searches.
 
 ### ✅ Use Semantic Search For:
 

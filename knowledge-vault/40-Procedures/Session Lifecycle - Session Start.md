@@ -137,14 +137,37 @@ LIMIT 3;
 ### C. Pending Messages
 
 ```sql
-SELECT *
+SELECT
+    message_id::text,
+    from_session_id::text,
+    to_project,
+    message_type,
+    subject,
+    body,
+    priority,
+    created_at
 FROM claude.messages
-WHERE (to_project = $PROJECT OR to_project IS NULL)
+WHERE (to_project = $PROJECT OR message_type = 'broadcast')
   AND status = 'pending'
-ORDER BY created_at DESC;
+ORDER BY
+    CASE priority
+        WHEN 'urgent' THEN 1
+        WHEN 'normal' THEN 2
+        WHEN 'low' THEN 3
+    END,
+    created_at ASC
+LIMIT 10;
 ```
 
-**Purpose**: Check if other Claude instances sent messages
+**Purpose**: Check for messages from other Claude instances and display them in startup context
+
+**What's displayed**:
+- Up to 5 messages with full details (priority, type, subject, sender, preview)
+- Message IDs for acknowledgment
+- Instructions for marking as read/actioned/deferred
+- Count of additional messages if >5 pending
+
+**Updated**: 2025-12-31 - Messages are now automatically surfaced in session startup (not just counted)
 
 ### D. Due Reminders
 
@@ -241,7 +264,7 @@ User                 Launcher            Claude Code         Hook Script        
 
 ---
 
-**Version**: 2.0 (split 2025-12-26)
+**Version**: 2.1 (Messages auto-surfaced in session startup)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2025-12-31
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md

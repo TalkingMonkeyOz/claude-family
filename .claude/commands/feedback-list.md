@@ -41,9 +41,9 @@ SELECT
     created_at,
     updated_at,
     resolved_at,
-    (SELECT COUNT(*) FROM claude.feedback_comments c
+    (SELECT COUNT(*) FROM claude_pm.project_feedback_comments c
      WHERE c.feedback_id = f.feedback_id) as comments
-FROM claude.feedback f
+FROM claude_pm.project_feedback f
 WHERE project_id = 'PROJECT-ID'::uuid
   AND status IN ('new', 'in_progress')
 ORDER BY created_at DESC;
@@ -94,8 +94,8 @@ Total Results: X items
 └──────────────────────────────────────┴──────────┴──────────┴─────────────┴──────────┴──────────┘
 
 ---
-View details: SELECT * FROM claude.feedback WHERE feedback_id = 'full-uuid'::uuid
-View comments: SELECT * FROM claude.feedback_comments WHERE feedback_id = 'full-uuid'::uuid ORDER BY created_at
+View details: SELECT * FROM claude_pm.project_feedback WHERE feedback_id = 'full-uuid'::uuid
+View comments: SELECT * FROM claude_pm.project_feedback_comments WHERE feedback_id = 'full-uuid'::uuid ORDER BY created_at
 ```
 
 ---
@@ -129,7 +129,7 @@ SELECT
     feedback_type,
     status,
     COUNT(*) as count
-FROM claude.feedback
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
 GROUP BY feedback_type, status
 ORDER BY feedback_type, status;
@@ -143,8 +143,8 @@ SELECT
     f.feedback_type,
     f.description,
     COUNT(c.comment_id) as comment_count
-FROM claude.feedback f
-LEFT JOIN claude.feedback_comments c ON f.feedback_id = c.feedback_id
+FROM claude_pm.project_feedback f
+LEFT JOIN claude_pm.project_feedback_comments c ON f.feedback_id = c.feedback_id
 WHERE f.project_id = 'PROJECT-ID'::uuid
 GROUP BY f.feedback_id, f.feedback_type, f.description
 HAVING COUNT(c.comment_id) > 0
@@ -162,7 +162,7 @@ SELECT
     description,
     created_at,
     EXTRACT(DAY FROM (NOW() - created_at)) as days_open
-FROM claude.feedback
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
   AND status IN ('new', 'in_progress')
 ORDER BY days_open DESC;
@@ -184,7 +184,7 @@ COPY (
         created_at,
         updated_at,
         resolved_at
-    FROM claude.feedback
+    FROM claude_pm.project_feedback
     WHERE project_id = 'PROJECT-ID'::uuid
     ORDER BY created_at DESC
 ) TO 'C:\Projects\{project}\feedback_export.csv' WITH CSV HEADER;

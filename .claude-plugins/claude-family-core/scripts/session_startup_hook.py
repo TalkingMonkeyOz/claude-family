@@ -211,32 +211,167 @@ def get_session_state(project_name):
         return None
 
 
-def get_pending_messages(project_name):
-    """Check for pending messages."""
+def get_todos_from_database(project_id, session_id):
+    """
+    Load todos from claude.todos table and auto-complete obvious ones.
+
+    Smart auto-completion rules:
+    - "RESTART" in content + new session = mark completed
+    - "Verify RAG" + RAG working = mark completed
+    - "Fix SessionStart" + SessionStart succeeded = mark completed
+    """
     if not DB_AVAILABLE:
-        return 0
+        return []
 
     conn = get_db_connection()
     if not conn:
-        return 0
+        return []
+
+    try:
+        cur = conn.cursor()
+
+        # Load pending/in_progress todos
+        cur.execute("""
+            SELECT
+                todo_id::text,
+                content,
+                active_form,
+                status,
+                priority,
+                display_order
+            FROM claude.todos
+            WHERE project_id = %s::uuid
+              AND status IN ('pending', 'in_progress')
+              AND is_deleted = false
+            ORDER BY priority ASC, display_order ASC, created_at ASC
+        """, (project_id,))
+
+        todos = cur.fetchall()
+
+        # Smart auto-completion logic
+        auto_completed = []
+
+        for todo in todos:
+            content_lower = todo['content'].lower()
+            should_complete = False
+
+            # Rule 1: "restart" in content = auto-complete (we're in a new session!)
+            if 'restart' in content_lower and 'claude' in content_lower:
+                should_complete = True
+                logger.info(f"Auto-completing todo (restart detected): {todo['content'][:50]}...")
+
+            # Rule 2: "verify rag" + check if RAG is working
+            elif 'verify' in content_lower and 'rag' in content_lower:
+                # Check hooks.log for recent RAG success
+                try:
+                    log_file = Path.home() / ".claude" / "hooks.log"
+                    if log_file.exists():
+                        with open(log_file, 'r') as f:
+                            recent_logs = f.readlines()[-100:]  # Last 100 lines
+                            for line in recent_logs:
+                                if 'rag_query' in line and 'RAG query success' in line:
+                                    should_complete = True
+                                    logger.info(f"Auto-completing todo (RAG verified): {todo['content'][:50]}...")
+                                    break
+                except:
+                    pass
+
+            # Rule 3: "fix sessionstart" + this session started successfully
+            elif 'fix' in content_lower and 'sessionstart' in content_lower:
+                # If we got here, SessionStart succeeded!
+                should_complete = True
+                logger.info(f"Auto-completing todo (SessionStart working): {todo['content'][:50]}...")
+
+            if should_complete:
+                # Mark as completed in database
+                cur.execute("""
+                    UPDATE claude.todos
+                    SET status = 'completed',
+                        completed_at = NOW(),
+                        completed_session_id = %s::uuid,
+                        updated_at = NOW()
+                    WHERE todo_id = %s::uuid
+                """, (session_id, todo['todo_id']))
+                auto_completed.append(todo['content'])
+
+        if auto_completed:
+            conn.commit()
+            logger.info(f"Auto-completed {len(auto_completed)} obvious todos")
+
+        # Reload todos after auto-completion
+        cur.execute("""
+            SELECT
+                todo_id::text,
+                content,
+                active_form,
+                status,
+                priority,
+                display_order
+            FROM claude.todos
+            WHERE project_id = %s::uuid
+              AND status IN ('pending', 'in_progress')
+              AND is_deleted = false
+            ORDER BY priority ASC, display_order ASC, created_at ASC
+        """, (project_id,))
+
+        final_todos = cur.fetchall()
+        conn.close()
+
+        return final_todos if final_todos else []
+
+    except Exception as e:
+        logger.error(f"Failed to load todos from database: {e}")
+        if conn:
+            conn.close()
+        return []
+
+
+def get_pending_messages(project_name):
+    """Check for pending messages and return detailed message data."""
+    if not DB_AVAILABLE:
+        return []
+
+    conn = get_db_connection()
+    if not conn:
+        return []
 
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT COUNT(*) as count
+            SELECT
+                message_id::text,
+                from_session_id::text,
+                to_project,
+                to_session_id::text,
+                message_type,
+                subject,
+                body,
+                priority,
+                created_at
             FROM claude.messages
             WHERE status = 'pending'
-              AND (to_project = %s OR to_project IS NULL)
+              AND (to_project = %s OR message_type = 'broadcast')
+            ORDER BY
+                CASE priority
+                    WHEN 'urgent' THEN 1
+                    WHEN 'normal' THEN 2
+                    WHEN 'low' THEN 3
+                END,
+                created_at ASC
+            LIMIT 10
         """, (project_name,))
 
-        row = cur.fetchone()
+        rows = cur.fetchall()
         conn.close()
 
-        if row:
-            return row['count'] if isinstance(row, dict) else row[0]
-        return 0
-    except:
-        return 0
+        # Convert rows to list of dicts if needed
+        if rows and not isinstance(rows[0], dict):
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+        return rows if rows else []
+    except Exception as e:
+        logger.warning(f"Failed to get pending messages: {e}")
+        return []
 
 
 def get_due_reminders(project_name):
@@ -361,7 +496,7 @@ def generate_embedding_for_rag(text):
         return None
 
 
-def preload_relevant_docs(conn, project_name, session_id, top_k=3, min_similarity=0.6):
+def preload_relevant_docs(conn, project_name, session_id, top_k=3, min_similarity=0.5):
     """Pre-load relevant vault documents based on project type/phase.
 
     Uses semantic search to find the most relevant docs for this project.
@@ -516,13 +651,30 @@ def main():
         else:
             logger.warning("Config sync not available - generate_project_settings.py not found")
 
+        # Get project_id from database (needed for todos and other queries)
+        project_id = None
+        if DB_AVAILABLE:
+            try:
+                conn = get_db_connection()
+                if conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT project_id::text FROM claude.projects WHERE project_name = %s", (project_name,))
+                    row = cur.fetchone()
+                    if row:
+                        project_id = row[0] if PSYCOPG_VERSION == 2 else row['project_id']
+                    conn.close()
+            except:
+                pass
+
         # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
         session_id = None
         if not is_resume:
             session_id = create_session(project_name)
-            # Export session_id as environment variable for MCP usage logging
+            # Export session_id as environment variable for MCP usage logging and todo tracking
             if session_id:
                 result["environment"]["CLAUDE_SESSION_ID"] = session_id
+                result["environment"]["SESSION_ID"] = session_id  # Also set SESSION_ID for hooks
+                result["environment"]["PROJECT_ID"] = project_id if project_id else ""  # For todo_sync_hook
                 result["environment"]["CLAUDE_PROJECT_NAME"] = project_name
                 logger.info(f"Environment variables set for session")
             else:
@@ -563,33 +715,75 @@ def main():
                     context_lines.append(f"   {i}. {step}")
                 context_lines.append("")
 
-            # Show pending todos
-            if state.get('todo_list'):
-                todo_list = state['todo_list']
-                if isinstance(todo_list, str):
-                    try:
-                        todo_list = json.loads(todo_list)
-                    except:
-                        pass
-                if isinstance(todo_list, list):
-                    pending = [t for t in todo_list if t.get('status') != 'completed']
-                    if pending:
-                        context_lines.append(f"PENDING TODOS ({len(pending)} items):")
-                        for item in pending[:5]:
-                            status = item.get('status', 'pending')
-                            icon = '→' if status == 'in_progress' else '○'
-                            context_lines.append(f"   {icon} {item.get('content', 'Unknown')}")
-                        if len(pending) > 5:
-                            context_lines.append(f"   ... and {len(pending) - 5} more")
-                        context_lines.append("")
-
             context_lines.append("=" * 50)
             context_lines.append("")
 
+        # Load todos from database (with smart auto-completion)
+        if project_id and session_id:
+            db_todos = get_todos_from_database(project_id, session_id)
+            if db_todos:
+                context_lines.append("=" * 50)
+                context_lines.append(f"ACTIVE TODOS ({len(db_todos)} items):")
+                context_lines.append("=" * 50)
+                for idx, todo in enumerate(db_todos, 1):
+                    priority = todo.get('priority', 3)
+                    priority_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🔵"
+                    status = todo.get('status', 'pending')
+                    status_icon = '→' if status == 'in_progress' else '○'
+                    content = todo.get('content', 'Unknown')
+                    context_lines.append(f"   {idx}. {priority_icon} {status_icon} {content}")
+                context_lines.append("")
+                context_lines.append("Note: Obvious completed todos (like 'restart') auto-completed on session start")
+                context_lines.append("=" * 50)
+                context_lines.append("")
+                context_lines.append("IMPORTANT: Call TodoWrite immediately to populate the tool with the above todos:")
+                context_lines.append("")
+                context_lines.append("TodoWrite([")
+                for idx, todo in enumerate(db_todos):
+                    status = todo.get('status', 'pending')
+                    content = todo.get('content', 'Unknown')
+                    active_form = todo.get('active_form', content)
+                    # Escape quotes in content
+                    content_escaped = content.replace('"', '\\"')
+                    active_form_escaped = active_form.replace('"', '\\"')
+                    comma = "," if idx < len(db_todos) - 1 else ""
+                    context_lines.append(f'  {{"content": "{content_escaped}", "activeForm": "{active_form_escaped}", "status": "{status}"}}{comma}')
+                context_lines.append("])")
+                context_lines.append("")
+                context_lines.append("=" * 50)
+                context_lines.append("")
+
         # Check for pending messages
-        msg_count = get_pending_messages(project_name)
-        if msg_count > 0:
-            context_lines.append(f"📬 {msg_count} pending message(s) - use /inbox-check to view")
+        pending_messages = get_pending_messages(project_name)
+        msg_count = len(pending_messages) if pending_messages else 0
+        if pending_messages:
+            context_lines.append("=" * 50)
+            context_lines.append(f"📬 INBOX: {len(pending_messages)} PENDING MESSAGE(S)")
+            context_lines.append("=" * 50)
+            for idx, msg in enumerate(pending_messages[:5], 1):  # Show max 5
+                priority_icon = "🔴" if msg['priority'] == 'urgent' else "🟡" if msg['priority'] == 'normal' else "🔵"
+                msg_type = msg['message_type'].upper()
+                context_lines.append(f"\n{priority_icon} Message {idx}: [{msg_type}] {msg['subject']}")
+                context_lines.append(f"   From: {msg.get('from_session_id', 'Unknown')[:8]}...")
+                context_lines.append(f"   To: {msg.get('to_project', 'Direct')} | Created: {msg['created_at']}")
+
+                # Show preview of body (first 200 chars)
+                body = msg.get('body', '').strip()
+                if body:
+                    body_preview = body[:200] + "..." if len(body) > 200 else body
+                    context_lines.append(f"   Preview: {body_preview}")
+
+                # Add ID for acknowledgment
+                context_lines.append(f"   ID: {msg['message_id']}")
+
+            if len(pending_messages) > 5:
+                context_lines.append(f"\n   ... and {len(pending_messages) - 5} more messages")
+
+            context_lines.append("\nACTIONS:")
+            context_lines.append("   - Use mcp__orchestrator__acknowledge(message_id, action='read') to mark as read")
+            context_lines.append("   - Use mcp__orchestrator__acknowledge(message_id, action='actioned', project_id=UUID) to create todo")
+            context_lines.append("   - Use mcp__orchestrator__acknowledge(message_id, action='deferred', defer_reason='...') to skip")
+            context_lines.append("=" * 50)
             context_lines.append("")
 
         # Check for due reminders
@@ -676,17 +870,9 @@ def main():
             if state.get('current_focus'):
                 system_parts.append(f"Focus: {state['current_focus'][:60]}...")
 
-            if state.get('todo_list'):
-                todo_list = state['todo_list']
-                if isinstance(todo_list, str):
-                    try:
-                        todo_list = json.loads(todo_list)
-                    except:
-                        pass
-                if isinstance(todo_list, list):
-                    pending = [t for t in todo_list if t.get('status') != 'completed']
-                    if pending:
-                        system_parts.append(f"{len(pending)} pending todos.")
+            # Use database todos instead of session_state
+            if 'db_todos' in locals() and db_todos:
+                system_parts.append(f"{len(db_todos)} active todos.")
 
             if msg_count > 0:
                 system_parts.append(f"{msg_count} pending message(s).")

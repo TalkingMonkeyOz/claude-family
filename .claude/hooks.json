@@ -105,6 +105,17 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "TodoWrite",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/todo_sync_hook.py\"",
+            "timeout": 10,
+            "description": "Sync TodoWrite calls to claude.todos database"
+          }
+        ]
       }
     ],
     "Stop": [

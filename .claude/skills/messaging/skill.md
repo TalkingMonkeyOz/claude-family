@@ -191,6 +191,12 @@ for msg in messages['messages']:
 
 **CRITICAL**: Always pass `project_name` to see project-targeted messages!
 
+**Filtering behavior (as of 2025-12-31)**:
+- No parameters: Shows ONLY true broadcasts (not project-targeted messages)
+- `project_name` specified: Shows messages for that project + broadcasts
+- `session_id` specified: Shows messages for that session + broadcasts
+- **Fixed**: Previously showed ALL project messages when no project_name was provided (caused "too many messages" issue)
+
 ---
 
 ## Sending Messages
@@ -564,7 +570,7 @@ messages = mcp__orchestrator__check_inbox(project_name="claude-family")
 
 ---
 
-**Version**: 2.0 (Added message context template + actioned/deferred actions)
+**Version**: 2.1 (Fixed message filtering - no longer returns all project messages)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2025-12-31
 **Location**: .claude/skills/messaging/skill.md

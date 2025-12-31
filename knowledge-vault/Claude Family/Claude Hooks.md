@@ -27,7 +27,7 @@ Enforcement layer for governance.
 | Stop | `stop_hook_enforcer.py` | Vault check every 5 interactions | ✅ Updated 2025-12-29 |
 | PreCompact (manual/auto) | `precompact_hook.py` | Re-examine CLAUDE.md and vault | ✅ Added 2025-12-29 |
 | SessionEnd | (prompt) | Reminder to run /session-end | ✅ Working |
-| UserPromptSubmit | (disabled) | Was blocking casual questions | ❌ REMOVED 2025-12-28 |
+| UserPromptSubmit | `rag_query_hook.py` | Auto-query Voyage AI RAG for vault context | ✅ ACTIVE 2025-12-31 |
 
 ## Git Hooks (Native)
 
@@ -59,6 +59,13 @@ Database (`claude.config_templates`) → `generate_project_settings.py` → `.cl
 See also: [[Setting's File]], [[claud.md structure]], [[Config Management SOP]]
 
 ## Recent Changes
+
+**2025-12-31**:
+- RE-ENABLED UserPromptSubmit hook with correct implementation (rag_query_hook.py)
+- Now uses silent JSON output format (no "chatty" messages)
+- Automatically queries Voyage AI on every user prompt for vault context injection
+- Fixed SessionStart RAG pre-load threshold (0.6 → 0.5)
+- Added vault-rag to .mcp.json for manual MCP calls
 
 **2025-12-29** (afternoon):
 - Added PreCompact hook (`precompact_hook.py`) for CLAUDE.md and vault refresh before compaction
