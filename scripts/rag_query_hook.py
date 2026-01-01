@@ -307,11 +307,12 @@ def main():
             min_similarity=0.30
         )
 
-        # Build result
+        # Build result (CORRECT format per Claude Code docs)
         result = {
-            "additionalContext": rag_context if rag_context else "",
-            "systemMessage": "",
-            "environment": {}
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": rag_context if rag_context else ""
+            }
         }
 
         # Output JSON to stdout (SILENT - no user-visible messages)
@@ -321,9 +322,10 @@ def main():
         logger.error(f"RAG hook failed: {e}", exc_info=True)
         # On error, return empty context (don't break the flow)
         result = {
-            "additionalContext": "",
-            "systemMessage": "",
-            "environment": {}
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": ""
+            }
         }
         print(json.dumps(result))
 
