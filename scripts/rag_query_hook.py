@@ -114,7 +114,7 @@ def extract_query_from_prompt(user_prompt: str) -> str:
 
 
 def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
-                    top_k: int = 3, min_similarity: float = 0.45) -> str:
+                    top_k: int = 3, min_similarity: float = 0.30) -> str:
     """Query vault embeddings and return formatted context.
 
     Args:
@@ -176,30 +176,59 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
         docs_returned = [r['doc_path'] if isinstance(r, dict) else r[0] for r in results]
         top_similarity = results[0]['similarity_score'] if results and isinstance(results[0], dict) else (results[0][4] if results else None)
 
-        # Only log if we have a session_id
-        if session_id:
-            try:
-                cur.execute("""
-                    INSERT INTO claude.rag_usage_log
-                    (session_id, project_name, query_type, query_text, results_count,
-                     top_similarity, docs_returned, latency_ms)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    session_id,
-                    project_name,
-                    "user_prompt",
-                    query_text,
-                    len(results),
-                    top_similarity,
-                    docs_returned,
-                    latency_ms
-                ))
-                conn.commit()
-            except Exception as log_error:
+        # Log RAG usage to database (try with session_id, fall back to NULL if FK fails)
+        try:
+            cur.execute("""
+                INSERT INTO claude.rag_usage_log
+                (session_id, project_name, query_type, query_text, results_count,
+                 top_similarity, docs_returned, latency_ms)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                session_id,  # May be None or invalid
+                project_name,
+                "user_prompt",
+                query_text,
+                len(results),
+                top_similarity,
+                docs_returned,
+                latency_ms
+            ))
+            conn.commit()
+            logger.info(f"RAG usage logged to database (session_id={'NULL' if not session_id else session_id[:8]}...)")
+        except Exception as log_error:
+            # If foreign key constraint fails (session_id not in sessions table),
+            # retry with NULL session_id to preserve usage data
+            error_msg = str(log_error)
+            if 'fk_session' in error_msg or 'foreign key constraint' in error_msg:
+                logger.warning(f"Session ID {session_id[:8] if session_id else 'None'}... not in database, logging with NULL")
+                try:
+                    # CRITICAL: Rollback failed transaction before retry
+                    conn.rollback()
+
+                    cur.execute("""
+                        INSERT INTO claude.rag_usage_log
+                        (session_id, project_name, query_type, query_text, results_count,
+                         top_similarity, docs_returned, latency_ms)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        None,  # Use NULL instead of invalid session_id
+                        project_name,
+                        "user_prompt",
+                        query_text,
+                        len(results),
+                        top_similarity,
+                        docs_returned,
+                        latency_ms
+                    ))
+                    conn.commit()
+                    logger.info("RAG usage logged with NULL session_id (session mismatch)")
+                except Exception as retry_error:
+                    logger.error(f"Failed to log RAG usage even with NULL session_id: {retry_error}")
+            else:
                 logger.warning(f"Failed to log RAG usage: {log_error}")
 
         if not results:
-            logger.info(f"No RAG results for query (similarity < {min_similarity})")
+            logger.info(f"No RAG results for query (similarity < {min_similarity}). Query: {query_text[:100]}")
             conn.close()
             return None
 
@@ -264,9 +293,10 @@ def main():
         # Get project context
         cwd = os.getcwd()
         project_name = os.path.basename(cwd)
-        session_id = os.environ.get('CLAUDE_SESSION_ID')
+        session_id = hook_input.get('session_id') or os.environ.get('CLAUDE_SESSION_ID')
 
         logger.info(f"RAG query hook invoked for project: {project_name}")
+        logger.info(f"Query text (first 100 chars): {user_prompt[:100]}")
 
         # Query RAG
         rag_context = query_vault_rag(
@@ -274,7 +304,7 @@ def main():
             project_name=project_name,
             session_id=session_id,
             top_k=3,
-            min_similarity=0.45
+            min_similarity=0.30
         )
 
         # Build result
