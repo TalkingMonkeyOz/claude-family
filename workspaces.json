@@ -1,10 +1,15 @@
 {
   "_metadata": {
-    "generated_at": "2025-12-31T12:40:23.517683",
+    "generated_at": "2026-01-02T07:54:06.425968",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
   "workspaces": {
+    "nimbus-mui": {
+      "path": "C:\\Projects\\nimbus-mui",
+      "type": "application",
+      "description": "Modern Tauri + React + MUI desktop application for Nimbus workforce management system data imports"
+    },
     "claude-family-manager-v2": {
       "path": "C:\\Projects\\claude-family-manager-v2",
       "type": "csharp-winforms",

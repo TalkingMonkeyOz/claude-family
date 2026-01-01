@@ -371,6 +371,7 @@ def reply_to(original_message_id: str, body: str, from_session_id: Optional[str]
         body=body,
         subject=f"Re: {original_dict['subject']}" if original_dict.get('subject') else "Reply",
         to_session_id=original_dict.get('from_session_id'),
+        to_project=original_dict.get('to_project'),
         from_session_id=from_session_id,
         metadata={"reply_to": original_message_id}
     )
@@ -600,10 +601,7 @@ def recommend_agent(task: str) -> dict:
 
     # Testing tasks
     if any(w in task_lower for w in ['playwright', 'e2e', 'browser', 'selenium']):
-        if 'next' in task_lower or 'react' in task_lower:
-            return {"agent": "nextjs-tester-haiku", "reason": "Next.js E2E testing", "cost": "$0.06", "timeout": get_spec_timeout("nextjs-tester-haiku"),
-                    "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
-        return {"agent": "web-tester-haiku", "reason": "Web E2E testing", "cost": "$0.05", "timeout": get_spec_timeout("web-tester-haiku"),
+        return {"agent": "web-tester-haiku", "reason": "Web E2E testing (Playwright)", "cost": "$0.05", "timeout": get_spec_timeout("web-tester-haiku"),
                 "governance": {"level": "test-only", "note": "Can run tests, results returned to caller"}}
     if any(w in task_lower for w in ['test', 'unit test', 'pytest', 'jest']):
         return {"agent": "tester-haiku", "reason": "Unit/integration testing", "cost": "$0.05", "timeout": get_spec_timeout("tester-haiku"),
@@ -634,7 +632,7 @@ def recommend_agent(task: str) -> dict:
 
     # C# development
     if any(w in task_lower for w in ['c#', 'csharp', '.net', 'wpf', 'winforms']):
-        return {"agent": "csharp-coder-haiku", "reason": "C#/.NET development", "cost": "$0.045", "timeout": get_spec_timeout("csharp-coder-haiku"),
+        return {"agent": "winforms-coder-haiku", "reason": "C#/.NET/WinForms development", "cost": "$0.045", "timeout": get_spec_timeout("winforms-coder-haiku"),
                 "governance": {"level": "code-write", "note": "Code returned to caller for review before commit"}}
 
     # Architecture
