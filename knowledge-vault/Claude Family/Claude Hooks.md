@@ -55,10 +55,17 @@ Database (`claude.config_templates`) → `generate_project_settings.py` → `.cl
 
 **Source of truth**: `claude.config_templates` table (hooks-base template)
 **Auto-regenerated**: Every SessionStart (self-healing)
+**Important**: Claude Code reads hooks from `settings.local.json`, NOT a separate `hooks.json` file!
 
-See also: [[Setting's File]], [[claud.md structure]], [[Config Management SOP]]
+See also: [[Settings File]], [[claud.md structure]], [[Config Management SOP]]
 
 ## Recent Changes
+
+**2026-01-02**:
+- CRITICAL FIX: Hooks must be in `settings.local.json`, NOT `hooks.json` (hooks.json is ignored!)
+- Updated `generate_project_settings.py` to put hooks in settings.local.json
+- Legacy hooks.json files are now auto-deleted during config regeneration
+- Root cause of "hooks not working" bug from 2026-01-01 was wrong config file, not cache bloat
 
 **2025-12-31**:
 - RE-ENABLED UserPromptSubmit hook with correct implementation (rag_query_hook.py)
@@ -84,7 +91,7 @@ See also: [[Setting's File]], [[claud.md structure]], [[Config Management SOP]]
 
 ---
 
-**Version**: 1.2
+**Version**: 1.3
 **Created**: 2025-12-26
-**Updated**: 2025-12-29
+**Updated**: 2026-01-02
 **Location**: Claude Family/Claude Hooks.md

@@ -263,27 +263,35 @@ def validate_content(file_path: str, content: str, standards: List[Dict]) -> Opt
     return None
 
 
-def block_with_reason(reason: str, exit_code: int = 2):
-    """Block the operation with a helpful error message."""
-    # Write error to stderr (Claude will see this)
-    print(reason, file=sys.stderr)
+def block_with_reason(reason: str):
+    """
+    Block the operation with a helpful error message.
 
-    # Return permissionDecision block
+    Uses exit code 0 + JSON with permissionDecision: "deny"
+    (Exit code 2 ignores JSON - only uses stderr as plain text)
+    """
+    # Log to file for debugging
+    logger.warning(f"Blocking operation: {reason[:200]}")
+
+    # Return proper PreToolUse JSON response
+    # CRITICAL: Must include hookEventName for Claude to parse correctly
     response = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
             "permissionDecisionReason": reason
         }
     }
 
     print(json.dumps(response))
-    sys.exit(exit_code)
+    sys.exit(0)  # Exit 0 required for JSON to be processed
 
 
 def allow_operation():
     """Allow the operation to proceed."""
     response = {
         "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
             "permissionDecision": "allow"
         }
     }
@@ -371,7 +379,7 @@ def main():
 
             if error:
                 # Validation failed - BLOCK
-                logger.warning(f"BLOCKED: {file_path} - {error[:100]}")
+                logger.warning(f"BLOCKED: {file_path}")
                 block_with_reason(error)
             else:
                 # Validation passed - ALLOW

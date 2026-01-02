@@ -3,13 +3,20 @@
 Generate Project Settings - Database-Driven Configuration Generator
 
 Reads configuration from PostgreSQL database and generates .claude/settings.local.json
+with ALL settings including hooks.
 
 Architecture:
     Database (Source of Truth)
         ↓
     generate_project_settings.py
         ↓
-    .claude/settings.local.json (Generated, do not edit manually)
+    .claude/settings.local.json (Generated, contains hooks + MCP + skills + permissions)
+
+Note: Claude Code reads hooks from settings files only:
+    - ~/.claude/settings.json (global)
+    - .claude/settings.json (project, shared)
+    - .claude/settings.local.json (project, local)
+A separate hooks.json file is NOT supported by Claude Code.
 
 Merge Priority (last wins):
     1. Base template (hooks-base from config_templates)
@@ -310,30 +317,34 @@ def generate_settings(project_name: str, project_path: Optional[str] = None) -> 
 
 
 def write_settings(project_path: str, settings: Dict) -> bool:
-    """Write settings to .claude/hooks.json and .claude/settings.local.json
+    """Write settings to .claude/settings.local.json
 
-    Hooks go to hooks.json (Claude Code reads this file for hooks)
-    Everything else goes to settings.local.json (mcp_servers, skills, permissions, instructions)
+    Claude Code reads hooks from settings files, NOT from a separate hooks.json.
+    Valid locations for hooks (per official docs):
+      - ~/.claude/settings.json (global)
+      - .claude/settings.json (project, shared)
+      - .claude/settings.local.json (project, local)
+
+    We write everything (including hooks) to settings.local.json.
     """
     try:
         claude_dir = Path(project_path) / ".claude"
         claude_dir.mkdir(exist_ok=True)
 
-        # Split: hooks go to hooks.json, rest to settings.local.json
-        # Use pop to extract hooks and remove from settings dict
-        hooks_only = {"hooks": settings.pop("hooks", {})}
-
-        # Write hooks.json (Claude Code reads this for hooks)
-        hooks_file = claude_dir / "hooks.json"
-        with open(hooks_file, 'w', encoding='utf-8') as f:
-            json.dump(hooks_only, f, indent=2, ensure_ascii=False)
-        logger.info(f"Hooks written to {hooks_file}")
-
-        # Write remaining settings to settings.local.json
+        # Write ALL settings (including hooks) to settings.local.json
         settings_file = claude_dir / "settings.local.json"
         with open(settings_file, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
+
+        hook_types = list(settings.get('hooks', {}).keys())
         logger.info(f"Settings written to {settings_file}")
+        logger.info(f"  - Hooks included: {hook_types}")
+
+        # Clean up legacy hooks.json if it exists (no longer used)
+        legacy_hooks_file = claude_dir / "hooks.json"
+        if legacy_hooks_file.exists():
+            legacy_hooks_file.unlink()
+            logger.info(f"Removed legacy {legacy_hooks_file} (hooks now in settings.local.json)")
 
         return True
 

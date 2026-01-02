@@ -23,8 +23,7 @@ projects:
 ## Architecture
 
 ```
-Database → generate_project_settings.py → .claude/hooks.json (hooks only)
-                                        → .claude/settings.local.json (MCP, skills, etc.)
+Database → generate_project_settings.py → .claude/settings.local.json (ALL config)
                                         → Claude Code
 ```
 
@@ -35,8 +34,9 @@ Database → generate_project_settings.py → .claude/hooks.json (hooks only)
 - `config_deployment_log` - Audit trail
 
 **Generated Files** (regenerated every SessionStart):
-- `.claude/hooks.json` - Hook configurations (Claude Code reads this for hooks)
-- `.claude/settings.local.json` - MCP servers, skills, instructions, permissions
+- `.claude/settings.local.json` - ALL settings (hooks, MCP servers, skills, permissions)
+
+**Note**: Claude Code reads hooks from settings files only (`settings.json` or `settings.local.json`), NOT from a separate `hooks.json` file.
 
 ---
 
@@ -110,11 +110,13 @@ WHERE template_name = 'hooks-base';
 
 **Current generated config**:
 ```bash
-# Hooks
-cat .claude/hooks.json | jq '.hooks'
-
-# MCP servers, skills, etc.
+# All settings (including hooks)
 cat .claude/settings.local.json | jq .
+
+# Just hooks
+cat .claude/settings.local.json | jq '.hooks'
+
+# MCP servers
 cat .claude/settings.local.json | jq '.mcp_servers'
 ```
 
@@ -177,31 +179,30 @@ python scripts/generate_project_settings.py project-name
 cat ~/.claude/hooks.log | grep -i error
 
 # Verify hook syntax
-cat .claude/hooks.json | jq '.hooks.SessionStart'
-cat .claude/hooks.json | jq '.hooks.PreToolUse'
+cat .claude/settings.local.json | jq '.hooks.SessionStart'
+cat .claude/settings.local.json | jq '.hooks.PreToolUse'
 ```
 
 ---
 
 ## Best Practices
 
-1. ✅ **Update database, not files** - hooks.json and settings.local.json regenerate
+1. ✅ **Update database, not files** - settings.local.json regenerates every session
 2. ✅ **Test on one project first** - Then expand to project type
 3. ✅ **Check logs** - `~/.claude/hooks.log` after changes
 4. ✅ **Use column_registry** - Validate values before insert
 5. ✅ **Audit trail** - config_deployment_log tracks changes
-6. ⚠️ **Don't edit hooks.json or settings.local.json** - Will be overwritten
+6. ⚠️ **Don't edit settings.local.json** - Will be overwritten on next session
 7. ⚠️ **Restart Claude Code after config changes** - Hooks load at startup, not dynamically
 
 ---
 
 ## Migration from Manual Config
 
-If project has manual `.claude/hooks.json` or `.claude/settings.local.json`:
+If project has manual `.claude/settings.local.json`:
 
 1. **Extract current config**:
    ```bash
-   cat .claude/hooks.json | jq . > backup-hooks.json
    cat .claude/settings.local.json | jq . > backup-settings.json
    ```
 2. **Decide tier**: Common → project_type_configs, specific → workspaces.startup_config
@@ -209,7 +210,6 @@ If project has manual `.claude/hooks.json` or `.claude/settings.local.json`:
 4. **Test**: `python scripts/generate_project_settings.py project-name`
 5. **Compare**:
    ```bash
-   diff backup-hooks.json .claude/hooks.json
    diff backup-settings.json .claude/settings.local.json
    ```
 6. **Verify**: Restart Claude Code, check hooks fire
