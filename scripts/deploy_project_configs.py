@@ -67,12 +67,14 @@ def find_project(identifier: str) -> Optional[Dict]:
                 return dict(result)
 
             # Try by path (partial match)
+            # Escape backslashes for ILIKE (backslash is escape char in LIKE/ILIKE)
+            escaped_path = identifier.replace('\\', '\\\\')
             cur.execute("""
                 SELECT project_id, project_name, metadata->>'project_path' as project_path
                 FROM claude.projects
                 WHERE metadata->>'project_path' ILIKE %s
                   AND (is_archived = false OR is_archived IS NULL)
-            """, (f"%{identifier}%",))
+            """, (f"%{escaped_path}%",))
             result = cur.fetchone()
 
             if result:
@@ -227,7 +229,11 @@ def update_deployment_status(project_id: str, template_id: int, version: int, co
 
 
 def deploy_hooks(project: Dict, templates: List[Dict], dry_run: bool = False) -> bool:
-    """Deploy hooks.json for a project."""
+    """Deploy hooks into settings.local.json for a project.
+
+    NOTE: Claude Code only reads hooks from settings.json or settings.local.json,
+    NOT from hooks.json. This function merges hooks into settings.local.json.
+    """
     project_path = project['project_path']
     project_id = str(project['project_id'])
 
@@ -240,50 +246,69 @@ def deploy_hooks(project: Dict, templates: List[Dict], dry_run: bool = False) ->
 
     # Merge all hooks templates
     merged_content = merge_hooks_content(hooks_templates)
-    content_json = json.dumps(merged_content, indent=2)
-    content_hash = compute_hash(content_json)
+    # merge_hooks_content returns {"hooks": {...}}, extract inner content
+    merged_hooks = merged_content.get('hooks', merged_content)
 
-    # Determine file path
-    target_path = Path(project_path) / ".claude" / "hooks.json"
+    # Target is settings.local.json (NOT hooks.json - that file is ignored by Claude Code)
+    target_path = Path(project_path) / ".claude" / "settings.local.json"
+    legacy_hooks_path = Path(project_path) / ".claude" / "hooks.json"
 
-    # Check if file exists and compare
-    action = "created"
+    # Delete legacy hooks.json if it exists (it's ignored by Claude Code)
+    if legacy_hooks_path.exists():
+        try:
+            legacy_hooks_path.unlink()
+            print(f"  hooks.json: DELETED (legacy file, ignored by Claude Code)")
+        except Exception as e:
+            print(f"  hooks.json: Warning - could not delete legacy file: {e}")
+
+    # Read existing settings.local.json or start fresh
+    existing_settings = {}
     if target_path.exists():
         try:
-            existing_content = target_path.read_text(encoding='utf-8')
-            existing_hash = compute_hash(existing_content)
-
-            if existing_hash == content_hash:
-                print(f"  hooks.json: No changes (up to date)")
-                if not dry_run:
-                    log_deployment(project_id, 'hooks', str(target_path), 'skipped',
-                                 details="Content unchanged")
-                return True
-            action = "updated"
+            existing_settings = json.loads(target_path.read_text(encoding='utf-8'))
         except Exception as e:
-            print(f"  hooks.json: Will replace (read error: {e})")
-            action = "replaced"
+            print(f"  settings.local.json: Warning - could not read existing: {e}")
 
+    # Compute hash of just the hooks portion for change detection
+    hooks_json = json.dumps(merged_hooks, sort_keys=True)
+    new_hooks_hash = compute_hash(hooks_json)
+
+    existing_hooks = existing_settings.get('hooks', {})
+    existing_hooks_json = json.dumps(existing_hooks, sort_keys=True)
+    existing_hooks_hash = compute_hash(existing_hooks_json)
+
+    if new_hooks_hash == existing_hooks_hash:
+        print(f"  settings.local.json hooks: No changes (up to date)")
+        if not dry_run:
+            log_deployment(project_id, 'hooks', str(target_path), 'skipped',
+                         details="Content unchanged")
+        return True
+
+    action = "updated" if existing_settings.get('hooks') else "added"
     template_names = ', '.join(t['template_name'] for t in hooks_templates)
 
     if dry_run:
-        print(f"  hooks.json: Would be {action}")
+        print(f"  settings.local.json hooks: Would be {action}")
         print(f"    Templates: {template_names}")
         return True
+
+    # Merge hooks into settings
+    existing_settings['hooks'] = merged_hooks
 
     # Create directory if needed
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write file
+    content_json = json.dumps(existing_settings, indent=2)
     target_path.write_text(content_json, encoding='utf-8')
-    print(f"  hooks.json: {action.upper()} ({template_names})")
+    print(f"  settings.local.json hooks: {action.upper()} ({template_names})")
 
     # Log and update status
     for template in hooks_templates:
         log_deployment(project_id, 'hooks', str(target_path), action,
                       template['template_id'], template['version'])
         update_deployment_status(project_id, template['template_id'],
-                                template['version'], content_hash)
+                                template['version'], new_hooks_hash)
 
     return True
 
