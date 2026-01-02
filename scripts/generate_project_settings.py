@@ -310,18 +310,31 @@ def generate_settings(project_name: str, project_path: Optional[str] = None) -> 
 
 
 def write_settings(project_path: str, settings: Dict) -> bool:
-    """Write settings to .claude/settings.local.json"""
+    """Write settings to .claude/hooks.json and .claude/settings.local.json
+
+    Hooks go to hooks.json (Claude Code reads this file for hooks)
+    Everything else goes to settings.local.json (mcp_servers, skills, permissions, instructions)
+    """
     try:
         claude_dir = Path(project_path) / ".claude"
         claude_dir.mkdir(exist_ok=True)
 
-        settings_file = claude_dir / "settings.local.json"
+        # Split: hooks go to hooks.json, rest to settings.local.json
+        # Use pop to extract hooks and remove from settings dict
+        hooks_only = {"hooks": settings.pop("hooks", {})}
 
-        # Write with nice formatting
+        # Write hooks.json (Claude Code reads this for hooks)
+        hooks_file = claude_dir / "hooks.json"
+        with open(hooks_file, 'w', encoding='utf-8') as f:
+            json.dump(hooks_only, f, indent=2, ensure_ascii=False)
+        logger.info(f"Hooks written to {hooks_file}")
+
+        # Write remaining settings to settings.local.json
+        settings_file = claude_dir / "settings.local.json"
         with open(settings_file, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2, ensure_ascii=False)
-
         logger.info(f"Settings written to {settings_file}")
+
         return True
 
     except Exception as e:

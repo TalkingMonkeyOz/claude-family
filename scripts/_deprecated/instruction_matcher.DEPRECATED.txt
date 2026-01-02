@@ -1,0 +1,8 @@
+# DEPRECATED - Replaced by standards_validator.py
+
+This script used additionalContext injection which didn't work.
+See line 22 of standards_validator.py for details.
+
+Archived: 2026-01-02
+Reason: Database-driven standards_validator.py provides block-and-correct pattern
+

@@ -3,12 +3,13 @@ title: Config Management SOP
 category: procedure
 status: active
 created: 2025-12-27
-updated: 2025-12-27
+updated: 2026-01-02
 tags:
 - sop
 - configuration
 - database
-projects: []
+projects:
+- claude-family
 ---
 
 # Config Management SOP
@@ -22,7 +23,9 @@ projects: []
 ## Architecture
 
 ```
-Database → generate_project_settings.py → .claude/settings.local.json → Claude Code
+Database → generate_project_settings.py → .claude/hooks.json (hooks only)
+                                        → .claude/settings.local.json (MCP, skills, etc.)
+                                        → Claude Code
 ```
 
 **Source Tables**:
@@ -31,7 +34,9 @@ Database → generate_project_settings.py → .claude/settings.local.json → Cl
 - `workspaces` - Per-project overrides (startup_config column)
 - `config_deployment_log` - Audit trail
 
-**Generated Files**: `.claude/settings.local.json` (regenerated every SessionStart)
+**Generated Files** (regenerated every SessionStart):
+- `.claude/hooks.json` - Hook configurations (Claude Code reads this for hooks)
+- `.claude/settings.local.json` - MCP servers, skills, instructions, permissions
 
 ---
 
@@ -61,7 +66,7 @@ Config built in **merge order** (last wins):
 3. Reads database (project type, base template, type defaults, overrides)
 4. Merges configs: `base → type defaults → project overrides`
 5. Preserves permissions from existing settings
-6. Writes `.claude/settings.local.json`
+6. Writes `.claude/hooks.json` (hooks only) and `.claude/settings.local.json` (rest)
 
 **Self-Healing**: Corrupted/manually-edited files regenerate every session.
 
@@ -103,10 +108,14 @@ WHERE template_name = 'hooks-base';
 
 ## Inspecting Configuration
 
-**Current generated settings**:
+**Current generated config**:
 ```bash
+# Hooks
+cat .claude/hooks.json | jq '.hooks'
+
+# MCP servers, skills, etc.
 cat .claude/settings.local.json | jq .
-cat .claude/settings.local.json | jq '.enabledMcpjsonServers'
+cat .claude/settings.local.json | jq '.mcp_servers'
 ```
 
 **Database source**:
@@ -168,32 +177,42 @@ python scripts/generate_project_settings.py project-name
 cat ~/.claude/hooks.log | grep -i error
 
 # Verify hook syntax
-cat .claude/settings.local.json | jq '.hooks.SessionStart'
+cat .claude/hooks.json | jq '.hooks.SessionStart'
+cat .claude/hooks.json | jq '.hooks.PreToolUse'
 ```
 
 ---
 
 ## Best Practices
 
-1. ✅ **Update database, not files** - settings.local.json regenerates
+1. ✅ **Update database, not files** - hooks.json and settings.local.json regenerate
 2. ✅ **Test on one project first** - Then expand to project type
 3. ✅ **Check logs** - `~/.claude/hooks.log` after changes
 4. ✅ **Use column_registry** - Validate values before insert
 5. ✅ **Audit trail** - config_deployment_log tracks changes
-6. ⚠️ **Don't edit settings.local.json** - Will be overwritten
+6. ⚠️ **Don't edit hooks.json or settings.local.json** - Will be overwritten
+7. ⚠️ **Restart Claude Code after config changes** - Hooks load at startup, not dynamically
 
 ---
 
 ## Migration from Manual Config
 
-If project has manual `.claude/settings.local.json`:
+If project has manual `.claude/hooks.json` or `.claude/settings.local.json`:
 
-1. **Extract current config**: `cat .claude/settings.local.json | jq . > backup.json`
+1. **Extract current config**:
+   ```bash
+   cat .claude/hooks.json | jq . > backup-hooks.json
+   cat .claude/settings.local.json | jq . > backup-settings.json
+   ```
 2. **Decide tier**: Common → project_type_configs, specific → workspaces.startup_config
 3. **Add to database**: `UPDATE claude.workspaces SET startup_config = {...}`
 4. **Test**: `python scripts/generate_project_settings.py project-name`
-5. **Compare**: `diff backup.json .claude/settings.local.json`
-6. **Verify**: Start new session, check hooks fire
+5. **Compare**:
+   ```bash
+   diff backup-hooks.json .claude/hooks.json
+   diff backup-settings.json .claude/settings.local.json
+   ```
+6. **Verify**: Restart Claude Code, check hooks fire
 
 ---
 
@@ -223,7 +242,7 @@ If project has manual `.claude/settings.local.json`:
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 3.0 (Database-driven hooks.json)
 **Created**: 2025-12-27
-**Updated**: 2025-12-27
+**Updated**: 2026-01-02
 **Location**: 40-Procedures/Config Management SOP.md

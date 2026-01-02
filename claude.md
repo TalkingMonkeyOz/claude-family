@@ -6,6 +6,12 @@
 
 ---
 
+## Coding Standards (Auto-Loaded)
+
+@~/.claude/standards/core/markdown-documentation.md
+
+---
+
 ## Problem Statement
 
 Enable coordinated AI-assisted software development across multiple Claude instances with:
