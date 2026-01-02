@@ -122,10 +122,10 @@ claude-family/
 
 ## Key Procedures
 
-1. `/session-start` - Auto-logs to DB, syncs config
-2. `/session-end` - Saves summary
-3. Data writes - Check column_registry
-4. Config changes - Update database, not files
+1. **Session Start** - Automatic via SessionStart hook (logs session, loads todos, checks messages)
+2. `/session-end` - Run manually to save summary and learnings
+3. Data writes - Check column_registry for valid values
+4. Config changes - Update database, files regenerate automatically
 
 ---
 
@@ -133,7 +133,7 @@ claude-family/
 
 **Architecture**: Skills-First (replaced process_router)
 
-A forced-eval hook prompts skill consideration on each request. Core skills:
+Core skills available:
 
 | Skill | Purpose |
 |-------|---------|
@@ -154,9 +154,9 @@ A forced-eval hook prompts skill consideration on each request. Core skills:
 
 ## Auto-Apply Instructions
 
-Coding standards auto-inject based on file patterns via `instruction_matcher.py` hook.
+Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 
-**Available**: csharp, winforms, a11y, sql-postgres, playwright (in `~/.claude/instructions/`)
+**Available** (9 files): csharp, winforms, winforms-dark-theme, wpf-ui, mvvm, a11y, sql-postgres, playwright, markdown
 
 **Override**: Create `.claude/instructions/[name].instructions.md` for project-specific rules.
 
@@ -209,14 +209,13 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
-| 2025-12-30 | **RAG System**: vault-rag MCP, Voyage AI embeddings, file versioning, 85% token reduction |
-| 2025-12-21 | **Auto-apply instructions**: instruction_matcher.py hook, 7 instruction files |
+| 2026-01-03 | **Infrastructure Audit**: Fixed broken session commands, added 10 DB indexes, removed redundant hooks |
+| 2025-12-30 | **RAG System**: vault-rag MCP, Voyage AI embeddings, 85% token reduction |
 | 2025-12-21 | **Skills-First** (ADR-005): Replaced process_router, 8 core skills |
-| 2025-12-21 | WinForms support: knowledge notes, agent, skill, dark theme instructions |
+| 2025-12-21 | **Auto-apply instructions**: 9 instruction files in `~/.claude/instructions/` |
 | 2025-12-20 | Config restructure: Family Rules.md, global CLAUDE.md update |
-| 2025-12-18 | Knowledge System: Obsidian vault, sync script, test suite |
 
-**Full changelog**: See git log or `docs/CHANGELOG.md`
+**Full changelog**: See git log or `docs/INFRASTRUCTURE_AUDIT_REPORT.md`
 
 ---
 
@@ -237,7 +236,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.8 (Database-driven config, SOP router)
+**Version**: 2.9 (Infrastructure audit fixes, session workflow clarified)
 **Created**: 2025-10-21
-**Updated**: 2025-12-27
+**Updated**: 2026-01-03
 **Location**: C:\Projects\claude-family\CLAUDE.md
