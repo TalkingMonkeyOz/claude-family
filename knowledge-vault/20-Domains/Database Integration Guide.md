@@ -267,7 +267,7 @@ WHERE table_name = 'TABLE_NAME';
 
 - [[Family Rules]] - Coordination rules
 - [[Observability]] - Logging and monitoring
-- [[MCP Configuration]] - MCP server setup
+- [[MCP configuration]] - MCP server setup
 
 ---
 

@@ -258,10 +258,10 @@ Desktop queries DB in real-time. If Code just worked on something, Desktop will 
 **Setup & Configuration**:
 - [[Purpose]] - Claude Family overview
 - [[Family Rules]] - Coordination rules
-- [[MCP Configuration]] - MCP server setup guide
+- [[MCP configuration]] - MCP server setup guide
 
 **Workflows**:
-- [[Session Lifecycle]] - How Code manages sessions (Desktop doesn't do this)
+- [[Session Lifecycle - Overview]] - How Code manages sessions (Desktop doesn't do this)
 - [[Knowledge System]] - How vault knowledge works
 
 **Reference**:

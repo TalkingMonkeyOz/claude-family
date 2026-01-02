@@ -133,7 +133,7 @@ LIMIT 1;
 
 ## Related Documents
 
-- [[Identity System]] - Full identity system documentation
+- [[Identity System - Overview]] - Full identity system documentation
 - [[Session Lifecycle Guide]] - How sessions are created and tracked
 - [[Database Schema - Core Tables]] - Projects and identities schema
 

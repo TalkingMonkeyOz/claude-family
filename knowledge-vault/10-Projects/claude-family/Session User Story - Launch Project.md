@@ -90,7 +90,7 @@ identity_id = os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
 # Result: ff32276f-9d05-4a18-b092-31b54c82fff9
 ```
 
-**Gap**: Should read from CLAUDE.md or projects.default_identity_id (see [[Identity System]])
+**Gap**: Should read from CLAUDE.md or projects.default_identity_id (see [[Identity System - Overview]])
 
 3. **Create Session Record**:
 ```python

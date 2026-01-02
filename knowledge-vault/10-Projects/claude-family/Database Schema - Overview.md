@@ -165,8 +165,8 @@ See **[[Database Schema - Supporting Tables]]**
 ## Related Documents
 
 - [[Database Architecture]] - Overview of all 57 tables
-- [[Identity System]] - How identity per project should work
-- [[Session Lifecycle]] - Complete session flow
+- [[Identity System - Overview]] - How identity per project should work
+- [[Session Lifecycle - Overview]] - Complete session flow
 - [[Family Rules]] - Database usage rules
 - [[Claude Hooks]] - Enforcement layer
 

@@ -249,9 +249,9 @@ If NULL: `CLAUDE_IDENTITY_ID` not set, DEFAULT_IDENTITY_ID missing
 
 ## Related Documents
 
-- [[Session Lifecycle]] - Complete detailed guide
+- [[Session Lifecycle - Overview]] - Complete detailed guide
 - [[Database Schema - Core Tables]] - Table structures
-- [[Identity System]] - How identity works
+- [[Identity System - Overview]] - How identity works
 - [[Family Rules]] - Mandatory procedures
 
 ---

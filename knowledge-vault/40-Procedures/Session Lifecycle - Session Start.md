@@ -75,7 +75,7 @@ identity = os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
 2. Check `projects.default_identity_id` in database
 3. Fall back to claude-code-unified
 
-See [[Identity System]] for full design.
+See [[Identity System - Overview]] for full design.
 
 ---
 
@@ -260,7 +260,7 @@ User                 Launcher            Claude Code         Hook Script        
 - [[Session Lifecycle - Session End]] - Ending and resuming sessions
 - [[Session Lifecycle - Reference]] - Key tables, troubleshooting, best practices
 - [[Database Schema - Core Tables]] - sessions table details
-- [[Identity System]] - How identity is determined
+- [[Identity System - Overview]] - How identity is determined
 
 ---
 

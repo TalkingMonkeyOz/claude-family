@@ -12,7 +12,7 @@ synced: false
 # Session User Stories - Overview
 
 **Purpose**: Traced paths through the system validating architecture documentation
-**Related**: [[Session Lifecycle]], [[Database Schema - Core Tables]], [[Identity System]]
+**Related**: [[Session Lifecycle - Overview]], [[Database Schema - Core Tables]], [[Identity System - Overview]]
 
 This document provides an overview of 5 key user stories through the Claude Family system, showing exactly what happens at each step, which files are involved, and what data is written to the database.
 
@@ -92,10 +92,10 @@ Each user story uses multiple documents:
 
 | Story | References |
 |-------|-----------|
-| 1. Launch Claude | [[Session Lifecycle]], [[Identity System]], [[Database Schema - Core Tables]] |
+| 1. Launch Claude | [[Session Lifecycle - Overview]], [[Identity System - Overview]], [[Database Schema - Core Tables]] |
 | 2. Spawn Agent | [[Database Schema - Core Tables]] (agent_sessions table) |
-| 3. End Session | [[Session Lifecycle]], [[Database Schema - Core Tables]] (sessions, session_state) |
-| 4. Resume Session | [[Session Lifecycle]], [[Database Schema - Core Tables]] (all core tables) |
+| 3. End Session | [[Session Lifecycle - Overview]], [[Database Schema - Core Tables]] (sessions, session_state) |
+| 4. Resume Session | [[Session Lifecycle - Overview]], [[Database Schema - Core Tables]] (all core tables) |
 | 5. Cross-Project Message | [[Database Schema - Core Tables]] (messages table) |
 
 ---
@@ -154,9 +154,9 @@ SELECT * FROM claude.messages WHERE in_reply_to = '...' AND to_project = 'Origin
 
 ## Related Documents
 
-- [[Session Lifecycle]] - Complete session flow documentation
+- [[Session Lifecycle - Overview]] - Complete session flow documentation
 - [[Database Schema - Core Tables]] - Detailed table schemas
-- [[Identity System]] - Identity resolution design
+- [[Identity System - Overview]] - Identity resolution design
 - [[Family Rules]] - Coordination procedures
 - [[Session Quick Reference]] - Quick reference for session operations
 

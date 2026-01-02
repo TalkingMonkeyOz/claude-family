@@ -197,7 +197,7 @@ claude-{project-code}
 - [[Identity System - Implementation]] - Migration plan and technical details
 - [[Identity Per Project]] - Quick-reference usage guide
 - [[Database Schema - Core Tables]] - Sessions and identities tables
-- [[Session Lifecycle]] - How identity is determined at session start
+- [[Session Lifecycle - Overview]] - How identity is determined at session start
 
 ---
 

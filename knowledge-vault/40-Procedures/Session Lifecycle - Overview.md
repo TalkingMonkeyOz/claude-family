@@ -138,7 +138,7 @@ A **session** is a single continuous interaction between a user and a Claude ins
 ## Related Documents
 
 - [[Database Schema - Core Tables]] - sessions, session_state tables
-- [[Identity System]] - How identity is determined
+- [[Identity System - Overview]] - How identity is determined
 - [[Session Quick Reference]] - Single-page cheat sheet
 - [[Family Rules]] - Session rules (mandatory)
 - [[Session User Stories]] - Traced examples

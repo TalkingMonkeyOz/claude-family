@@ -34,7 +34,7 @@ We are the **Claude Family** - multiple Claude instances coordinating across pro
 
 **Consequence of skipping**: Future sessions waste time rediscovering work.
 
-**Detailed Documentation**: See [[Session Lifecycle]] for complete session flow and [[Session Quick Reference]] for quick commands.
+**Detailed Documentation**: See [[Session Lifecycle - Overview]] for complete session flow and [[Session Quick Reference]] for quick commands.
 
 ---
 
@@ -91,14 +91,14 @@ Available across all projects (varies by platform):
 
 ## Related Documents
 
-- [[Session Lifecycle]] - Complete session flow documentation (NEW)
+- [[Session Lifecycle - Overview]] - Complete session flow documentation (NEW)
 - [[Session Quick Reference]] - Quick reference for session operations (NEW)
 - [[Database Schema - Core Tables]] - Core database tables reference (NEW)
 - [[Claude Desktop Setup]] - Desktop configuration and workflows (NEW)
 - [[Purpose]] - Vault overview
 - [[Session Workflow]] - Detailed session procedures
 - [[Claude Hooks]] - Enforcement layer
-- [[MCP Configuration]] - Server setup
+- [[MCP configuration]] - Server setup
 
 ---
 

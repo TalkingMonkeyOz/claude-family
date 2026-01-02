@@ -235,7 +235,7 @@ See **[[Database Schema - Overview]]** for full navigation.
 
 - [[Database Schema - Workspace and Agents]] - Next section
 - [[Database Architecture]] - Overview of all 57 tables
-- [[Session Lifecycle]] - Complete session flow
+- [[Session Lifecycle - Overview]] - Complete session flow
 
 ---
 

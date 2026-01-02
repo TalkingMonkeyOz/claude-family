@@ -122,7 +122,7 @@ SELECT * FROM claude.session_state WHERE project_name = 'YOUR-PROJECT';
 - [[Session Lifecycle - Session Start]] - Startup sequence and configuration
 - [[Session Lifecycle - Session End]] - Ending and resuming sessions
 - [[Database Schema - Core Tables]] - sessions, session_state, mcp_usage tables
-- [[Identity System]] - How identity is determined
+- [[Identity System - Overview]] - How identity is determined
 - [[Session Quick Reference]] - Single-page cheat sheet
 - [[Family Rules]] - Session rules (mandatory)
 - [[Session User Stories]] - Traced examples

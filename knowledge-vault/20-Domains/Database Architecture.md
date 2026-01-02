@@ -273,8 +273,8 @@ These tables exist in legacy schemas and will be dropped:
 ## Related Documents
 
 - [[Database Schema - Core Tables]] - Detailed core tables documentation (NEW)
-- [[Identity System]] - Identity resolution and per-project identities (NEW)
-- [[Session Lifecycle]] - Complete session flow documentation (NEW)
+- [[Identity System - Overview]] - Identity resolution and per-project identities (NEW)
+- [[Session Lifecycle - Overview]] - Complete session flow documentation (NEW)
 - [[Claude Family Postgres]] - Quick reference
 - [[Claude Hooks]] - Enforcement layer
 - [[Data Gateway]] - Constraint patterns

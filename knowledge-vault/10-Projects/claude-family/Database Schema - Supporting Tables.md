@@ -222,8 +222,8 @@ See **[[Database Schema - Overview]]** for full navigation.
 - [[Database Schema - Core Tables]] - Core session/identity tracking
 - [[Database Schema - Workspace and Agents]] - Workspace/agent execution
 - [[Database Architecture]] - Overview of all 57 tables
-- [[Identity System]] - How identity per project should work
-- [[Session Lifecycle]] - Complete session flow
+- [[Identity System - Overview]] - How identity per project should work
+- [[Session Lifecycle - Overview]] - Complete session flow
 
 ---
 
