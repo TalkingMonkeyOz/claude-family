@@ -1,64 +1,41 @@
-# Next Session TODO - HOOKS FIX COMPLETE
+# Next Session TODO
 
-**Last Updated**: 2026-01-02 23:25
-**Last Session**: Fixed hooks configuration bug
-
----
-
-## RESOLVED: Hooks Not Working
-
-**Root Cause**: `generate_project_settings.py` was writing hooks to `.claude/hooks.json`, but Claude Code only reads hooks from:
-- `~/.claude/settings.json` (global)
-- `.claude/settings.json` (project, shared)
-- `.claude/settings.local.json` (project, local)
-
-**The file `hooks.json` is NOT supported by Claude Code!**
-
-**Fix Applied**:
-1. Updated `generate_project_settings.py` to put hooks INTO `settings.local.json`
-2. Script now auto-deletes legacy `hooks.json` files
-3. Updated vault documentation (Config Management SOP, Claude Hooks)
-
-**Note**: The cache bloat hypothesis from 2026-01-01 was a red herring. The hooks weren't working because they were in the wrong file.
+**Last Updated**: 2026-01-02 23:45
+**Last Session**: Fixed standards_validator PreToolUse response format
 
 ---
 
 ## Completed This Session
 
-- [x] Researched Claude Code hooks documentation (via claude-code-guide agent)
-- [x] Identified root cause: hooks.json not supported
-- [x] Fixed `generate_project_settings.py` to merge hooks into settings.local.json
-- [x] Regenerated claude-family config (hooks.json deleted, settings.local.json updated)
-- [x] Updated Config Management SOP (removed hooks.json references)
-- [x] Updated Claude Hooks document (added fix, corrected config flow)
+- [x] Verified hooks are working after restart (SessionStart, RAG query hooks firing)
+- [x] Tested 500-line markdown write - discovered validator wasn't blocking
+- [x] Fixed `standards_validator.py`:
+  - Added required `hookEventName: "PreToolUse"` to JSON response
+  - Changed exit code from 2 to 0 (exit 2 ignores JSON)
+  - Fixed log truncation
+- [x] Verified fix works - 500-line file now blocked correctly
+- [x] Committed and pushed all hooks fixes (11 commits total)
 
 ---
 
 ## Next Steps
 
-1. **RESTART Claude Code** to load the new settings.local.json with hooks
-2. **Verify hooks work** after restart:
-   ```bash
-   # Make an edit, then check hooks.log for fresh timestamps
-   tail -10 ~/.claude/hooks.log
-   ```
-3. **Commit these changes** (script fix + documentation updates)
+1. **Research stop hook enforcement** - Currently just shows reminder, could be more active
+2. Review other hooks for similar PreToolUse JSON issues
+3. Consider adding more validation rules to standards_validator
 
 ---
 
-## Files Changed
+## Recent Fixes Summary
 
-| File | Change |
-|------|--------|
-| `scripts/generate_project_settings.py` | Fixed to put hooks in settings.local.json |
-| `knowledge-vault/40-Procedures/Config Management SOP.md` | Removed hooks.json references |
-| `knowledge-vault/Claude Family/Claude Hooks.md` | Added fix, updated config flow |
-| `.claude/settings.local.json` | Now contains hooks (regenerated) |
-| `.claude/hooks.json` | DELETED (was ignored by Claude Code) |
+| Date | Fix |
+|------|-----|
+| 2026-01-02 (PM) | standards_validator.py - PreToolUse JSON format |
+| 2026-01-02 (AM) | hooks.json → settings.local.json migration |
 
 ---
 
-**Version**: 2.0
+**Version**: 3.0
 **Created**: 2026-01-02
 **Updated**: 2026-01-02
 **Location**: docs/TODO_NEXT_SESSION.md

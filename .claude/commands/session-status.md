@@ -1,4 +1,4 @@
-**QUICK SESSION RESUME - Context at a Glance**
+**QUICK STATUS CHECK - Read-Only View**
 
 Get instant visibility into project state without starting a new session.
 
