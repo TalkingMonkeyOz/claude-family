@@ -1,41 +1,52 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-02 23:45
-**Last Session**: Fixed standards_validator PreToolUse response format
+**Last Updated**: 2026-01-03
+**Last Session**: Comprehensive infrastructure audit
+
+---
+
+## 🔴 CRITICAL - Fix Immediately
+
+1. **session-start.md** - References non-existent tables:
+   - `claude_family.session_history` → `claude.sessions`
+   - `claude_family.universal_knowledge` → `claude.knowledge`
+   - `claude_pm.project_feedback` → `claude.feedback`
+
+2. **session-end.md** - Same deprecated table references
 
 ---
 
 ## Completed This Session
 
-- [x] Verified hooks are working after restart (SessionStart, RAG query hooks firing)
-- [x] Tested 500-line markdown write - discovered validator wasn't blocking
-- [x] Fixed `standards_validator.py`:
-  - Added required `hookEventName: "PreToolUse"` to JSON response
-  - Changed exit code from 2 to 0 (exit 2 ignores JSON)
-  - Fixed log truncation
-- [x] Verified fix works - 500-line file now blocked correctly
-- [x] Committed and pushed all hooks fixes (11 commits total)
+- [x] Comprehensive infrastructure audit (10 phases)
+- [x] Created audit reports: `docs/INFRASTRUCTURE_AUDIT_REPORT.md`
+- [x] Detailed sub-reports in `docs/audit/`
+- [x] Verified all hooks working correctly
+- [x] Confirmed best practices compliance
 
 ---
 
-## Next Steps
+## Audit Findings Summary
 
-1. **Research stop hook enforcement** - Currently just shows reminder, could be more active
-2. Review other hooks for similar PreToolUse JSON issues
-3. Consider adding more validation rules to standards_validator
-
----
-
-## Recent Fixes Summary
-
-| Date | Fix |
-|------|-----|
-| 2026-01-02 (PM) | standards_validator.py - PreToolUse JSON format |
-| 2026-01-02 (AM) | hooks.json → settings.local.json migration |
+| Area | Health | Issues |
+|------|--------|--------|
+| Database | 69% | 1 duplicate FK, 10 missing indexes |
+| Hooks | 85% | Minor race condition in todo_sync |
+| Commands | 🔴 | 2 broken commands |
+| Vault | 68% | 9 broken links, 0% YAML compliance |
 
 ---
 
-**Version**: 3.0
+## Priority Actions
+
+1. Fix session-start.md and session-end.md
+2. Add 10 missing indexes on FK columns
+3. Fix 9 broken wiki-links in vault
+4. Add YAML frontmatter to vault docs
+
+---
+
+**Version**: 5.0
 **Created**: 2026-01-02
-**Updated**: 2026-01-02
+**Updated**: 2026-01-03
 **Location**: docs/TODO_NEXT_SESSION.md
