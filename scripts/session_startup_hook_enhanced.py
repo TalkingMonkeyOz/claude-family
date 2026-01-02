@@ -166,7 +166,6 @@ def get_session_state(project_name: str) -> dict:
         cur = conn.cursor()
         cur.execute("""
             SELECT
-                todo_list,
                 current_focus,
                 files_modified,
                 pending_actions,
@@ -180,6 +179,52 @@ def get_session_state(project_name: str) -> dict:
         return dict(result) if result else None
     except Exception:
         return None
+
+def get_active_todos(project_name: str) -> list:
+    """Get active todos from claude.todos table (DATABASE SOURCE OF TRUTH)."""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Get project_id first
+        cur.execute("""
+            SELECT project_id::text
+            FROM claude.projects
+            WHERE project_name = %s
+        """, (project_name,))
+        project_result = cur.fetchone()
+        if not project_result:
+            cur.close()
+            conn.close()
+            return []
+
+        project_id = project_result['project_id']
+
+        # Get active todos
+        cur.execute("""
+            SELECT
+                content,
+                status,
+                priority,
+                created_at
+            FROM claude.todos
+            WHERE project_id = %s::uuid
+              AND is_deleted = false
+              AND status IN ('pending', 'in_progress')
+            ORDER BY
+                CASE status
+                    WHEN 'in_progress' THEN 1
+                    WHEN 'pending' THEN 2
+                END,
+                priority ASC,
+                created_at ASC
+            LIMIT 10
+        """, (project_id,))
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [dict(r) for r in results]
+    except Exception:
+        return []
 
 def format_todo_list(todo_list: list) -> list:
     """Format todo list items for display."""
@@ -232,35 +277,55 @@ def main():
 
         # === WHERE WE LEFT OFF ===
         state = get_session_state(project_name)
-        if state:
+        todos = get_active_todos(project_name)
+
+        if state or todos:
             context_lines.append("")
             context_lines.append("=== WHERE WE LEFT OFF ===")
 
             # Last updated
-            if state.get('updated_at'):
+            if state and state.get('updated_at'):
                 updated = state['updated_at'].strftime('%Y-%m-%d %H:%M')
                 context_lines.append(f"Last saved: {updated}")
 
             # Current focus
-            if state.get('current_focus'):
+            if state and state.get('current_focus'):
                 context_lines.append(f"Focus: {state['current_focus']}")
 
-            # Todo list
-            if state.get('todo_list'):
+            # Todo list from DATABASE (claude.todos - SOURCE OF TRUTH)
+            if todos:
+                in_progress = [t for t in todos if t['status'] == 'in_progress']
+                pending = [t for t in todos if t['status'] == 'pending']
+
                 context_lines.append("")
-                context_lines.append("Todo List:")
-                todo_lines = format_todo_list(state['todo_list'])
-                context_lines.extend(todo_lines)
+                context_lines.append(f"Active Todos: {len(todos)} total ({len(in_progress)} in progress, {len(pending)} pending)")
+
+                if in_progress:
+                    context_lines.append("")
+                    context_lines.append("In Progress:")
+                    for t in in_progress:
+                        priority_label = f"[P{t['priority']}]" if t.get('priority') else ""
+                        context_lines.append(f"  [>] {priority_label} {t['content']}")
+
+                if pending[:5]:  # Show top 5 pending
+                    context_lines.append("")
+                    context_lines.append("Pending (top 5):")
+                    for t in pending[:5]:
+                        priority_label = f"[P{t['priority']}]" if t.get('priority') else ""
+                        context_lines.append(f"  [ ] {priority_label} {t['content']}")
+
+                if len(pending) > 5:
+                    context_lines.append(f"  ... and {len(pending) - 5} more pending")
 
             # Pending actions
-            if state.get('pending_actions'):
+            if state and state.get('pending_actions'):
                 context_lines.append("")
                 context_lines.append("Pending Actions:")
                 for action in state['pending_actions'][:5]:
                     context_lines.append(f"  - {action}")
 
             # Files modified
-            if state.get('files_modified'):
+            if state and state.get('files_modified'):
                 context_lines.append("")
                 context_lines.append(f"Files touched: {len(state['files_modified'])} files")
                 for f in state['files_modified'][:3]:
