@@ -1,7 +1,7 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-03
-**Last Session**: Implemented search_agents progressive discovery tool
+**Last Updated**: 2026-01-04
+**Last Session**: Fixed MCP usage tracking (session_id mismatch bug)
 
 ---
 
@@ -10,7 +10,7 @@
 - [x] Research progressive discovery pattern for orchestrator ✅
 - [x] Implement search_agents tool ✅ (server.py:557-638)
 - [x] Update ORCHESTRATOR_MCP_AUDIT.md with resolution ✅
-- [ ] Implement usage tracking (MCP usage hooks added, verify logging)
+- [x] Implement usage tracking ✅ (Fixed session_id mismatch - hooks now use Claude's session_id)
 - [ ] Consider reducing MCP token usage (~28k tokens warning)
 - [ ] Update spawn_agent to use string instead of enum (optional)
 

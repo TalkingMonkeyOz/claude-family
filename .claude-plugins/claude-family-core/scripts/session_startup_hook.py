@@ -133,8 +133,13 @@ def resolve_identity_for_project(project_name):
         return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
 
 
-def create_session(project_name, identity_id=None):
+def create_session(project_name, identity_id=None, claude_session_id=None):
     """Create a new session record in claude.sessions.
+
+    Args:
+        project_name: Name of the project
+        identity_id: Optional identity UUID
+        claude_session_id: Session ID from Claude Code (use this instead of generating new)
 
     Returns the session_id if successful, None otherwise.
     """
@@ -148,7 +153,8 @@ def create_session(project_name, identity_id=None):
         return None
 
     try:
-        session_id = str(uuid.uuid4())
+        # Use Claude Code's session_id if provided, otherwise generate new
+        session_id = claude_session_id if claude_session_id else str(uuid.uuid4())
 
         # Resolve identity: explicit parameter > project default > env var > hardcoded default
         if identity_id:
@@ -803,6 +809,19 @@ def main():
         is_resume = '--resume' in sys.argv
         logger.info(f"SessionStart hook invoked (resume={is_resume})")
 
+        # Read hook input from stdin (Claude Code passes session_id and other context)
+        hook_input = {}
+        try:
+            raw_input = sys.stdin.read()
+            if raw_input.strip():
+                hook_input = json.loads(raw_input)
+                logger.info(f"Hook input received: session_id={hook_input.get('session_id')}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Failed to parse hook input: {e}")
+
+        # Extract session_id from Claude Code's hook input
+        claude_session_id = hook_input.get('session_id')
+
         # Claude Code expects additionalContext at top level (not nested in hookSpecificOutput)
         result = {
             "additionalContext": "",
@@ -812,8 +831,8 @@ def main():
 
         context_lines = []
 
-        # Get current directory to determine project
-        cwd = os.getcwd()
+        # Get current directory to determine project (prefer hook input)
+        cwd = hook_input.get('cwd') or os.getcwd()
         project_name = os.path.basename(cwd)
         logger.info(f"Project: {project_name}")
 
@@ -855,7 +874,8 @@ def main():
         # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
         session_id = None
         if not is_resume:
-            session_id = create_session(project_name)
+            # Pass Claude Code's session_id so we use the same ID throughout
+            session_id = create_session(project_name, claude_session_id=claude_session_id)
             # Export session_id as environment variable for MCP usage logging and todo tracking
             if session_id:
                 result["environment"]["CLAUDE_SESSION_ID"] = session_id

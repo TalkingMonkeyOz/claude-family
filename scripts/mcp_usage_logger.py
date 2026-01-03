@@ -104,6 +104,8 @@ def log_mcp_usage(
         conn.commit()
     except Exception as e:
         # Best effort - don't fail the tool call
+        import logging
+        logging.warning(f"MCP usage logging failed: {e}")
         print(f"MCP usage logging failed: {e}", file=sys.stderr)
     finally:
         conn.close()
@@ -128,17 +130,31 @@ def main():
     """Main entry point for the hook."""
     start_time = time.time()
 
+    # ALWAYS log invocation to file for debugging
+    import logging
+    log_path = os.path.expanduser('~/.claude/hooks.log')
+    logging.basicConfig(
+        filename=log_path,
+        level=logging.INFO,
+        format='%(asctime)s - mcp_usage_logger - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    logging.info("MCP usage logger hook invoked")
+
+    # Read input early for logging
+    raw_input_for_log = sys.stdin.read()
+    logging.info(f"Raw input length: {len(raw_input_for_log)}")
+
     # Debug: Log that hook was called
     debug_mode = os.environ.get('MCP_LOGGER_DEBUG', '0') == '1'
     if debug_mode:
         print(f"DEBUG: mcp_usage_logger called", file=sys.stderr)
 
-    # Read hook input from stdin
+    # Read hook input from stdin (already read above for logging)
     try:
-        raw_input = sys.stdin.read()
         if debug_mode:
-            print(f"DEBUG: raw input: {raw_input[:200]}", file=sys.stderr)
-        hook_input = json.loads(raw_input) if raw_input.strip() else {}
+            print(f"DEBUG: raw input: {raw_input_for_log[:200]}", file=sys.stderr)
+        hook_input = json.loads(raw_input_for_log) if raw_input_for_log.strip() else {}
     except json.JSONDecodeError as e:
         # No input or invalid JSON - pass through
         if debug_mode:
@@ -152,6 +168,8 @@ def main():
     tool_response = hook_input.get('tool_response', {})  # Correct field name per docs
     # Check for error in response
     tool_error = tool_response.get('error') if isinstance(tool_response, dict) else None
+
+    logging.info(f"tool_name={tool_name}, HAS_DB={HAS_DB}")
 
     if debug_mode:
         print(f"DEBUG: tool_name={tool_name}", file=sys.stderr)
@@ -199,6 +217,7 @@ def main():
     execution_time_ms = int((time.time() - start_time) * 1000)
 
     # Log to database
+    logging.info(f"Calling log_mcp_usage: tool={tool_name}, server={mcp_server}, session={session_id}, project={project_name}")
     if debug_mode:
         print(f"DEBUG: calling log_mcp_usage({tool_name}, {mcp_server})", file=sys.stderr)
     log_mcp_usage(
@@ -212,6 +231,7 @@ def main():
         session_id=session_id,
         project_name=project_name
     )
+    logging.info("log_mcp_usage completed successfully")
     if debug_mode:
         print(f"DEBUG: log_mcp_usage completed", file=sys.stderr)
 
