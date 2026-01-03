@@ -1,37 +1,12 @@
 #!/bin/bash
-#
-# Git commit-msg hook
-# Validates commit message has work item reference (warning only, not blocking)
-#
-# Work item formats:
-#   [F1], [F2], etc.   - Features
-#   [FB1], [FB2], etc. - Feedback items
-#   [BT1], [BT2], etc. - Build tasks
-#
-# This hook does NOT block commits, only provides a helpful reminder.
-
-COMMIT_MSG_FILE=$1
-COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
-
-# Check for work item reference pattern
+# Validate work item reference (soft enforcement)
+COMMIT_MSG=$(cat "$1")
 if ! echo "$COMMIT_MSG" | grep -qE '\[(F|FB|BT)[0-9]+\]'; then
     echo ""
     echo "=============================================="
     echo "NOTE: No work item reference in commit message"
     echo "=============================================="
-    echo ""
-    echo "Consider linking your commit to a work item:"
-    echo "  - Use branch naming: feature/F1-desc, fix/FB1-desc"
-    echo "  - Or manually add: [F1] Your commit message"
-    echo ""
-    echo "Work items can be created via:"
-    echo "  INSERT INTO claude.features (...)"
-    echo "  INSERT INTO claude.feedback (...)"
-    echo ""
-    echo "See: knowledge-vault/20-Domains/Database/Work Tracking Schema.md"
+    echo "Consider: feature/F1-desc, fix/FB1-desc branch naming"
     echo "=============================================="
-    echo ""
 fi
-
-# Always allow the commit (soft enforcement)
 exit 0

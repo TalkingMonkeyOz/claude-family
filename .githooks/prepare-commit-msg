@@ -1,56 +1,21 @@
 #!/bin/bash
-#
-# Git prepare-commit-msg hook
-# Auto-prepends work item reference from branch name to commit message
-#
-# Branch naming convention:
-#   feature/F<id>-description  -> [F<id>] prefix
-#   fix/FB<id>-description     -> [FB<id>] prefix
-#   task/BT<id>-description    -> [BT<id>] prefix
-#
-# Example:
-#   Branch: feature/F1-dark-mode
-#   Commit: "Add toggle component"
-#   Result: "[F1] Add toggle component"
-
+# Auto-prepend work item reference from branch name
 COMMIT_MSG_FILE=$1
 COMMIT_SOURCE=$2
-
-# Only process regular commits (not merges, amends, etc.)
-if [ "$COMMIT_SOURCE" != "" ]; then
-    exit 0
-fi
-
-# Get current branch name
+if [ "$COMMIT_SOURCE" != "" ]; then exit 0; fi
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
-
-if [ -z "$BRANCH" ]; then
-    exit 0
-fi
-
-# Extract work item from branch name
+if [ -z "$BRANCH" ]; then exit 0; fi
 WORK_ITEM=""
-
-if [[ $BRANCH =~ ^feature/(F[0-9]+) ]]; then
-    WORK_ITEM="${BASH_REMATCH[1]}"
-elif [[ $BRANCH =~ ^fix/(FB[0-9]+) ]]; then
-    WORK_ITEM="${BASH_REMATCH[1]}"
-elif [[ $BRANCH =~ ^task/(BT[0-9]+) ]]; then
-    WORK_ITEM="${BASH_REMATCH[1]}"
-fi
-
-# If we found a work item and it's not already in the commit message
+if [[ $BRANCH =~ ^feature/(F[0-9]+) ]]; then WORK_ITEM="${BASH_REMATCH[1]}"; fi
+if [[ $BRANCH =~ ^fix/(FB[0-9]+) ]]; then WORK_ITEM="${BASH_REMATCH[1]}"; fi
+if [[ $BRANCH =~ ^task/(BT[0-9]+) ]]; then WORK_ITEM="${BASH_REMATCH[1]}"; fi
 if [ -n "$WORK_ITEM" ]; then
     FIRST_LINE=$(head -n 1 "$COMMIT_MSG_FILE")
-
-    # Check if work item already present
     if ! echo "$FIRST_LINE" | grep -qE "^\[$WORK_ITEM\]"; then
-        # Prepend work item to commit message
         TEMP_FILE=$(mktemp)
         echo "[$WORK_ITEM] $FIRST_LINE" > "$TEMP_FILE"
         tail -n +2 "$COMMIT_MSG_FILE" >> "$TEMP_FILE"
         mv "$TEMP_FILE" "$COMMIT_MSG_FILE"
     fi
 fi
-
 exit 0
