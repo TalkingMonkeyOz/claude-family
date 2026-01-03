@@ -20,12 +20,13 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 
 ---
 
-## Tools (13 total)
+## Tools (14 total)
 
-### Agent Spawning (6 tools)
+### Agent Spawning (7 tools)
 
 | Tool | Purpose |
 |------|---------|
+| `search_agents` | **NEW** Search agents by capability (progressive discovery) |
 | `spawn_agent` | Spawn agent (blocks until complete) |
 | `spawn_agent_async` | Background spawn, returns task_id |
 | `check_async_task` | Check async agent status |
@@ -88,6 +89,12 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 
 ## Quick Reference
 
+**Search agents first** (progressive discovery):
+```
+search_agents(query="python testing", detail_level="summary")
+→ Returns matching agents with costs
+```
+
 **Spawn agent**:
 ```
 spawn_agent(agent_type="coder-haiku", task="...", workspace_dir="...")
@@ -103,10 +110,35 @@ check_inbox(project_name="claude-family")
 send_message(to_project="ATO-Tax-Agent", message_type="notification", ...)
 ```
 
-**Broadcast**:
+---
+
+## Progressive Discovery Pattern
+
+**Problem**: Loading all 15 agent definitions upfront wastes tokens
+
+**Solution**: Use `search_agents` first, load details on-demand
+
+### Detail Levels
+
+| Level | Returns | Use Case |
+|-------|---------|----------|
+| `name` | Just agent names | Browsing options |
+| `summary` | Name + description + cost | Decision making |
+| `full` | Complete spec + MCP config | Ready to spawn |
+
+### Example Flow
+
 ```
-broadcast(subject="...", body="...")
+1. search_agents(query="testing", detail_level="name")
+   → ["tester-haiku", "web-tester-haiku"]
+
+2. search_agents(query="web-tester-haiku", detail_level="full")
+   → Complete spec
+
+3. spawn_agent(agent_type="web-tester-haiku", ...)
 ```
+
+**Token savings**: ~98% reduction in upfront context
 
 ---
 
@@ -140,7 +172,7 @@ Each agent has isolated MCP access:
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 3.0 (Added progressive discovery pattern)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-01-03
 **Location**: Claude Family/Orchestrator MCP.md

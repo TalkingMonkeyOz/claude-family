@@ -3,7 +3,54 @@
 **Audit Date**: 2026-01-01
 **Auditor**: Claude (Session 48939637-b711-4a55-ac3d-a1fe89220300)
 **Trigger**: User reported Playwright agent not working, questioned if orchestrator too heavy
-**Status**: Critical bug found, optimization opportunities identified
+**Status**: ✅ RESOLVED - Progressive discovery implemented 2026-01-03
+
+---
+
+## Resolution Summary (2026-01-03)
+
+**Implemented**: `search_agents` tool for progressive discovery pattern
+
+### Changes Made
+
+1. **Added `search_agents()` function** (`server.py:557-638`)
+   - Keyword-based search across agent names, descriptions, use_cases
+   - Three detail levels: `name`, `summary`, `full`
+   - Scores results by keyword match count
+
+2. **Added `search_agents` MCP tool** (`server.py:918-941`)
+   - Query parameter: Natural language search
+   - Detail level: Controls response size
+   - Use BEFORE spawn_agent to discover agents
+
+3. **Added handler and routing** (`server.py:1171, 1274-1279`)
+
+### Expected Token Reduction
+
+| Before | After | Reduction |
+|--------|-------|-----------|
+| ~1,230 lines upfront | <100 lines + on-demand | **~98%** |
+
+### Usage Pattern
+
+```python
+# Step 1: Search for agents (minimal context)
+search_agents(query="python testing", detail_level="name")
+# → {"count": 2, "agents": ["python-coder-haiku", "web-tester-haiku"]}
+
+# Step 2: Get details on specific agent
+search_agents(query="python-coder-haiku", detail_level="full")
+# → Complete spec with MCP config, timeout, cost
+
+# Step 3: Spawn the agent
+spawn_agent(agent_type="python-coder-haiku", task="...", workspace_dir="...")
+```
+
+### Remaining Work
+
+- [ ] Update `spawn_agent` to use string instead of enum (optional optimization)
+- [ ] Collect usage data to validate token reduction
+- [ ] Fine-tune search algorithm based on usage patterns
 
 ---
 

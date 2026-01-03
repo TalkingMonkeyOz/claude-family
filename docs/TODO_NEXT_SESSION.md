@@ -1,52 +1,86 @@
 # Next Session TODO
 
 **Last Updated**: 2026-01-03
-**Last Session**: Comprehensive infrastructure audit
+**Last Session**: Implemented search_agents progressive discovery tool
 
 ---
 
-## 🔴 CRITICAL - Fix Immediately
+## Priority 1: Orchestrator Improvements
 
-1. **session-start.md** - References non-existent tables:
-   - `claude_family.session_history` → `claude.sessions`
-   - `claude_family.universal_knowledge` → `claude.knowledge`
-   - `claude_pm.project_feedback` → `claude.feedback`
-
-2. **session-end.md** - Same deprecated table references
-
----
-
-## Completed This Session
-
-- [x] Comprehensive infrastructure audit (10 phases)
-- [x] Created audit reports: `docs/INFRASTRUCTURE_AUDIT_REPORT.md`
-- [x] Detailed sub-reports in `docs/audit/`
-- [x] Verified all hooks working correctly
-- [x] Confirmed best practices compliance
+- [x] Research progressive discovery pattern for orchestrator ✅
+- [x] Implement search_agents tool ✅ (server.py:557-638)
+- [x] Update ORCHESTRATOR_MCP_AUDIT.md with resolution ✅
+- [ ] Implement usage tracking (MCP usage hooks added, verify logging)
+- [ ] Consider reducing MCP token usage (~28k tokens warning)
+- [ ] Update spawn_agent to use string instead of enum (optional)
 
 ---
 
-## Audit Findings Summary
+## Priority 2: Standards System
 
-| Area | Health | Issues |
-|------|--------|--------|
-| Database | 69% | 1 duplicate FK, 10 missing indexes |
-| Hooks | 85% | Minor race condition in todo_sync |
-| Commands | 🔴 | 2 broken commands |
-| Vault | 68% | 9 broken links, 0% YAML compliance |
-
----
-
-## Priority Actions
-
-1. Fix session-start.md and session-end.md
-2. Add 10 missing indexes on FK columns
-3. Fix 9 broken wiki-links in vault
-4. Add YAML frontmatter to vault docs
+- [ ] Add C#, TypeScript/MUI, Rust standards to database
+- [ ] Add Azure standards (Bicep, Functions, Logic Apps)
+- [ ] Add Security/OWASP standards
+- [ ] Regenerate all standards files
+- [ ] Test SessionStart loads standards correctly
 
 ---
 
-**Version**: 5.0
+## Priority 3: Vault/Documentation
+
+- [ ] Complete YAML frontmatter for vault docs (0% compliance)
+- [ ] Split oversized vault documents (3 files)
+- [ ] Tune RAG threshold 0.50 to 0.40
+- [ ] Update vault documentation with standards system docs
+- [ ] Consolidate documentation process into single source
+- [ ] Decide on ~/.claude/instructions/ files fate
+
+---
+
+## Priority 4: Database Cleanup
+
+- [ ] Audit unused database tables for project/work tracking
+- [ ] Plan database schema for enforced project work compliance
+- [ ] Add FK constraints to prevent orphaned records
+
+---
+
+## Priority 5: Session/Hooks
+
+- [ ] Test complete session lifecycle end-to-end
+- [ ] Investigate startup warning: Config deployment skipped
+- [ ] Research stop hook enforcement (make more active)
+
+---
+
+## Backlog
+
+- [ ] Test ATO project - Verify logic gates, data capture
+- [ ] Create ATO-Infrastructure project with Azure + MS Learn MCPs
+- [ ] Review other projects for duplicate session commands
+
+---
+
+## Open Feedback (5 items)
+
+| Type | Description | Priority |
+|------|-------------|----------|
+| design | Claude Launcher: Desktop App | 1 |
+| design | Claude Launcher: Startup Config | 2 |
+| design | MCW: Claude Config Tree View | 2 |
+| design | MCW: Observability Dashboard | 2 |
+| change | Documentation Keeper Agent | medium |
+
+---
+
+**Database Stats**:
+- Pending todos: ~34 items (cleaned from 100+)
+- Open feedback: 5 items
+- Active features: 0
+
+---
+
+**Version**: 7.0
 **Created**: 2026-01-02
 **Updated**: 2026-01-03
 **Location**: docs/TODO_NEXT_SESSION.md
