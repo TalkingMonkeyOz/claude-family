@@ -105,6 +105,25 @@ python scripts/generate_project_settings.py claude-family
 
 ---
 
+## Windows npx Wrapper (CRITICAL)
+
+On Windows, npx-based MCPs MUST use `cmd /c` wrapper for process isolation:
+
+```json
+{
+  "memory": {
+    "command": "cmd",
+    "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
+  }
+}
+```
+
+**Why?** Without wrapper, closing dev servers (Vite, webpack) kills MCP servers and crashes Claude.
+
+See [[MCP Windows npx Wrapper Pattern]] for full details.
+
+---
+
 ## Troubleshooting
 
 | Issue | Fix |
@@ -113,6 +132,7 @@ python scripts/generate_project_settings.py claude-family
 | Changes not applying | Regenerate or wait for next SessionStart |
 | Wrong MCPs loaded | Check project type matches expected |
 | Database update ignored | Verify `project_type_configs` was updated, check logs |
+| Claude crashes when closing dev server | Apply `cmd /c` wrapper to npx MCPs (Windows) |
 
 **Debug**:
 ```bash
@@ -137,7 +157,7 @@ python scripts/generate_project_settings.py PROJECT
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 2.1 (Added Windows npx wrapper section)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-01-03
 **Location**: Claude Family/MCP configuration.md
