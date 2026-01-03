@@ -1,70 +1,103 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Before ending this session, complete these steps:
+Before ending this session, complete ALL of the following:
 
 ---
 
-## Step 1: Update Session Summary
+## 🚨 MCP USAGE CHECKLIST 🚨
+
+### ✅ Session Logging (postgres MCP)
 
 ```sql
--- Get your session ID (from SESSION_ID env var or query)
-UPDATE claude.sessions
+-- 1. Get your latest session ID
+SELECT id FROM claude_family.session_history
+WHERE identity_id = 5
+ORDER BY session_start DESC LIMIT 1;
+
+-- 2. Update session with summary
+UPDATE claude_family.session_history
 SET
     session_end = NOW(),
     summary = 'What was accomplished',
-    outcome = 'success'
-WHERE session_id = 'YOUR-SESSION-UUID';
+    files_modified = ARRAY['file1.cs', 'file2.cs'],
+    outcome = 'success',
+    tokens_used = <estimated_tokens>
+WHERE id = <session_id>;
 ```
 
----
+### ✅ Store Reusable Knowledge (postgres MCP)
 
-## Step 2: Store Reusable Knowledge (If Applicable)
+**If you discovered a reusable pattern:**
 
 ```sql
--- If you discovered a reusable pattern
-INSERT INTO claude.knowledge
-(pattern_name, description, applies_to, example_code, gotchas)
+INSERT INTO claude_family.universal_knowledge
+(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
 VALUES (
     'Pattern Name',
     'Clear description',
     'When to use this',
     'Code example',
-    'Things to watch out for'
+    'Things to watch out for',
+    5
 );
 ```
 
----
+**If project-specific:**
 
-## Step 3: Update Memory Graph (Optional)
+```sql
+INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
+VALUES ('bug-fix', 'Solution details', 'When this applies');
+```
+
+### ✅ Store in Memory Graph (memory MCP)
 
 ```
 mcp__memory__create_entities(entities=[{
     "name": "Session Summary",
     "entityType": "Session",
-    "observations": ["Completed: X", "Key decision: Y"]
+    "observations": [
+        "Completed: X",
+        "Key decision: Y",
+        "Files modified: Z",
+        "Pattern discovered: P"
+    ]
+}])
+```
+
+**If you solved a problem:**
+
+```
+mcp__memory__create_relations(relations=[{
+    "from": "Problem Name",
+    "relationType": "solved-by",
+    "to": "Solution Pattern"
 }])
 ```
 
 ---
 
-## Verification Checklist
+## Verification Questions
 
-- [ ] Session summary updated in database
-- [ ] Reusable patterns captured (if any)
-- [ ] Memory graph updated (if significant learnings)
-- [ ] Todos synced (automatic via hook)
+Ask yourself:
 
----
+- [ ] Did I log session start to postgres?
+- [ ] Did I query for existing knowledge before proposing solutions?
+- [ ] Did I use tree-sitter for code analysis (if applicable)?
+- [ ] Did I store learnings in memory graph?
+- [ ] Did I update session log with summary?
+- [ ] Did I store reusable patterns in postgres?
 
-## Why This Matters
-
-- Next Claude avoids rediscovering your solution
-- Institutional knowledge grows
-- User doesn't repeat themselves
+**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
 
 ---
 
-**Version**: 2.0
-**Created**: 2025-10-21
-**Updated**: 2026-01-03
-**Location**: .claude/commands/session-end.md
+## Cost of Skipping MCPs
+
+- Next Claude spends 30 minutes rediscovering your solution
+- Same bug gets solved 3 times by different Claudes
+- Institutional knowledge stays at zero
+- User gets frustrated repeating themselves
+
+---
+
+**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.

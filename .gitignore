@@ -53,3 +53,6 @@ output/
 # MCP config (use .mcp.json.template instead)
 .mcp.json
 nul
+
+# Downloaded reference repos (keep local, don't track)
+knowledge-vault/20-Domains/awesome-copilot-reference/
