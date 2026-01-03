@@ -57,6 +57,7 @@ INTERVALS = {
     "git_check": 5,          # Every 5 interactions
     "inbox_check": 10,       # Every 10 interactions
     "claude_md_refresh": 5,  # Every 5 interactions - check vault for answers
+    "work_tracking": 15,     # Every 15 interactions - check work item tracking
 }
 
 # Code file extensions that trigger test tracking
@@ -76,6 +77,7 @@ def load_state() -> Dict[str, Any]:
         "last_git_check": 0,
         "last_inbox_check": 0,
         "last_claude_md_check": 0,
+        "last_work_tracking_check": 0,
         "code_changes_since_test": 0,
         "files_changed_this_session": [],
         "session_start": datetime.now(timezone.utc).isoformat(),
@@ -227,6 +229,16 @@ def build_reminders(state: Dict[str, Any], analysis: Dict[str, Any]) -> List[str
         )
         state["last_claude_md_check"] = count
 
+    # Work tracking reminder (every 15 interactions)
+    if count - state.get("last_work_tracking_check", 0) >= INTERVALS["work_tracking"]:
+        reminders.append(
+            "WORK TRACKING: Are you tracking this work? "
+            "Significant work should be logged as features (claude.features) or build_tasks. "
+            "Link commits using branch naming: feature/F1-desc, fix/FB1-desc. "
+            "See [[Work Tracking Schema]] in vault."
+        )
+        state["last_work_tracking_check"] = count
+
     # Test tracking - warn if code changed without tests
     if analysis["code_files_changed"] and not analysis["test_files_changed"]:
         state["code_changes_since_test"] += len(analysis["code_files_changed"])
@@ -286,8 +298,10 @@ def main():
             reminder_type = "git_check"
         elif "INBOX CHECK" in reminder:
             reminder_type = "inbox_check"
-        elif "CONTEXT REFRESH" in reminder:
+        elif "VAULT CHECK" in reminder:
             reminder_type = "claude_md_refresh"
+        elif "WORK TRACKING" in reminder:
+            reminder_type = "work_tracking"
         elif "TEST REMINDER" in reminder:
             reminder_type = "test_reminder"
         else:

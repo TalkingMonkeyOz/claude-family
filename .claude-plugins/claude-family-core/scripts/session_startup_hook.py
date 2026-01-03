@@ -374,6 +374,67 @@ def get_pending_messages(project_name):
         return []
 
 
+def get_active_work_items(project_id):
+    """Load active features, feedback, and build_tasks for context injection."""
+    if not DB_AVAILABLE:
+        return {'features': [], 'feedback': [], 'build_tasks': []}
+
+    conn = get_db_connection()
+    if not conn:
+        return {'features': [], 'feedback': [], 'build_tasks': []}
+
+    try:
+        cur = conn.cursor()
+
+        # Active features
+        cur.execute("""
+            SELECT 'F' || short_code as code, feature_name, status
+            FROM claude.features
+            WHERE project_id = %s::uuid
+              AND status IN ('draft', 'planned', 'in_progress', 'blocked')
+            ORDER BY short_code
+            LIMIT 10
+        """, (project_id,))
+        features = cur.fetchall()
+
+        # Open feedback
+        cur.execute("""
+            SELECT 'FB' || short_code as code, description, feedback_type, status
+            FROM claude.feedback
+            WHERE project_id = %s::uuid
+              AND status IN ('new', 'triaged', 'in_progress')
+            ORDER BY short_code
+            LIMIT 10
+        """, (project_id,))
+        feedback = cur.fetchall()
+
+        # Active build_tasks
+        cur.execute("""
+            SELECT 'BT' || bt.short_code as code, bt.task_name, bt.status,
+                   'F' || f.short_code as feature_code
+            FROM claude.build_tasks bt
+            LEFT JOIN claude.features f ON bt.feature_id = f.feature_id
+            WHERE bt.project_id = %s::uuid
+              AND bt.status IN ('pending', 'in_progress', 'blocked')
+            ORDER BY bt.short_code
+            LIMIT 10
+        """, (project_id,))
+        build_tasks = cur.fetchall()
+
+        conn.close()
+
+        return {
+            'features': features if features else [],
+            'feedback': feedback if feedback else [],
+            'build_tasks': build_tasks if build_tasks else []
+        }
+    except Exception as e:
+        logger.warning(f"Failed to load work items: {e}")
+        if conn:
+            conn.close()
+        return {'features': [], 'feedback': [], 'build_tasks': []}
+
+
 def get_due_reminders(project_name):
     """Check for due reminders."""
     if not DB_AVAILABLE:
@@ -619,6 +680,123 @@ def preload_relevant_docs(conn, project_name, session_id, top_k=3, min_similarit
         return None
 
 
+def sync_workspaces_json():
+    """Sync workspaces.json from database if project is missing.
+
+    Regenerates workspaces.json if the current project isn't in it.
+    This ensures new projects get proper config deployment.
+    """
+    if not DB_AVAILABLE:
+        return False
+
+    workspaces_file = Path(__file__).parent.parent.parent.parent.parent / "workspaces.json"
+    cwd = os.getcwd()
+    project_name = os.path.basename(cwd)
+
+    # Check if current project is in workspaces.json
+    try:
+        if workspaces_file.exists():
+            with open(workspaces_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                if project_name in data.get('workspaces', {}):
+                    return True  # Already in file, no sync needed
+
+        # Project not in file - regenerate from database
+        logger.info(f"Project '{project_name}' not in workspaces.json - regenerating...")
+
+        conn = get_db_connection()
+        if not conn:
+            return False
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT project_name, project_path, project_type, description
+            FROM claude.workspaces
+            WHERE is_active = true
+            ORDER BY project_name
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        # Build new workspaces.json
+        workspaces = {}
+        for row in rows:
+            if PSYCOPG_VERSION == 2:
+                name, path, ptype, desc = row[0], row[1], row[2], row[3]
+            else:
+                name, path, ptype, desc = row['project_name'], row['project_path'], row['project_type'], row['description']
+
+            workspaces[name] = {
+                "path": path,
+                "type": ptype or "infrastructure",
+                "description": desc or ""
+            }
+
+        new_data = {
+            "_metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "source": "PostgreSQL (claude.workspaces)",
+                "description": "Auto-generated workspace mappings. Do not edit manually."
+            },
+            "workspaces": workspaces
+        }
+
+        with open(workspaces_file, 'w', encoding='utf-8') as f:
+            json.dump(new_data, f, indent=2)
+
+        logger.info(f"Regenerated workspaces.json with {len(workspaces)} projects")
+        return True
+
+    except Exception as e:
+        logger.warning(f"Could not sync workspaces.json: {e}")
+        return False
+
+
+def fix_windows_npx_commands(project_path):
+    """Fix .mcp.json files to use cmd /c wrapper for npx on Windows.
+
+    On Windows, npx commands need to be wrapped with 'cmd /c' otherwise
+    Claude Code shows a warning: "Windows requires 'cmd /c' wrapper to execute npx"
+
+    This function automatically fixes any .mcp.json files in the project.
+    """
+    if sys.platform != 'win32':
+        return 0  # Only applies to Windows
+
+    mcp_json_path = Path(project_path) / '.mcp.json'
+    if not mcp_json_path.exists():
+        return 0
+
+    fixes_made = 0
+    try:
+        with open(mcp_json_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+
+        modified = False
+        servers = config.get('mcpServers', {})
+
+        for server_name, server_config in servers.items():
+            # Check if command is "npx" without cmd wrapper
+            if server_config.get('command') == 'npx':
+                # Need to wrap with cmd /c
+                old_args = server_config.get('args', [])
+                server_config['command'] = 'cmd'
+                server_config['args'] = ['/c', 'npx'] + old_args
+                modified = True
+                fixes_made += 1
+                logger.info(f"Fixed Windows npx wrapper for MCP server: {server_name}")
+
+        if modified:
+            with open(mcp_json_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2)
+            logger.info(f"Updated .mcp.json with {fixes_made} npx wrapper fix(es)")
+
+    except Exception as e:
+        logger.warning(f"Could not fix Windows npx commands: {e}")
+
+    return fixes_made
+
+
 def main():
     """Run startup checks and output JSON context."""
     try:
@@ -650,6 +828,14 @@ def main():
                 logger.warning("Configuration sync failed - using existing settings")
         else:
             logger.warning("Config sync not available - generate_project_settings.py not found")
+
+        # SYNC WORKSPACES.JSON: Ensure new projects are in workspaces.json
+        sync_workspaces_json()
+
+        # FIX WINDOWS NPX COMMANDS: Automatically add cmd /c wrapper
+        npx_fixes = fix_windows_npx_commands(cwd)
+        if npx_fixes > 0:
+            context_lines.append(f"[AUTO-FIX] Fixed {npx_fixes} MCP server(s) with Windows npx wrapper")
 
         # Get project_id from database (needed for todos and other queries)
         project_id = None
@@ -753,6 +939,55 @@ def main():
                 context_lines.append("=" * 50)
                 context_lines.append("")
 
+        # Load active work items (features, feedback, build_tasks)
+        work_items = get_active_work_items(project_id)
+        has_work_items = any([work_items['features'], work_items['feedback'], work_items['build_tasks']])
+
+        if has_work_items:
+            context_lines.append("=" * 50)
+            context_lines.append("📋 ACTIVE WORK ITEMS")
+            context_lines.append("=" * 50)
+
+            if work_items['features']:
+                context_lines.append("")
+                context_lines.append("FEATURES:")
+                for f in work_items['features']:
+                    code = f['code'] if isinstance(f, dict) else f[0]
+                    name = f['feature_name'] if isinstance(f, dict) else f[1]
+                    status = f['status'] if isinstance(f, dict) else f[2]
+                    context_lines.append(f"   {code}: {name} [{status}]")
+
+            if work_items['feedback']:
+                context_lines.append("")
+                context_lines.append("OPEN FEEDBACK:")
+                for fb in work_items['feedback']:
+                    code = fb['code'] if isinstance(fb, dict) else fb[0]
+                    desc = fb['description'] if isinstance(fb, dict) else fb[1]
+                    ftype = fb['feedback_type'] if isinstance(fb, dict) else fb[2]
+                    desc_short = (desc[:40] + "...") if desc and len(desc) > 40 else desc
+                    context_lines.append(f"   {code}: {desc_short} [{ftype}]")
+
+            if work_items['build_tasks']:
+                context_lines.append("")
+                context_lines.append("BUILD TASKS:")
+                for bt in work_items['build_tasks']:
+                    code = bt['code'] if isinstance(bt, dict) else bt[0]
+                    name = bt['task_name'] if isinstance(bt, dict) else bt[1]
+                    status = bt['status'] if isinstance(bt, dict) else bt[2]
+                    feat = bt.get('feature_code', '') if isinstance(bt, dict) else (bt[3] if len(bt) > 3 else '')
+                    feat_str = f" → {feat}" if feat else ""
+                    context_lines.append(f"   {code}: {name} [{status}]{feat_str}")
+
+            context_lines.append("")
+            context_lines.append("TIP: Link commits to work items using branch naming: feature/F1-desc, fix/FB1-desc")
+            context_lines.append("=" * 50)
+            context_lines.append("")
+        else:
+            # No active work items - gentle reminder
+            context_lines.append("")
+            context_lines.append("💡 No active features for this project. Consider creating one for significant work.")
+            context_lines.append("")
+
         # Check for pending messages
         pending_messages = get_pending_messages(project_name)
         msg_count = len(pending_messages) if pending_messages else 0
@@ -764,7 +999,8 @@ def main():
                 priority_icon = "🔴" if msg['priority'] == 'urgent' else "🟡" if msg['priority'] == 'normal' else "🔵"
                 msg_type = msg['message_type'].upper()
                 context_lines.append(f"\n{priority_icon} Message {idx}: [{msg_type}] {msg['subject']}")
-                context_lines.append(f"   From: {msg.get('from_session_id', 'Unknown')[:8]}...")
+                from_id = msg.get('from_session_id') or 'System'
+                context_lines.append(f"   From: {from_id[:8]}...")
                 context_lines.append(f"   To: {msg.get('to_project', 'Direct')} | Created: {msg['created_at']}")
 
                 # Show preview of body (first 200 chars)
