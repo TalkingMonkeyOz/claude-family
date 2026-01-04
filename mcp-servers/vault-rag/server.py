@@ -169,7 +169,7 @@ def semantic_search(
                     WHERE {where_clause}
                     ORDER BY embedding <=> %s::vector
                     LIMIT %s
-                """, params + [query_embedding, query_embedding, top_k])
+                """, params + [query_embedding, top_k])
 
                 results = cur.fetchall()
 

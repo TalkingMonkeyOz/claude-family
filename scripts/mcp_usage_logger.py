@@ -61,6 +61,35 @@ def get_db_connection():
         return None
 
 
+def ensure_session_exists(conn, session_id: str, project_name: Optional[str]) -> bool:
+    """Ensure session exists in database, create lazily if needed.
+
+    Returns True if session exists (or was created), False otherwise.
+    """
+    try:
+        cur = conn.cursor()
+        # Check if session exists
+        cur.execute("SELECT 1 FROM claude.sessions WHERE session_id = %s", (session_id,))
+        if cur.fetchone():
+            return True
+
+        # Create session lazily (continuation without SessionStart)
+        cur.execute("""
+            INSERT INTO claude.sessions (session_id, project_name, session_start, created_at)
+            VALUES (%s, %s, NOW(), NOW())
+            ON CONFLICT (session_id) DO NOTHING
+        """, (session_id, project_name))
+        conn.commit()
+
+        import logging
+        logging.info(f"Lazy session created: {session_id} for {project_name}")
+        return True
+    except Exception as e:
+        import logging
+        logging.warning(f"Failed to ensure session exists: {e}")
+        return False
+
+
 def log_mcp_usage(
     tool_name: str,
     mcp_server: str,
@@ -83,6 +112,10 @@ def log_mcp_usage(
         return
 
     try:
+        # Ensure session exists before INSERT (lazy creation for continuations)
+        if session_id and not ensure_session_exists(conn, session_id, project_name):
+            session_id = None  # Fall back to NULL if session creation fails
+
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO claude.mcp_usage

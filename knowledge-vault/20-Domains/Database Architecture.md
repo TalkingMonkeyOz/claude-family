@@ -12,9 +12,11 @@ tags:
 # Database Architecture
 
 **Database**: `ai_company_foundation`
-**Schema**: `claude` (52 tables)
+**Schema**: `claude` (73 tables)
 
 This is the authoritative reference for the Claude Family database schema.
+
+**Related**: [[System Functional Specification]] | [[Database FK Constraints]]
 
 ---
 
@@ -270,19 +272,30 @@ These tables exist in legacy schemas and will be dropped:
 
 ---
 
-## Related Documents
+## Known Issues (VERIFIED 2026-01-04)
 
-- [[Database Schema - Core Tables]] - Detailed core tables documentation (NEW)
-- [[Identity System - Overview]] - Identity resolution and per-project identities (NEW)
-- [[Session Lifecycle - Overview]] - Complete session flow documentation (NEW)
-- [[Claude Family Postgres]] - Quick reference
-- [[Claude Hooks]] - Enforcement layer
-- [[Data Gateway]] - Constraint patterns
-- [[Knowledge System]] - Vault sync flow
+| Issue | Count | Impact | Fix |
+|-------|-------|--------|-----|
+| ~~Duplicate FK on `mcp_usage.session_id`~~ | ✅ FIXED | Dropped `mcp_usage_session_id_fkey` | 2026-01-04 |
+| Orphaned `agent_sessions` | 176 | NULL parent_session_id | Backfill or set FK nullable |
+| Session continuation bypass | - | FK violations (session not in DB) | See [[System Functional Specification#Session ID Lifecycle]] |
+
+**Full FK reference**: [[Database FK Constraints]] (39 constraints after cleanup)
 
 ---
 
-**Version**: 1.1
+## Related Documents
+
+- [[System Functional Specification]] - End-to-end system flow
+- [[Database FK Constraints]] - All 40 FK constraints
+- [[Database Schema - Core Tables]] - Detailed core tables documentation
+- [[Session Architecture]] - Session lifecycle
+- [[Claude Hooks]] - Enforcement layer
+- [[Data Gateway]] - Constraint patterns
+
+---
+
+**Version**: 1.2
 **Created**: 2025-12-20
-**Updated**: 2025-12-26
+**Updated**: 2026-01-04
 **Location**: knowledge-vault/20-Domains/Database Architecture.md
