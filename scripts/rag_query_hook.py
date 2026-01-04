@@ -161,10 +161,10 @@ def get_recent_rag_queries(conn, session_id: str, limit: int = 3) -> List[dict]:
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT log_id, query_text, docs_returned, top_similarity, retrieved_at
+            SELECT log_id, query_text, docs_returned, top_similarity, created_at
             FROM claude.rag_usage_log
             WHERE session_id = %s
-            ORDER BY retrieved_at DESC
+            ORDER BY created_at DESC
             LIMIT %s
         """, (session_id, limit))
 
@@ -175,7 +175,7 @@ def get_recent_rag_queries(conn, session_id: str, limit: int = 3) -> List[dict]:
             # Convert tuple to dict for psycopg2
             return [
                 {'log_id': r[0], 'query_text': r[1], 'docs_returned': r[2],
-                 'top_similarity': r[3], 'retrieved_at': r[4]}
+                 'top_similarity': r[3], 'created_at': r[4]}
                 for r in results
             ]
     except Exception as e:
