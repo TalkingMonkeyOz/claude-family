@@ -505,8 +505,9 @@ def main():
         # UserPromptSubmit hook provides the prompt in the hook_input
         user_prompt = hook_input.get('prompt', '')
 
-        if not user_prompt or len(user_prompt.strip()) < 10:
+        if not user_prompt or len(user_prompt.strip()) < 5:
             # Skip very short prompts (likely not substantive questions)
+            # Note: Lowered from 10 to 5 to catch short feedback like "wrong doc"
             result = {
                 "additionalContext": "",
                 "systemMessage": "",
