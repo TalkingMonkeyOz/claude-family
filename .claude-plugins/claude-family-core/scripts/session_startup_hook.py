@@ -31,9 +31,26 @@ try:
 except ImportError:
     CONFIG_SYNC_AVAILABLE = False
 
+try:
+    from log_rotation import rotate_logs
+    LOG_ROTATION_AVAILABLE = True
+except ImportError:
+    LOG_ROTATION_AVAILABLE = False
+
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
+
+# ROTATE LOGS BEFORE SETTING UP LOGGING (prevents 48GB bloat issue)
+if LOG_ROTATION_AVAILABLE:
+    try:
+        rotation_result = rotate_logs()
+        # Can't log yet - logging not configured - write to stderr if rotated
+        if rotation_result.get("rotated"):
+            import sys
+            print(f"Log rotated: {rotation_result.get('previous_size_mb', 0):.1f}MB", file=sys.stderr)
+    except Exception:
+        pass  # Silent fail - don't break startup
 
 logging.basicConfig(
     filename=str(LOG_FILE),
