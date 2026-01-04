@@ -5,6 +5,11 @@ RAG Query Hook for UserPromptSubmit
 Automatically queries Voyage AI embeddings on every user prompt to inject
 relevant vault knowledge into Claude's context.
 
+SELF-LEARNING: Also captures implicit feedback signals:
+- Explicit negative phrases ("that didn't work", "wrong doc")
+- Query rephrasing within recent prompts
+- No mention of returned docs (low confidence)
+
 This is SILENT - no visible output to user, just additionalContext injection.
 
 Output Format:
@@ -20,8 +25,10 @@ import os
 import sys
 import time
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import List, Tuple, Optional
 
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
@@ -111,6 +118,224 @@ def extract_query_from_prompt(user_prompt: str) -> str:
     if len(user_prompt) > max_length:
         return user_prompt[:max_length]
     return user_prompt
+
+
+# ============================================================================
+# SELF-LEARNING: Implicit Feedback Detection
+# ============================================================================
+
+NEGATIVE_PHRASES = [
+    "that didn't work",
+    "that's not what i",
+    "wrong doc",
+    "not helpful",
+    "ignore that",
+    "that's irrelevant",
+    "that's old",
+    "that's outdated",
+    "that's stale",
+    "wrong file",
+    "not what i asked",
+    "that's not it",
+]
+
+
+def detect_explicit_negative(user_prompt: str) -> Optional[Tuple[str, float]]:
+    """Detect explicit negative feedback in user prompt.
+
+    Returns: (signal_type, confidence) or None
+    """
+    prompt_lower = user_prompt.lower()
+    for phrase in NEGATIVE_PHRASES:
+        if phrase in prompt_lower:
+            logger.info(f"Detected explicit negative: '{phrase}'")
+            return ('explicit_negative', 0.9)
+    return None
+
+
+def get_recent_rag_queries(conn, session_id: str, limit: int = 3) -> List[dict]:
+    """Get recent RAG queries from this session for rephrase detection."""
+    if not session_id:
+        return []
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT log_id, query_text, docs_returned, top_similarity, retrieved_at
+            FROM claude.rag_usage_log
+            WHERE session_id = %s
+            ORDER BY retrieved_at DESC
+            LIMIT %s
+        """, (session_id, limit))
+
+        results = cur.fetchall()
+        if isinstance(results[0] if results else {}, dict):
+            return results
+        else:
+            # Convert tuple to dict for psycopg2
+            return [
+                {'log_id': r[0], 'query_text': r[1], 'docs_returned': r[2],
+                 'top_similarity': r[3], 'retrieved_at': r[4]}
+                for r in results
+            ]
+    except Exception as e:
+        logger.warning(f"Failed to get recent queries: {e}")
+        return []
+
+
+def calculate_query_similarity(query1: str, query2: str) -> float:
+    """Simple word overlap similarity between two queries.
+
+    Returns: similarity score 0-1
+    """
+    words1 = set(re.findall(r'\w+', query1.lower()))
+    words2 = set(re.findall(r'\w+', query2.lower()))
+
+    if not words1 or not words2:
+        return 0.0
+
+    intersection = words1 & words2
+    union = words1 | words2
+
+    return len(intersection) / len(union)
+
+
+def detect_query_rephrase(current_query: str, recent_queries: List[dict],
+                          threshold: float = 0.6) -> Optional[Tuple[str, float, dict]]:
+    """Detect if current query is a rephrase of a recent query.
+
+    Returns: (signal_type, confidence, original_query_dict) or None
+    """
+    for prev in recent_queries:
+        prev_text = prev.get('query_text', '')
+        similarity = calculate_query_similarity(current_query, prev_text)
+
+        if similarity >= threshold:
+            logger.info(f"Detected rephrase (similarity={similarity:.2f}): '{current_query[:50]}...'")
+            return ('rephrase', 0.7, prev)
+
+    return None
+
+
+def log_implicit_feedback(conn, signal_type: str, signal_confidence: float,
+                          log_id: str = None, doc_path: str = None,
+                          session_id: str = None):
+    """Log implicit feedback signal to rag_feedback table."""
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.rag_feedback
+            (log_id, signal_type, signal_confidence, doc_path, session_id)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (log_id, signal_type, signal_confidence, doc_path, session_id))
+        conn.commit()
+        logger.info(f"Logged implicit feedback: {signal_type} (confidence={signal_confidence})")
+    except Exception as e:
+        logger.warning(f"Failed to log implicit feedback: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
+
+
+def update_doc_quality(conn, doc_path: str, is_hit: bool):
+    """Update doc quality tracking (miss counter).
+
+    Docs with 3+ misses get flagged for review.
+    """
+    try:
+        cur = conn.cursor()
+
+        if is_hit:
+            cur.execute("""
+                INSERT INTO claude.rag_doc_quality (doc_path, hit_count, last_hit_at)
+                VALUES (%s, 1, NOW())
+                ON CONFLICT (doc_path) DO UPDATE SET
+                    hit_count = claude.rag_doc_quality.hit_count + 1,
+                    last_hit_at = NOW(),
+                    quality_score = (claude.rag_doc_quality.hit_count + 1)::float /
+                                   NULLIF(claude.rag_doc_quality.hit_count + 1 + claude.rag_doc_quality.miss_count, 0),
+                    updated_at = NOW()
+            """, (doc_path,))
+        else:
+            # Miss - increment counter and check for flagging
+            cur.execute("""
+                INSERT INTO claude.rag_doc_quality (doc_path, miss_count, last_miss_at)
+                VALUES (%s, 1, NOW())
+                ON CONFLICT (doc_path) DO UPDATE SET
+                    miss_count = claude.rag_doc_quality.miss_count + 1,
+                    last_miss_at = NOW(),
+                    quality_score = claude.rag_doc_quality.hit_count::float /
+                                   NULLIF(claude.rag_doc_quality.hit_count + claude.rag_doc_quality.miss_count + 1, 0),
+                    flagged_for_review = CASE
+                        WHEN claude.rag_doc_quality.miss_count + 1 >= 3 THEN true
+                        ELSE claude.rag_doc_quality.flagged_for_review
+                    END,
+                    updated_at = NOW()
+                RETURNING miss_count, flagged_for_review
+            """, (doc_path,))
+
+            result = cur.fetchone()
+            if result:
+                miss_count = result[0] if not isinstance(result, dict) else result['miss_count']
+                flagged = result[1] if not isinstance(result, dict) else result['flagged_for_review']
+                if flagged:
+                    logger.warning(f"Doc flagged for review after {miss_count} misses: {doc_path}")
+
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to update doc quality: {e}")
+        try:
+            conn.rollback()
+        except:
+            pass
+
+
+def process_implicit_feedback(conn, user_prompt: str, session_id: str = None):
+    """Process current prompt for implicit feedback signals.
+
+    This checks for:
+    1. Explicit negative phrases
+    2. Query rephrasing (similar to recent query)
+    """
+    if not session_id:
+        return
+
+    # Check for explicit negative feedback
+    negative = detect_explicit_negative(user_prompt)
+    if negative:
+        signal_type, confidence = negative
+
+        # Get most recent query to associate feedback with
+        recent = get_recent_rag_queries(conn, session_id, limit=1)
+        if recent:
+            prev = recent[0]
+            log_id = prev.get('log_id')
+            docs = prev.get('docs_returned', [])
+
+            # Log feedback for each doc that was returned
+            for doc_path in (docs or []):
+                log_implicit_feedback(conn, signal_type, confidence,
+                                      log_id=log_id, doc_path=doc_path,
+                                      session_id=session_id)
+                update_doc_quality(conn, doc_path, is_hit=False)
+        return
+
+    # Check for query rephrase
+    recent = get_recent_rag_queries(conn, session_id, limit=3)
+    if recent:
+        rephrase = detect_query_rephrase(user_prompt, recent)
+        if rephrase:
+            signal_type, confidence, prev = rephrase
+            log_id = prev.get('log_id')
+            docs = prev.get('docs_returned', [])
+
+            # Log feedback - rephrase indicates previous results weren't helpful
+            for doc_path in (docs or []):
+                log_implicit_feedback(conn, signal_type, confidence,
+                                      log_id=log_id, doc_path=doc_path,
+                                      session_id=session_id)
+                update_doc_quality(conn, doc_path, is_hit=False)
 
 
 def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
@@ -297,6 +522,17 @@ def main():
 
         logger.info(f"RAG query hook invoked for project: {project_name}")
         logger.info(f"Query text (first 100 chars): {user_prompt[:100]}")
+
+        # SELF-LEARNING: Check for implicit feedback signals BEFORE querying
+        # This detects phrases like "that didn't work" or query rephrasing
+        if DB_AVAILABLE and session_id:
+            try:
+                feedback_conn = get_db_connection()
+                if feedback_conn:
+                    process_implicit_feedback(feedback_conn, user_prompt, session_id)
+                    feedback_conn.close()
+            except Exception as e:
+                logger.warning(f"Implicit feedback processing failed: {e}")
 
         # Query RAG
         rag_context = query_vault_rag(

@@ -43,8 +43,9 @@ Session ends → [[Session Lifecycle - Session End]]
 | Launch & Config | [[Config Management SOP]] | ✅ Verified |
 | Session Lifecycle | [[Session Architecture]] | ✅ Verified |
 | Hook System | [[Claude Hooks]] | ✅ Verified |
-| Database Schema | [[Database Architecture]] | ⚠️ Needs FK details |
+| Database Schema | [[Database Architecture]] | ✅ FK docs added |
 | MCP Integration | [[MCP configuration]] | ✅ Verified |
+| RAG Self-Learning | [[#Self-Learning RAG]] | ✅ Implemented |
 | Error Handling | [[#Known Issues]] | 🔴 Active issues |
 
 ---
@@ -109,10 +110,68 @@ SELECT COUNT(*) FROM claude.agent_sessions WHERE parent_session_id IS NULL;
 
 ---
 
+## Self-Learning RAG
+
+The RAG system continuously improves through feedback capture and analysis.
+
+### Learning Loop
+
+```
+QUERY → RETRIEVE → DELIVER → CAPTURE FEEDBACK → ANALYZE → OPTIMIZE
+                                    ↓
+                            (Loop back to QUERY)
+```
+
+### Feedback Capture (3 Types)
+
+| Type | Signal | Confidence | Stored In |
+|------|--------|------------|-----------|
+| Explicit | User rates "helpful" at session end | High (0.9) | `rag_feedback` |
+| Implicit | Query rephrase within 3 prompts | Medium (0.7) | `rag_feedback` |
+| Implicit | No mention of returned doc | Low (0.5) | `rag_feedback` |
+| Implicit | User says "wrong doc", "not helpful" | High (0.9) | `rag_feedback` |
+
+### Miss Counter (Doc Quality)
+
+Docs that fail 3 times get flagged for review:
+
+| Miss Count | Action |
+|------------|--------|
+| 1-2 | Auto re-embed with better keywords |
+| 3 | Flag for human review |
+| 3+ | Notify user, pause auto-retrieval |
+
+### Database Tables
+
+| Table | Purpose |
+|-------|---------|
+| `claude.rag_feedback` | Feedback signals (explicit + implicit) |
+| `claude.rag_doc_quality` | Miss counter, quality scoring |
+| `claude.rag_query_patterns` | Learned query-doc associations |
+
+### Analytics Queries
+
+```sql
+-- Docs that consistently fail
+SELECT doc_path, miss_count, quality_score, flagged_for_review
+FROM claude.rag_doc_quality WHERE miss_count >= 2;
+
+-- Feedback by signal type
+SELECT signal_type, COUNT(*), AVG(signal_confidence)
+FROM claude.rag_feedback GROUP BY signal_type;
+
+-- Optimal threshold analysis
+SELECT AVG(r.top_similarity) FILTER (WHERE f.helpful)
+FROM claude.rag_usage_log r
+JOIN claude.rag_feedback f ON r.log_id = f.log_id;
+```
+
+---
+
 ## Related Documents
 
-- [[Database Architecture]] - Schema reference (73 tables)
-- [[Database FK Constraints]] - All 40 FK constraints
+- [[Database Architecture]] - Schema reference (76 tables)
+- [[Database FK Constraints]] - All 42+ FK constraints
 - [[Session Architecture]] - Session lifecycle
 - [[Claude Hooks]] - Hook implementation
 - [[Config Management SOP]] - Config generation
@@ -120,7 +179,7 @@ SELECT COUNT(*) FROM claude.agent_sessions WHERE parent_session_id IS NULL;
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-01-04
-**Updated**: 2026-01-04
+**Updated**: 2026-01-04 (RAG Self-Learning added)
 **Location**: knowledge-vault/Claude Family/System Functional Specification.md

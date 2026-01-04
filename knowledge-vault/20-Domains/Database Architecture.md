@@ -12,7 +12,7 @@ tags:
 # Database Architecture
 
 **Database**: `ai_company_foundation`
-**Schema**: `claude` (73 tables)
+**Schema**: `claude` (76 tables)
 
 This is the authoritative reference for the Claude Family database schema.
 
@@ -29,6 +29,7 @@ This is the authoritative reference for the Claude Family database schema.
 | [[#Process Workflow]] | 8 | Workflow engine, process automation |
 | [[#Work Items]] | 8 | Tasks, feedback, features |
 | [[#Knowledge]] | 5 | Knowledge sync, documents |
+| [[#RAG Self-Learning]] | 3 | Feedback capture, doc quality, patterns |
 | [[#Governance]] | 8 | Data quality, audits, compliance |
 | [[#MCP Orchestration]] | 5 | MCP servers, messaging |
 | [[#Scheduling]] | 3 | Cron jobs, reminders |
@@ -179,6 +180,32 @@ WHERE 'claude-family' = ANY(applies_to_projects);
 
 ---
 
+## RAG Self-Learning
+
+Continuous improvement loop for RAG system.
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `rag_feedback` | Feedback signals (explicit + implicit) | log_id, helpful, signal_type, signal_confidence, doc_path |
+| `rag_doc_quality` | Doc quality tracking (miss counter) | doc_path, miss_count, hit_count, flagged_for_review, quality_score |
+| `rag_query_patterns` | Learned query-doc associations | query_pattern, success_rate, suggested_docs |
+
+```sql
+-- Flagged docs needing review
+SELECT doc_path, miss_count, quality_score
+FROM claude.rag_doc_quality
+WHERE flagged_for_review = true;
+
+-- Recent feedback signals
+SELECT signal_type, signal_confidence, doc_path, created_at
+FROM claude.rag_feedback
+ORDER BY created_at DESC LIMIT 10;
+```
+
+**Related**: [[System Functional Specification#Self-Learning RAG]] | [[RAG Usage Guide]]
+
+---
+
 ## Governance
 
 Data quality, audits, and compliance tracking.
@@ -295,7 +322,7 @@ These tables exist in legacy schemas and will be dropped:
 
 ---
 
-**Version**: 1.2
+**Version**: 1.3
 **Created**: 2025-12-20
-**Updated**: 2026-01-04
+**Updated**: 2026-01-04 (RAG Self-Learning tables added)
 **Location**: knowledge-vault/20-Domains/Database Architecture.md

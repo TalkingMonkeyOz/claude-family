@@ -10,7 +10,7 @@ synced: false
 
 # Database FK Constraints
 
-All foreign key constraints in the `claude` schema. **39 total** (1 duplicate dropped 2026-01-04).
+All foreign key constraints in the `claude` schema. **42 total** (39 original + 3 RAG tables).
 
 ---
 
@@ -62,6 +62,15 @@ These FKs reference `sessions.session_id` and cause violations when session does
 
 ---
 
+## RAG Self-Learning FKs
+
+| Table | Column | Constraint |
+|-------|--------|------------|
+| `rag_feedback` | `log_id` | `rag_feedback_log_id_fkey` → rag_usage_log |
+| `rag_feedback` | `session_id` | `rag_feedback_session_id_fkey` → sessions |
+
+---
+
 ## Other FKs
 
 | Table | Column | References |
@@ -88,6 +97,7 @@ These FKs reference `sessions.session_id` and cause violations when session does
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-01-04
+**Updated**: 2026-01-04 (RAG Self-Learning FKs added)
 **Location**: knowledge-vault/20-Domains/Database FK Constraints.md
