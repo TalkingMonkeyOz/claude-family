@@ -102,7 +102,7 @@ def get_db_connection():
             return psycopg.connect(conn_str, row_factory=dict_row)
         else:
             return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except:
+    except Exception:
         return None
 
 
@@ -145,7 +145,7 @@ def resolve_identity_for_project(project_name):
     except Exception as e:
         try:
             conn.close()
-        except:
+        except Exception:
             pass
         return os.environ.get('CLAUDE_IDENTITY_ID', DEFAULT_IDENTITY_ID)
 
@@ -202,7 +202,7 @@ def create_session(project_name, identity_id=None, claude_session_id=None):
         logger.error(f"Failed to create session: {e}", exc_info=True)
         try:
             conn.close()
-        except:
+        except Exception:
             pass
         return None
 
@@ -296,7 +296,7 @@ def get_todos_from_database(project_id, session_id):
                                     should_complete = True
                                     logger.info(f"Auto-completing todo (RAG verified): {todo['content'][:50]}...")
                                     break
-                except:
+                except Exception:
                     pass
 
             # Rule 3: "fix sessionstart" + this session started successfully
@@ -483,7 +483,7 @@ def get_due_reminders(project_name):
         conn.close()
 
         return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
-    except:
+    except Exception:
         return []
 
 
@@ -515,7 +515,7 @@ def get_due_jobs(project_name):
         conn.close()
 
         return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
-    except:
+    except Exception:
         return []
 
 
@@ -547,7 +547,7 @@ def get_governance_compliance(project_name):
         if row:
             return dict(row) if PSYCOPG_VERSION == 3 else dict(row)
         return None
-    except:
+    except Exception:
         return None
 
 
@@ -885,7 +885,7 @@ def main():
                     if row:
                         project_id = row[0] if PSYCOPG_VERSION == 2 else row['project_id']
                     conn.close()
-            except:
+            except Exception:
                 pass
 
         # AUTO-LOG SESSION: Create session record for new sessions (not resumes)
@@ -928,7 +928,7 @@ def main():
             if isinstance(next_steps, str):
                 try:
                     next_steps = json.loads(next_steps)
-                except:
+                except Exception:
                     next_steps = []
             if next_steps:
                 context_lines.append("NEXT STEPS (from last session):")
@@ -1115,7 +1115,7 @@ def main():
                     logger.warning(f"RAG pre-load failed: {e}")
                     try:
                         conn.close()
-                    except:
+                    except Exception:
                         pass
 
         result["additionalContext"] = "\n".join(context_lines)
@@ -1135,7 +1135,7 @@ def main():
             if isinstance(next_steps, str):
                 try:
                     next_steps = json.loads(next_steps)
-                except:
+                except Exception:
                     next_steps = []
             if next_steps:
                 system_parts.append(f"{len(next_steps)} next steps from last session.")

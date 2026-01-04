@@ -1,19 +1,29 @@
 {
   "_metadata": {
-    "generated_at": "2026-01-03T11:00:00.000000",
+    "generated_at": "2026-01-04T10:42:16.503374",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
   "workspaces": {
+    "nimbus-mui": {
+      "path": "C:\\Projects\\nimbus-mui",
+      "type": "application",
+      "description": "Modern Tauri + React + MUI desktop application for Nimbus workforce management system data imports"
+    },
     "ATO-Infrastructure": {
       "path": "C:\\Projects\\ATO-Infrastructure",
       "type": "azure-infrastructure",
       "description": "Azure infrastructure and deployment for ATO tax platform"
     },
-    "ATO-Tax-Agent": {
-      "path": "C:\\Projects\\ATO-Tax-Agent",
-      "type": "nextjs-typescript",
-      "description": "Australian Tax Office tax return wizard - Next.js frontend"
+    "claude-family-manager-v2": {
+      "path": "C:\\Projects\\claude-family-manager-v2",
+      "type": "csharp-winforms",
+      "description": "WinForms C# desktop app for Claude Family management. Replaced MAUI Blazor Hybrid approach."
+    },
+    "nimbus-user-loader": {
+      "path": "C:\\Projects\\nimbus-user-loader",
+      "type": "csharp-winforms",
+      "description": "Nimbus user import tool (private work project)"
     },
     "claude-desktop-config": {
       "path": "C:\\Projects\\claude-desktop-config",
@@ -25,35 +35,30 @@
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
     },
-    "claude-family-manager-v2": {
-      "path": "C:\\Projects\\claude-family-manager-v2",
-      "type": "csharp-winforms",
-      "description": "WinForms C# desktop app for Claude Family management. Replaced MAUI Blazor Hybrid approach."
+    "ATO-Tax-Agent": {
+      "path": "C:\\Projects\\ATO-Tax-Agent",
+      "type": "nextjs-typescript",
+      "description": "Australian Tax Office tax return wizard - Next.js frontend"
     },
     "claude-manager-mui": {
       "path": "C:\\Projects\\claude-manager-mui",
       "type": "tauri-react",
       "description": "Modern desktop app for Claude Family management using Material-UI"
     },
-    "finance-mui": {
-      "path": "C:\\Projects\\finance-mui",
-      "type": "web",
-      "description": "Personal Finance Management - React + TypeScript + Material-UI + Tauri implementation"
-    },
     "nimbus-import": {
       "path": "C:\\Projects\\nimbus-import",
       "type": "tauri-react",
       "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
     },
-    "nimbus-mui": {
-      "path": "C:\\Projects\\nimbus-mui",
-      "type": "application",
-      "description": "Modern Tauri + React + MUI desktop application for Nimbus workforce management system data imports"
+    "finance-mui": {
+      "path": "C:\\Projects\\finance-mui",
+      "type": "web",
+      "description": "Personal Finance Management - React + TypeScript + Material-UI + Tauri implementation"
     },
-    "nimbus-user-loader": {
-      "path": "C:\\Projects\\nimbus-user-loader",
-      "type": "csharp-winforms",
-      "description": "Nimbus user import tool (private work project)"
+    "ATO-tax-agent": {
+      "path": "C:\\Projects\\ATO-tax-agent",
+      "type": "work-research",
+      "description": "ATO tax agent tools (private work project)"
     }
   }
 }

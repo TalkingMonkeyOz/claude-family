@@ -49,7 +49,7 @@ spawn_agent(agent_type="python-coder-haiku", task="...", workspace_dir="...")
 ### Remaining Work
 
 - [ ] Update `spawn_agent` to use string instead of enum (optional optimization)
-- [ ] Collect usage data to validate token reduction
+- [x] Collect usage data to validate token reduction (MCP usage tracking active - 170+ calls logged)
 - [ ] Fine-tune search algorithm based on usage patterns
 
 ---

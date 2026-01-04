@@ -8,35 +8,43 @@ tags:
 synced: false
 ---
 
-# Auto-Apply Instructions
+# Coding Standards System
 
-Automatically inject coding standards into Claude's context based on file patterns.
-
----
-
-## Concept
-
-```
-Edit *.cs file → csharp.instructions.md auto-injects → Claude follows C# guidelines
-```
-
-**Key**: Automatic and invisible. No manual invocation needed.
+Two systems for automatically injecting coding standards into Claude's context.
 
 ---
 
-## How It Works
+## Overview
 
-```
-User edits file → PreToolUse hook → instruction_matcher.py → Matched instructions inject → Claude receives file + standards
-```
+| System | Location | Source | Auto-Update |
+|--------|----------|--------|-------------|
+| **Database-Driven** | `~/.claude/standards/` | `claude.coding_standards` table | `generate_standards.py` |
+| **Native Instructions** | `~/.claude/instructions/` | Manual files | No |
 
-**Search Order**: Project `.claude/instructions/` → Global `~/.claude/instructions/`
+Both inject into Claude's context when editing matching files.
 
 ---
 
-## Global Instructions (9 Files)
+## Database-Driven Standards (Primary)
 
-**Location**: `~/.claude/instructions/`
+**12 standards** in `claude.coding_standards` table, auto-generated to `~/.claude/standards/`.
+
+| Category | Standards |
+|----------|-----------|
+| core | markdown-documentation |
+| language | csharp, typescript, rust |
+| framework | react, mui, azure-bicep, azure-functions, azure-logic-apps |
+| pattern | security-aspnet, docker, github-actions |
+
+**Regenerate**: `python scripts/generate_standards.py`
+
+**Add new**: Insert into `claude.coding_standards` table, then regenerate.
+
+---
+
+## Native Instructions (Legacy)
+
+**9 files** in `~/.claude/instructions/` for Claude Code native loading.
 
 | File                                  | Applies To              | Purpose                         |
 | ------------------------------------- | ----------------------- | ------------------------------- |
@@ -124,7 +132,7 @@ To customize for one project:
 
 ---
 
-**Version**: 3.0 (Condensed)
+**Version**: 4.0 (Database-driven standards added)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-01-04
 **Location**: Claude Family/Auto-Apply Instructions.md

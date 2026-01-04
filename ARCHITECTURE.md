@@ -1,8 +1,8 @@
 # Architecture - Claude Family Infrastructure
 
 **Project**: claude-family
-**Version**: 1.2
-**Updated**: 2025-12-09
+**Version**: 1.3
+**Updated**: 2026-01-04
 **Status**: Active
 
 ---
@@ -301,62 +301,37 @@ The enforcement hierarchy exists but with gaps:
 
 ---
 
-## Process Router & Workflow System
+## Skills System (ADR-005)
 
-The process router (`scripts/process_router.py`) detects user intent and triggers appropriate workflows.
+Skills replaced the deprecated Process Router in December 2025. Skills are domain-specific expertise modules that Claude can invoke via the `Skill` tool.
 
-### Classification Architecture (Hybrid)
+### Core Skills
 
-```
-User Prompt
-    │
-    ▼
-┌─────────────────────────────────────────┐
-│ TIER 1: Fast Regex/Keywords (0-1ms)    │
-│ - 53 triggers across 32 processes       │
-│ - Cost: $0                              │
-└─────────────────────────────────────────┘
-    │ (if no match)
-    ▼
-┌─────────────────────────────────────────┐
-│ TIER 2: LLM Classification (2-4s)       │
-│ - Claude Haiku semantic understanding   │
-│ - Cost: ~$0.001 per call                │
-│ - Catches edge cases                    │
-└─────────────────────────────────────────┘
-    │
-    ▼
-Return workflow steps + standards guidance
-```
+| Skill | Purpose |
+|-------|---------|
+| `database-operations` | SQL validation, column_registry checks |
+| `work-item-routing` | Feedback, features, build_tasks routing |
+| `session-management` | Session lifecycle (start/end/resume) |
+| `code-review` | Pre-commit review, testing |
+| `project-ops` | Project init, retrofit, phases |
+| `messaging` | Inter-Claude communication |
+| `agentic-orchestration` | Agent spawning, parallel work |
+| `testing-patterns` | Test writing and execution |
 
-### Workflow Inventory (32 Total)
+### Skill Locations
 
-| Category | Count | Examples |
-|----------|-------|----------|
-| SESSION  | 4 | Start, End, Commit, Resume |
-| DEV      | 7 | Bug Fix, Feature, Code Review, Testing |
-| DOC      | 4 | Create Doc, ADR, CLAUDE.md Update |
-| PROJECT  | 5 | Init, Retrofit, Compliance Check |
-| COMM     | 4 | Feedback, Broadcast, Messages |
-| DATA     | 4 | Knowledge Capture, DB Validation |
-| QA       | 4 | Pre-Commit, Schema, API Smoke |
+- **User skills**: `~/.claude/commands/*.md` (global)
+- **Project skills**: `.claude/commands/*.md` (project-specific)
+- **Managed skills**: `.claude/skills/*.md` (auto-generated)
 
-### User Testing Results (2025-12-09)
+### Migration from Process Router
 
-| Metric | Result |
-|--------|--------|
-| Workflows tested | 19/32 (59%) |
-| Classification accuracy | 17/19 (89%) |
-| LLM fallback accuracy | 2/3 (67%) |
-| Issues fixed | 3 |
+The process_registry table (32 workflows) was archived. Skills provide:
+- Simpler invocation (no regex/LLM classification needed)
+- Better composability
+- Direct user control via `/skill-name`
 
-**Key Findings:**
-- Regex/keywords handle ~90% of cases correctly
-- LLM catches semantic variations ("system crashing" → Bug Fix)
-- Keyword collisions can cause misclassification
-- Session Resume needed user-facing triggers
-
-**Test Report**: `docs/test-reports/WORKFLOW_USER_TESTING_2025-12-09.md`
+**Legacy reference**: `archive/process-router/` contains historical implementation.
 
 ---
 
@@ -364,11 +339,12 @@ Return workflow steps + standards guidance
 
 | ADR | Title | Status |
 |-----|-------|--------|
-| ADR-001 | Schema Consolidation | Accepted |
-| ADR-002 | Core Documentation System | Accepted |
-| ADR-003 | Async Agent Workflow | Proposed |
+| ADR-001 | Consolidate 4 schemas into unified claude schema | Accepted |
+| ADR-002 | Core Documentation and Process System | Accepted |
+| ADR-003 | Data Gateway Pattern for Validated Writes | Accepted |
+| ADR-005 | Skills-First Architecture (replacing Process Router) | Accepted |
 
-See `claude.architecture_decisions` table and `docs/adr/` folder for full records.
+See `claude.architecture_decisions` table for full records.
 
 ---
 
