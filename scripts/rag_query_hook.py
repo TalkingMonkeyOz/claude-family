@@ -201,7 +201,7 @@ def calculate_query_similarity(query1: str, query2: str) -> float:
 
 
 def detect_query_rephrase(current_query: str, recent_queries: List[dict],
-                          threshold: float = 0.6) -> Optional[Tuple[str, float, dict]]:
+                          threshold: float = 0.30) -> Optional[Tuple[str, float, dict]]:
     """Detect if current query is a rephrase of a recent query.
 
     Returns: (signal_type, confidence, original_query_dict) or None
@@ -209,10 +209,13 @@ def detect_query_rephrase(current_query: str, recent_queries: List[dict],
     for prev in recent_queries:
         prev_text = prev.get('query_text', '')
         similarity = calculate_query_similarity(current_query, prev_text)
+        logger.debug(f"Rephrase check: '{current_query[:30]}' vs '{prev_text[:30]}' = {similarity:.2f}")
 
         if similarity >= threshold:
             logger.info(f"Detected rephrase (similarity={similarity:.2f}): '{current_query[:50]}...'")
-            return ('rephrase', 0.7, prev)
+            # Use similarity as confidence (0.3-1.0 mapped to 0.5-0.9)
+            confidence = min(0.9, 0.5 + (similarity * 0.5))
+            return ('rephrase', confidence, prev)
 
     return None
 
