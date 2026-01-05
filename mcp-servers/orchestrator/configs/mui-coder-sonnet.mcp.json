@@ -1,0 +1,35 @@
+{
+  "_comment": "MCP config for mui-coder-sonnet agent",
+  "_created": "2026-01-05",
+  "_purpose": "MUI X specialist with filesystem access and MUI documentation MCP",
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "C:\\Projects"
+      ],
+      "env": {}
+    },
+    "orchestrator": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
+      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
+      }
+    },
+    "mui-mcp": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-mui"
+      ],
+      "env": {}
+    }
+  }
+}

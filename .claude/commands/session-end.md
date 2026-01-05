@@ -4,99 +4,100 @@ Before ending this session, complete ALL of the following:
 
 ---
 
-## 🔍 RAG Feedback (Self-Learning)
+## 🚨 MCP USAGE CHECKLIST 🚨
 
-**Quick assessment** - Were the auto-loaded vault docs helpful today?
-
-Ask the user ONE question:
-
-> "Before we wrap up: Were the knowledge vault docs I auto-loaded helpful this session?"
-> - Yes (worked well)
-> - Mixed (some useful, some not)
-> - No (mostly irrelevant)
-> - Didn't notice them
-
-**Log the response:**
+### ✅ Session Logging (postgres MCP)
 
 ```sql
--- Record explicit session feedback
-INSERT INTO claude.rag_feedback (session_id, helpful, signal_type, signal_confidence, feedback_text)
+-- 1. Get your latest session ID
+SELECT id FROM claude_family.session_history
+WHERE identity_id = 5
+ORDER BY session_start DESC LIMIT 1;
+
+-- 2. Update session with summary
+UPDATE claude_family.session_history
+SET
+    session_end = NOW(),
+    summary = 'What was accomplished',
+    files_modified = ARRAY['file1.cs', 'file2.cs'],
+    outcome = 'success',
+    tokens_used = <estimated_tokens>
+WHERE id = <session_id>;
+```
+
+### ✅ Store Reusable Knowledge (postgres MCP)
+
+**If you discovered a reusable pattern:**
+
+```sql
+INSERT INTO claude_family.universal_knowledge
+(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
 VALUES (
-    '<current_session_id>',
-    <true/false/null>,  -- Yes=true, No=false, Mixed/Didn't notice=null
-    'session_end_survey',
-    0.95,
-    '<user response if they elaborated>'
+    'Pattern Name',
+    'Clear description',
+    'When to use this',
+    'Code example',
+    'Things to watch out for',
+    5
 );
 ```
 
-**If user mentions specific bad docs**, flag them:
+**If project-specific:**
 
 ```sql
-UPDATE claude.rag_doc_quality
-SET miss_count = miss_count + 1,
-    last_miss_at = NOW(),
-    flagged_for_review = CASE WHEN miss_count >= 2 THEN true ELSE false END
-WHERE doc_path = '<mentioned_doc_path>';
+INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
+VALUES ('bug-fix', 'Solution details', 'When this applies');
 ```
 
----
-
-## ✅ Session Logging (postgres MCP)
-
-```sql
--- 1. Find current session
-SELECT session_id, session_start, project_name
-FROM claude.sessions
-WHERE project_name = '<current_project>'
-ORDER BY session_start DESC LIMIT 1;
-
--- 2. Update with summary
-UPDATE claude.sessions
-SET
-    session_end = NOW(),
-    session_summary = 'What was accomplished',
-    outcome = 'success'  -- success, partial, blocked, abandoned
-WHERE session_id = '<session_id>';
-```
-
----
-
-## ✅ Store Learnings
-
-**If you discovered a reusable pattern**, add to knowledge vault:
-
-1. Create/update markdown doc in `knowledge-vault/30-Patterns/`
-2. Re-embed: `python scripts/embed_vault_documents.py`
-
-**If project-specific**, use `/knowledge-capture` skill.
-
----
-
-## ✅ Memory Graph (memory MCP)
+### ✅ Store in Memory Graph (memory MCP)
 
 ```
 mcp__memory__create_entities(entities=[{
-    "name": "Session <date>",
+    "name": "Session Summary",
     "entityType": "Session",
     "observations": [
-        "Project: X",
-        "Completed: Y",
-        "Key decision: Z"
+        "Completed: X",
+        "Key decision: Y",
+        "Files modified: Z",
+        "Pattern discovered: P"
     ]
+}])
+```
+
+**If you solved a problem:**
+
+```
+mcp__memory__create_relations(relations=[{
+    "from": "Problem Name",
+    "relationType": "solved-by",
+    "to": "Solution Pattern"
 }])
 ```
 
 ---
 
-## Quick Verification
+## Verification Questions
 
-- [ ] Session logged to claude.sessions?
-- [ ] RAG feedback collected?
-- [ ] Learnings captured (if any)?
-- [ ] Uncommitted changes? → Run `/session-commit`
+Ask yourself:
+
+- [ ] Did I log session start to postgres?
+- [ ] Did I query for existing knowledge before proposing solutions?
+- [ ] Did I use tree-sitter for code analysis (if applicable)?
+- [ ] Did I store learnings in memory graph?
+- [ ] Did I update session log with summary?
+- [ ] Did I store reusable patterns in postgres?
+
+**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
 
 ---
 
-**Version**: 2.0 (Updated for claude schema + RAG feedback)
-**Updated**: 2026-01-04
+## Cost of Skipping MCPs
+
+- Next Claude spends 30 minutes rediscovering your solution
+- Same bug gets solved 3 times by different Claudes
+- Institutional knowledge stays at zero
+- User gets frustrated repeating themselves
+
+---
+
+**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.

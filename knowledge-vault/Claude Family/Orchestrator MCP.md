@@ -54,25 +54,65 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 
 ---
 
-## Agent Types (15 total)
+## Boss-Worker Architecture (NEW)
+
+**Implemented**: 2026-01-05
+
+The main Claude session (Boss) now operates with minimal MCPs and delegates to specialized agents (Workers).
+
+### Boss Configuration
+- **MCPs**: orchestrator + postgres + sequential-thinking only (~12k tokens)
+- **Role**: Planning, coordination, synthesis, oversight
+- **Keeps**: Read, Grep, Glob, Edit (trivial), WebSearch, TodoWrite
+
+### Workflow
+```
+1. Boss receives task
+2. Boss plans approach (sequential-thinking)
+3. Boss spawns specialist(s) for execution
+4. Workers complete focused tasks
+5. Boss reviews, synthesizes, presents
+```
+
+### When to Delegate
+
+| Task | Delegate to |
+|------|-------------|
+| Write new code | coder-haiku, python-coder-haiku |
+| MUI components | mui-coder-sonnet |
+| Git operations | git-haiku |
+| Code review | reviewer-sonnet |
+| Testing | tester-haiku, web-tester-haiku |
+| Security audit | security-sonnet |
+
+### Quality Benefits
+- 70% token savings → more context for reasoning
+- Focused specialists → better task performance
+- Built-in review cycle → iteration and quality checks
+
+---
+
+## Agent Types (17 total)
 
 ### Fast/Cheap (Haiku $0.01-0.08)
 
 | Agent | Cost | Use Case |
 |-------|------|----------|
 | `lightweight-haiku` | $0.01 | Simple file ops |
+| `git-haiku` | $0.015 | **NEW** Git operations |
 | `coder-haiku` | $0.035 | New code, bug fixes |
 | `python-coder-haiku` | $0.045 | Python + DB + REPL |
+| `winforms-coder-haiku` | $0.045 | WinForms development |
 | `tester-haiku` | $0.052 | Unit/integration tests |
 | `web-tester-haiku` | $0.05 | E2E Playwright tests |
 | `doc-keeper-haiku` | $0.03 | Doc maintenance |
-| `winforms-coder-haiku` | $0.045 | WinForms development |
 
 ### Balanced (Sonnet $0.10-0.35)
 
 | Agent | Cost | Use Case |
 |-------|------|----------|
 | `reviewer-sonnet` | $0.105 | Code review |
+| `mui-coder-sonnet` | $0.12 | **NEW** MUI X components (design quality) |
 | `planner-sonnet` | $0.21 | Task breakdown |
 | `security-sonnet` | $0.24 | Security audits |
 | `analyst-sonnet` | $0.30 | Research, docs |
@@ -172,7 +212,7 @@ Each agent has isolated MCP access:
 
 ---
 
-**Version**: 3.0 (Added progressive discovery pattern)
+**Version**: 4.0 (Boss-Worker Architecture, added mui-coder-sonnet and git-haiku)
 **Created**: 2025-12-26
-**Updated**: 2026-01-03
+**Updated**: 2026-01-05
 **Location**: Claude Family/Orchestrator MCP.md

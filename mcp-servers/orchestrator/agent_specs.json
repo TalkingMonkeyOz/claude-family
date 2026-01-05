@@ -1,9 +1,9 @@
 {
   "description": "Claude Agent Orchestrator - Specialized agent type definitions (STREAMLINED)",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "created": "2025-11-04",
-  "updated": "2025-12-26",
-  "note": "Timeout analysis: Updated 4 agent timeouts based on P95 execution data. Added timeout override validation and improved enforcement.",
+  "updated": "2026-01-05",
+  "note": "Boss-Worker Architecture: Added mui-coder-sonnet (Sonnet for design quality) and git-haiku (pure git operations). See plan: delightful-swinging-trinket.md",
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",
@@ -602,6 +602,98 @@
         "cost_per_task_usd": 0.045
       },
       "recommended_timeout_seconds": 600
+    },
+    "mui-coder-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "MUI X component specialist with DataGrid, DatePicker, TreeView expertise - Sonnet for design quality",
+      "use_cases": [
+        "MUI DataGrid configuration and customization",
+        "MUI DatePicker and date handling",
+        "MUI X Pro/Premium components",
+        "React + MUI responsive layouts",
+        "MUI theming and sx prop styling",
+        "Complex layout decisions requiring design reasoning"
+      ],
+      "not_for": [
+        "Simple non-MUI React components (use coder-haiku)",
+        "Backend work (use python-coder-haiku)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(npm*)",
+        "Bash(yarn*)",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)",
+        "mcp__filesystem",
+        "mcp__mui-mcp"
+      ],
+      "disallowed_tools": [
+        "Bash(rm*)",
+        "Bash(del*)",
+        "Bash(curl*)",
+        "WebSearch"
+      ],
+      "mcp_config": "configs/mui-coder-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
+      "system_prompt": "You are an MUI X specialist using Sonnet for design-quality reasoning.\n\nEXPERTISE:\n- MUI X DataGrid (sorting, filtering, editing, grouping)\n- MUI X DatePicker, TimePicker, DateRangePicker\n- MUI X TreeView, RichTreeView\n- MUI theming (createTheme, sx prop, styled components)\n- Responsive design with MUI Grid and breakpoints\n\nBEST PRACTICES:\n1. Use MUI's sx prop for one-off styles, styled() for reusable components\n2. Leverage MUI's responsive breakpoint system\n3. Follow MUI naming conventions (outlined, contained, etc.)\n4. Use controlled components for forms\n5. Handle loading/error states in DataGrid\n\nUSE mui-mcp TO:\n- Look up component API reference\n- Check prop types and defaults\n- Find usage examples\n\nWhen uncertain about MUI API, ALWAYS check mui-mcp before guessing.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.12
+      },
+      "recommended_timeout_seconds": 900
+    },
+    "git-haiku": {
+      "model": "claude-haiku-4-5",
+      "description": "Git operations specialist - commits, branches, merges, stash",
+      "use_cases": [
+        "Commit changes with good messages",
+        "Branch management",
+        "Merge and rebase operations",
+        "Stash management",
+        "Git history analysis",
+        "Push and pull operations"
+      ],
+      "not_for": [
+        "Writing code (use coder-haiku)",
+        "Code review (use reviewer-sonnet)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Glob",
+        "Grep",
+        "Bash(git *)"
+      ],
+      "disallowed_tools": [
+        "Write",
+        "Edit",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/git-haiku.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "system_prompt": "You are a Git operations specialist. Execute git commands efficiently and safely.\n\nSAFETY RULES:\n1. NEVER force push to main/master without explicit user request\n2. NEVER run destructive commands (git reset --hard, git clean -fd) without confirmation\n3. Always check git status before operations\n4. Use descriptive commit messages following conventional commits\n\nCOMMIT MESSAGE FORMAT:\ntype(scope): description\n\nTypes: feat, fix, docs, style, refactor, test, chore\n\nEXAMPLES:\n- feat(auth): add OAuth2 login flow\n- fix(api): handle null response in user endpoint\n- docs(readme): update installation steps\n\nWhen committing, read changed files first to write accurate commit messages.",
+      "cost_profile": {
+        "input_tokens_avg": 5000,
+        "output_tokens_avg": 2000,
+        "cost_per_task_usd": 0.015
+      },
+      "recommended_timeout_seconds": 300
     }
   },
   "removed_agents": {

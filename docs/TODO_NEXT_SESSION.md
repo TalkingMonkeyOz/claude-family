@@ -1,17 +1,23 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-04
-**Last Session**: Fixed MCP usage tracking (session_id mismatch bug)
+**Last Updated**: 2026-01-05
+**Last Session**: Implemented Boss-Worker Architecture - 70% token reduction
 
 ---
 
-## Priority 1: Orchestrator Improvements
+## Priority 1: Boss-Worker Architecture (COMPLETED)
 
 - [x] Research progressive discovery pattern for orchestrator ✅
 - [x] Implement search_agents tool ✅ (server.py:557-638)
 - [x] Update ORCHESTRATOR_MCP_AUDIT.md with resolution ✅
-- [x] Implement usage tracking ✅ (Fixed session_id mismatch - hooks now use Claude's session_id)
-- [ ] Consider reducing MCP token usage (~28k tokens warning)
+- [x] Implement usage tracking ✅ (Fixed session_id mismatch)
+- [x] **Boss-Worker Architecture** ✅ (2026-01-05)
+  - Reduced global MCPs: 7 → 3 (orchestrator, postgres, sequential-thinking)
+  - Token reduction: 42k → 12k (~70% savings)
+  - Added mui-coder-sonnet agent (Sonnet for MUI design quality)
+  - Added git-haiku agent (pure git operations)
+  - Updated database project_type_configs
+  - Updated vault docs (Orchestrator MCP.md v4.0)
 - [ ] Update spawn_agent to use string instead of enum (optional)
 
 ---

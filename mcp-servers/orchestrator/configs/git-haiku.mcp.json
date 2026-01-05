@@ -1,0 +1,16 @@
+{
+  "_comment": "MCP config for git-haiku agent",
+  "_created": "2026-01-05",
+  "_purpose": "Git operations specialist - minimal config, uses built-in Read/Glob/Grep + Bash(git*)",
+  "mcpServers": {
+    "orchestrator": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
+      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
+      }
+    }
+  }
+}
