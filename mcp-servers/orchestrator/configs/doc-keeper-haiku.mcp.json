@@ -6,7 +6,7 @@
       "args": [
         "-y",
         "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects\\claude-family",
+        "{workspace_dir}",
         "C:\\Users\\johnd\\.claude"
       ],
       "env": {}
@@ -15,6 +15,15 @@
       "type": "stdio",
       "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
       "args": ["--access-mode=unrestricted"],
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "orchestrator": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
+      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }
