@@ -1,103 +1,132 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Before ending this session, complete ALL of the following:
+Before ending this session, Claude MUST complete ALL of the following:
 
 ---
 
-## 🚨 MCP USAGE CHECKLIST 🚨
+## 1. Generate Session Summary
 
-### ✅ Session Logging (postgres MCP)
+Analyze conversation to create:
+- **Tasks completed** (array of strings)
+- **Learnings gained** (key insights, gotchas discovered)
+- **Session summary** (2-3 sentences)
+
+---
+
+## 2. Update Database Records
+
+### Update sessions table:
 
 ```sql
--- 1. Get your latest session ID
-SELECT id FROM claude_family.session_history
-WHERE identity_id = 5
-ORDER BY session_start DESC LIMIT 1;
-
--- 2. Update session with summary
-UPDATE claude_family.session_history
+UPDATE claude.sessions
 SET
     session_end = NOW(),
-    summary = 'What was accomplished',
-    files_modified = ARRAY['file1.cs', 'file2.cs'],
-    outcome = 'success',
-    tokens_used = <estimated_tokens>
-WHERE id = <session_id>;
+    session_summary = '[Your 2-3 sentence summary]',
+    tasks_completed = ARRAY['task1', 'task2', ...],
+    learnings_gained = ARRAY['learning1', 'learning2', ...]
+WHERE session_id = '[CURRENT_SESSION_ID]'::uuid
+  AND session_end IS NULL;
 ```
 
-### ✅ Store Reusable Knowledge (postgres MCP)
-
-**If you discovered a reusable pattern:**
+### Update session_state table:
 
 ```sql
-INSERT INTO claude_family.universal_knowledge
-(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
+INSERT INTO claude.session_state
+(project_name, todo_list, current_focus, next_steps, updated_at)
 VALUES (
-    'Pattern Name',
-    'Clear description',
-    'When to use this',
-    'Code example',
-    'Things to watch out for',
-    5
+    '[PROJECT_NAME]',
+    '[CURRENT_TODOWRITE_JSON]'::jsonb,
+    '[What was being worked on]',
+    ARRAY['Next step 1', 'Next step 2', 'Next step 3'],
+    NOW()
+)
+ON CONFLICT (project_name)
+DO UPDATE SET
+    todo_list = EXCLUDED.todo_list,
+    current_focus = EXCLUDED.current_focus,
+    next_steps = EXCLUDED.next_steps,
+    updated_at = NOW();
+```
+
+---
+
+## 3. Update TODO_NEXT_SESSION.md
+
+Write/update `docs/TODO_NEXT_SESSION.md` with:
+
+```markdown
+# Next Session TODO
+
+**Last Updated**: [TODAY'S DATE]
+**Last Session**: [Brief session description]
+
+---
+
+## Completed This Session
+
+- [x] Task 1
+- [x] Task 2
+
+---
+
+## Next Steps
+
+1. [Priority 1 item]
+2. [Priority 2 item]
+3. [Priority 3 item]
+
+---
+
+## Pending Work
+
+- [ ] Incomplete task 1
+- [ ] Incomplete task 2
+
+---
+
+**Version**: X.0
+**Created**: [ORIGINAL DATE]
+**Updated**: [TODAY]
+**Location**: docs/TODO_NEXT_SESSION.md
+```
+
+---
+
+## 4. Knowledge Capture (Optional)
+
+If you discovered reusable patterns or gotchas:
+
+```sql
+INSERT INTO claude.knowledge
+(project_id, category, title, content, created_at)
+VALUES (
+    '[PROJECT_UUID]'::uuid,
+    'pattern',  -- or 'gotcha', 'decision', 'learning'
+    '[Pattern Title]',
+    '[Detailed description]',
+    NOW()
 );
 ```
 
-**If project-specific:**
+---
 
-```sql
-INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
-VALUES ('bug-fix', 'Solution details', 'When this applies');
-```
+## 5. Check for Uncommitted Changes
 
-### ✅ Store in Memory Graph (memory MCP)
-
-```
-mcp__memory__create_entities(entities=[{
-    "name": "Session Summary",
-    "entityType": "Session",
-    "observations": [
-        "Completed: X",
-        "Key decision: Y",
-        "Files modified: Z",
-        "Pattern discovered: P"
-    ]
-}])
-```
-
-**If you solved a problem:**
-
-```
-mcp__memory__create_relations(relations=[{
-    "from": "Problem Name",
-    "relationType": "solved-by",
-    "to": "Solution Pattern"
-}])
-```
+Run `git status` and warn user if there are uncommitted changes.
 
 ---
 
-## Verification Questions
+## Verification
 
-Ask yourself:
+Before confirming session end:
 
-- [ ] Did I log session start to postgres?
-- [ ] Did I query for existing knowledge before proposing solutions?
-- [ ] Did I use tree-sitter for code analysis (if applicable)?
-- [ ] Did I store learnings in memory graph?
-- [ ] Did I update session log with summary?
-- [ ] Did I store reusable patterns in postgres?
-
-**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
+- [ ] sessions table updated with summary
+- [ ] session_state table updated with todos/focus/next_steps
+- [ ] TODO_NEXT_SESSION.md file updated
+- [ ] Uncommitted changes noted (if any)
 
 ---
 
-## Cost of Skipping MCPs
+**Session ID**: Use environment variable `CLAUDE_SESSION_ID` or query latest from database.
 
-- Next Claude spends 30 minutes rediscovering your solution
-- Same bug gets solved 3 times by different Claudes
-- Institutional knowledge stays at zero
-- User gets frustrated repeating themselves
-
----
-
-**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.
+**Project ID**: For claude-family: `20b5627c-e72c-4501-8537-95b559731b59`

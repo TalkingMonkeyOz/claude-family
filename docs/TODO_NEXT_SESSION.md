@@ -1,61 +1,57 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-05
-**Last Session**: Implemented Boss-Worker Architecture - 70% token reduction
+**Last Updated**: 2026-01-06
+**Last Session**: Implemented Agent Coordination System (context injection, status tracking, boss control)
 
 ---
 
-## Priority 1: Boss-Worker Architecture (COMPLETED)
+## Priority 1: Agent Coordination System (COMPLETED 2026-01-06)
 
-- [x] Research progressive discovery pattern for orchestrator ✅
-- [x] Implement search_agents tool ✅ (server.py:557-638)
-- [x] Update ORCHESTRATOR_MCP_AUDIT.md with resolution ✅
-- [x] Implement usage tracking ✅ (Fixed session_id mismatch)
-- [x] **Boss-Worker Architecture** ✅ (2026-01-05)
-  - Reduced global MCPs: 7 → 3 (orchestrator, postgres, sequential-thinking)
-  - Token reduction: 42k → 12k (~70% savings)
-  - Added mui-coder-sonnet agent (Sonnet for MUI design quality)
-  - Added git-haiku agent (pure git operations)
-  - Updated database project_type_configs
-  - Updated vault docs (Orchestrator MCP.md v4.0)
-- [ ] Update spawn_agent to use string instead of enum (optional)
-
----
-
-## Priority 2: Standards System
-
-- [ ] Add C#, TypeScript/MUI, Rust standards to database
-- [ ] Add Azure standards (Bicep, Functions, Logic Apps)
-- [ ] Add Security/OWASP standards
-- [ ] Regenerate all standards files
-- [ ] Test SessionStart loads standards correctly
+- [x] Created `claude.context_rules` table (8 seed rules for DB-driven standards injection)
+- [x] Created `claude.agent_status` table (real-time agent progress tracking)
+- [x] Created `claude.agent_commands` table (boss-to-agent control: ABORT, REDIRECT, etc.)
+- [x] Added 5 new MCP tools:
+  - `get_context_for_task` - Compose context from DB rules
+  - `update_agent_status` - Agent reports progress
+  - `get_agent_statuses` - Boss monitors agents
+  - `send_agent_command` - Boss controls agents
+  - `check_agent_commands` - Agent checks for commands
+- [x] Enhanced spawn_agent with auto-context injection
+- [x] Updated vault docs (Orchestrator MCP.md v4.0)
 
 ---
 
-## Priority 3: Vault/Documentation
+## Priority 2: Missing Standards (NEW)
 
-- [ ] Complete YAML frontmatter for vault docs (0% compliance)
-- [ ] Split oversized vault documents (3 files)
-- [ ] Tune RAG threshold 0.50 to 0.40
-- [ ] Update vault documentation with standards system docs
-- [ ] Consolidate documentation process into single source
-- [ ] Decide on ~/.claude/instructions/ files fate
+- [ ] Add sql-postgres standard to `claude.coding_standards`
+- [ ] Verify all `context_rules.inject_standards` have matching DB entries
+- [ ] Add winforms standard content to database
 
 ---
 
-## Priority 4: Database Cleanup
+## Priority 3: Session Handoff Fix (NEW)
 
-- [ ] Audit unused database tables for project/work tracking
-- [ ] Plan database schema for enforced project work compliance
-- [ ] Add FK constraints to prevent orphaned records
-
----
-
-## Priority 5: Session/Hooks
-
+- [ ] Fix /session-resume to query database instead of TODO file
+- [ ] Or: Auto-update TODO_NEXT_SESSION.md in /session-end workflow
 - [ ] Test complete session lifecycle end-to-end
-- [ ] Investigate startup warning: Config deployment skipped
-- [ ] Research stop hook enforcement (make more active)
+
+---
+
+## Priority 4: Expand Native Instructions
+
+- [ ] Add rust.instructions.md to ~/.claude/instructions/
+- [ ] Add azure.instructions.md (Bicep, Functions, Logic Apps)
+- [ ] Add docker.instructions.md
+- [ ] Test file-type auto-apply works
+
+---
+
+## Priority 5: Standards Validator Enhancement (OPTIONAL)
+
+- [ ] Implement forbidden_patterns in standards_validator.py
+- [ ] Implement required_patterns checks
+- [ ] Implement naming_checks
+- [ ] Add more validation rules to database
 
 ---
 
@@ -86,7 +82,7 @@
 
 ---
 
-**Version**: 7.0
+**Version**: 9.0
 **Created**: 2026-01-02
-**Updated**: 2026-01-03
+**Updated**: 2026-01-06
 **Location**: docs/TODO_NEXT_SESSION.md

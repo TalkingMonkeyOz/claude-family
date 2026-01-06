@@ -345,9 +345,58 @@ class AgentOrchestrator:
 
         timeout = timeout or spec_timeout
 
+        # Get context injection from database-driven rules
+        injected_context = ""
+        try:
+            # Add base_dir to path to import server module
+            sys.path.insert(0, str(self.base_dir))
+            from server import get_context_for_task
+
+            context_result = get_context_for_task(
+                task=task,
+                file_patterns=None,  # Could extract from task
+                agent_type=agent_type
+            )
+            if context_result.get('context'):
+                injected_context = f"""
+=== CODING STANDARDS (from context_rules) ===
+{context_result['context']}
+=== END STANDARDS ===
+
+"""
+                print(f"DEBUG: [{spawn_id}] Injected context from rules: {context_result.get('rules_matched', [])}", file=sys.stderr)
+        except Exception as e:
+            print(f"DEBUG: [{spawn_id}] Context injection skipped: {e}", file=sys.stderr)
+
+        # Build coordination protocol for agent awareness
+        # Use actual session_id from DB (full UUID), not spawn_id (8-char fragment)
+        agent_session_id = session_id if session_id else spawn_id
+        coordination_protocol = f"""
+=== COORDINATION PROTOCOL ===
+You are an agent session spawned by parent session.
+Your agent_session_id for status reporting: {agent_session_id}
+
+Every 5-7 tool calls, you should:
+1. Report your status if the orchestrator MCP is available:
+   mcp__orchestrator__update_agent_status(
+     session_id="{agent_session_id}",
+     agent_type="{agent_type}",
+     current_status="working",
+     activity="<what you're doing>",
+     progress_pct=<0-100>
+   )
+2. Check for commands from boss:
+   mcp__orchestrator__check_agent_commands(session_id="{agent_session_id}")
+   - If ABORT: Stop immediately
+   - If REDIRECT: Adjust your task based on payload
+   - If INJECT: Add payload.context to your understanding
+=== END PROTOCOL ===
+
+"""
+
         # Prepend workspace context to task so agent knows where to work
         # Agent accesses files via filesystem MCP, not local filesystem
-        task_with_context = f"""WORKSPACE: {workspace_path}
+        task_with_context = f"""{coordination_protocol}{injected_context}WORKSPACE: {workspace_path}
 Use the filesystem MCP tools (mcp__filesystem__*) to read and write files in this workspace.
 
 TASK:

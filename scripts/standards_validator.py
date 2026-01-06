@@ -162,6 +162,8 @@ def matches_any_pattern(file_path: str, patterns: List[str]) -> bool:
 
 def get_file_type(file_path: str) -> str:
     """Determine file type based on path for context-specific validation."""
+    # Normalize path separators for cross-platform matching
+    file_path = file_path.replace('\\', '/')
     base_name = os.path.basename(file_path)
 
     # Check specific filenames first

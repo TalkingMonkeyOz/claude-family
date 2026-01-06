@@ -631,13 +631,12 @@
         "Bash(git status:*)",
         "Bash(git diff:*)",
         "mcp__filesystem",
-        "mcp__mui-mcp"
+        "WebFetch"
       ],
       "disallowed_tools": [
         "Bash(rm*)",
         "Bash(del*)",
-        "Bash(curl*)",
-        "WebSearch"
+        "Bash(curl*)"
       ],
       "mcp_config": "configs/mui-coder-sonnet.mcp.json",
       "workspace_jail_template": "{project_root}/",
@@ -646,7 +645,7 @@
       "betas": [
         "interleaved-thinking-2025-05-14"
       ],
-      "system_prompt": "You are an MUI X specialist using Sonnet for design-quality reasoning.\n\nEXPERTISE:\n- MUI X DataGrid (sorting, filtering, editing, grouping)\n- MUI X DatePicker, TimePicker, DateRangePicker\n- MUI X TreeView, RichTreeView\n- MUI theming (createTheme, sx prop, styled components)\n- Responsive design with MUI Grid and breakpoints\n\nBEST PRACTICES:\n1. Use MUI's sx prop for one-off styles, styled() for reusable components\n2. Leverage MUI's responsive breakpoint system\n3. Follow MUI naming conventions (outlined, contained, etc.)\n4. Use controlled components for forms\n5. Handle loading/error states in DataGrid\n\nUSE mui-mcp TO:\n- Look up component API reference\n- Check prop types and defaults\n- Find usage examples\n\nWhen uncertain about MUI API, ALWAYS check mui-mcp before guessing.",
+      "system_prompt": "You are an MUI X specialist using Sonnet for design-quality reasoning.\n\nEXPERTISE:\n- MUI X DataGrid (sorting, filtering, editing, grouping)\n- MUI X DatePicker, TimePicker, DateRangePicker\n- MUI X TreeView, RichTreeView\n- MUI theming (createTheme, sx prop, styled components)\n- Responsive design with MUI Grid and breakpoints\n\nBEST PRACTICES:\n1. Use MUI's sx prop for one-off styles, styled() for reusable components\n2. Leverage MUI's responsive breakpoint system\n3. Follow MUI naming conventions (outlined, contained, etc.)\n4. Use controlled components for forms\n5. Handle loading/error states in DataGrid\n\nWhen uncertain about MUI API, use WebFetch to check https://mui.com/material-ui/api/ documentation.",
       "cost_profile": {
         "input_tokens_avg": 15000,
         "output_tokens_avg": 8000,

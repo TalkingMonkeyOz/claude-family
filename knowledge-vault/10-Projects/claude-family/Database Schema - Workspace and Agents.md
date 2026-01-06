@@ -243,6 +243,22 @@ DO UPDATE SET
 
 ---
 
+## 5-7. Agent Coordination Tables (NEW)
+
+**Implemented**: 2026-01-06
+
+Three new tables support the Agent Coordination System:
+
+| Table | Purpose | Details |
+|-------|---------|---------|
+| `claude.context_rules` | DB-driven coding standard injection | 8 seed rules, matches by task/pattern/agent |
+| `claude.agent_status` | Real-time agent status tracking | Status, progress, discoveries |
+| `claude.agent_commands` | Boss→agent control commands | ABORT, REDIRECT, INJECT, PAUSE, RESUME |
+
+**Full documentation**: See [[Orchestrator MCP#Agent Coordination System]]
+
+---
+
 ## Data Quality Summary
 
 ### agent_sessions Issues ⚠️
@@ -272,7 +288,7 @@ See **[[Database Schema - Overview]]** for full navigation.
 
 ---
 
-**Version**: 2.0 (split from Database Schema - Core Tables)
+**Version**: 3.0 (Added Agent Coordination tables: context_rules, agent_status, agent_commands)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-06
 **Location**: knowledge-vault/10-Projects/claude-family/Database Schema - Workspace and Agents.md

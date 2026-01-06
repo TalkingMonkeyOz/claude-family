@@ -20,13 +20,13 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 
 ---
 
-## Tools (14 total)
+## Tools (19 total)
 
 ### Agent Spawning (7 tools)
 
 | Tool | Purpose |
 |------|---------|
-| `search_agents` | **NEW** Search agents by capability (progressive discovery) |
+| `search_agents` | Search agents by capability (progressive discovery) |
 | `spawn_agent` | Spawn agent (blocks until complete) |
 | `spawn_agent_async` | Background spawn, returns task_id |
 | `check_async_task` | Check async agent status |
@@ -34,7 +34,17 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 | `recommend_agent` | Get agent recommendation |
 | `get_spawn_status` | Spawn safeguards/slots |
 
-### Messaging (6 tools)
+### Agent Coordination (5 tools) **NEW**
+
+| Tool | Purpose |
+|------|---------|
+| `get_context_for_task` | Get composed context from context_rules |
+| `update_agent_status` | Agent reports status to boss |
+| `get_agent_statuses` | Boss monitors all active agents |
+| `send_agent_command` | Boss sends ABORT/REDIRECT/INJECT/PAUSE/RESUME |
+| `check_agent_commands` | Agent checks for pending commands |
+
+### Messaging (5 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -43,7 +53,6 @@ Custom MCP for spawning specialized agents and inter-Claude messaging.
 | `broadcast` | Message ALL Claude instances |
 | `reply_to` | Reply to message |
 | `acknowledge` | Mark message read/actioned |
-| `get_active_sessions` | See who's online |
 
 ### Statistics (2 tools)
 
@@ -89,6 +98,65 @@ The main Claude session (Boss) now operates with minimal MCPs and delegates to s
 - 70% token savings → more context for reasoning
 - Focused specialists → better task performance
 - Built-in review cycle → iteration and quality checks
+
+---
+
+## Agent Coordination System **NEW**
+
+**Implemented**: 2026-01-06
+
+Database-driven context injection and real-time agent control.
+
+### Context Rules
+
+Rules in `claude.context_rules` auto-inject coding standards based on:
+- **Task keywords**: "database", "sql", "winforms", etc.
+- **File patterns**: `**/*.cs`, `**/*.sql`, etc.
+- **Agent type**: coder-haiku, python-coder-haiku, etc.
+
+```sql
+-- View active rules
+SELECT name, task_keywords, priority FROM claude.context_rules
+WHERE active = true ORDER BY priority DESC;
+```
+
+**Current rules**: winforms-development, mui-development, database-operations, testing-patterns, csharp-development, python-development, typescript-react, documentation-standards
+
+### Agent Status Tracking
+
+Agents report status every 5-7 tool calls to `claude.agent_status`:
+- `current_status`: starting, working, waiting, completed, failed, aborted
+- `progress_pct`: 0-100
+- `discoveries`: JSON array of findings
+
+```
+Boss: get_agent_statuses()
+→ See all active agents, their progress, what they found
+```
+
+### Agent Commands
+
+Boss can control running agents via `claude.agent_commands`:
+
+| Command | Purpose |
+|---------|---------|
+| `ABORT` | Stop agent immediately |
+| `REDIRECT` | Change agent's task focus |
+| `INJECT` | Add context to agent's understanding |
+| `PAUSE` | Temporarily halt (future) |
+| `RESUME` | Continue after pause (future) |
+
+```
+Boss: send_agent_command(target_session_id, "REDIRECT", {new_focus: "..."})
+Agent: check_agent_commands(session_id) → executes pending commands
+```
+
+### Coordination Protocol
+
+Automatically injected into spawned agents:
+1. Report status every 5-7 tool calls
+2. Check for commands from boss
+3. Act on ABORT/REDIRECT/INJECT immediately
 
 ---
 
@@ -201,6 +269,9 @@ Each agent has isolated MCP access:
 | `claude.messages` | Inter-Claude messaging |
 | `claude.agent_sessions` | Agent spawn history |
 | `claude.scheduled_jobs` | Scheduled spawns |
+| `claude.context_rules` | **NEW** Context injection rules |
+| `claude.agent_status` | **NEW** Real-time agent status |
+| `claude.agent_commands` | **NEW** Boss→agent commands |
 
 ---
 
@@ -212,7 +283,7 @@ Each agent has isolated MCP access:
 
 ---
 
-**Version**: 4.0 (Boss-Worker Architecture, added mui-coder-sonnet and git-haiku)
+**Version**: 5.0 (Agent Coordination System - context injection, status tracking, commands)
 **Created**: 2025-12-26
-**Updated**: 2026-01-05
+**Updated**: 2026-01-06
 **Location**: Claude Family/Orchestrator MCP.md

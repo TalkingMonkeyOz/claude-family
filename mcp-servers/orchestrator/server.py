@@ -490,6 +490,451 @@ def defer_message(message_id: str, reason: str) -> dict:
         conn.close()
 
 
+# ============================================================================
+# Context Injection Functions
+# ============================================================================
+
+def get_context_for_task(
+    task: str,
+    file_patterns: Optional[List[str]] = None,
+    agent_type: Optional[str] = None
+) -> dict:
+    """
+    Get composed context for a task based on context_rules.
+
+    Queries context_rules matching task keywords, file patterns, or agent type.
+    Returns prioritized context from coding_standards and static context.
+
+    Args:
+        task: Task description to analyze for keywords
+        file_patterns: Optional file patterns to match (e.g., ['**/*.cs'])
+        agent_type: Optional agent type to match rules for
+
+    Returns:
+        dict with 'context' string, 'rules_matched' list, 'standards_loaded' list
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Extract keywords from task
+        task_lower = task.lower()
+        task_words = set(task_lower.split())
+
+        # Build query to find matching rules
+        cur.execute("""
+            SELECT
+                rule_id, name, task_keywords, file_patterns, agent_types,
+                inject_standards, inject_vault_query, inject_static_context, priority
+            FROM claude.context_rules
+            WHERE active = true
+            ORDER BY priority DESC
+        """)
+
+        rules = cur.fetchall()
+        matched_rules = []
+        standards_to_load = set()
+        static_contexts = []
+        vault_queries = []
+
+        for rule in rules:
+            rule_dict = dict(rule) if not isinstance(rule, dict) else rule
+            matched = False
+
+            # Check task_keywords match
+            if rule_dict.get('task_keywords'):
+                for keyword in rule_dict['task_keywords']:
+                    if keyword.lower() in task_lower:
+                        matched = True
+                        break
+
+            # Check file_patterns match
+            if not matched and file_patterns and rule_dict.get('file_patterns'):
+                for rule_pattern in rule_dict['file_patterns']:
+                    for file_pattern in file_patterns:
+                        # Simple pattern matching (could be improved with fnmatch)
+                        if rule_pattern.replace('**/', '').replace('*', '') in file_pattern:
+                            matched = True
+                            break
+
+            # Check agent_type match
+            if not matched and agent_type and rule_dict.get('agent_types'):
+                if agent_type in rule_dict['agent_types']:
+                    matched = True
+
+            if matched:
+                matched_rules.append({
+                    'name': rule_dict['name'],
+                    'priority': rule_dict['priority']
+                })
+
+                if rule_dict.get('inject_standards'):
+                    standards_to_load.update(rule_dict['inject_standards'])
+
+                if rule_dict.get('inject_static_context'):
+                    static_contexts.append(rule_dict['inject_static_context'])
+
+                if rule_dict.get('inject_vault_query'):
+                    vault_queries.append(rule_dict['inject_vault_query'])
+
+        # Load coding standards content
+        standards_content = []
+        if standards_to_load:
+            placeholders = ','.join(['%s'] * len(standards_to_load))
+            cur.execute(f"""
+                SELECT name, content
+                FROM claude.coding_standards
+                WHERE name IN ({placeholders}) AND active = true
+            """, list(standards_to_load))
+
+            for std in cur.fetchall():
+                std_dict = dict(std) if not isinstance(std, dict) else std
+                if std_dict.get('content'):
+                    standards_content.append(f"=== {std_dict['name']} STANDARDS ===\n{std_dict['content']}")
+
+        cur.close()
+
+        # Compose final context
+        context_parts = []
+
+        if standards_content:
+            context_parts.extend(standards_content)
+
+        if static_contexts:
+            context_parts.extend(static_contexts)
+
+        # Note: vault_queries would need RAG integration - store for future use
+        final_context = "\n\n".join(context_parts) if context_parts else ""
+
+        return {
+            "context": final_context[:10000],  # Limit context size
+            "rules_matched": matched_rules,
+            "standards_loaded": list(standards_to_load),
+            "vault_queries": vault_queries  # For future RAG integration
+        }
+
+    except Exception as e:
+        return {
+            "context": "",
+            "rules_matched": [],
+            "error": str(e)
+        }
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Agent Status Functions
+# ============================================================================
+
+def update_agent_status(
+    session_id: str,
+    agent_type: str,
+    current_status: str = "working",
+    activity: Optional[str] = None,
+    progress_pct: Optional[int] = None,
+    discoveries: Optional[List[dict]] = None,
+    parent_session_id: Optional[str] = None,
+    task_summary: Optional[str] = None
+) -> dict:
+    """
+    Update or create agent status record.
+
+    Agents should call this every ~5 tool calls to report progress.
+
+    Args:
+        session_id: This agent's session ID
+        agent_type: Agent type (e.g., 'coder-haiku')
+        current_status: 'starting', 'working', 'waiting', 'completed', 'failed', 'aborted'
+        activity: Current activity description
+        progress_pct: Estimated progress 0-100
+        discoveries: List of discoveries to share with other agents
+        parent_session_id: Boss session that spawned this agent
+        task_summary: Brief task description
+
+    Returns:
+        dict with success status
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Check if status record exists
+        cur.execute("""
+            SELECT status_id FROM claude.agent_status
+            WHERE agent_session_id = %s
+        """, (session_id,))
+
+        existing = cur.fetchone()
+
+        if existing:
+            # Update existing record
+            cur.execute("""
+                UPDATE claude.agent_status
+                SET current_status = %s,
+                    current_activity = COALESCE(%s, current_activity),
+                    progress_pct = COALESCE(%s, progress_pct),
+                    discoveries = CASE WHEN %s IS NOT NULL THEN %s::jsonb ELSE discoveries END,
+                    tool_call_count = tool_call_count + 1,
+                    last_heartbeat = NOW()
+                WHERE agent_session_id = %s
+                RETURNING status_id::text
+            """, (
+                current_status,
+                activity,
+                progress_pct,
+                json.dumps(discoveries) if discoveries else None,
+                json.dumps(discoveries) if discoveries else None,
+                session_id
+            ))
+        else:
+            # Create new record
+            cur.execute("""
+                INSERT INTO claude.agent_status
+                (agent_session_id, parent_session_id, agent_type, task_summary,
+                 current_status, current_activity, progress_pct, discoveries)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING status_id::text
+            """, (
+                session_id,
+                parent_session_id,
+                agent_type,
+                task_summary,
+                current_status,
+                activity,
+                progress_pct,
+                json.dumps(discoveries or [])
+            ))
+
+        result = cur.fetchone()
+        result_dict = dict(result) if not isinstance(result, dict) else result
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "status_id": result_dict['status_id'],
+            "current_status": current_status
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def get_agent_statuses(parent_session_id: Optional[str] = None) -> dict:
+    """
+    Get status of all agents (optionally filtered by parent).
+
+    Args:
+        parent_session_id: Filter to agents spawned by this session
+
+    Returns:
+        dict with list of agent statuses
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if parent_session_id:
+            cur.execute("""
+                SELECT
+                    agent_session_id::text,
+                    parent_session_id::text,
+                    agent_type,
+                    task_summary,
+                    current_status,
+                    current_activity,
+                    progress_pct,
+                    tool_call_count,
+                    discoveries,
+                    last_heartbeat,
+                    created_at,
+                    EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) as seconds_since_heartbeat
+                FROM claude.agent_status
+                WHERE parent_session_id = %s
+                ORDER BY created_at DESC
+            """, (parent_session_id,))
+        else:
+            cur.execute("""
+                SELECT
+                    agent_session_id::text,
+                    parent_session_id::text,
+                    agent_type,
+                    task_summary,
+                    current_status,
+                    current_activity,
+                    progress_pct,
+                    tool_call_count,
+                    discoveries,
+                    last_heartbeat,
+                    created_at,
+                    EXTRACT(EPOCH FROM (NOW() - last_heartbeat)) as seconds_since_heartbeat
+                FROM claude.agent_status
+                WHERE current_status NOT IN ('completed', 'failed', 'aborted')
+                   OR created_at > NOW() - INTERVAL '1 hour'
+                ORDER BY last_heartbeat DESC
+                LIMIT 20
+            """)
+
+        statuses = cur.fetchall()
+        cur.close()
+
+        result_statuses = []
+        for status in statuses:
+            status_dict = dict(status) if not isinstance(status, dict) else status
+            # Convert timestamps
+            for key in ['last_heartbeat', 'created_at']:
+                if status_dict.get(key):
+                    status_dict[key] = status_dict[key].isoformat()
+            if status_dict.get('seconds_since_heartbeat'):
+                status_dict['seconds_since_heartbeat'] = float(status_dict['seconds_since_heartbeat'])
+            result_statuses.append(status_dict)
+
+        return {
+            "count": len(result_statuses),
+            "statuses": result_statuses
+        }
+
+    except Exception as e:
+        return {"count": 0, "statuses": [], "error": str(e)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Agent Command Functions
+# ============================================================================
+
+def send_agent_command(
+    target_session_id: str,
+    command: str,
+    payload: Optional[dict] = None,
+    reason: Optional[str] = None,
+    sender_session_id: Optional[str] = None
+) -> dict:
+    """
+    Send a control command to a running agent.
+
+    Args:
+        target_session_id: Agent session to receive command
+        command: 'ABORT', 'REDIRECT', 'INJECT', 'PAUSE', 'RESUME'
+        payload: Command-specific data (e.g., new_task for REDIRECT, context for INJECT)
+        reason: Why this command is being sent
+        sender_session_id: Session sending the command
+
+    Returns:
+        dict with command_id and success status
+    """
+    valid_commands = ['ABORT', 'REDIRECT', 'INJECT', 'PAUSE', 'RESUME']
+    if command not in valid_commands:
+        return {"success": False, "error": f"Invalid command. Must be one of: {valid_commands}"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            INSERT INTO claude.agent_commands
+            (target_session_id, sender_session_id, command, payload, reason)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING command_id::text, created_at
+        """, (
+            target_session_id,
+            sender_session_id,
+            command,
+            json.dumps(payload) if payload else None,
+            reason
+        ))
+
+        result = cur.fetchone()
+        result_dict = dict(result) if not isinstance(result, dict) else result
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "command_id": result_dict['command_id'],
+            "command": command,
+            "target_session_id": target_session_id,
+            "created_at": result_dict['created_at'].isoformat()
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def check_agent_commands(session_id: str) -> dict:
+    """
+    Check for pending commands for this agent.
+
+    Agents should call this every ~5 tool calls to check for boss commands.
+
+    Args:
+        session_id: This agent's session ID
+
+    Returns:
+        dict with list of pending commands
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get pending, non-expired commands
+        cur.execute("""
+            SELECT
+                command_id::text,
+                command,
+                payload,
+                reason,
+                created_at
+            FROM claude.agent_commands
+            WHERE target_session_id = %s
+              AND status = 'pending'
+              AND (expires_at IS NULL OR expires_at > NOW())
+            ORDER BY created_at ASC
+        """, (session_id,))
+
+        commands = cur.fetchall()
+
+        # Mark commands as acknowledged
+        if commands:
+            command_ids = [dict(c)['command_id'] if not isinstance(c, dict) else c['command_id'] for c in commands]
+            placeholders = ','.join(['%s'] * len(command_ids))
+            cur.execute(f"""
+                UPDATE claude.agent_commands
+                SET status = 'acknowledged', acknowledged_at = NOW()
+                WHERE command_id::text IN ({placeholders})
+            """, command_ids)
+            conn.commit()
+
+        cur.close()
+
+        result_commands = []
+        for cmd in commands:
+            cmd_dict = dict(cmd) if not isinstance(cmd, dict) else cmd
+            if cmd_dict.get('created_at'):
+                cmd_dict['created_at'] = cmd_dict['created_at'].isoformat()
+            result_commands.append(cmd_dict)
+
+        return {
+            "count": len(result_commands),
+            "commands": result_commands,
+            "has_abort": any(c['command'] == 'ABORT' for c in result_commands),
+            "has_redirect": any(c['command'] == 'REDIRECT' for c in result_commands)
+        }
+
+    except Exception as e:
+        return {"count": 0, "commands": [], "error": str(e)}
+    finally:
+        conn.close()
+
+
 def get_unactioned_messages(project_name: str) -> dict:
     """Get actionable messages that haven't been actioned or deferred.
 
@@ -1152,6 +1597,136 @@ async def list_tools() -> List[Tool]:
                     "required": ["project_name"]
                 }
             ),
+            # Context injection tools
+            Tool(
+                name="get_context_for_task",
+                description="Get composed context for a task based on database-driven context_rules. Returns coding standards and relevant documentation matching the task keywords, file patterns, or agent type.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "task": {
+                            "type": "string",
+                            "description": "Task description to analyze for context matching"
+                        },
+                        "file_patterns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional file patterns to match (e.g., ['**/*.cs', '**/*.sql'])"
+                        },
+                        "agent_type": {
+                            "type": "string",
+                            "description": "Optional agent type to match rules for"
+                        }
+                    },
+                    "required": ["task"]
+                }
+            ),
+            # Agent status tools
+            Tool(
+                name="update_agent_status",
+                description="Update this agent's status for visibility by the boss session. Agents should call this every ~5 tool calls to report progress.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "This agent's session ID"
+                        },
+                        "agent_type": {
+                            "type": "string",
+                            "description": "Agent type (e.g., 'coder-haiku')"
+                        },
+                        "current_status": {
+                            "type": "string",
+                            "enum": ["starting", "working", "waiting", "completed", "failed", "aborted"],
+                            "description": "Current status"
+                        },
+                        "activity": {
+                            "type": "string",
+                            "description": "Current activity description"
+                        },
+                        "progress_pct": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 100,
+                            "description": "Estimated progress 0-100"
+                        },
+                        "discoveries": {
+                            "type": "array",
+                            "items": {"type": "object"},
+                            "description": "List of discoveries to share"
+                        },
+                        "parent_session_id": {
+                            "type": "string",
+                            "description": "Boss session that spawned this agent"
+                        },
+                        "task_summary": {
+                            "type": "string",
+                            "description": "Brief task description"
+                        }
+                    },
+                    "required": ["session_id", "agent_type"]
+                }
+            ),
+            Tool(
+                name="get_agent_statuses",
+                description="Get status of running agents. Boss sessions use this to monitor their spawned agents.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "parent_session_id": {
+                            "type": "string",
+                            "description": "Filter to agents spawned by this session (optional)"
+                        }
+                    }
+                }
+            ),
+            # Agent command tools
+            Tool(
+                name="send_agent_command",
+                description="Send a control command to a running agent (ABORT, REDIRECT, INJECT, PAUSE, RESUME)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "target_session_id": {
+                            "type": "string",
+                            "description": "Agent session to receive command"
+                        },
+                        "command": {
+                            "type": "string",
+                            "enum": ["ABORT", "REDIRECT", "INJECT", "PAUSE", "RESUME"],
+                            "description": "Command to send"
+                        },
+                        "payload": {
+                            "type": "object",
+                            "description": "Command-specific data (e.g., new_task for REDIRECT, context for INJECT)"
+                        },
+                        "reason": {
+                            "type": "string",
+                            "description": "Why this command is being sent"
+                        },
+                        "sender_session_id": {
+                            "type": "string",
+                            "description": "Your session ID"
+                        }
+                    },
+                    "required": ["target_session_id", "command"]
+                }
+            ),
+            Tool(
+                name="check_agent_commands",
+                description="Check for pending commands from boss session. Agents should call this every ~5 tool calls.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "This agent's session ID"
+                        }
+                    },
+                    "required": ["session_id"]
+                }
+            ),
         ])
 
     return tools
@@ -1204,6 +1779,22 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_get_mcp_stats(arguments)
     elif name == "get_unactioned_messages":
         return await handle_get_unactioned_messages(arguments)
+
+    # Context injection tools
+    elif name == "get_context_for_task":
+        return await handle_get_context_for_task(arguments)
+
+    # Agent status tools
+    elif name == "update_agent_status":
+        return await handle_update_agent_status(arguments)
+    elif name == "get_agent_statuses":
+        return await handle_get_agent_statuses(arguments)
+
+    # Agent command tools
+    elif name == "send_agent_command":
+        return await handle_send_agent_command(arguments)
+    elif name == "check_agent_commands":
+        return await handle_check_agent_commands(arguments)
 
     else:
         raise ValueError(f"Unknown tool: {name}")
@@ -1564,6 +2155,71 @@ async def handle_get_unactioned_messages(arguments: dict) -> List[TextContent]:
     """Handle get_unactioned_messages tool call."""
     project_name = arguments['project_name']
     result = get_unactioned_messages(project_name)
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+# ============================================================================
+# Context Injection Handlers
+# ============================================================================
+
+async def handle_get_context_for_task(arguments: dict) -> List[TextContent]:
+    """Handle get_context_for_task tool call."""
+    result = get_context_for_task(
+        task=arguments['task'],
+        file_patterns=arguments.get('file_patterns'),
+        agent_type=arguments.get('agent_type')
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+# ============================================================================
+# Agent Status Handlers
+# ============================================================================
+
+async def handle_update_agent_status(arguments: dict) -> List[TextContent]:
+    """Handle update_agent_status tool call."""
+    result = update_agent_status(
+        session_id=arguments['session_id'],
+        agent_type=arguments['agent_type'],
+        current_status=arguments.get('current_status', 'working'),
+        activity=arguments.get('activity'),
+        progress_pct=arguments.get('progress_pct'),
+        discoveries=arguments.get('discoveries'),
+        parent_session_id=arguments.get('parent_session_id'),
+        task_summary=arguments.get('task_summary')
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_get_agent_statuses(arguments: dict) -> List[TextContent]:
+    """Handle get_agent_statuses tool call."""
+    result = get_agent_statuses(
+        parent_session_id=arguments.get('parent_session_id')
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+# ============================================================================
+# Agent Command Handlers
+# ============================================================================
+
+async def handle_send_agent_command(arguments: dict) -> List[TextContent]:
+    """Handle send_agent_command tool call."""
+    result = send_agent_command(
+        target_session_id=arguments['target_session_id'],
+        command=arguments['command'],
+        payload=arguments.get('payload'),
+        reason=arguments.get('reason'),
+        sender_session_id=arguments.get('sender_session_id')
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_check_agent_commands(arguments: dict) -> List[TextContent]:
+    """Handle check_agent_commands tool call."""
+    result = check_agent_commands(
+        session_id=arguments['session_id']
+    )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

@@ -1,7 +1,9 @@
 {
   "_comment": "MCP config for mui-coder-sonnet agent",
   "_created": "2026-01-05",
-  "_purpose": "MUI X specialist with filesystem access and MUI documentation MCP",
+  "_updated": "2026-01-06",
+  "_purpose": "MUI X specialist with filesystem access - NOTE: MUI MCP removed (package doesn't exist)",
+  "_note": "@anthropic/mcp-mui does not exist. Agent relies on built-in knowledge + WebFetch for MUI docs.",
   "mcpServers": {
     "filesystem": {
       "type": "stdio",
@@ -21,15 +23,6 @@
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
       }
-    },
-    "mui-mcp": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@anthropic/mcp-mui"
-      ],
-      "env": {}
     }
   }
 }
