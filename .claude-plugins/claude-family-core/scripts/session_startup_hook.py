@@ -458,67 +458,6 @@ def get_active_work_items(project_id):
         return {'features': [], 'feedback': [], 'build_tasks': []}
 
 
-def get_due_reminders(project_name):
-    """Check for due reminders."""
-    if not DB_AVAILABLE:
-        return []
-
-    conn = get_db_connection()
-    if not conn:
-        return []
-
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT reminder_id, title, description, check_after, reminder_count, max_reminders
-            FROM claude.reminders
-            WHERE status = 'pending'
-              AND check_after <= NOW()
-              AND (project_name = %s OR project_name IS NULL)
-            ORDER BY check_after ASC
-            LIMIT 5
-        """, (project_name,))
-
-        rows = cur.fetchall()
-        conn.close()
-
-        return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
-    except Exception:
-        return []
-
-
-def get_due_jobs(project_name):
-    """Check for scheduled jobs that should run."""
-    if not DB_AVAILABLE:
-        return []
-
-    conn = get_db_connection()
-    if not conn:
-        return []
-
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT job_id, job_name, job_description,
-                   EXTRACT(DAY FROM NOW() - COALESCE(last_run, created_at)) as days_since_run
-            FROM claude.scheduled_jobs
-            WHERE is_active = true
-              AND (
-                  -- Check if enough days have passed (default 7 if no trigger_condition)
-                  EXTRACT(DAY FROM NOW() - COALESCE(last_run, created_at)) >= 7
-              )
-            ORDER BY last_run ASC NULLS FIRST
-            LIMIT 3
-        """)
-
-        rows = cur.fetchall()
-        conn.close()
-
-        return [dict(r) if PSYCOPG_VERSION == 3 else dict(r) for r in rows]
-    except Exception:
-        return []
-
-
 def get_governance_compliance(project_name):
     """Check project governance compliance."""
     if not DB_AVAILABLE:
@@ -1059,25 +998,6 @@ def main():
             context_lines.append("=" * 50)
             context_lines.append("")
 
-        # Check for due reminders
-        reminders = get_due_reminders(project_name)
-        if reminders:
-            context_lines.append("⏰ DUE REMINDERS:")
-            for r in reminders:
-                context_lines.append(f"   - {r['title']}")
-                if r.get('description'):
-                    context_lines.append(f"     {r['description'][:100]}...")
-            context_lines.append("")
-
-        # Check for due scheduled jobs
-        due_jobs = get_due_jobs(project_name)
-        if due_jobs:
-            context_lines.append("📅 JOBS DUE TO RUN:")
-            for job in due_jobs:
-                days = int(job.get('days_since_run', 0))
-                context_lines.append(f"   - {job['job_name']} (last run: {days} days ago)")
-            context_lines.append("")
-
         # Check governance compliance
         compliance = get_governance_compliance(project_name)
         if compliance:
@@ -1149,12 +1069,6 @@ def main():
 
             if msg_count > 0:
                 system_parts.append(f"{msg_count} pending message(s).")
-
-            if reminders:
-                system_parts.append(f"{len(reminders)} reminder(s) due!")
-
-            if due_jobs:
-                system_parts.append(f"{len(due_jobs)} job(s) ready to run.")
 
             result["systemMessage"] = " ".join(system_parts)
 

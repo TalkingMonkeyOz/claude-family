@@ -88,7 +88,7 @@ def get_db_connection():
             return psycopg.connect(conn_str, row_factory=dict_row)
         else:
             return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except:
+    except Exception:
         return None
 
 
@@ -262,7 +262,7 @@ def log_implicit_feedback(conn, signal_type: str, signal_confidence: float,
         logger.warning(f"Failed to log implicit feedback: {e}")
         try:
             conn.rollback()
-        except:
+        except Exception:
             pass
 
 
@@ -315,7 +315,7 @@ def update_doc_quality(conn, doc_path: str, is_hit: bool):
         logger.warning(f"Failed to update doc quality: {e}")
         try:
             conn.rollback()
-        except:
+        except Exception:
             pass
 
 
@@ -482,7 +482,7 @@ def get_session_context(project_name: str) -> Optional[str]:
         if conn:
             try:
                 conn.close()
-            except:
+            except Exception:
                 pass
         return None
 

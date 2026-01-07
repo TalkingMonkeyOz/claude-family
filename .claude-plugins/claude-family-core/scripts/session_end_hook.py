@@ -41,7 +41,7 @@ def get_db_connection():
             return psycopg.connect(conn_str, row_factory=dict_row)
         else:
             return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except:
+    except Exception:
         return None
 
 
@@ -97,7 +97,7 @@ def main():
             raw = sys.stdin.read()
             if raw.strip():
                 input_data = json.loads(raw)
-        except:
+        except (json.JSONDecodeError, Exception):
             pass
 
     # Extract data from input or environment
