@@ -139,6 +139,31 @@ NEGATIVE_PHRASES = [
     "that's not it",
 ]
 
+# Session context keywords - trigger session handoff context injection
+SESSION_KEYWORDS = [
+    "where was i",
+    "where were we",
+    "what was i working on",
+    "what were we working on",
+    "what's next",
+    "whats next",
+    "next steps",
+    "resume",
+    "continue from",
+    "last session",
+    "previous session",
+    "pick up where",
+    "what todos",
+    "my todos",
+    "active todos",
+    "pending tasks",
+    "what should i do",
+    "what should we do",
+    "session context",
+    "session resume",
+    "/session-resume",
+]
+
 
 def detect_explicit_negative(user_prompt: str) -> Optional[Tuple[str, float]]:
     """Detect explicit negative feedback in user prompt.
@@ -292,6 +317,174 @@ def update_doc_quality(conn, doc_path: str, is_hit: bool):
             conn.rollback()
         except:
             pass
+
+
+def detect_session_keywords(user_prompt: str) -> bool:
+    """Detect if user prompt contains session-related keywords.
+
+    Returns True if prompt is asking about session context, todos, or resumption.
+    """
+    prompt_lower = user_prompt.lower()
+    for keyword in SESSION_KEYWORDS:
+        if keyword in prompt_lower:
+            logger.info(f"Detected session keyword: '{keyword}'")
+            return True
+    return False
+
+
+def get_session_context(project_name: str) -> Optional[str]:
+    """Query database for session context: todos, focus, last session summary.
+
+    Returns formatted context string or None if no context available.
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    conn = get_db_connection()
+    if not conn:
+        return None
+
+    try:
+        import time
+        start_time = time.time()
+        cur = conn.cursor()
+        context_lines = []
+
+        # 1. Get project_id
+        cur.execute("""
+            SELECT project_id::text FROM claude.projects WHERE project_name = %s
+        """, (project_name,))
+        project_row = cur.fetchone()
+        if not project_row:
+            conn.close()
+            return None
+        project_id = project_row['project_id'] if isinstance(project_row, dict) else project_row[0]
+
+        # 2. Get active todos from claude.todos (source of truth)
+        cur.execute("""
+            SELECT content, status, priority
+            FROM claude.todos
+            WHERE project_id = %s::uuid
+              AND is_deleted = false
+              AND status IN ('pending', 'in_progress')
+            ORDER BY
+                CASE status WHEN 'in_progress' THEN 1 ELSE 2 END,
+                priority ASC,
+                created_at ASC
+            LIMIT 10
+        """, (project_id,))
+        todos = cur.fetchall()
+
+        # 3. Get session_state (current_focus, next_steps)
+        cur.execute("""
+            SELECT current_focus, next_steps, updated_at
+            FROM claude.session_state
+            WHERE project_name = %s
+        """, (project_name,))
+        state_row = cur.fetchone()
+
+        # 4. Get last completed session summary
+        cur.execute("""
+            SELECT session_summary, session_end, tasks_completed
+            FROM claude.sessions
+            WHERE project_name = %s AND session_end IS NOT NULL
+            ORDER BY session_end DESC
+            LIMIT 1
+        """, (project_name,))
+        last_session = cur.fetchone()
+
+        # 5. Check for pending messages
+        cur.execute("""
+            SELECT COUNT(*) as count
+            FROM claude.messages
+            WHERE status = 'pending'
+              AND (to_project = %s OR message_type = 'broadcast')
+        """, (project_name,))
+        msg_row = cur.fetchone()
+        msg_count = msg_row['count'] if isinstance(msg_row, dict) else msg_row[0]
+
+        conn.close()
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Format context
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        context_lines.append(f"SESSION CONTEXT (from database, {latency_ms}ms)")
+        context_lines.append("=" * 70)
+
+        # Last session info
+        if last_session:
+            summary = last_session['session_summary'] if isinstance(last_session, dict) else last_session[0]
+            end_time = last_session['session_end'] if isinstance(last_session, dict) else last_session[1]
+            if summary:
+                context_lines.append("")
+                context_lines.append(f"📅 LAST SESSION ({end_time.strftime('%Y-%m-%d %H:%M') if end_time else 'unknown'}):")
+                context_lines.append(f"   {summary[:300]}{'...' if len(summary) > 300 else ''}")
+
+        # Current focus
+        if state_row:
+            focus = state_row['current_focus'] if isinstance(state_row, dict) else state_row[0]
+            next_steps = state_row['next_steps'] if isinstance(state_row, dict) else state_row[1]
+
+            if focus:
+                context_lines.append("")
+                context_lines.append(f"🎯 CURRENT FOCUS: {focus}")
+
+            if next_steps:
+                context_lines.append("")
+                context_lines.append("📋 NEXT STEPS (from last session):")
+                if isinstance(next_steps, list):
+                    for i, step in enumerate(next_steps[:5], 1):
+                        step_text = step.get('content', str(step)) if isinstance(step, dict) else str(step)
+                        context_lines.append(f"   {i}. {step_text}")
+                elif isinstance(next_steps, str):
+                    context_lines.append(f"   {next_steps}")
+
+        # Active todos
+        if todos:
+            in_progress = [t for t in todos if (t['status'] if isinstance(t, dict) else t[1]) == 'in_progress']
+            pending = [t for t in todos if (t['status'] if isinstance(t, dict) else t[1]) == 'pending']
+
+            context_lines.append("")
+            context_lines.append(f"✅ ACTIVE TODOS ({len(todos)} total):")
+
+            if in_progress:
+                context_lines.append("   In Progress:")
+                for t in in_progress[:3]:
+                    content = t['content'] if isinstance(t, dict) else t[0]
+                    context_lines.append(f"      → {content}")
+
+            if pending:
+                context_lines.append("   Pending:")
+                for t in pending[:5]:
+                    content = t['content'] if isinstance(t, dict) else t[0]
+                    priority = t['priority'] if isinstance(t, dict) else t[2]
+                    p_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🔵"
+                    context_lines.append(f"      {p_icon} {content}")
+                if len(pending) > 5:
+                    context_lines.append(f"      ... and {len(pending) - 5} more")
+
+        # Message count
+        if msg_count > 0:
+            context_lines.append("")
+            context_lines.append(f"📬 INBOX: {msg_count} pending message(s) - use mcp__orchestrator__check_inbox")
+
+        context_lines.append("")
+        context_lines.append("-" * 70)
+        context_lines.append("")
+
+        logger.info(f"Session context loaded: {len(todos)} todos, focus={'yes' if state_row else 'no'}, latency={latency_ms}ms")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Failed to get session context: {e}", exc_info=True)
+        if conn:
+            try:
+                conn.close()
+            except:
+                pass
+        return None
 
 
 def process_implicit_feedback(conn, user_prompt: str, session_id: str = None):
@@ -538,7 +731,14 @@ def main():
             except Exception as e:
                 logger.warning(f"Implicit feedback processing failed: {e}")
 
-        # Query RAG
+        # SESSION CONTEXT: Check for session-related keywords and inject context
+        # This implements the "progressive context loading" pattern from Anthropic
+        session_context = None
+        if detect_session_keywords(user_prompt):
+            logger.info("Session keywords detected - loading session context from database")
+            session_context = get_session_context(project_name)
+
+        # Query RAG (vault knowledge)
         rag_context = query_vault_rag(
             user_prompt=user_prompt,
             project_name=project_name,
@@ -547,11 +747,20 @@ def main():
             min_similarity=0.30
         )
 
+        # Combine contexts: session context first (if present), then RAG results
+        combined_context_parts = []
+        if session_context:
+            combined_context_parts.append(session_context)
+        if rag_context:
+            combined_context_parts.append(rag_context)
+
+        combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
+
         # Build result (CORRECT format per Claude Code docs)
         result = {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": rag_context if rag_context else ""
+                "additionalContext": combined_context
             }
         }
 
