@@ -1,27 +1,30 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-06
-**Last Session**: Implemented Agent Coordination System (context injection, status tracking, boss control)
+**Last Updated**: 2026-01-07
+**Last Session**: Fixed agent status finalization bug - agents now properly show 'completed' status
 
 ---
 
-## Priority 1: Agent Coordination System (COMPLETED 2026-01-06)
+## Completed This Session
 
-- [x] Created `claude.context_rules` table (8 seed rules for DB-driven standards injection)
-- [x] Created `claude.agent_status` table (real-time agent progress tracking)
-- [x] Created `claude.agent_commands` table (boss-to-agent control: ABORT, REDIRECT, etc.)
-- [x] Added 5 new MCP tools:
-  - `get_context_for_task` - Compose context from DB rules
-  - `update_agent_status` - Agent reports progress
-  - `get_agent_statuses` - Boss monitors agents
-  - `send_agent_command` - Boss controls agents
-  - `check_agent_commands` - Agent checks for commands
-- [x] Enhanced spawn_agent with auto-context injection
-- [x] Updated vault docs (Orchestrator MCP.md v4.0)
+- [x] Tested agent coordination end-to-end (spawn, status reporting, commands)
+- [x] Found bug: agent_status not updated to 'completed' when agents finish
+- [x] Fixed: Added `finalize_agent_status()` to db_logger.py
+- [x] Fixed: Integrated call in orchestrator_prototype.py after log_completion()
+- [x] Acknowledged pending messages (commands inventory, schema verification)
 
 ---
 
-## Priority 2: Missing Standards (NEW)
+## Priority 1: Verify Agent Status Fix (NEEDS RESTART)
+
+- [ ] Restart Claude Code to reload MCP servers with fix
+- [ ] Spawn a test agent
+- [ ] Verify agent_status shows 'completed' at 100% when done
+- [ ] Clean up any stale agent_status records
+
+---
+
+## Priority 2: Missing Standards
 
 - [ ] Add sql-postgres standard to `claude.coding_standards`
 - [ ] Verify all `context_rules.inject_standards` have matching DB entries
@@ -29,11 +32,10 @@
 
 ---
 
-## Priority 3: Session Handoff Fix (NEW)
+## Priority 3: Session Handoff Improvements
 
 - [ ] Fix /session-resume to query database instead of TODO file
 - [ ] Or: Auto-update TODO_NEXT_SESSION.md in /session-end workflow
-- [ ] Test complete session lifecycle end-to-end
 
 ---
 
@@ -42,47 +44,34 @@
 - [ ] Add rust.instructions.md to ~/.claude/instructions/
 - [ ] Add azure.instructions.md (Bicep, Functions, Logic Apps)
 - [ ] Add docker.instructions.md
-- [ ] Test file-type auto-apply works
-
----
-
-## Priority 5: Standards Validator Enhancement (OPTIONAL)
-
-- [ ] Implement forbidden_patterns in standards_validator.py
-- [ ] Implement required_patterns checks
-- [ ] Implement naming_checks
-- [ ] Add more validation rules to database
 
 ---
 
 ## Backlog
 
-- [ ] Test ATO project - Verify logic gates, data capture
-- [ ] Create ATO-Infrastructure project with Azure + MS Learn MCPs
+- [ ] Implement forbidden_patterns in standards_validator.py
+- [ ] Implement required_patterns checks
 - [ ] Review other projects for duplicate session commands
 
 ---
 
-## Open Feedback (5 items)
+## Key Learnings (This Session)
 
-| Type | Description | Priority |
-|------|-------------|----------|
-| design | Claude Launcher: Desktop App | 1 |
-| design | Claude Launcher: Startup Config | 2 |
-| design | MCW: Claude Config Tree View | 2 |
-| design | MCW: Observability Dashboard | 2 |
-| change | Documentation Keeper Agent | medium |
+1. **agent_status vs async_tasks**: Two separate tables that both need updating
+2. **Orchestrator-side finalization is more reliable** than expecting agents to do it
+3. **MCP server restart required** to pick up code changes in orchestrator
+4. **Coordination protocol** tells agents to report progress, but not to finalize
 
 ---
 
-**Database Stats**:
-- Pending todos: ~34 items (cleaned from 100+)
-- Open feedback: 5 items
-- Active features: 0
+## Files Modified This Session
+
+- `mcp-servers/orchestrator/db_logger.py` - Added finalize_agent_status() method
+- `mcp-servers/orchestrator/orchestrator_prototype.py` - Call finalize after log_completion
 
 ---
 
-**Version**: 9.0
+**Version**: 11.0
 **Created**: 2026-01-02
-**Updated**: 2026-01-06
+**Updated**: 2026-01-07
 **Location**: docs/TODO_NEXT_SESSION.md

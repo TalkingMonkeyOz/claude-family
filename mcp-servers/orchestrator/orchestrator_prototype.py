@@ -415,6 +415,12 @@ TASK:
         # Log completion to database
         if self.db_logger and session_id:
             self.db_logger.log_completion(session_id, result)
+            # Also finalize agent_status to 'completed' or 'failed'
+            self.db_logger.finalize_agent_status(
+                session_id,
+                success=result.get('success', False),
+                final_activity=f"Task {'completed' if result.get('success') else 'failed'}"
+            )
 
         # Cleanup temp agent workspace
         try:

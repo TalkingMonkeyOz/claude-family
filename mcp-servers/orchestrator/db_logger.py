@@ -252,6 +252,56 @@ class AgentLogger:
                 except Exception:
                     pass
 
+    def finalize_agent_status(
+        self,
+        session_id: str,
+        success: bool,
+        final_activity: str = None
+    ):
+        """Update agent_status to completed/failed when agent finishes.
+
+        This ensures the agent_status table reflects final state even if
+        the agent didn't call update_agent_status before exiting.
+
+        Thread-safe: Uses dedicated connection per call.
+        """
+        if psycopg is None or session_id is None:
+            return
+
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            final_status = 'completed' if success else 'failed'
+            activity = final_activity or f"Task {final_status}"
+
+            cursor.execute("""
+                UPDATE claude.agent_status
+                SET current_status = %s,
+                    current_activity = %s,
+                    progress_pct = CASE WHEN %s THEN 100 ELSE progress_pct END,
+                    last_heartbeat = NOW()
+                WHERE agent_session_id = %s;
+            """, (final_status, activity, success, session_id))
+
+            conn.commit()
+            cursor.close()
+
+        except Exception as e:
+            print(f"WARNING: Failed to finalize agent status: {e}")
+            if conn:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def get_agent_stats(self, agent_type: Optional[str] = None) -> Dict[str, Any]:
         """Get statistics for agent usage.
 
