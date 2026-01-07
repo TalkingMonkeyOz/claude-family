@@ -256,12 +256,14 @@ class AgentLogger:
         self,
         session_id: str,
         success: bool,
+        agent_type: str = None,
         final_activity: str = None
     ):
-        """Update agent_status to completed/failed when agent finishes.
+        """Update or create agent_status to completed/failed when agent finishes.
 
-        This ensures the agent_status table reflects final state even if
-        the agent didn't call update_agent_status before exiting.
+        Uses UPSERT to ensure a status record exists even if the agent never
+        reported status during execution (e.g., lightweight-haiku without
+        orchestrator MCP access).
 
         Thread-safe: Uses dedicated connection per call.
         """
@@ -274,16 +276,25 @@ class AgentLogger:
             cursor = conn.cursor()
 
             final_status = 'completed' if success else 'failed'
+            progress = 100 if success else 0
             activity = final_activity or f"Task {final_status}"
+            agent = agent_type or 'unknown'
 
+            # UPSERT: Insert if no record exists, update if it does
             cursor.execute("""
-                UPDATE claude.agent_status
-                SET current_status = %s,
-                    current_activity = %s,
-                    progress_pct = CASE WHEN %s THEN 100 ELSE progress_pct END,
-                    last_heartbeat = NOW()
-                WHERE agent_session_id = %s;
-            """, (final_status, activity, success, session_id))
+                INSERT INTO claude.agent_status (
+                    agent_session_id, agent_type, current_status,
+                    current_activity, progress_pct, last_heartbeat
+                ) VALUES (%s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (agent_session_id) DO UPDATE SET
+                    current_status = EXCLUDED.current_status,
+                    current_activity = EXCLUDED.current_activity,
+                    progress_pct = CASE
+                        WHEN EXCLUDED.current_status = 'completed' THEN 100
+                        ELSE claude.agent_status.progress_pct
+                    END,
+                    last_heartbeat = NOW();
+            """, (session_id, agent, final_status, activity, progress))
 
             conn.commit()
             cursor.close()

@@ -416,9 +416,11 @@ TASK:
         if self.db_logger and session_id:
             self.db_logger.log_completion(session_id, result)
             # Also finalize agent_status to 'completed' or 'failed'
+            # Uses UPSERT to create record if agent never reported status
             self.db_logger.finalize_agent_status(
                 session_id,
                 success=result.get('success', False),
+                agent_type=agent_type,
                 final_activity=f"Task {'completed' if result.get('success') else 'failed'}"
             )
 

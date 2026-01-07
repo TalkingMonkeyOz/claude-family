@@ -1,26 +1,28 @@
 # Next Session TODO
 
 **Last Updated**: 2026-01-07
-**Last Session**: Fixed agent status finalization bug - agents now properly show 'completed' status
+**Last Session**: Fixed agent status UPSERT - agents now properly show 'completed' even without orchestrator MCP
 
 ---
 
 ## Completed This Session
 
-- [x] Tested agent coordination end-to-end (spawn, status reporting, commands)
-- [x] Found bug: agent_status not updated to 'completed' when agents finish
-- [x] Fixed: Added `finalize_agent_status()` to db_logger.py
-- [x] Fixed: Integrated call in orchestrator_prototype.py after log_completion()
-- [x] Acknowledged pending messages (commands inventory, schema verification)
+- [x] Verified agent status fix needed UPSERT, not just UPDATE
+- [x] Root cause: lightweight-haiku has no orchestrator MCP → no status record created
+- [x] Fixed `finalize_agent_status()` to use INSERT ... ON CONFLICT DO UPDATE
+- [x] Added UNIQUE constraint on `agent_session_id` column
+- [x] Updated orchestrator_prototype.py to pass agent_type parameter
+- [x] Cleaned up stale agent_status records (manually ran UPSERT)
+- [x] Acknowledged pending async task message
 
 ---
 
-## Priority 1: Verify Agent Status Fix (NEEDS RESTART)
+## Priority 1: Test UPSERT Fix (NEEDS RESTART)
 
-- [ ] Restart Claude Code to reload MCP servers with fix
-- [ ] Spawn a test agent
-- [ ] Verify agent_status shows 'completed' at 100% when done
-- [ ] Clean up any stale agent_status records
+- [ ] Restart Claude Code to reload orchestrator MCP with fix
+- [ ] Spawn a lightweight-haiku test agent
+- [ ] Verify agent_status shows 'completed' at 100% automatically
+- [ ] Confirm both INSERT (new agent) and UPDATE (reporting agent) paths work
 
 ---
 
@@ -57,21 +59,21 @@
 
 ## Key Learnings (This Session)
 
-1. **agent_status vs async_tasks**: Two separate tables that both need updating
-2. **Orchestrator-side finalization is more reliable** than expecting agents to do it
-3. **MCP server restart required** to pick up code changes in orchestrator
-4. **Coordination protocol** tells agents to report progress, but not to finalize
+1. **UPSERT needed, not UPDATE**: Agents without orchestrator MCP can't create status records
+2. **PostgreSQL ON CONFLICT**: Requires UNIQUE constraint on the conflict column
+3. **lightweight-haiku limitation**: Only has filesystem MCP, no orchestrator access
+4. **Two-phase fix**: Code change + database constraint needed together
 
 ---
 
 ## Files Modified This Session
 
-- `mcp-servers/orchestrator/db_logger.py` - Added finalize_agent_status() method
-- `mcp-servers/orchestrator/orchestrator_prototype.py` - Call finalize after log_completion
+- `mcp-servers/orchestrator/db_logger.py` - Changed finalize_agent_status() to use UPSERT
+- `mcp-servers/orchestrator/orchestrator_prototype.py` - Pass agent_type to finalize_agent_status()
 
 ---
 
-**Version**: 11.0
+**Version**: 12.0
 **Created**: 2026-01-02
 **Updated**: 2026-01-07
 **Location**: docs/TODO_NEXT_SESSION.md
