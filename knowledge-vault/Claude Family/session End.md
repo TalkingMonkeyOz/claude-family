@@ -15,23 +15,38 @@ tags:
 
 ## What It Does
 
-1. Prompts for session summary
-2. Saves to `claude.sessions`
-3. Updates `TODO_NEXT_SESSION.md`
-4. Captures learnings to vault
+1. Updates session record in `claude.sessions` with summary
+2. Saves tasks_completed, learnings_gained, challenges_encountered
+3. Optionally updates `claude.session_state` with new focus/next_steps
+4. Optionally stores reusable patterns in `claude.knowledge`
 
-## Hook
+## Schema
 
-`session_end_hook.py` checks for doc updates.
+Uses `claude.*` schema (consolidated):
+- `claude.sessions` - Session record with summary
+- `claude.session_state` - Persistent focus and next_steps
+- `claude.knowledge` - Reusable patterns
 
-## Mandatory
+## When to Run
 
-Run before closing EVERY session.
+- End of work day
+- Before long break
+- After major milestone
+- When switching projects
 
-See also: [[Claude Family todo Session Start]], [[Claude Hooks]]
+## Related Commands
+
+| Command | Purpose |
+|---------|---------|
+| `/session-commit` | Session end + git commit (recommended for normal work) |
+| `/session-resume` | Database-driven context at session start |
+| `/session-status` | Quick read-only status check |
+
+See also: [[Session Quick Reference]], [[Session Lifecycle - Overview]], [[Claude Hooks]]
+
 ---
 
-**Version**: 1.0
+**Version**: 2.0
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-07
 **Location**: Claude Family/session End.md

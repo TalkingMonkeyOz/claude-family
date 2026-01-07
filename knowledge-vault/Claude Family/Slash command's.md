@@ -19,10 +19,25 @@ Quick actions via `/command` syntax.
 **Status**: File-based (not yet database-driven like hooks/MCPs)
 
 **Current Design**:
+- Global commands → `~/.claude/commands/` (apply to ALL projects)
 - Shared commands → `claude-family/.claude/commands/`
 - Project commands → `{project}/.claude/commands/`
 
-**Why**: Unlike hooks and MCPs (database-driven with distribution), commands are still file-based. Shared commands are maintained in claude-family and referenced by all projects.
+**Priority**: Project > Global (project-level overrides global)
+
+---
+
+## Session Commands
+
+| Command | Purpose | Source |
+|---------|---------|--------|
+| `/session-start` | Auto via hook (manual if needed) | Automatic |
+| `/session-resume` | Database-driven context (todos, focus, last session) | Global |
+| `/session-end` | Save summary and learnings | Project |
+| `/session-commit` | Session end + git commit | Project |
+| `/session-status` | Quick read-only status check | Project |
+
+**Note**: Session start is automatic via SessionStart hook. `/session-resume` queries the database for todos, focus, and last session summary.
 
 ---
 
@@ -30,10 +45,6 @@ Quick actions via `/command` syntax.
 
 | Command | Purpose |
 |---------|---------|
-| `/session-start` | Begin session with logging |
-| `/session-resume` | Quick status view (no logging) |
-| `/session-end` | End session with summary |
-| `/session-commit` | End session + git commit |
 | `/feedback-check` | View open feedback |
 | `/feedback-create` | Create new feedback |
 | `/feedback-list` | List/filter feedback |
@@ -60,17 +71,26 @@ Quick actions via `/command` syntax.
 
 ---
 
-## Migration Note (2025-12-27)
+## Data Sources
 
-Removed duplicate commands from ATO-Tax-Agent:
-- Deleted: feedback-*.md, session-*.md (6 files)
-- Reason: Outdated duplicates of claude-family canonical versions
-- Impact: ATO now uses claude-family shared commands only
+Session commands query the `claude.*` schema:
+- `claude.sessions` - Session history and summaries
+- `claude.session_state` - Current focus, next_steps
+- `claude.todos` - Active todos with priorities
+- `claude.messages` - Pending messages
 
-**Future**: Convert to database-driven distribution (like hooks/MCPs)
 ---
 
-**Version**: 1.0
+## Change History
+
+| Date | Change |
+|------|--------|
+| 2026-01-07 | Updated session-resume to database-driven (global) |
+| 2025-12-27 | Removed duplicate commands from ATO-Tax-Agent |
+
+---
+
+**Version**: 2.0
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-07
 **Location**: Claude Family/Slash command's.md
