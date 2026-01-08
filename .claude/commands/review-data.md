@@ -54,3 +54,10 @@ This review runs automatically **daily** via scheduled_jobs.
 
 **Reviewer Type**: data-quality
 **Schedule**: Daily
+
+---
+
+**Version**: 1.0
+**Created**: 2025-12-15
+**Updated**: 2026-01-08
+**Location**: .claude/commands/review-data.md

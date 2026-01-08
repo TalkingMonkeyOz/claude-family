@@ -62,3 +62,10 @@ User: `/knowledge-capture`
 Claude: "What did you learn today that's worth remembering?"
 User: "Nimbus API returns 500 errors if you send UTC times in the wrong format"
 Claude: [Creates file in 00-Inbox with gotcha template, asks for more details]
+
+---
+
+**Version**: 1.0
+**Created**: 2025-12-15
+**Updated**: 2026-01-08
+**Location**: .claude/commands/knowledge-capture.md

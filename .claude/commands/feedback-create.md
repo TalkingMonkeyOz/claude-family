@@ -19,7 +19,7 @@ Map to project_id using the quick reference:
 
 If not found, query:
 ```sql
-SELECT project_id FROM claude_pm.projects
+SELECT project_id FROM claude.projects
 WHERE project_code ILIKE '%keyword%';
 ```
 
@@ -53,7 +53,7 @@ Prompt user to provide detailed description. Encourage them to include:
 
 ```sql
 -- Insert new feedback
-INSERT INTO claude_pm.project_feedback (
+INSERT INTO claude.feedback (
     project_id,
     feedback_type,
     description,
@@ -76,7 +76,7 @@ Ask user: "Would you like to add any additional notes or context?"
 
 If yes:
 ```sql
-INSERT INTO claude_pm.project_feedback_comments (
+INSERT INTO claude.feedback_comments (
     feedback_id,
     author,
     content
@@ -96,7 +96,7 @@ Inform user: "You can add screenshots by placing them in: `C:\Projects\{project}
 
 Then update:
 ```sql
-UPDATE claude_pm.project_feedback
+UPDATE claude.feedback
 SET screenshot_path = '["feedback/{feedback_id}-1.png"]'
 WHERE feedback_id = 'FEEDBACK-ID'::uuid;
 ```
@@ -117,7 +117,7 @@ Created: timestamp
 
 Next Steps:
 - View all feedback: /feedback-check
-- Add comments: INSERT INTO claude_pm.project_feedback_comments...
+- Add comments: INSERT INTO claude.feedback_comments...
 - Add screenshots: Save to C:\Projects\{project}\feedback\{feedback_id}-N.png
 
 Full guide: C:\claude\shared\docs\feedback-system-guide.md
@@ -151,3 +151,10 @@ When user says: "The export button doesn't work"
 4. Create feedback
 5. Offer to add comment with stack trace
 6. Confirm creation
+
+---
+
+**Version**: 2.0 (Schema migration to claude.*)
+**Created**: 2025-10-21
+**Updated**: 2026-01-08
+**Location**: .claude/commands/feedback-create.md

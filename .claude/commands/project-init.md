@@ -74,3 +74,10 @@ Then answer prompts for project type and description.
 ---
 
 **Action ID**: See `claude.actions` WHERE action_name = 'project-init'
+
+---
+
+**Version**: 1.0
+**Created**: 2025-12-06
+**Updated**: 2026-01-08
+**Location**: .claude/commands/project-init.md

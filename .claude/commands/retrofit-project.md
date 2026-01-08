@@ -82,3 +82,10 @@ In project directory, will detect project and add missing docs.
 ---
 
 **Action ID**: See `claude.actions` WHERE action_name = 'retrofit-project'
+
+---
+
+**Version**: 1.0
+**Created**: 2025-12-06
+**Updated**: 2026-01-08
+**Location**: .claude/commands/retrofit-project.md
