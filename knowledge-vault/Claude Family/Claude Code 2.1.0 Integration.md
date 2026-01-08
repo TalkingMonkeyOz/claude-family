@@ -11,7 +11,7 @@ synced: false
 
 # Claude Code 2.1.0 Integration
 
-**Status**: Completed | **Date**: 2026-01-08
+**Status**: Complete | **Date**: 2026-01-09
 
 ---
 
@@ -29,8 +29,9 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 |---------|--------|-------|
 | `once: true` | ✅ | SessionStart runs only once per session |
 | SubagentStart | ✅ | Logs agent spawns to `claude.agent_sessions` |
+| SubagentStop data | ✅ | agent_id, agent_transcript_path documented |
 | PreToolUse `ask` + `updatedInput` | ✅ | Middleware pattern in standards_validator.py |
-| PermissionRequest | ⏳ Pending | Auto-approve safe patterns |
+| PermissionRequest | 📋 Future | Auto-approve safe patterns (needs use case) |
 
 ### Skills
 
@@ -38,8 +39,9 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 |---------|--------|-------|
 | YAML frontmatter | ✅ | All 12 skills have `allowed-tools` |
 | `context: fork` | ✅ | code-review, agentic-orchestration |
-| `agent` field | ✅ | 5 skills linked to agent types |
-| Hooks in frontmatter | ✅ | database skill has PreToolUse hook |
+| `agent` field | ✅ | 7 skills linked to agent types |
+| Hooks in frontmatter | ✅ | database, work-item-routing skills |
+| `skill-inheritance` | ✅ | Cross-skill knowledge sharing |
 
 ### Commands
 
@@ -55,6 +57,14 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 | `.claude/rules/` | ✅ | 3 rule files created |
 | Wildcard permissions | ✅ | `mcp__postgres__*` pattern |
 | Spawn limit | ✅ | Increased to 10 agents |
+
+### Agents (v2.0.28+)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Async messaging | ✅ | Documented in agentic-orchestration skill |
+| Agent resume | ✅ | Task tool `resume` parameter documented |
+| Dynamic model choice | ✅ | Model override patterns documented |
 
 ---
 
@@ -106,7 +116,7 @@ Database-driven config auto-regenerates on SessionStart:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-01-08
-**Updated**: 2026-01-08
+**Updated**: 2026-01-09
 **Location**: knowledge-vault/Claude Family/Claude Code 2.1.0 Integration.md

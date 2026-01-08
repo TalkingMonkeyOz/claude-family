@@ -3,9 +3,13 @@ name: agentic-orchestration
 description: Spawn and coordinate Claude agents for parallel work
 model: opus
 context: fork
+agent: research-coordinator-sonnet
 allowed-tools:
   - Read
   - mcp__orchestrator__*
+skill-inheritance:
+  - messaging
+  - database-operations
 ---
 
 # Agentic Orchestration Skill
@@ -144,6 +148,37 @@ result = mcp__orchestrator__spawn_agent(
 )
 ```
 
+### Pattern 3: Async Agent with Messaging (v2.1.0)
+
+Spawn agent async and receive results via messaging:
+
+```python
+# Spawn async - returns immediately
+task_result = mcp__orchestrator__spawn_agent_async(
+    agent_type="analyst-sonnet",
+    task="Generate comprehensive API documentation",
+    workspace_dir="C:/Projects/myproject",
+    callback_project="claude-family"  # Receives completion message
+)
+
+# Agent works in background...
+# When complete, check inbox for results
+messages = mcp__orchestrator__check_inbox(project_name="claude-family")
+```
+
+### Pattern 4: Agent Resume (Claude Code v2.0.28+)
+
+Resume a previous agent conversation using Task tool:
+
+```python
+# In Claude Code, use Task tool with resume parameter
+Task(
+    subagent_type="general-purpose",
+    prompt="Continue with the refactoring",
+    resume="previous-agent-id"  # Continues with full context
+)
+```
+
 ---
 
 ## Agent Selection Guide
@@ -208,6 +243,23 @@ result = mcp__orchestrator__spawn_agent(
 
 ## Timeout Management
 
+### Dynamic Model Selection (v2.1.0)
+
+Agent specs define default models, but you can override for specific use cases:
+
+```json
+// In agent_specs.json
+{
+  "model": "claude-haiku-4-5",       // Default: fast, cheap
+  "model_overrides": {
+    "complex_task": "claude-sonnet-4-5-20250929",
+    "critical_path": "claude-opus-4-5-20251101"
+  }
+}
+```
+
+**Decision tree**: Haiku ($0.01) → Sonnet ($0.10) → Opus ($0.80)
+
 ### Default Timeouts
 
 Agents use timeouts from `agent_specs.json`. Override only if needed:
@@ -223,6 +275,21 @@ result = mcp__orchestrator__spawn_agent(
 ```
 
 **Warning**: Timeout overrides <50% or >200% of spec will log warnings
+
+---
+
+## SubagentStop Hook Data (v2.1.0)
+
+The SubagentStop hook provides these fields for tracking:
+
+| Field | Description |
+|-------|-------------|
+| `agent_id` | Unique agent session ID |
+| `agent_transcript_path` | Path to conversation transcript |
+| `subagent_type` | Agent type that was spawned |
+| `success` | Boolean completion status |
+
+Use for: Post-completion analysis, transcript archiving, success rate tracking.
 
 ---
 

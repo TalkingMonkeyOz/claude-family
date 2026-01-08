@@ -2,10 +2,12 @@
 name: testing-patterns
 description: Testing patterns and requirements for Claude Family projects
 model: haiku
+agent: tester-haiku
 allowed-tools:
   - Read
   - Bash
   - Grep
+  - mcp__orchestrator__spawn_agent
 ---
 
 # Testing Patterns Skill

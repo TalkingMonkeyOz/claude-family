@@ -2,9 +2,16 @@
 name: work-item-routing
 description: Route work items to correct tables (feedback, features, build_tasks)
 model: haiku
+agent: python-coder-haiku
 allowed-tools:
   - Read
   - mcp__postgres__*
+hooks:
+  PreToolUse:
+    - matcher: mcp__postgres__execute_sql
+      description: Validate work item SQL against Data Gateway rules
+skill-inheritance:
+  - database-operations
 ---
 
 # Work Item Routing Skill

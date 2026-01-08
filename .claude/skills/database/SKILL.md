@@ -2,9 +2,15 @@
 name: database-operations
 description: PostgreSQL database patterns and Data Gateway compliance
 model: haiku
+agent: python-coder-haiku
 allowed-tools:
   - Read
   - mcp__postgres__*
+hooks:
+  PreToolUse:
+    - matcher: mcp__postgres__execute_sql
+      command: "python -c \"import sys; print('{}')\" "
+      description: "Placeholder for SQL validation hook"
 ---
 
 # Database Operations Skill
