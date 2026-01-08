@@ -1,7 +1,15 @@
+---
+name: messaging
+description: Inter-Claude messaging (inbox, broadcast, team status)
+model: sonnet
+allowed-tools:
+  - mcp__orchestrator__*
+---
+
 # Messaging Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

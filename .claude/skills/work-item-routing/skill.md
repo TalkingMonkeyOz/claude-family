@@ -1,7 +1,16 @@
+---
+name: work-item-routing
+description: Route work items to correct tables (feedback, features, build_tasks)
+model: haiku
+allowed-tools:
+  - Read
+  - mcp__postgres__*
+---
+
 # Work Item Routing Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

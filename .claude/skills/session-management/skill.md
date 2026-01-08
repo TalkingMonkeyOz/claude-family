@@ -1,7 +1,17 @@
+---
+name: session-management
+description: Session start/end workflows for Claude Family
+model: haiku
+allowed-tools:
+  - Read
+  - mcp__postgres__*
+  - mcp__orchestrator__check_inbox
+---
+
 # Session Management Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

@@ -1,7 +1,12 @@
 ---
 name: wpf-ui
-description: 'Build modern Fluent Design WPF applications using the WPF UI library (lepoco/wpfui). Use when creating WPF desktop apps with Windows 11 styling, NavigationView shells, dark/light themes, Card layouts, and modern controls. Provides patterns for App.xaml setup, MVVM integration, dashboard layouts, and real-world UI improvements.'
-version: '2.0'
+description: Build modern Fluent Design WPF applications using WPF UI library
+model: haiku
+version: '2.1'
+allowed-tools:
+  - Read
+  - Write
+  - Edit
 sources:
   - 'Claude Desktop WPF UI Skill'
   - 'https://wpfui.lepo.co/documentation/'

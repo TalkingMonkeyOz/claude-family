@@ -1,7 +1,17 @@
+---
+name: agentic-orchestration
+description: Spawn and coordinate Claude agents for parallel work
+model: opus
+context: fork
+allowed-tools:
+  - Read
+  - mcp__orchestrator__*
+---
+
 # Agentic Orchestration Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

@@ -1,7 +1,16 @@
+---
+name: feature-workflow
+description: Feature development lifecycle from idea to deployment
+model: haiku
+allowed-tools:
+  - Read
+  - mcp__postgres__*
+---
+
 # Feature Workflow Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-19
+**Last Updated**: 2026-01-08
 
 ---
 

@@ -1,7 +1,16 @@
+---
+name: database-operations
+description: PostgreSQL database patterns and Data Gateway compliance
+model: haiku
+allowed-tools:
+  - Read
+  - mcp__postgres__*
+---
+
 # Database Operations Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-19
+**Last Updated**: 2026-01-08
 
 ---
 

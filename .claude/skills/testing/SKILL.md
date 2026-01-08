@@ -1,7 +1,17 @@
+---
+name: testing-patterns
+description: Testing patterns and requirements for Claude Family projects
+model: haiku
+allowed-tools:
+  - Read
+  - Bash
+  - Grep
+---
+
 # Testing Patterns Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-19
+**Last Updated**: 2026-01-08
 
 ---
 

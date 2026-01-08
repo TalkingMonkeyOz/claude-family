@@ -1,3 +1,13 @@
+---
+name: winforms
+description: WinForms development patterns and Designer file rules
+model: haiku
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+---
+
 # WinForms Development Skill
 
 **When to Use**: Working on Windows Forms applications

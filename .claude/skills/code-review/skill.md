@@ -1,7 +1,19 @@
+---
+name: code-review
+description: Code review patterns, testing, and pre-commit quality gates
+model: sonnet
+context: fork
+allowed-tools:
+  - Read
+  - Bash
+  - Grep
+  - mcp__orchestrator__spawn_agent
+---
+
 # Code Review Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

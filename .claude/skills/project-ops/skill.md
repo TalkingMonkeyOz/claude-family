@@ -1,7 +1,18 @@
+---
+name: project-ops
+description: Project lifecycle operations (init, retrofit, phase advancement, compliance)
+model: haiku
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - mcp__postgres__*
+---
+
 # Project Operations Skill
 
 **Status**: Active
-**Last Updated**: 2025-12-26
+**Last Updated**: 2026-01-08
 
 ---
 

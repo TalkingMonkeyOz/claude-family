@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Standards Validator - PreToolUse Block-and-Correct Hook
+Standards Validator - PreToolUse Hook with Middleware Capability
 
 Validates file operations (Write/Edit) against coding standards from database
-BEFORE execution. Blocks violations with helpful error messages.
+BEFORE execution. Can block violations OR suggest corrections.
 
 Architecture:
     Database (claude.coding_standards)
@@ -12,17 +12,27 @@ Architecture:
         ↓
     Validate proposed content
         ↓
-    Exit 0 (allow) OR Exit 2 (block with reason)
+    allow | deny | ask+updatedInput
 
-Block-and-Correct Pattern:
-    - Exit code 0: Operation allowed (passes validation)
-    - Exit code 2: Operation BLOCKED (Claude sees error, adjusts, retries)
-    - stderr: Helpful error message explaining violation
+Response Patterns:
+    - allow: Operation proceeds as-is
+    - deny: Operation BLOCKED with error message (Claude must retry)
+    - ask+updatedInput: Suggest corrected input, ask user approval (NEW v2.1.0!)
 
-Replaces: instruction_matcher.py (which tried additionalContext injection - didn't work)
+The ask+updatedInput pattern (v2.1.0) enables middleware-style hooks that:
+    1. Detect an issue in the proposed operation
+    2. Generate a suggested fix
+    3. Present to user for approval before execution
+
+Use cases for ask+updatedInput:
+    - Auto-trim files slightly over limit → suggest truncated version
+    - Add missing version footer → suggest with footer appended
+    - Fix invalid column values → suggest corrected SQL
+    - Normalize paths → suggest with corrected paths
 
 Author: Claude Family
-Date: 2026-01-02
+Created: 2026-01-02
+Updated: 2026-01-08 (added ask+updatedInput v2.1.0 support)
 """
 
 import sys
@@ -287,6 +297,37 @@ def block_with_reason(reason: str):
 
     print(json.dumps(response))
     sys.exit(0)  # Exit 0 required for JSON to be processed
+
+
+def ask_with_suggestion(reason: str, updated_input: Dict):
+    """
+    Ask user to approve a suggested correction.
+
+    NEW IN v2.1.0: PreToolUse hooks can now return 'ask' with 'updatedInput'
+    together - the suggested input is shown to user for approval.
+
+    This enables middleware-style hooks that:
+    1. Detect an issue
+    2. Suggest a fix
+    3. Ask user to approve the corrected operation
+
+    Args:
+        reason: Explanation of what was changed and why
+        updated_input: The corrected tool_input to propose
+    """
+    logger.info(f"Suggesting correction: {reason[:200]}")
+
+    response = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "ask",
+            "permissionDecisionReason": reason,
+            "updatedInput": updated_input
+        }
+    }
+
+    print(json.dumps(response))
+    sys.exit(0)
 
 
 def allow_operation():
