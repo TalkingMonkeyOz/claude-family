@@ -2,11 +2,13 @@
 name: wpf-ui
 description: Build modern Fluent Design WPF applications using WPF UI library
 model: haiku
+agent: coder-haiku
 version: '2.1'
 allowed-tools:
   - Read
   - Write
   - Edit
+  - Bash
 sources:
   - 'Claude Desktop WPF UI Skill'
   - 'https://wpfui.lepo.co/documentation/'

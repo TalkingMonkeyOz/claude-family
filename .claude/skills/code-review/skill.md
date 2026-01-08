@@ -3,6 +3,7 @@ name: code-review
 description: Code review patterns, testing, and pre-commit quality gates
 model: sonnet
 context: fork
+agent: reviewer-sonnet
 allowed-tools:
   - Read
   - Bash

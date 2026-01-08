@@ -40,7 +40,7 @@ class AgentOrchestrator:
     """Manages spawning and communication with Claude agents."""
 
     # Safeguard constants
-    MAX_CONCURRENT_SPAWNS = 6  # Maximum agents running simultaneously
+    MAX_CONCURRENT_SPAWNS = 10  # Maximum agents running simultaneously (increased from 6)
     MIN_SPAWN_DELAY_SECONDS = 2.0  # Minimum delay between spawns
     MAX_RETRIES = 2  # Max retry attempts for failed spawns
     RETRY_DELAY_SECONDS = 5.0  # Delay before retry

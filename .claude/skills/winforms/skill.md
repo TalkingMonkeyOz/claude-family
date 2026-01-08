@@ -2,10 +2,12 @@
 name: winforms
 description: WinForms development patterns and Designer file rules
 model: haiku
+agent: winforms-coder-haiku
 allowed-tools:
   - Read
   - Write
   - Edit
+  - Bash
 ---
 
 # WinForms Development Skill
