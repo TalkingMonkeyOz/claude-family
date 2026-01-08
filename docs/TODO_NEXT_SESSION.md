@@ -1,115 +1,84 @@
 # Next Session TODO
 
-**Last Updated**: 2026-01-07
-**Last Session**: Implemented session handoff improvements - RAG-style context injection
+**Last Updated**: 2026-01-08
+**Last Session**: Playwright batch testing - Run 4 completion and final deliverables
 
 ---
 
 ## Completed This Session
 
-- [x] Verified agent status UPSERT fix works
-- [x] Verified all coding standards exist in DB
-- [x] **Session Handoff Research** - Analyzed Anthropic's best practices, current implementation
-- [x] **Option B Implemented** - RAG hook now detects session keywords and injects context from DB
-- [x] **Option A Implemented** - /session-resume command updated to use database queries
-- [x] Added SESSION_KEYWORDS list to rag_query_hook.py
-- [x] Added get_session_context() function to query todos, session_state, last session
-- [x] Updated main() to combine session context with RAG results
+- [x] Ran create_final_master_v2.py to update results with Run 4 data
+- [x] Verified all 3 failures: 276099, 276669, 277019
+- [x] Created FINAL_DELIVERABLES folder with organized output
+- [x] Created DATA_ISSUES_TO_FIX.csv with 66 data issues (staff IDs + actions)
+- [x] Archived obsolete intermediate files to archive_intermediate/
+- [x] Created clear README.md for final deliverables
 
 ---
 
-## Priority 1: Test Session Handoff (NEEDS RESTART)
+## Playwright Batch Testing - COMPLETED
 
-- [ ] Restart Claude Code to reload rag_query_hook.py
-- [ ] Test: Ask "where was I working on?" - should inject session context
-- [ ] Test: Ask "what todos do I have?" - should inject session context
-- [ ] Test: Run /session-resume - should query database
+**Location**: `C:\Projects\DRY_RUN_playwright\FINAL_DELIVERABLES\`
+
+### Final Results (All 4 Runs)
+
+| Outcome | Count | % |
+|---------|-------|---|
+| PASSED | 945 | 93.3% |
+| ABORTED | 65 | 6.4% |
+| FAILED | 3 | 0.3% |
+
+### Key Files
+
+- `FINAL_DELIVERABLES/ALL_SCHEDULES_RESULTS.csv` - Master results (1,013 schedules)
+- `FINAL_DELIVERABLES/DATA_ISSUES_TO_FIX.csv` - 66 data issues with staff IDs
+- `FINAL_DELIVERABLES/README.md` - Complete documentation
+
+### 3 Failures (Technical)
+
+| Schedule | Run | Cause |
+|----------|-----|-------|
+| 276099 | Run 3 | Server timeout |
+| 276669 | Run 3 | Server timeout |
+| 277019 | Run 4 | TelerikModalOverlay blocking |
+
+### 65 Aborted (Data Issues)
+
+- 31 job_role issues (staff needs Sessional role)
+- 34 overlap_diff_schedule issues (schedule conflicts)
 
 ---
 
-## Priority 2: Clean Up Stale Data
+## Priority 1: Nimbus Data Fixes
 
-- [ ] Delete deprecated session_state.todo_list content (stale Dec 31)
-- [ ] Archive old todos (created_at > 30 days, status=pending)
+The 65 aborted schedules need data fixes in Nimbus:
 
----
-
-## Priority 4: Expand Native Instructions
-
-- [ ] Add rust.instructions.md to ~/.claude/instructions/
-- [ ] Add azure.instructions.md (Bicep, Functions, Logic Apps)
-- [ ] Add docker.instructions.md
+1. Use `DATA_ISSUES_TO_FIX.csv` to identify staff IDs
+2. Assign Sessional role where missing
+3. Resolve schedule overlaps
 
 ---
 
 ## Backlog
 
+- [ ] Add rust.instructions.md to ~/.claude/instructions/
+- [ ] Add azure.instructions.md (Bicep, Functions, Logic Apps)
 - [ ] Implement forbidden_patterns in standards_validator.py
-- [ ] Implement required_patterns checks
-- [ ] Review other projects for duplicate session commands
+- [ ] Delete deprecated session_state.todo_list content
+- [ ] Archive old todos (created_at > 30 days, status=pending)
 
 ---
 
 ## Key Learnings (This Session)
 
-1. **RAG injection pattern works** - UserPromptSubmit hook → additionalContext is the proven approach
-2. **Anthropic recommends "progressive context loading"** - Load on demand, not pre-load everything
-3. **Database is source of truth** - claude.todos, session_state, sessions
-4. **Session keywords trigger context** - "where was I", "what's next", "resume", etc.
+1. **Worker count matters** - 10 workers caused 137 server failures; 5 workers reduced to 2
+2. **handleExistingWorkingCopyDialog()** - Added to handle orphaned working copies
+3. **Data issues vs technical failures** - 65 aborted are data quality, not test issues
+4. **Organize final deliverables** - Separate folder with clear README avoids confusion
 
 ---
 
-## Files Modified This Session
-
-**Session Handoff Implementation:**
-- `scripts/rag_query_hook.py` - Added SESSION_KEYWORDS, detect_session_keywords(), get_session_context()
-- `.claude/commands/session-resume.md` - Changed to use database queries via MCP
-
-**Previous (UPSERT fix):**
-- `mcp-servers/orchestrator/db_logger.py` - Changed finalize_agent_status() to use UPSERT
-- `mcp-servers/orchestrator/orchestrator_prototype.py` - Pass agent_type to finalize_agent_status()
-
----
-
-## How Session Handoff Works Now
-
-```
-User asks session question (e.g., "where was I?")
-    ↓
-UserPromptSubmit hook (rag_query_hook.py)
-    ↓
-detect_session_keywords() matches keyword
-    ↓
-get_session_context() queries:
-  - claude.todos (active items)
-  - claude.session_state (focus, next_steps)
-  - claude.sessions (last session summary)
-  - claude.messages (pending count)
-    ↓
-Session context + RAG results → additionalContext
-    ↓
-Claude sees full context automatically
-```
-
-**Keywords that trigger**: "where was i", "what's next", "resume", "last session",
-"todos", "pending tasks", "continue from", "session context", etc.
-
----
-
-## If Tests Fail
-
-1. Check `~/.claude/hooks.log` for errors
-2. Verify hook is registered in `.claude/settings.local.json` under UserPromptSubmit
-3. Run `python -m py_compile scripts/rag_query_hook.py` to check syntax
-4. Query database directly to verify data exists:
-   ```sql
-   SELECT * FROM claude.todos WHERE project_id = '20b5627c-e72c-4501-8537-95b559731b59'
-   AND is_deleted = false LIMIT 5;
-   ```
-
----
-
-**Version**: 13.0
+**Version**: 15.0
 **Created**: 2026-01-02
-**Updated**: 2026-01-07
+**Updated**: 2026-01-08
 **Location**: docs/TODO_NEXT_SESSION.md

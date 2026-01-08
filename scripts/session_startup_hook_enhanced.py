@@ -65,6 +65,72 @@ IDENTITY_MAP = {
     'claude-desktop': '3be37dfb-c3bb-4303-9bf1-952c7287263f',
 }
 
+def check_system_health() -> dict:
+    """Check system health: DB, Voyage AI, required env vars."""
+    health = {
+        'database': {'status': 'unknown', 'message': ''},
+        'voyage_ai': {'status': 'unknown', 'message': ''},
+        'env_vars': {'status': 'unknown', 'message': ''},
+        'overall': 'unknown'
+    }
+    issues = []
+
+    # Check database
+    if not DB_AVAILABLE:
+        health['database'] = {'status': 'error', 'message': 'psycopg not installed'}
+        issues.append('DB: psycopg missing')
+    elif not POSTGRES_CONFIG and not os.environ.get('DATABASE_URI'):
+        health['database'] = {'status': 'error', 'message': 'No DB config found'}
+        issues.append('DB: No config')
+    else:
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+            conn.close()
+            health['database'] = {'status': 'ok', 'message': 'Connected'}
+        except Exception as e:
+            health['database'] = {'status': 'error', 'message': str(e)[:50]}
+            issues.append(f'DB: {str(e)[:30]}')
+
+    # Check Voyage AI (for RAG)
+    voyage_key = os.environ.get('VOYAGE_API_KEY', '')
+    if not voyage_key:
+        health['voyage_ai'] = {'status': 'warning', 'message': 'VOYAGE_API_KEY not set (RAG disabled)'}
+        issues.append('Voyage AI: No API key')
+    elif len(voyage_key) < 10:
+        health['voyage_ai'] = {'status': 'warning', 'message': 'VOYAGE_API_KEY looks invalid'}
+        issues.append('Voyage AI: Invalid key')
+    else:
+        health['voyage_ai'] = {'status': 'ok', 'message': 'API key configured'}
+
+    # Check required env vars
+    required_vars = ['POSTGRES_PASSWORD']
+    optional_vars = ['ANTHROPIC_API_KEY', 'VOYAGE_API_KEY']
+    missing_required = [v for v in required_vars if not os.environ.get(v)]
+    missing_optional = [v for v in optional_vars if not os.environ.get(v)]
+
+    if missing_required:
+        health['env_vars'] = {'status': 'error', 'message': f'Missing: {", ".join(missing_required)}'}
+        issues.append(f'Env: Missing {", ".join(missing_required)}')
+    elif missing_optional:
+        health['env_vars'] = {'status': 'warning', 'message': f'Optional missing: {", ".join(missing_optional)}'}
+    else:
+        health['env_vars'] = {'status': 'ok', 'message': 'All vars configured'}
+
+    # Overall status
+    statuses = [h['status'] for h in health.values() if isinstance(h, dict)]
+    if 'error' in statuses:
+        health['overall'] = 'degraded'
+    elif 'warning' in statuses:
+        health['overall'] = 'partial'
+    else:
+        health['overall'] = 'healthy'
+
+    health['issues'] = issues
+    return health
+
 def get_db_connection():
     """Get PostgreSQL connection using central config or environment variables."""
     # Try central config first
@@ -261,10 +327,18 @@ def main():
     identity_name = 'claude-code-unified'
     identity_id = IDENTITY_MAP.get(identity_name, IDENTITY_MAP['claude-code-unified'])
 
+    # === HEALTH CHECK ===
+    health = check_system_health()
+    health_icon = {'healthy': '[OK]', 'partial': '[!]', 'degraded': '[X]'}.get(health['overall'], '[?]')
+
     context_lines.append(f"=== Claude Family Session Started ===")
     context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     context_lines.append(f"Project: {project_name}")
     context_lines.append(f"Identity: {identity_name}")
+    context_lines.append(f"Health: {health_icon} {health['overall'].upper()}")
+
+    if health['issues']:
+        context_lines.append(f"Issues: {' | '.join(health['issues'])}")
 
     if DB_AVAILABLE:
         # Log session to database
