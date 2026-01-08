@@ -89,7 +89,7 @@ A **session** is a single continuous interaction between a user and a Claude ins
   ┌─────▼─────┐         ┌──────▼──────┐      ┌───────▼────────┐
   │ TodoWrite │         │  MCP tools  │      │  Agent spawns  │
   │ persists  │         │  tracked    │      │    tracked     │
-  │   state   │         │(mcp_usage)  │      │(agent_sessions)│
+  │   state   │         │(mcp_usage)  │      │(SubagentStart) │
   └─────┬─────┘         └──────┬──────┘      └───────┬────────┘
         │                      │                      │
         └──────────────────────┼──────────────────────┘
@@ -145,7 +145,7 @@ A **session** is a single continuous interaction between a user and a Claude ins
 
 ---
 
-**Version**: 2.0 (split 2025-12-26)
+**Version**: 2.1 (Added SubagentStart hook reference, updated hooks location)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-08
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Overview.md

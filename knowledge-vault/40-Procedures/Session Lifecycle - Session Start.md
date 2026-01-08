@@ -20,7 +20,7 @@ See [[Session Lifecycle - Overview]] for complete context.
 
 ## Hook Trigger (SessionStart Event)
 
-**File**: `C:\Projects\claude-family\.claude\hooks.json` (lines 74-84)
+**File**: `C:\Projects\claude-family\.claude\settings.local.json` (hooks section)
 
 ```json
 "SessionStart": [{
@@ -29,12 +29,17 @@ See [[Session Lifecycle - Overview]] for complete context.
     "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
     "timeout": 30,
     "description": "Auto-log session and load state/messages"
-  }]
+  }],
+  "once": true
 }]
 ```
 
 **When**: Fires automatically when Claude Code starts
 **Purpose**: Creates session record, loads context
+
+**v2.1.0 Feature**: `"once": true` ensures hook runs only once per session (not on every interaction)
+
+> **CRITICAL**: Hooks must be in `settings.local.json`, NOT `hooks.json`! See [[Claude Hooks]] for details.
 
 ---
 
@@ -264,7 +269,7 @@ User                 Launcher            Claude Code         Hook Script        
 
 ---
 
-**Version**: 2.1 (Messages auto-surfaced in session startup)
+**Version**: 2.2 (Updated hooks location to settings.local.json, added once:true)
 **Created**: 2025-12-26
-**Updated**: 2025-12-31
+**Updated**: 2026-01-08
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md
