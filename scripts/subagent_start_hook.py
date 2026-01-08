@@ -79,7 +79,7 @@ def log_agent_spawn(
     subagent_type: str,
     task_prompt: str,
     parent_session_id: Optional[str],
-    project_name: Optional[str]
+    workspace_dir: Optional[str]
 ):
     """Log agent spawn to database."""
     conn = get_db_connection()
@@ -89,12 +89,11 @@ def log_agent_spawn(
     try:
         cur = conn.cursor()
 
-        # Check if agent_sessions table has the columns we need
-        # Using flexible INSERT that works with existing schema
+        # Insert into agent_sessions with correct columns
         cur.execute("""
             INSERT INTO claude.agent_sessions
-            (session_id, agent_type, task_description, parent_session_id,
-             project_name, spawned_at, success)
+            (session_id, agent_type, task_description, workspace_dir,
+             parent_session_id, spawned_at, success)
             VALUES (%s, %s, %s, %s, %s, NOW(), NULL)
             ON CONFLICT (session_id) DO UPDATE SET
                 task_description = EXCLUDED.task_description,
@@ -102,9 +101,9 @@ def log_agent_spawn(
         """, (
             subagent_id,
             subagent_type,
-            task_prompt[:1000] if task_prompt else None,  # Truncate long prompts
-            parent_session_id if is_valid_uuid(parent_session_id) else None,
-            project_name
+            task_prompt[:1000] if task_prompt else 'No description',
+            workspace_dir or 'unknown',
+            parent_session_id if is_valid_uuid(parent_session_id) else None
         ))
         conn.commit()
         logging.info(f"Logged agent spawn: {subagent_type} ({subagent_id[:8]}...)")
@@ -135,14 +134,8 @@ def main():
     task_prompt = hook_input.get('task_prompt', '')
     parent_session_id = hook_input.get('session_id')  # Parent's session
 
-    # Get project name from environment or cwd
-    project_name = os.environ.get('CLAUDE_PROJECT_NAME')
-    if not project_name:
-        cwd = hook_input.get('cwd', '')
-        if 'Projects' in cwd:
-            parts = cwd.split('Projects')
-            if len(parts) > 1:
-                project_name = parts[1].strip('\\/ ').split('\\')[0].split('/')[0]
+    # Get workspace directory from hook input or cwd
+    workspace_dir = hook_input.get('workspace_dir') or hook_input.get('cwd', 'unknown')
 
     logging.info(f"Agent spawned: type={subagent_type}, id={subagent_id[:8] if subagent_id else 'N/A'}..., parent={parent_session_id[:8] if parent_session_id else 'N/A'}...")
 
@@ -153,7 +146,7 @@ def main():
             subagent_type=subagent_type,
             task_prompt=task_prompt,
             parent_session_id=parent_session_id,
-            project_name=project_name
+            workspace_dir=workspace_dir
         )
 
     # Return empty response (allow spawn to proceed)
