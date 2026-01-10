@@ -1,225 +1,124 @@
 # List and Filter Feedback
 
-Display feedback items with optional filters for status, type, and search keywords.
+Display feedback items with optional filters for status, type, and search.
 
 ---
 
-## Step 1: Detect Current Project
+## Step 1: Get Project Info
 
-Determine project_id from current working directory:
-
-**Quick Reference:**
-- `claude-pm` → `a3097e59-7799-4114-86a7-308702115905`
-- `nimbus-user-loader` → `07206097-4caf-423b-9eb8-541d4c25da6c`
-- `ATO-Tax-Agent` → `7858ecf4-4550-456d-9509-caea0339ec0d`
+Use the current working directory basename as project_name.
 
 ---
 
-## Step 2: Ask User for Filters (Optional)
+## Step 2: Ask for Filters (Optional)
 
-Use AskUserQuestion to ask what they want to see:
+Use AskUserQuestion for filter options:
 
-**Filter Options:**
-1. **Status**: All / New / In Progress / Fixed / Won't Fix
-2. **Type**: All / Bug / Design / Question / Change
-3. **Search**: Keywords to search in descriptions (optional)
-4. **Timeframe**: All time / Last 7 days / Last 30 days / This year
+**Status**: All / New / In Progress / Fixed / Won't Fix
+**Type**: All / Bug / Design / Question / Change / Idea
+**Search**: Keywords (optional)
+**Timeframe**: All / Last 7 days / Last 30 days
 
 ---
 
-## Step 3: Build and Execute Query
-
-Based on user's selections, build the appropriate SQL:
+## Step 3: Query Feedback
 
 **Default Query (All Open):**
 ```sql
 SELECT
-    feedback_id::text,
-    feedback_type,
-    status,
-    description,
-    created_at,
-    updated_at,
-    resolved_at,
+    f.feedback_id::text,
+    f.feedback_type,
+    f.status,
+    COALESCE(f.description, '') as description,
+    COALESCE(f.priority, 'medium') as priority,
+    f.created_at,
+    f.updated_at,
     (SELECT COUNT(*) FROM claude.feedback_comments c
      WHERE c.feedback_id = f.feedback_id) as comments
 FROM claude.feedback f
-WHERE project_id = 'PROJECT-ID'::uuid
-  AND status IN ('new', 'in_progress')
-ORDER BY created_at DESC;
+JOIN claude.workspaces w ON f.project_id = w.project_id
+WHERE w.project_name = '{project_name}'
+  AND f.status IN ('new', 'in_progress')
+ORDER BY f.created_at DESC;
 ```
 
 **With Type Filter:**
 ```sql
--- Add to WHERE clause:
-AND feedback_type = 'bug'  -- or 'design', 'question', 'change'
+AND f.feedback_type = 'bug'  -- bug, design, question, change, idea
 ```
 
 **With Status Filter:**
 ```sql
--- Add to WHERE clause:
-AND status = 'fixed'  -- or 'new', 'in_progress', 'wont_fix'
+AND f.status = 'fixed'  -- new, in_progress, fixed, wont_fix
 ```
 
 **With Search:**
 ```sql
--- Add to WHERE clause:
-AND description ILIKE '%search-keyword%'
+AND f.description ILIKE '%keyword%'
 ```
 
 **With Timeframe:**
 ```sql
--- Add to WHERE clause:
-AND created_at > NOW() - INTERVAL '7 days'  -- or '30 days', '1 year'
+AND f.created_at > NOW() - INTERVAL '7 days'
 ```
 
 ---
 
 ## Step 4: Display Results
 
-Format results in a readable table:
-
 ```
-📋 FEEDBACK LIST - [Project Name]
+FEEDBACK LIST - {project_name}
 
-Filters: [Status: New/In Progress] [Type: All] [Search: none] [Timeframe: All]
+Filters: Status: {status} | Type: {type} | Search: {search}
 
-Total Results: X items
+Total: X items
 
-┌──────────────────────────────────────┬──────────┬──────────┬─────────────┬──────────┬──────────┐
-│ ID (first 8 chars)                   │ Type     │ Status   │ Created     │ Comments │ Desc     │
-├──────────────────────────────────────┼──────────┼──────────┼─────────────┼──────────┼──────────┤
-│ a1b2c3d4                             │ 🐛 Bug   │ New      │ 2025-11-05  │ 2        │ Login... │
-│ b2c3d4e5                             │ 🎨 Design│ Progress │ 2025-11-04  │ 5        │ Export.. │
-└──────────────────────────────────────┴──────────┴──────────┴─────────────┴──────────┴──────────┘
+| ID       | Type   | Status  | Priority | Created    | Comments |
+|----------|--------|---------|----------|------------|----------|
+| a1b2c3d4 | Bug    | New     | high     | 2026-01-10 | 2        |
+| b2c3d4e5 | Design | Progress| medium   | 2026-01-09 | 5        |
 
 ---
-View details: SELECT * FROM claude.feedback WHERE feedback_id = 'full-uuid'::uuid
-View comments: SELECT * FROM claude.feedback_comments WHERE feedback_id = 'full-uuid'::uuid ORDER BY created_at
+View details: SELECT * FROM claude.feedback WHERE feedback_id = 'uuid'::uuid
+View comments: SELECT * FROM claude.feedback_comments WHERE feedback_id = 'uuid'::uuid
 ```
 
 ---
 
-## Step 5: Offer Actions
+## Statistics Query
 
-Present common next actions:
-
-```
-What would you like to do?
-
-1. View details of specific item (provide ID)
-2. Update status
-3. Add comment
-4. Create new feedback
-5. Export to CSV (if needed)
-
-Commands:
-- /feedback-check - Quick view of open items
-- /feedback-create - Create new item
-```
-
----
-
-## Advanced Queries
-
-**Get Statistics:**
 ```sql
--- Count by status and type
 SELECT
     feedback_type,
     status,
     COUNT(*) as count
-FROM claude.feedback
-WHERE project_id = 'PROJECT-ID'::uuid
+FROM claude.feedback f
+JOIN claude.workspaces w ON f.project_id = w.project_id
+WHERE w.project_name = '{project_name}'
 GROUP BY feedback_type, status
 ORDER BY feedback_type, status;
 ```
 
-**Get Most Discussed:**
-```sql
--- Items with most comments
-SELECT
-    f.feedback_id::text,
-    f.feedback_type,
-    f.description,
-    COUNT(c.comment_id) as comment_count
-FROM claude.feedback f
-LEFT JOIN claude.feedback_comments c ON f.feedback_id = c.feedback_id
-WHERE f.project_id = 'PROJECT-ID'::uuid
-GROUP BY f.feedback_id, f.feedback_type, f.description
-HAVING COUNT(c.comment_id) > 0
-ORDER BY comment_count DESC
-LIMIT 10;
-```
+---
 
-**Get Aging Report:**
+## Aging Report
+
 ```sql
--- How long items have been open
 SELECT
     feedback_id::text,
     feedback_type,
     status,
-    description,
-    created_at,
     EXTRACT(DAY FROM (NOW() - created_at)) as days_open
-FROM claude.feedback
-WHERE project_id = 'PROJECT-ID'::uuid
-  AND status IN ('new', 'in_progress')
+FROM claude.feedback f
+JOIN claude.workspaces w ON f.project_id = w.project_id
+WHERE w.project_name = '{project_name}'
+  AND f.status IN ('new', 'in_progress')
 ORDER BY days_open DESC;
 ```
 
 ---
 
-## Export Options
-
-**CSV Export (if requested):**
-```sql
--- Copy to CSV
-COPY (
-    SELECT
-        feedback_id,
-        feedback_type,
-        status,
-        description,
-        created_at,
-        updated_at,
-        resolved_at
-    FROM claude.feedback
-    WHERE project_id = 'PROJECT-ID'::uuid
-    ORDER BY created_at DESC
-) TO 'C:\Projects\{project}\feedback_export.csv' WITH CSV HEADER;
-```
-
----
-
-## Error Handling
-
-**If no results:**
-```
-✅ No feedback items match your filters.
-
-Try:
-- Broaden status filter (include 'fixed' items)
-- Remove search keywords
-- Expand timeframe
-```
-
-**If project not found:**
-- Guide to project registration
-- Link to feedback-system-guide.md
-
----
-
-**Quick Usage Examples:**
-
-1. "Show all bugs" → Type filter: bug, Status: all
-2. "What's fixed this week?" → Status: fixed, Timeframe: 7 days
-3. "Search for login issues" → Search: "login"
-4. "Show everything" → All filters: All
-
----
-
-**Version**: 2.0 (Schema migration to claude.*)
+**Version**: 2.0
 **Created**: 2025-10-21
-**Updated**: 2026-01-08
+**Updated**: 2026-01-10
 **Location**: .claude/commands/feedback-list.md

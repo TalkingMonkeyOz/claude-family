@@ -1,110 +1,76 @@
-**MANDATORY END-OF-SESSION CHECKLIST**
+**COMPLETE SESSION WORKFLOW: Logging + Git**
 
-Before ending this session, complete ALL of the following:
+Execute these steps to properly close the session. Session was auto-logged at start via hook.
 
 ---
 
-## 🚨 MCP USAGE CHECKLIST 🚨
-
-### ✅ Session Logging (postgres MCP)
+## Step 1: Update Session Summary (MCP)
 
 ```sql
--- NOTE: SessionEnd hook can automate this, but for manual logging:
-
--- 1. Get your latest session ID
-SELECT session_id FROM claude.sessions
-WHERE project_name = 'your-project'
-ORDER BY session_start DESC LIMIT 1;
-
--- 2. Update session with summary
+-- Update the current session with summary
 UPDATE claude.sessions
 SET
     session_end = NOW(),
-    session_summary = 'What was accomplished',
-    tasks_completed = ARRAY['task1', 'task2']
-WHERE session_id = '<session_id>';
+    session_summary = 'Brief description of what was accomplished',
+    tasks_completed = ARRAY['Task 1', 'Task 2', 'Task 3']
+WHERE project_name = '{project_name}'
+  AND session_end IS NULL
+ORDER BY session_start DESC
+LIMIT 1;
 ```
 
-### ✅ Store Reusable Knowledge (postgres MCP)
+---
 
-**If you discovered a reusable pattern:**
+## Step 2: Capture Knowledge (if applicable)
+
+**Only if you discovered something reusable:**
 
 ```sql
 INSERT INTO claude.knowledge
-(knowledge_id, title, content, category, tags, created_at)
+(title, content, category, project_id, created_by)
 VALUES (
-    gen_random_uuid(),
-    'Pattern Name',
-    'Clear description and example code',
-    'pattern',
-    ARRAY['tag1', 'tag2'],
-    NOW()
+    'Pattern/Gotcha Title',
+    'Description of the pattern, solution, or gotcha',
+    'pattern',  -- or: 'gotcha', 'procedure', 'reference'
+    (SELECT project_id FROM claude.workspaces WHERE project_name = '{project_name}'),
+    'claude'
 );
 ```
 
-**If project-specific:**
+---
+
+## Step 3: Update Session State
 
 ```sql
-INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
-VALUES ('bug-fix', 'Solution details', 'When this applies');
-```
-
-### ✅ Store in Memory Graph (memory MCP)
-
-```
-mcp__memory__create_entities(entities=[{
-    "name": "Session Summary",
-    "entityType": "Session",
-    "observations": [
-        "Completed: X",
-        "Key decision: Y",
-        "Files modified: Z",
-        "Pattern discovered: P"
-    ]
-}])
-```
-
-**If you solved a problem:**
-
-```
-mcp__memory__create_relations(relations=[{
-    "from": "Problem Name",
-    "relationType": "solved-by",
-    "to": "Solution Pattern"
-}])
+UPDATE claude.session_state
+SET
+    current_focus = 'What we were working on',
+    next_steps = ARRAY['Next step 1', 'Next step 2']
+WHERE project_name = '{project_name}';
 ```
 
 ---
 
-## Verification Questions
+## Step 4: Check Git Status
 
-Ask yourself:
-
-- [ ] Did I log session start to postgres?
-- [ ] Did I query for existing knowledge before proposing solutions?
-- [ ] Did I use tree-sitter for code analysis (if applicable)?
-- [ ] Did I store learnings in memory graph?
-- [ ] Did I update session log with summary?
-- [ ] Did I store reusable patterns in postgres?
-
-**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
+Run `git status` and commit if there are meaningful changes.
 
 ---
 
-## Cost of Skipping MCPs
+## Quick Checklist
 
-- Next Claude spends 30 minutes rediscovering your solution
-- Same bug gets solved 3 times by different Claudes
-- Institutional knowledge stays at zero
-- User gets frustrated repeating themselves
-
----
-
-**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.
+- [ ] Session summary updated
+- [ ] Knowledge captured (if any)
+- [ ] Session state updated for next time
+- [ ] Changes committed (if applicable)
 
 ---
 
-**Version**: 2.1
+**Note**: Session logging is automatic via SessionStart hook. This command focuses on closing out cleanly.
+
+---
+
+**Version**: 3.0
 **Created**: 2025-10-21
-**Updated**: 2026-01-08
+**Updated**: 2026-01-10
 **Location**: .claude/commands/session-end.md

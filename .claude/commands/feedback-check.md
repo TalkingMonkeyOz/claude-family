@@ -1,138 +1,95 @@
 # Check Open Feedback
 
-Display open feedback items (bugs, design issues, questions, changes) for the current project.
-
-Execute the following steps to display open feedback items:
+Display open feedback items (bugs, design issues, questions, changes, ideas) for the current project.
 
 ---
 
-## Step 1: Detect Current Project
+## Step 1: Get Project Info
 
-Determine which project you're in by checking the current working directory:
-
-```bash
-pwd
-```
-
-Map the directory to a project code using `workspaces.json` or the directory name pattern.
+Use the current working directory basename as project_name.
 
 ---
 
-## Step 2: Get Project ID from Database
+## Step 2: Query Open Feedback
 
 ```sql
--- Find project_id for the current project
-SELECT project_id, project_code, project_name
-FROM claude.projects
-WHERE project_code ILIKE '%current-project-keyword%'
-   OR project_name ILIKE '%current-project-keyword%'
-LIMIT 1;
-```
-
-**Project Mapping (Quick Reference):**
-- `claude-pm` → `a3097e59-7799-4114-86a7-308702115905`
-- `nimbus-user-loader` → `07206097-4caf-423b-9eb8-541d4c25da6c`
-- `ATO-Tax-Agent` → `7858ecf4-4550-456d-9509-caea0339ec0d`
-
----
-
-## Step 3: Query Open Feedback
-
-```sql
--- Get all open feedback for this project
 SELECT
-    feedback_id::text,
-    feedback_type,
-    status,
-    description,
-    created_at,
+    f.feedback_id::text,
+    f.feedback_type,
+    f.status,
+    COALESCE(f.description, '') as description,
+    f.created_at,
+    COALESCE(f.priority, 'medium') as priority,
     (SELECT COUNT(*) FROM claude.feedback_comments c
      WHERE c.feedback_id = f.feedback_id) as comments
 FROM claude.feedback f
-WHERE project_id = 'PROJECT-ID-FROM-STEP-2'::uuid
-  AND status IN ('new', 'in_progress')
+JOIN claude.workspaces w ON f.project_id = w.project_id
+WHERE w.project_name = '{project_name}'
+  AND f.status IN ('new', 'in_progress')
 ORDER BY
-    CASE feedback_type
+    CASE f.feedback_type
         WHEN 'bug' THEN 1
         WHEN 'design' THEN 2
         WHEN 'change' THEN 3
         WHEN 'question' THEN 4
+        WHEN 'idea' THEN 5
     END,
-    created_at ASC;
+    f.created_at ASC;
 ```
 
 ---
 
-## Step 4: Display Summary
+## Step 3: Display Summary
 
-Format the results in a user-friendly summary:
+Format results:
 
 ```
-📋 OPEN FEEDBACK - [Project Name]
+OPEN FEEDBACK - {project_name}
 
-🐛 Bugs (X)
-  - [feedback_id] Description... (Created: date, Comments: N)
+Bugs (X)
+  - [{id}] Description... (Priority: high, Comments: N)
 
-🎨 Design (X)
-  - [feedback_id] Description... (Created: date, Comments: N)
+Design (X)
+  - [{id}] Description... (Priority: medium, Comments: N)
 
-🔄 Changes (X)
-  - [feedback_id] Description... (Created: date, Comments: N)
+Changes (X)
+  - [{id}] Description... (Priority: low, Comments: N)
 
-❓ Questions (X)
-  - [feedback_id] Description... (Created: date, Comments: N)
+Questions (X)
+  - [{id}] Description... (Priority: medium, Comments: N)
+
+Ideas (X)
+  - [{id}] Description... (Priority: low, Comments: N)
 
 Total Open: X items
-
----
-To view details: SELECT * FROM claude.feedback WHERE feedback_id = 'id'::uuid
-To add comment: INSERT INTO claude.feedback_comments (feedback_id, author, content) VALUES ('id'::uuid, 'claude', 'your comment')
-To mark fixed: UPDATE claude.feedback SET status = 'fixed', notes = 'summary' WHERE feedback_id = 'id'::uuid
 ```
 
 ---
 
-## Step 5: Optional - Show Recent Activity
-
-If requested, also show recently fixed items:
+## Quick Actions
 
 ```sql
--- Get recently resolved feedback (last 7 days)
-SELECT
-    feedback_id::text,
-    feedback_type,
-    description,
-    resolved_at
-FROM claude.feedback
-WHERE project_id = 'PROJECT-ID'::uuid
-  AND status IN ('fixed', 'wont_fix')
-  AND resolved_at > NOW() - INTERVAL '7 days'
-ORDER BY resolved_at DESC
-LIMIT 5;
+-- View details
+SELECT * FROM claude.feedback WHERE feedback_id = 'uuid'::uuid;
+
+-- Add comment
+INSERT INTO claude.feedback_comments (feedback_id, author, content)
+VALUES ('uuid'::uuid, 'claude', 'comment');
+
+-- Update status
+UPDATE claude.feedback SET status = 'fixed', updated_at = NOW()
+WHERE feedback_id = 'uuid'::uuid;
 ```
 
 ---
 
-## Error Handling
+## No Feedback?
 
-**If project not found in database:**
-- Check `workspaces.json` for correct project mapping
-- Suggest registering project (see `C:\claude\shared\docs\feedback-system-guide.md`)
-
-**If no open feedback:**
-- Display: "✅ No open feedback items. Great work!"
-
-**If database connection fails:**
-- Remind user to check postgres MCP configuration
-- Check connection: `SELECT 1;`
-
----
-
-**Note:** This command is read-only. Use `/feedback-create` to add new items.
+If no open feedback: "No open feedback items for this project."
 
 ---
 
 **Version**: 2.0
 **Created**: 2025-10-21
-**Updated**: 2026-01-08
+**Updated**: 2026-01-10
 **Location**: .claude/commands/feedback-check.md
