@@ -1,7 +1,7 @@
 {
-  "_comment": "MCP config for tester-haiku agent",
+  "_comment": "MCP config for designer-sonnet agent",
   "_created": "2026-01-09",
-  "_purpose": "Test writing with vault-rag for testing patterns lookup",
+  "_purpose": "UI/UX designer agent with vault-rag for design patterns and web search for inspiration",
   "mcpServers": {
     "vault-rag": {
       "type": "stdio",
@@ -10,16 +10,6 @@
       "env": {
         "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
-      ],
-      "env": {}
     },
     "orchestrator": {
       "type": "stdio",

@@ -48,6 +48,7 @@ response = {
 | PermissionRequest | v2.0.45 | Auto-approve safe patterns |
 | Hooks in frontmatter | v2.1.0 | Define hooks in skill/agent files |
 | `once: true` config | v2.1.0 | Run hook only once per session |
+| **`agent_type` in SessionStart** | v2.1.2 | Hook input includes agent type if `--agent` specified |
 
 ### Hooks in Skill Frontmatter
 ```yaml
@@ -84,6 +85,10 @@ generate_project_settings.py
 
 ## Recent Changes
 
+**2026-01-09**:
+- Added `agent_type` in SessionStart hook input (v2.1.2)
+- Large bash/tool outputs now saved to disk instead of truncated (v2.1.2)
+
 **2026-01-08**:
 - Updated standards_validator.py with `ask_with_suggestion()` pattern
 - Documented new v2.1.0 hook features (SubagentStart, PermissionRequest, frontmatter hooks)
@@ -96,7 +101,7 @@ generate_project_settings.py
 
 ---
 
-**Version**: 1.4
+**Version**: 1.5
 **Created**: 2025-12-26
-**Updated**: 2026-01-08
+**Updated**: 2026-01-09
 **Location**: Claude Family/Claude Hooks.md

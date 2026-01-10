@@ -1,19 +1,20 @@
 {
   "description": "Claude Agent Orchestrator - Specialized agent type definitions (STREAMLINED)",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "created": "2025-11-04",
-  "updated": "2026-01-05",
-  "note": "Boss-Worker Architecture: Added mui-coder-sonnet (Sonnet for design quality) and git-haiku (pure git operations). See plan: delightful-swinging-trinket.md",
+  "updated": "2026-01-09",
+  "note": "Agent ecosystem upgrade: Added vault-rag to all agents, tree-sitter to reviewers/coders, designer-sonnet for UI/UX, enabled spawn capability on architect-opus/planner-sonnet",
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",
-      "description": "Fast code writing for new features and simple refactoring",
+      "description": "Fast code writing with access to learnings and patterns via vault-rag",
       "use_cases": [
         "Implement new functions/classes",
         "Simple refactoring",
         "Bug fixes (non-complex)",
         "Add logging/comments",
-        "Format code"
+        "Format code",
+        "Search past patterns and learnings"
       ],
       "allowed_tools": [
         "Read",
@@ -24,7 +25,9 @@
         "Bash(git add:*)",
         "Bash(git commit:*)",
         "Bash(git status:*)",
-        "Bash(git diff:*)"
+        "Bash(git diff:*)",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -48,13 +51,14 @@
     },
     "python-coder-haiku": {
       "model": "claude-haiku-4-5",
-      "description": "Python code writing with REPL testing and database access",
+      "description": "Python code writing with REPL testing, database access, and vault-rag learnings",
       "use_cases": [
         "Write Python scripts and modules",
         "Build/modify MCP servers",
         "Test code in Python REPL",
         "Database schema work",
-        "Python refactoring and bug fixes"
+        "Python refactoring and bug fixes",
+        "Search past Python patterns and learnings"
       ],
       "allowed_tools": [
         "Read",
@@ -71,7 +75,9 @@
         "mcp__filesystem",
         "mcp__postgres",
         "mcp__python-repl",
-        "mcp__orchestrator"
+        "mcp__orchestrator",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -137,19 +143,23 @@
     },
     "reviewer-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
-      "description": "Code review and architectural analysis with LLM-as-Judge verification",
+      "description": "Code review and architectural analysis with vault-rag for pattern lookup",
       "use_cases": [
         "Code review for PRs",
         "Architecture analysis",
         "Best practices validation",
         "Performance review",
         "Maintainability assessment",
-        "LLM-as-Judge quality verification"
+        "LLM-as-Judge quality verification",
+        "Search past review patterns and common issues"
       ],
       "allowed_tools": [
         "Read",
         "Grep",
-        "Glob"
+        "Glob",
+        "mcp__tree-sitter",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Write",
@@ -208,13 +218,14 @@
     },
     "analyst-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
-      "description": "Research, documentation, and architectural analysis",
+      "description": "Research, documentation, and architectural analysis with vault-rag access",
       "use_cases": [
         "Codebase research",
         "Documentation writing",
         "Architecture design",
         "Technical specifications",
-        "Migration planning"
+        "Migration planning",
+        "Search past analysis and domain knowledge"
       ],
       "allowed_tools": [
         "Read",
@@ -223,7 +234,9 @@
         "Write",
         "Edit",
         "WebSearch",
-        "WebFetch"
+        "WebFetch",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -244,14 +257,15 @@
     },
     "architect-opus": {
       "model": "claude-opus-4-5-20251101",
-      "description": "Complex architectural decisions, system design, and strategic planning using Opus 4.5",
+      "description": "Complex architectural decisions with ability to spawn specialist agents",
       "use_cases": [
         "System architecture design",
         "Complex refactoring planning",
         "Multi-service integration design",
         "Performance optimization strategy",
         "Migration planning",
-        "Technical decision making"
+        "Technical decision making",
+        "Coordinate specialist agents for implementation"
       ],
       "allowed_tools": [
         "Read",
@@ -260,7 +274,14 @@
         "Write",
         "Edit",
         "WebSearch",
-        "WebFetch"
+        "WebFetch",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__spawn_agent_async",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message",
+        "mcp__orchestrator__check_async_task"
       ],
       "disallowed_tools": [
         "Bash(rm*)",
@@ -274,7 +295,17 @@
       "betas": [
         "interleaved-thinking-2025-05-14"
       ],
-      "system_prompt": "You are a senior software architect using Claude Opus 4.5. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "coder-haiku",
+        "python-coder-haiku",
+        "mui-coder-sonnet",
+        "tester-haiku",
+        "reviewer-sonnet",
+        "analyst-sonnet",
+        "designer-sonnet"
+      ],
+      "system_prompt": "You are a senior software architect using Claude Opus 4.5. Design robust, scalable systems. Consider trade-offs carefully. Provide detailed architectural decisions with clear rationale. Focus on long-term maintainability and performance.\n\nYou can spawn specialist agents for implementation:\n- coder-haiku/python-coder-haiku for code writing\n- mui-coder-sonnet for MUI/React UI work\n- designer-sonnet for UI/UX design decisions\n- tester-haiku for test writing\n- reviewer-sonnet for code review\n\nUse vault-rag to search past patterns and architectural decisions.",
       "cost_profile": {
         "input_tokens_avg": 40000,
         "output_tokens_avg": 25000,
@@ -284,21 +315,29 @@
     },
     "planner-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
-      "description": "Task planning and breakdown for complex multi-step work",
+      "description": "Task planning with ability to spawn agents and search past patterns",
       "use_cases": [
         "Sprint planning",
         "Feature breakdown",
         "Task estimation",
         "Dependency mapping",
         "Implementation roadmaps",
-        "Work package creation"
+        "Work package creation",
+        "Coordinate implementation via spawned agents"
       ],
       "allowed_tools": [
         "Read",
         "Grep",
         "Glob",
         "Write",
-        "Edit"
+        "Edit",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document",
+        "mcp__orchestrator__spawn_agent",
+        "mcp__orchestrator__spawn_agent_async",
+        "mcp__orchestrator__check_inbox",
+        "mcp__orchestrator__send_message",
+        "mcp__orchestrator__check_async_task"
       ],
       "disallowed_tools": [
         "Bash(rm*)",
@@ -309,7 +348,15 @@
       "workspace_jail_template": "{project_root}/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a technical project planner. Break down complex tasks into actionable steps. Identify dependencies and risks. Create clear implementation plans with acceptance criteria. Output structured plans in markdown.",
+      "can_spawn_agents": true,
+      "spawnable_agent_types": [
+        "coder-haiku",
+        "python-coder-haiku",
+        "mui-coder-sonnet",
+        "tester-haiku",
+        "analyst-sonnet"
+      ],
+      "system_prompt": "You are a technical project planner. Break down complex tasks into actionable steps. Identify dependencies and risks. Create clear implementation plans with acceptance criteria. Output structured plans in markdown.\n\nYou can spawn agents to execute your plans:\n- coder-haiku for general coding\n- python-coder-haiku for Python work\n- mui-coder-sonnet for React/MUI UI\n- tester-haiku for test writing\n- analyst-sonnet for research/docs\n\nUse vault-rag to search past planning patterns and project learnings.",
       "cost_profile": {
         "input_tokens_avg": 20000,
         "output_tokens_avg": 10000,
@@ -319,21 +366,24 @@
     },
     "researcher-opus": {
       "model": "claude-opus-4-5-20251101",
-      "description": "Deep research and analysis tasks requiring extensive reasoning",
+      "description": "Deep research with vault-rag for past learnings and web search",
       "use_cases": [
         "Complex codebase analysis",
         "Technology evaluation",
         "Best practices research",
         "Framework comparison",
         "Performance analysis",
-        "Root cause analysis"
+        "Root cause analysis",
+        "Search past research and domain knowledge"
       ],
       "allowed_tools": [
         "Read",
         "Grep",
         "Glob",
         "WebSearch",
-        "WebFetch"
+        "WebFetch",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Write",
@@ -407,21 +457,25 @@
     },
     "tester-haiku": {
       "model": "claude-haiku-4-5",
-      "description": "Write unit and integration tests",
+      "description": "Write tests with access to testing patterns and learnings via vault-rag",
       "use_cases": [
         "Write unit tests",
         "Write integration tests",
         "Add test fixtures",
         "Mock/stub creation",
-        "Test data generation"
+        "Test data generation",
+        "Search past testing patterns and learnings"
       ],
       "allowed_tools": [
         "Read",
         "Write",
         "Edit",
         "Grep",
+        "Glob",
         "Bash(pytest:*)",
-        "Bash(npm test:*)"
+        "Bash(npm test:*)",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
       ],
       "disallowed_tools": [
         "Bash(curl*)",
@@ -482,14 +536,15 @@
     },
     "doc-keeper-haiku": {
       "model": "claude-haiku-4-5",
-      "description": "Documentation maintenance agent - verifies and updates vault/registry entries",
+      "description": "Documentation maintenance with vault-rag for verification",
       "use_cases": [
         "Verify MCP Registry against actual configs",
         "Check vault entries are up-to-date",
         "Validate agent_specs.json matches reality",
         "Flag stale documentation",
         "Update token estimates",
-        "Cross-check skill paths exist"
+        "Cross-check skill paths exist",
+        "Search vault for inconsistencies"
       ],
       "allowed_tools": [
         "Read",
@@ -498,7 +553,11 @@
         "Glob",
         "Grep",
         "mcp__filesystem",
-        "mcp__postgres"
+        "mcp__postgres",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document",
+        "mcp__vault-rag__list_vault_documents",
+        "mcp__vault-rag__vault_stats"
       ],
       "disallowed_tools": [
         "Bash(rm*)",
@@ -605,14 +664,16 @@
     },
     "mui-coder-sonnet": {
       "model": "claude-sonnet-4-5-20250929",
-      "description": "MUI X component specialist with DataGrid, DatePicker, TreeView expertise - Sonnet for design quality",
+      "description": "MUI X specialist with tree-sitter analysis and vault-rag learnings access",
       "use_cases": [
         "MUI DataGrid configuration and customization",
         "MUI DatePicker and date handling",
         "MUI X Pro/Premium components",
         "React + MUI responsive layouts",
         "MUI theming and sx prop styling",
-        "Complex layout decisions requiring design reasoning"
+        "Complex layout decisions requiring design reasoning",
+        "Analyze component structure with tree-sitter",
+        "Search past MUI patterns and learnings"
       ],
       "not_for": [
         "Simple non-MUI React components (use coder-haiku)",
@@ -631,6 +692,9 @@
         "Bash(git status:*)",
         "Bash(git diff:*)",
         "mcp__filesystem",
+        "mcp__tree-sitter",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document",
         "WebFetch"
       ],
       "disallowed_tools": [
@@ -652,6 +716,53 @@
         "cost_per_task_usd": 0.12
       },
       "recommended_timeout_seconds": 900
+    },
+    "designer-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "UI/UX designer for layout decisions, wireframes, and visual hierarchy",
+      "use_cases": [
+        "UI layout architecture decisions",
+        "Wireframe and mockup descriptions",
+        "Visual hierarchy analysis",
+        "Accessibility recommendations",
+        "Design system consistency checks",
+        "Component composition planning",
+        "Responsive design strategy",
+        "User flow optimization"
+      ],
+      "not_for": [
+        "Writing actual code (use mui-coder-sonnet or coder-haiku)",
+        "Backend architecture (use architect-opus)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Glob",
+        "Grep",
+        "WebSearch",
+        "WebFetch",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
+      ],
+      "disallowed_tools": [
+        "Edit",
+        "Bash(rm*)",
+        "Bash(del*)"
+      ],
+      "mcp_config": "configs/designer-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
+      "system_prompt": "You are a UI/UX designer. Focus on user experience, visual hierarchy, and accessibility.\n\nEXPERTISE:\n- Layout architecture (grid systems, responsive breakpoints)\n- Visual hierarchy (typography, spacing, color)\n- Accessibility (WCAG 2.1 AA, keyboard navigation, screen readers)\n- Component composition (atomic design, design systems)\n- User flows and interaction patterns\n\nOUTPUT FORMAT:\n1. LAYOUT SPEC: Describe container structure, grid, spacing\n2. COMPONENT HIERARCHY: List components from outer to inner\n3. RESPONSIVE STRATEGY: Mobile-first breakpoints\n4. ACCESSIBILITY NOTES: ARIA, focus order, color contrast\n5. IMPLEMENTATION NOTES: Framework-agnostic guidance\n\nWhen analyzing existing UI:\n- Read relevant component files\n- Identify inconsistencies with design system\n- Suggest improvements with rationale\n\nYou do NOT write code. You provide design specifications for coders to implement.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.12
+      },
+      "recommended_timeout_seconds": 600
     },
     "git-haiku": {
       "model": "claude-haiku-4-5",

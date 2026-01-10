@@ -1,5 +1,16 @@
 {
+  "_comment": "MCP config for python-coder-haiku agent",
+  "_created": "2026-01-09",
+  "_purpose": "Python development with vault-rag, REPL testing, and database access",
   "mcpServers": {
+    "vault-rag": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
     "filesystem": {
       "type": "stdio",
       "command": "npx",
@@ -13,9 +24,7 @@
     "postgres": {
       "type": "stdio",
       "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
-      "args": [
-        "--access-mode=unrestricted"
-      ],
+      "args": ["--access-mode=unrestricted"],
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }

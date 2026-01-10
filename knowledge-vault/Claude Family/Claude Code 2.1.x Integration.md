@@ -4,20 +4,20 @@ projects:
 tags:
 - claude-code
 - integration
-- v2.1.0
+- v2.1.x
 - quick-reference
 synced: false
 ---
 
-# Claude Code 2.1.0 Integration
+# Claude Code 2.1.x Integration
 
-**Status**: Complete | **Date**: 2026-01-09
+**Status**: Complete | **Date**: 2026-01-09 (Updated for 2.1.2)
 
 ---
 
 ## Summary
 
-Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
+Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
 
 ---
 
@@ -32,6 +32,7 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 | SubagentStop data | ✅ | agent_id, agent_transcript_path documented |
 | PreToolUse `ask` + `updatedInput` | ✅ | Middleware pattern in standards_validator.py |
 | PermissionRequest | 📋 Future | Auto-approve safe patterns (needs use case) |
+| **`agent_type` in SessionStart** | ✅ 2.1.2 | Hook input includes agent type if `--agent` specified |
 
 ### Skills
 
@@ -42,6 +43,9 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 | `agent` field | ✅ | 7 skills linked to agent types |
 | Hooks in frontmatter | ✅ | database, work-item-routing skills |
 | `skill-inheritance` | ✅ | Cross-skill knowledge sharing |
+| **Automatic hot-reload** | ✅ 2.1.0 | Skills in `.claude/skills` reload without restart |
+| **YAML-style lists** | ✅ 2.1.0 | `allowed-tools:` can use YAML list syntax |
+| **Visible in / menu** | ✅ 2.1.0 | Skills show in slash command menu by default |
 
 ### Commands
 
@@ -55,8 +59,25 @@ Integrated Claude Code 2.1.0 features into Claude Family infrastructure.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `.claude/rules/` | ✅ | 3 rule files created |
-| Wildcard permissions | ✅ | `mcp__postgres__*` pattern |
+| MCP wildcard permissions | ✅ | `mcp__postgres__*` pattern |
+| **Bash wildcard permissions** | ✅ 2.1.0 | `Bash(npm *)`, `Bash(npx playwright *)` |
 | Spawn limit | ✅ | Increased to 10 agents |
+| **`respectGitignore`** | ✅ 2.1.0 | Control @-mention file picker per-project |
+| **`language` setting** | ✅ 2.1.0 | Configure Claude's response language |
+
+### Environment Variables (New)
+
+| Variable | Purpose | Version |
+|----------|---------|---------|
+| `CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS` | Override file read token limit | 2.1.0 |
+| `FORCE_AUTOUPDATE_PLUGINS` | Allow plugin autoupdate when main updater disabled | 2.1.2 |
+
+### Output Handling (2.1.2)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Large bash outputs to disk** | ✅ | Saved to disk instead of truncated - great for Playwright! |
+| **Large tool outputs to disk** | ✅ | Full output via file references |
 
 ### Agents (v2.0.28+)
 
@@ -116,7 +137,7 @@ Database-driven config auto-regenerates on SessionStart:
 
 ---
 
-**Version**: 1.1
+**Version**: 2.0 (Added 2.1.2 features)
 **Created**: 2026-01-08
 **Updated**: 2026-01-09
-**Location**: knowledge-vault/Claude Family/Claude Code 2.1.0 Integration.md
+**Location**: knowledge-vault/Claude Family/Claude Code 2.1.x Integration.md

@@ -1,10 +1,21 @@
 {
+  "_comment": "MCP config for reviewer-sonnet agent",
+  "_created": "2026-01-09",
+  "_purpose": "Code review with tree-sitter analysis and vault-rag for patterns lookup",
   "mcpServers": {
     "tree-sitter": {
       "type": "stdio",
       "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
       "args": [],
       "env": {}
+    },
+    "vault-rag": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
     },
     "orchestrator": {
       "type": "stdio",

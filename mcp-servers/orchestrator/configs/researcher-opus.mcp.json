@@ -1,5 +1,16 @@
 {
+  "_comment": "MCP config for researcher-opus agent",
+  "_created": "2026-01-09",
+  "_purpose": "Deep research with vault-rag for past learnings and sequential thinking",
   "mcpServers": {
+    "vault-rag": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
     "sequential-thinking": {
       "type": "stdio",
       "command": "npx",

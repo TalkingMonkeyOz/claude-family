@@ -1,10 +1,23 @@
 {
   "_comment": "MCP config for mui-coder-sonnet agent",
   "_created": "2026-01-05",
-  "_updated": "2026-01-06",
-  "_purpose": "MUI X specialist with filesystem access - NOTE: MUI MCP removed (package doesn't exist)",
-  "_note": "@anthropic/mcp-mui does not exist. Agent relies on built-in knowledge + WebFetch for MUI docs.",
+  "_updated": "2026-01-09",
+  "_purpose": "MUI X specialist with tree-sitter analysis and vault-rag for patterns lookup",
   "mcpServers": {
+    "vault-rag": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
+      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
+      "env": {
+        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
+    },
+    "tree-sitter": {
+      "type": "stdio",
+      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
+      "args": [],
+      "env": {}
+    },
     "filesystem": {
       "type": "stdio",
       "command": "npx",
