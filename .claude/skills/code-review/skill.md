@@ -49,6 +49,23 @@ Before committing, verify:
 
 ---
 
+## MANDATORY: Spawn Reviewer Before Commit
+
+Per the Delegation Rules, **ALWAYS spawn reviewer-sonnet before committing**:
+
+```python
+# Spawn reviewer agent for all staged changes
+mcp__orchestrator__spawn_agent(
+    agent_type="reviewer-sonnet",
+    task="Review all staged changes for: code quality, security issues, performance, best practices, and potential bugs. Provide severity-rated findings.",
+    workspace_dir="C:/Projects/current-project"
+)
+```
+
+This is not optional. The reviewer catches issues that self-review misses.
+
+---
+
 ## Code Review Process
 
 ### 1. Self-Review First
@@ -321,6 +338,7 @@ hotfix/security-vulnerability
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Added MANDATORY spawn reviewer section)
 **Created**: 2025-12-26
+**Updated**: 2026-01-10
 **Location**: .claude/skills/code-review/skill.md

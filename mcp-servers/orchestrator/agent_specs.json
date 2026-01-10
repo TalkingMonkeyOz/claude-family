@@ -1,9 +1,9 @@
 {
   "description": "Claude Agent Orchestrator - Specialized agent type definitions (STREAMLINED)",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "created": "2025-11-04",
-  "updated": "2026-01-09",
-  "note": "Agent ecosystem upgrade: Added vault-rag to all agents, tree-sitter to reviewers/coders, designer-sonnet for UI/UX, enabled spawn capability on architect-opus/planner-sonnet",
+  "updated": "2026-01-10",
+  "note": "Added coder-sonnet for complex/convention-heavy coding tasks where Haiku fails. Haiku struggles with ~4000 token context (lost in the middle). Sonnet processes long context better.",
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",
@@ -48,6 +48,58 @@
         "cost_per_task_usd": 0.035
       },
       "recommended_timeout_seconds": 1200
+    },
+    "coder-sonnet": {
+      "model": "claude-sonnet-4-5-20250929",
+      "description": "Complex code writing requiring reasoning, convention adherence, and multi-file coordination",
+      "use_cases": [
+        "Complex implementations (3+ files)",
+        "Convention-heavy code (requires following standards)",
+        "Architectural code decisions",
+        "Refactoring with design patterns",
+        "Code requiring reasoning about trade-offs",
+        "Tasks where Haiku missed requirements"
+      ],
+      "not_for": [
+        "Simple single-file changes (use coder-haiku)",
+        "MUI/React UI work (use mui-coder-sonnet)",
+        "Code review (use reviewer-sonnet)"
+      ],
+      "allowed_tools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash(git add:*)",
+        "Bash(git commit:*)",
+        "Bash(git status:*)",
+        "Bash(git diff:*)",
+        "mcp__vault-rag__semantic_search",
+        "mcp__vault-rag__get_document"
+      ],
+      "disallowed_tools": [
+        "Bash(curl*)",
+        "Bash(wget*)",
+        "Bash(rm*)",
+        "Bash(del*)",
+        "WebSearch",
+        "WebFetch"
+      ],
+      "mcp_config": "configs/coder-sonnet.mcp.json",
+      "workspace_jail_template": "{project_root}/src/",
+      "read_only": false,
+      "permission_mode": "bypassPermissions",
+      "betas": [
+        "interleaved-thinking-2025-05-14"
+      ],
+      "system_prompt": "You are a senior code writer using Claude Sonnet. Your strength is handling complex tasks that require reasoning and strict convention adherence.\n\nCRITICAL: Follow ALL conventions from injected context:\n- Version footers in markdown files\n- Proper tool usage (Write not Bash for files)\n- Code style guidelines\n- Project-specific patterns\n\nBEFORE WRITING CODE:\n1. Read existing patterns in the codebase\n2. Check vault-rag for relevant standards\n3. Plan your approach considering all requirements\n\nUse interleaved thinking to reason through complex decisions before implementing.",
+      "cost_profile": {
+        "input_tokens_avg": 15000,
+        "output_tokens_avg": 8000,
+        "cost_per_task_usd": 0.12
+      },
+      "recommended_timeout_seconds": 900
     },
     "python-coder-haiku": {
       "model": "claude-haiku-4-5",

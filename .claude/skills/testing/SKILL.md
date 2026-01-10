@@ -23,6 +23,30 @@ This skill provides testing patterns and requirements for Claude Family projects
 
 ---
 
+## RECOMMENDED: Spawn Tester Agent
+
+Per the Delegation Rules, consider spawning tester-haiku for test writing:
+
+```python
+# Spawn tester agent to write tests for new code
+mcp__orchestrator__spawn_agent(
+    agent_type="tester-haiku",
+    task="Write unit tests for the new functions in src/feature.ts. Cover happy path, edge cases, and error scenarios.",
+    workspace_dir="C:/Projects/current-project"
+)
+
+# For E2E web tests, use web-tester-haiku
+mcp__orchestrator__spawn_agent(
+    agent_type="web-tester-haiku",
+    task="Write Playwright E2E tests for the login flow.",
+    workspace_dir="C:/Projects/current-project"
+)
+```
+
+Test writing is structured work - Haiku agents handle it well and cheaply.
+
+---
+
 ## Quick Reference
 
 ### Test Levels
@@ -240,4 +264,7 @@ Before committing code:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Added agent spawning guidance)
+**Created**: 2025-12-26
+**Updated**: 2026-01-10
+**Location**: .claude/skills/testing/skill.md
