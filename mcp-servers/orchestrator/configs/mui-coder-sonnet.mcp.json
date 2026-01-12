@@ -1,9 +1,15 @@
 {
   "_comment": "MCP config for mui-coder-sonnet agent",
   "_created": "2026-01-05",
-  "_updated": "2026-01-09",
-  "_purpose": "MUI X specialist with tree-sitter analysis and vault-rag for patterns lookup",
+  "_updated": "2026-01-11",
+  "_purpose": "MUI X specialist with tree-sitter analysis, MUI docs, and vault-rag for patterns lookup",
   "mcpServers": {
+    "mui": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@mui/mcp@latest"],
+      "env": {}
+    },
     "vault-rag": {
       "type": "stdio",
       "command": "C:\\venvs\\mcp\\Scripts\\python.exe",

@@ -1,67 +1,123 @@
 **MANDATORY SESSION STARTUP PROTOCOL**
 
-Session logging is **AUTOMATIC** via SessionStart hook. This command provides additional context loading if needed.
+Execute ALL of the following steps at the start of EVERY session:
 
 ---
 
-## What Happens Automatically
+## Step 1: Load Startup Context
 
-The SessionStart hook already:
-1. Logs session to `claude.sessions`
-2. Loads active todos from `claude.todos`
-3. Checks for pending messages via orchestrator
-4. Queries RAG for relevant vault context
-
----
-
-## Optional: Load Additional Context
-
-### Check Last Session State
-
-```sql
-SELECT current_focus, next_steps
-FROM claude.session_state
-WHERE project_name = '{project_name}';
+```bash
+python C:/claude/shared/scripts/load_claude_startup_context.py
 ```
 
-### Check Open Feedback
+This restores:
+- Your identity and role
+- Universal knowledge (patterns, gotchas, techniques)
+- Recent sessions (last 7 days across all Claudes)
+- Project-specific context
+
+---
+
+## Step 2: Sync Workspaces
+
+```bash
+python C:/claude/shared/scripts/sync_workspaces.py
+```
+
+This generates `workspaces.json` from PostgreSQL, mapping project names to locations.
+
+---
+
+## Step 3: Log Session Start (postgres MCP)
 
 ```sql
-SELECT feedback_type, COUNT(*) as count
-FROM claude.feedback f
-JOIN claude.workspaces w ON f.project_id = w.project_id
-WHERE w.project_name = '{project_name}'
-  AND f.status IN ('new', 'in_progress')
+-- Get your identity_id first (check CLAUDE.md for your identity)
+-- claude-desktop-001: Use appropriate ID
+-- claude-code-console-001: Use appropriate ID
+-- diana: Use appropriate ID
+
+-- Then log the session start
+INSERT INTO claude_family.session_history
+(identity_id, session_start, project_name, task_description)
+VALUES ('<your-identity-uuid>', NOW(), 'project-name', 'Brief task description')
+RETURNING id;
+
+-- Save the returned ID - you'll need it for session end
+```
+
+---
+
+## Step 4: Query Relevant Context (memory MCP)
+
+Based on the user's request, search for relevant past knowledge:
+
+```
+mcp__memory__search_nodes(query="relevant keywords from user's request")
+```
+
+---
+
+## Step 5: Check for Existing Solutions (postgres MCP)
+
+NEVER propose new solutions without checking if we've solved this before:
+
+```sql
+-- Check universal knowledge
+SELECT pattern_name, description, example_code, gotchas
+FROM claude_family.universal_knowledge
+WHERE pattern_name ILIKE '%relevant-keyword%'
+   OR description ILIKE '%relevant-keyword%';
+
+-- Check past sessions for similar work
+SELECT summary, outcome, files_modified, project_name
+FROM claude_family.session_history
+WHERE task_description ILIKE '%relevant-keyword%'
+   OR summary ILIKE '%relevant-keyword%'
+ORDER BY session_start DESC
+LIMIT 10;
+```
+
+---
+
+## Step 6: Check Open Feedback (Optional)
+
+If working on a registered project, check for open feedback items:
+
+```sql
+-- Quick check for open feedback (if project has feedback tracking)
+-- Replace PROJECT-ID with your project's UUID from CLAUDE.md
+SELECT
+    feedback_type,
+    COUNT(*) as count
+FROM claude_pm.project_feedback
+WHERE project_id = 'PROJECT-ID'::uuid
+  AND status IN ('new', 'in_progress')
 GROUP BY feedback_type;
 ```
 
-### Check Active Features
+**If open items exist:** Briefly mention them to user: "📋 Note: This project has X open feedback items. Use `/feedback-check` to view details."
 
-```sql
-SELECT 'F' || short_code as code, feature_name, status
-FROM claude.features f
-JOIN claude.workspaces w ON f.project_id = w.project_id
-WHERE w.project_name = '{project_name}'
-  AND f.status IN ('planned', 'in_progress');
-```
+**Registered Projects:**
+- claude-pm: `a3097e59-7799-4114-86a7-308702115905`
+- nimbus-user-loader: `07206097-4caf-423b-9eb8-541d4c25da6c`
+- ATO-Tax-Agent: `7858ecf4-4550-456d-9509-caea0339ec0d`
 
 ---
 
-## Quick Start Checklist
+## Checklist
 
-- [x] Session logged (automatic via hook)
-- [x] Todos loaded (automatic via hook)
-- [x] Messages checked (automatic via hook)
-- [ ] Review session_state for context (if resuming work)
-- [ ] Check git status for uncommitted changes
+Before starting work, verify:
+
+- [ ] Ran `load_claude_startup_context.py`
+- [ ] Synced `workspaces.json` from database
+- [ ] Logged session start to PostgreSQL
+- [ ] Queried memory graph for context
+- [ ] Checked for existing solutions in universal_knowledge
+- [ ] Checked past sessions for similar work
+- [ ] Checked open feedback (if applicable)
+
+**IF ANY ANSWER IS NO → DO IT NOW BEFORE STARTING WORK**
 
 ---
 
-**Note**: Most startup steps are now handled by hooks. This command is for additional context when needed.
-
----
-
-**Version**: 3.0
-**Created**: 2025-10-21
-**Updated**: 2026-01-10
-**Location**: .claude/commands/session-start.md
+**Remember**: The time spent loading context prevents hours of rediscovering existing solutions.

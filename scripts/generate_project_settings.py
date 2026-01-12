@@ -23,20 +23,31 @@ Merge Priority (last wins):
     2. Project type defaults (from project_type_configs)
     3. Project-specific overrides (from workspaces.startup_config)
 
+Change Detection (2026-01-11):
+    Before generating settings, checks if CLAUDE.md has local changes.
+    If changed, prompts user to:
+    - [1] Accept changes → Import to database
+    - [2] Discard changes → Restore from database
+    - [3] Continue anyway → No sync
+
 Called by:
+    - Desktop shortcut → Launch-Claude-Code-Console.bat
     - session_startup_hook.py on every SessionStart (self-healing)
     - Manual: python scripts/generate_project_settings.py [project_name]
 
 Author: Claude Family
 Date: 2025-12-27
+Updated: 2026-01-11 (added change detection)
 """
 
 import json
 import os
 import sys
 import logging
+import hashlib
+import uuid
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from copy import deepcopy
 
 # Setup logging
@@ -215,6 +226,196 @@ def get_project_info(conn, project_name: str) -> Optional[Dict]:
         return None
 
 
+def get_profile_for_project(conn, project_name: str) -> Optional[Dict]:
+    """Get profile from claude.profiles for a project."""
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT profile_id, name, config, current_version
+            FROM claude.profiles
+            WHERE name = %s
+        """, (project_name,))
+
+        row = cur.fetchone()
+        if row:
+            data = dict(row) if PSYCOPG_VERSION == 3 else dict(row)
+            return {
+                'profile_id': data['profile_id'],
+                'name': data['name'],
+                'config': data['config'],
+                'current_version': data['current_version']
+            }
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get profile: {e}")
+        return None
+
+
+def check_for_local_changes(project_path: str, profile: Dict) -> Tuple[bool, str]:
+    """Compare CLAUDE.md file content vs database profile.
+
+    Returns:
+        (has_changes, changed_file) - True if file differs from database
+    """
+    claude_md_path = Path(project_path) / "CLAUDE.md"
+
+    if not claude_md_path.exists():
+        return False, ""
+
+    try:
+        with open(claude_md_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except Exception as e:
+        logger.error(f"Failed to read CLAUDE.md: {e}")
+        return False, ""
+
+    # Get database content
+    db_content = ""
+    if profile and profile.get('config'):
+        db_content = profile['config'].get('behavior', '')
+
+    # Compare by hash for efficiency
+    file_hash = hashlib.md5(file_content.encode('utf-8')).hexdigest()
+    db_hash = hashlib.md5(db_content.encode('utf-8')).hexdigest()
+
+    if file_hash != db_hash:
+        logger.info(f"Local changes detected in CLAUDE.md (file hash: {file_hash[:8]}, db hash: {db_hash[:8]})")
+        return True, "CLAUDE.md"
+
+    return False, ""
+
+
+def import_changes_to_database(conn, project_name: str, project_path: str, profile: Optional[Dict]) -> bool:
+    """Import CLAUDE.md content to database profile."""
+    claude_md_path = Path(project_path) / "CLAUDE.md"
+
+    try:
+        with open(claude_md_path, 'r', encoding='utf-8') as f:
+            file_content = f.read()
+    except Exception as e:
+        logger.error(f"Failed to read CLAUDE.md: {e}")
+        return False
+
+    try:
+        cur = conn.cursor()
+
+        if profile:
+            # Update existing profile
+            new_version = profile['current_version'] + 1
+            new_config = profile['config'].copy() if profile['config'] else {}
+            new_config['behavior'] = file_content
+
+            cur.execute("""
+                UPDATE claude.profiles
+                SET config = %s, current_version = %s, updated_at = NOW()
+                WHERE profile_id = %s
+            """, (json.dumps(new_config), new_version, profile['profile_id']))
+
+            # Create version snapshot
+            cur.execute("""
+                INSERT INTO claude.profile_versions (version_id, profile_id, version, config, notes)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (str(uuid.uuid4()), profile['profile_id'], new_version, json.dumps(new_config),
+                  'Imported local changes from CLAUDE.md'))
+
+            conn.commit()
+            logger.info(f"Updated profile {project_name} to version {new_version}")
+            print(f"  Imported changes to database (version {new_version})")
+        else:
+            # Create new profile
+            profile_id = str(uuid.uuid4())
+            config = {
+                'behavior': file_content,
+                'description': f'{project_name} project configuration'
+            }
+
+            cur.execute("""
+                INSERT INTO claude.profiles (profile_id, name, source_type, config, current_version, is_active, is_favorite)
+                VALUES (%s, %s, 'project', %s, 1, true, false)
+            """, (profile_id, project_name, json.dumps(config)))
+
+            cur.execute("""
+                INSERT INTO claude.profile_versions (version_id, profile_id, version, config, notes)
+                VALUES (%s, %s, 1, %s, %s)
+            """, (str(uuid.uuid4()), profile_id, json.dumps(config), 'Initial import from CLAUDE.md'))
+
+            conn.commit()
+            logger.info(f"Created new profile for {project_name}")
+            print(f"  Created new profile in database")
+
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to import to database: {e}")
+        conn.rollback()
+        return False
+
+
+def restore_file_from_database(project_path: str, profile: Dict) -> bool:
+    """Restore CLAUDE.md from database profile content."""
+    if not profile or not profile.get('config'):
+        logger.error("No profile content to restore")
+        return False
+
+    db_content = profile['config'].get('behavior', '')
+    if not db_content:
+        logger.error("Profile has no behavior content")
+        return False
+
+    claude_md_path = Path(project_path) / "CLAUDE.md"
+
+    try:
+        # Create backup first
+        if claude_md_path.exists():
+            backup_path = claude_md_path.with_suffix('.md.bak')
+            import shutil
+            shutil.copy2(claude_md_path, backup_path)
+            logger.info(f"Created backup: {backup_path}")
+
+        # Write database content
+        with open(claude_md_path, 'w', encoding='utf-8') as f:
+            f.write(db_content)
+
+        logger.info(f"Restored CLAUDE.md from database (v{profile['current_version']})")
+        print(f"  Restored CLAUDE.md from database (backup saved as .bak)")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to restore file: {e}")
+        return False
+
+
+def prompt_user_for_action(changed_file: str, interactive: bool = True) -> str:
+    """Prompt user for action on detected changes.
+
+    Returns: '1' (accept), '2' (discard), '3' (continue), or 'skip' if non-interactive
+    """
+    if not interactive:
+        logger.info("Non-interactive mode, skipping change prompt")
+        return 'skip'
+
+    print(f"\n{'='*60}")
+    print(f"  LOCAL CHANGES DETECTED: {changed_file}")
+    print(f"{'='*60}")
+    print()
+    print("  The file has been modified outside the database.")
+    print()
+    print("  [1] Accept changes  (import to database)")
+    print("  [2] Discard changes (restore from database)")
+    print("  [3] Continue anyway (no sync)")
+    print()
+
+    try:
+        choice = input("  Choice (1-3): ").strip()
+        if choice in ('1', '2', '3'):
+            return choice
+        print("  Invalid choice, continuing without sync...")
+        return '3'
+    except (EOFError, KeyboardInterrupt):
+        print("\n  Interrupted, continuing without sync...")
+        return '3'
+
+
 def get_current_settings(project_path: str) -> Dict:
     """Read current settings.local.json if it exists."""
     settings_file = Path(project_path) / ".claude" / "settings.local.json"
@@ -383,11 +584,89 @@ def sync_project_config(project_name: str, project_path: Optional[str] = None) -
     return True
 
 
+def check_and_handle_local_changes(project_name: str, project_path: str, interactive: bool = True) -> bool:
+    """Check for local changes and handle them based on user choice.
+
+    Args:
+        project_name: Name of the project
+        project_path: Path to project directory
+        interactive: If False, skip prompting (for automated/hook calls)
+
+    Returns:
+        True if we should continue with settings generation, False to abort
+    """
+    if not DB_AVAILABLE:
+        return True  # Can't check without DB
+
+    conn = get_db_connection()
+    if not conn:
+        return True  # Can't check without connection
+
+    try:
+        # Get profile from database
+        profile = get_profile_for_project(conn, project_name)
+
+        # Check for local changes
+        has_changes, changed_file = check_for_local_changes(project_path, profile)
+
+        if not has_changes:
+            conn.close()
+            return True  # No changes, continue normally
+
+        # Get user choice
+        choice = prompt_user_for_action(changed_file, interactive)
+
+        if choice == '1':
+            # Accept changes - import to database
+            success = import_changes_to_database(conn, project_name, project_path, profile)
+            conn.close()
+            return True  # Continue with settings generation
+
+        elif choice == '2':
+            # Discard changes - restore from database
+            if profile:
+                restore_file_from_database(project_path, profile)
+            else:
+                print("  No profile in database to restore from")
+            conn.close()
+            return True  # Continue with settings generation
+
+        else:
+            # Continue anyway (choice 3 or skip)
+            conn.close()
+            return True
+
+    except Exception as e:
+        logger.error(f"Error during change detection: {e}")
+        try:
+            conn.close()
+        except:
+            pass
+        return True  # Continue on error
+
+
 def main():
     """CLI entry point."""
-    if len(sys.argv) > 1:
-        project_name = sys.argv[1]
-        project_path = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
+    # Parse arguments
+    interactive = True
+    project_name = None
+    project_path = None
+
+    args = sys.argv[1:]
+
+    # Check for --no-interactive flag
+    if '--no-interactive' in args:
+        interactive = False
+        args.remove('--no-interactive')
+
+    # Check for --skip-change-detection flag (for hook calls)
+    skip_change_detection = '--skip-change-detection' in args
+    if skip_change_detection:
+        args.remove('--skip-change-detection')
+
+    if len(args) >= 1:
+        project_name = args[0]
+        project_path = args[1] if len(args) > 1 else os.getcwd()
     else:
         # Auto-detect from cwd
         project_path = os.getcwd()
@@ -396,6 +675,13 @@ def main():
     print(f"Generating settings for: {project_name}")
     print(f"Project path: {project_path}")
 
+    # Step 1: Check for local changes (unless skipped)
+    if not skip_change_detection:
+        if not check_and_handle_local_changes(project_name, project_path, interactive):
+            print("[ABORT] Settings generation aborted")
+            return 1
+
+    # Step 2: Generate and write settings
     if sync_project_config(project_name, project_path):
         print("[OK] Settings generated successfully")
         print(f"  Check: {project_path}/.claude/settings.local.json")

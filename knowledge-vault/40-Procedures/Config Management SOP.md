@@ -151,6 +151,25 @@ cat ~/.claude/hooks.log | tail -20
 | `workspaces` | Project registry | project_name, project_type, startup_config (JSONB) |
 | `project_config_assignments` | Template assignments | project_id, template_id, override_content |
 | `config_deployment_log` | Audit trail | project_id, config_type, file_path, deployed_at |
+| `profiles` | CLAUDE.md content | name, source_type, config (JSONB with 'behavior' key) |
+| `coding_standards` | Auto-apply standards | name, category, content, applies_to_patterns[] |
+| `skills` | Skill definitions | name, scope, project_id, content |
+| `instructions` | Instruction files | name, scope, applies_to, content |
+| `rules` | Rule files | name, scope, content, rule_type |
+
+### CLAUDE.md in Database
+
+CLAUDE.md content is stored in `profiles.config->'behavior'`:
+
+```sql
+-- Global CLAUDE.md
+SELECT config->>'behavior' FROM claude.profiles WHERE name = 'Global Configuration';
+
+-- Project CLAUDE.md  
+SELECT config->>'behavior' FROM claude.profiles WHERE name = 'project-name';
+```
+
+**MUI Manager**: Use `claude-manager-mui` → Configuration → Global/Project to edit via GUI.
 
 **Column Registry**:
 ```sql
@@ -242,7 +261,7 @@ If project has manual `.claude/settings.local.json`:
 
 ---
 
-**Version**: 3.0 (Database-driven hooks.json)
+**Version**: 3.1 (Added profiles table for CLAUDE.md)
 **Created**: 2025-12-27
-**Updated**: 2026-01-02
+**Updated**: 2026-01-11
 **Location**: 40-Procedures/Config Management SOP.md
