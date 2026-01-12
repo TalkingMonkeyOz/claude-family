@@ -182,7 +182,9 @@ def get_target_path(component: Dict, project_path: str) -> Path:
 
     # Global components go to ~/.claude/
     if scope == 'global':
-        if comp_type == 'instruction':
+        if comp_type == 'claude_md':
+            return GLOBAL_CLAUDE_DIR / "CLAUDE.md"
+        elif comp_type == 'instruction':
             return GLOBAL_CLAUDE_DIR / "instructions" / f"{name}.instructions.md"
         elif comp_type == 'standard':
             category = sub_type or 'misc'
