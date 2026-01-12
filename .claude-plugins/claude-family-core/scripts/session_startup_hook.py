@@ -37,6 +37,12 @@ try:
 except ImportError:
     LOG_ROTATION_AVAILABLE = False
 
+try:
+    from deploy_components import deploy_for_project, check_sync_status, get_target_path
+    DEPLOY_AVAILABLE = True
+except ImportError:
+    DEPLOY_AVAILABLE = False
+
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
@@ -804,6 +810,35 @@ def main():
         else:
             logger.warning("Config sync not available - generate_project_settings.py not found")
 
+        # DEPLOY COMPONENTS: Deploy CLAUDE.md, skills, rules, etc. from database
+        # This ensures files match database (ADR-006: database is source of truth)
+        deploy_conflicts = []
+        if DEPLOY_AVAILABLE:
+            logger.info("Deploying components from database...")
+            try:
+                deploy_result = deploy_for_project(project_name, dry_run=False, force=False)
+
+                # Track conflicts for user notification
+                if deploy_result.get('conflicts'):
+                    deploy_conflicts = deploy_result['conflicts']
+                    logger.warning(f"Component deployment found {len(deploy_conflicts)} conflicts")
+
+                deployed_count = len(deploy_result.get('deployed', []))
+                skipped_count = len(deploy_result.get('skipped', []))
+                error_count = len(deploy_result.get('errors', []))
+
+                if deployed_count > 0:
+                    logger.info(f"Deployed {deployed_count} components")
+                if error_count > 0:
+                    logger.warning(f"Failed to deploy {error_count} components")
+                    for err in deploy_result.get('errors', []):
+                        if isinstance(err, dict):
+                            logger.warning(f"  - {err.get('type')}/{err.get('name')}: {err.get('error')}")
+            except Exception as e:
+                logger.error(f"Component deployment failed: {e}")
+        else:
+            logger.warning("Component deployment not available - deploy_components.py not found")
+
         # SYNC WORKSPACES.JSON: Ensure new projects are in workspaces.json
         sync_workspaces_json()
 
@@ -811,6 +846,29 @@ def main():
         npx_fixes = fix_windows_npx_commands(cwd)
         if npx_fixes > 0:
             context_lines.append(f"[AUTO-FIX] Fixed {npx_fixes} MCP server(s) with Windows npx wrapper")
+
+        # WARN ABOUT CONFLICTS: If local files were modified, notify user
+        if deploy_conflicts:
+            context_lines.append("")
+            context_lines.append("=" * 60)
+            context_lines.append(f"!! LOCAL FILE CHANGES DETECTED ({len(deploy_conflicts)} files)")
+            context_lines.append("=" * 60)
+            context_lines.append("")
+            context_lines.append("The following files have been modified locally and differ from database:")
+            context_lines.append("")
+            for conflict in deploy_conflicts:
+                context_lines.append(f"   - {conflict['type']}: {conflict['name']}")
+                context_lines.append(f"     Path: {conflict['path']}")
+            context_lines.append("")
+            context_lines.append("OPTIONS:")
+            context_lines.append("   1. Accept local changes: Run 'python scripts/deploy_components.py --import'")
+            context_lines.append("   2. Discard local changes: Run 'python scripts/deploy_components.py --force'")
+            context_lines.append("   3. Continue as-is (files will remain out of sync)")
+            context_lines.append("")
+            context_lines.append("NOTE: Database is source of truth (ADR-006). To persist local edits,")
+            context_lines.append("      import them to database first, then they will deploy to all projects.")
+            context_lines.append("=" * 60)
+            context_lines.append("")
 
         # Get project_id from database (needed for todos and other queries)
         project_id = None
