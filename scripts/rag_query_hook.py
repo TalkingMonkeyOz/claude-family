@@ -120,6 +120,81 @@ def extract_query_from_prompt(user_prompt: str) -> str:
     return user_prompt
 
 
+def expand_query_with_vocabulary(conn, query_text: str) -> str:
+    """Expand query using learned vocabulary mappings.
+
+    This improves RAG retrieval by translating user's vocabulary
+    (e.g., "spin up") into canonical concepts (e.g., "create").
+
+    Args:
+        conn: Database connection
+        query_text: Original query text
+
+    Returns:
+        Expanded query with canonical concepts appended
+    """
+    if not conn:
+        return query_text
+
+    try:
+        cur = conn.cursor()
+
+        # Find matching vocabulary mappings
+        # Use ILIKE for case-insensitive matching
+        cur.execute("""
+            SELECT user_phrase, canonical_concept, context_keywords
+            FROM claude.vocabulary_mappings
+            WHERE active = true
+              AND %s ILIKE '%%' || user_phrase || '%%'
+            ORDER BY confidence DESC, times_seen DESC
+            LIMIT 5
+        """, (query_text,))
+
+        mappings = cur.fetchall()
+
+        if not mappings:
+            logger.debug(f"No vocabulary mappings found for: {query_text[:50]}")
+            return query_text
+
+        # Build expansion terms
+        expansion_terms = []
+        matched_phrases = []
+
+        for m in mappings:
+            if isinstance(m, dict):
+                phrase = m['user_phrase']
+                concept = m['canonical_concept']
+                keywords = m.get('context_keywords', []) or []
+            else:
+                phrase = m[0]
+                concept = m[1]
+                keywords = m[2] or []
+
+            matched_phrases.append(phrase)
+            expansion_terms.append(concept)
+            if keywords:
+                expansion_terms.extend(keywords[:3])  # Limit keywords per mapping
+
+        if expansion_terms:
+            # Deduplicate while preserving order
+            seen = set()
+            unique_terms = []
+            for term in expansion_terms:
+                if term.lower() not in seen:
+                    seen.add(term.lower())
+                    unique_terms.append(term)
+
+            expanded = f"{query_text} {' '.join(unique_terms)}"
+            logger.info(f"Vocabulary expansion: matched [{', '.join(matched_phrases)}] -> added [{', '.join(unique_terms)}]")
+            return expanded
+
+        return query_text
+
+    except Exception as e:
+        logger.warning(f"Vocabulary expansion failed: {e}")
+        return query_text
+
+
 # ============================================================================
 # SELF-LEARNING: Implicit Feedback Detection
 # ============================================================================
@@ -562,15 +637,20 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
         # Extract query from user prompt
         query_text = extract_query_from_prompt(user_prompt)
 
-        # Generate embedding for query
-        query_embedding = generate_embedding(query_text)
-        if not query_embedding:
-            return None
-
-        # Connect to database
+        # Connect to database (needed for vocabulary expansion and search)
         conn = get_db_connection()
         if not conn:
             logger.warning("Could not connect to database - skipping RAG")
+            return None
+
+        # VOCABULARY EXPANSION: Expand query with learned user vocabulary
+        # This translates user phrases (e.g., "spin up") to canonical concepts (e.g., "create")
+        expanded_query = expand_query_with_vocabulary(conn, query_text)
+
+        # Generate embedding for EXPANDED query (better semantic matching)
+        query_embedding = generate_embedding(expanded_query)
+        if not query_embedding:
+            conn.close()
             return None
 
         cur = conn.cursor()
