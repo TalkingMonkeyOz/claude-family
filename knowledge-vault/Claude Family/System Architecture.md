@@ -117,11 +117,22 @@ doc_source VARCHAR (vault|project)
 
 ---
 
+## Scheduled Jobs
+
+Jobs are tracked in `claude.scheduled_jobs` with `source` column:
+- `windows_task_scheduler` - Runs via Windows Task Scheduler
+- `database` - Run via MUI Manager Scheduler UI
+
+**MUI Manager**: Tools > Scheduler (shows overdue jobs on startup)
+
+See [[Scheduled Jobs Management]] for details.
+
+---
+
 ## Dead Code Inventory
 
 | Item | Last Used | Reason Unused |
 |------|-----------|---------------|
-| `scheduled_jobs` | Dec 13 | No automation triggers |
 | `process_registry` | Never | Replaced by skills |
 | `reminders` | Never | No hook checks |
 | `session_state.todo_list` | Deprecated | Use `claude.todos` |

@@ -1,15 +1,67 @@
 {
-  "hashes": {
-    "advanced-tool-use": "b77dd91edbccf091",
-    "claude-code-best-practices": "34ab5f227463189a",
-    "building-agents": "30bcc78569c5b5d5",
-    "claude-code-sandboxing": "d404d96eea3e984f",
-    "models-overview": "a8cb9a24178ce7c9",
-    "computer-use": "3d4ef1e1a93aedda",
-    "token-efficient-tools": "8cb65aea201205cc",
-    "extended-thinking": "b4796ca9070d2846",
-    "mcp-overview": "dd3cc7efe76e7461",
-    "claude-code-changelog": "bfbdaf23b1751fce"
+  "docs": {
+    "advanced-tool-use": {
+      "url": "https://www.anthropic.com/engineering/advanced-tool-use",
+      "description": "Advanced tool use patterns (Tool Search, Programmatic Calling)",
+      "relevance": "MCP optimization, token reduction"
+    },
+    "claude-code-best-practices": {
+      "url": "https://www.anthropic.com/engineering/claude-code-best-practices",
+      "description": "Claude Code usage patterns and workflows",
+      "relevance": "Agent patterns, multi-Claude workflows"
+    },
+    "building-agents": {
+      "url": "https://www.anthropic.com/engineering/building-agents-with-the-claude-agent-sdk",
+      "description": "Claude Agent SDK architecture",
+      "relevance": "Subagent patterns, context management"
+    },
+    "claude-code-sandboxing": {
+      "url": "https://www.anthropic.com/engineering/claude-code-sandboxing",
+      "description": "Sandboxing for secure autonomous operation",
+      "relevance": "Permission reduction, security"
+    },
+    "models-overview": {
+      "url": "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "description": "Model capabilities and context windows",
+      "relevance": "1M context, model selection"
+    },
+    "computer-use": {
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool",
+      "description": "Computer use tool for desktop automation",
+      "relevance": "Visual testing, UI automation"
+    },
+    "token-efficient-tools": {
+      "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/token-efficient-tool-use",
+      "description": "Token-efficient tool use patterns",
+      "relevance": "Cost reduction, performance"
+    },
+    "extended-thinking": {
+      "url": "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+      "description": "Extended thinking and reasoning",
+      "relevance": "Complex reasoning, interleaved thinking"
+    },
+    "mcp-overview": {
+      "url": "https://modelcontextprotocol.io/introduction",
+      "description": "Model Context Protocol specification",
+      "relevance": "MCP server development"
+    },
+    "claude-code-changelog": {
+      "url": "https://claudelog.com/claude-code-changelog/",
+      "description": "Claude Code release notes and updates",
+      "relevance": "New features, CLI changes"
+    }
   },
-  "last_check": "2025-12-07T13:09:59.714296"
+  "hashes": {
+    "advanced-tool-use": "5eaa4b172acd7c68",
+    "claude-code-best-practices": "1cd050821448f6f5",
+    "building-agents": "8b32e7dfe9bfb9b1",
+    "claude-code-sandboxing": "95775d09144fd848",
+    "models-overview": "dedbc6e9b4687871",
+    "computer-use": "da34458e986b2207",
+    "token-efficient-tools": "939fd0bdb09d313e",
+    "extended-thinking": "5d5731d8bf63fc59",
+    "mcp-overview": "7fbe0543d61b45ba",
+    "claude-code-changelog": "8db8acfbfb2a43fb"
+  },
+  "last_check": "2026-01-13T22:17:04.438511"
 }
