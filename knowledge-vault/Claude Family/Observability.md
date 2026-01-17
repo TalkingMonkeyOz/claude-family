@@ -2,7 +2,7 @@
 projects:
 - claude-family
 synced: false
-synced_at: '2025-12-27T00:00:00.000000'
+synced_at: '2026-01-17T00:00:00.000000'
 tags:
 - quick-reference
 - claude-family
@@ -14,48 +14,55 @@ What we log, how it's analyzed, and gaps to address.
 
 ---
 
-## Logging Tables
+## Logging Tables (Updated 2026-01-17)
 
 | Table | Rows | Purpose | Status |
 |-------|------|---------|--------|
-| `process_classification_log` | 461 | Process router decisions | ✅ Active |
-| `sessions` | 211 | Claude Code sessions | ✅ Active |
-| `agent_sessions` | 127 | Spawned agent tracking | ✅ Active |
-| `messages` | 90 | Inter-Claude messaging | ✅ Active |
-| `feedback` | 46 | Issue tracking | ✅ Active |
-| `knowledge_retrieval_log` | 21 | Vault queries | ✅ Active |
+| `sessions` | 532 | Claude Code sessions | ✅ Active |
+| `rag_usage_log` | 664 | RAG queries via UserPromptSubmit hook | ✅ Active |
+| `messages` | 146 | Inter-Claude messaging | ✅ Active |
+| `agent_sessions` | ~130 | Spawned agent tracking | ✅ Active |
+| `feedback` | 53 | Issue tracking | ✅ Active |
+| `vocabulary_mappings` | 28 | Informal → canonical mappings | ✅ Active |
+| `scheduled_jobs` | 25 | Job definitions + history | ✅ Active |
+| `reviewer_runs` | 14 | Reviewer script executions | ✅ Active |
+| `todos` | 1200 | Persistent todos across sessions | ✅ Active |
 | `mcp_usage_stats` | 2 | MCP tool calls | ⚠️ Barely used |
 | `enforcement_log` | 0 | Rule violations | ❌ NOT USED |
+
+**Note**: `process_classification_log` deprecated - skills-first replaced process router (ADR-005)
 
 ---
 
 ## Key Insights
 
-### Process Router (Classification)
+### RAG System (Active)
 
-| Method | Count | Latency | Notes |
-|--------|-------|---------|-------|
-| LLM | 373 | 4,191ms | Slow, expensive |
-| Regex | 63 | 7ms | Fast (slash commands) |
-| Keywords | 25 | 6ms | Fast |
+- 664 queries logged via UserPromptSubmit hook
+- Automatic context injection on every prompt
+- 85% token reduction achieved
+- Logs: `~/.claude/hooks.log` and `claude.rag_usage_log`
 
-**Fix**: Added 14 regex triggers for slash commands (now 7ms vs 4,191ms)
+### Scheduled Jobs System
 
-### Agent Success Rates
+- 25 jobs defined (16 active)
+- MUI Manager Scheduler UI available
+- Status: FAILED when genuinely failed, ISSUES_FOUND when script found problems
+- Gap: Some jobs stopped running Dec 13 (path escaping bug fixed Jan 2026)
+
+### Agent Success Rates (Last 60 Days)
 
 | Agent | Spawns | Success | Avg Cost |
 |-------|--------|---------|----------|
-| lightweight-haiku | 12 | 83% | $0.013 |
-| python-coder-haiku | 28 | 71% | $0.045 |
-| coder-haiku | 42 | 57% | $0.035 |
-| reviewer-sonnet | 9 | 56% | $0.105 |
-| analyst-sonnet | 11 | 45% | $0.300 |
-| researcher-opus | 6 | 17% | $0.725 |
+| lightweight-haiku | 4 | 100% | $0.010 |
+| coder-sonnet | 3 | 100% | $0.120 |
+| reviewer-sonnet | 3 | 100% | $0.105 |
+| mui-coder-sonnet | 5 | 80% | $0.120 |
 
 **Insights**:
-- lightweight-haiku: Best success rate (83%)
-- researcher-opus: Worst (17%) - use task breakdown pattern instead
-- Haiku agents: Most cost-effective
+- lightweight-haiku: Best cost-effectiveness ($0.01)
+- Sonnet agents: Higher success rates now (vs Opus)
+- mui-coder-sonnet: Specialized for MUI React work
 
 ---
 
@@ -121,9 +128,17 @@ GROUP BY classification_method;
 
 ## Fixes Implemented
 
+**2026-01-17**:
+- ✅ Fixed scheduled jobs path escaping (working_directory + quoted paths)
+- ✅ Fixed status semantics (ISSUES_FOUND vs FAILED)
+- ✅ Created FB57 for ANTHROPIC_ADMIN_API_KEY setup
+
 **2025-12-20**:
-- ✅ Added 14 regex triggers for slash commands (PROC-SESSION-*, PROC-COMM-*, etc.)
+- ✅ Added 14 regex triggers for slash commands
 - ✅ Increased doc-keeper-haiku timeout: 300s → 600s
+
+**2025-12-21**:
+- ✅ Skills-First architecture replaced process router (ADR-005)
 
 ---
 
@@ -132,14 +147,14 @@ GROUP BY classification_method;
 - [ ] Implement enforcement_log writes
 - [ ] Add MCP usage tracking to orchestrator
 - [ ] Create MCW observability dashboard
-- [ ] Verify orchestrator uses spec timeouts (not hardcoded)
-- [ ] Add week-over-week trend queries to MCW
+- [ ] Add exit code semantics to MUI scheduler (exit 1 = issues found, exit 2+ = error)
 - [x] Add keyword triggers to reduce LLM classification
 - [x] Increase agent timeouts
+- [x] Fix scheduled jobs path escaping
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 3.0 (Current data, scheduled jobs status)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-01-17
 **Location**: Claude Family/Observability.md

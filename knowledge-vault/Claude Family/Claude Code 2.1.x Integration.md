@@ -11,7 +11,7 @@ synced: false
 
 # Claude Code 2.1.x Integration
 
-**Status**: Complete | **Date**: 2026-01-09 (Updated for 2.1.2)
+**Status**: In Progress | **Date**: 2026-01-17 (Updated for 2.1.9)
 
 ---
 
@@ -79,6 +79,26 @@ Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
 | **Large bash outputs to disk** | ✅ | Saved to disk instead of truncated - great for Playwright! |
 | **Large tool outputs to disk** | ✅ | Full output via file references |
 
+### PreToolUse Enhancements (2.1.9)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **`additionalContext` now works** | ✅ | Previously broken (2026-01-02 bug) - NOW FIXED |
+| **`stopOnMatch` option** | 📋 Future | Stop after first matching hook |
+| **Context injection system** | ✅ IMPLEMENTED | See [[PreToolUse Context Injection]] |
+
+**Implemented**: Database-driven context injection via `context_injector_hook.py`:
+- `PreToolUse[Write/Edit]` + `**/*.md` → markdown standards injected
+- `PreToolUse[mcp__postgres__*]` → SQL/database standards injected
+- Managed via MUI: Global Settings → Context Rules tab
+
+### MCP Configuration (2.1.9)
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **`mcpToolSearch: "auto:N"`** | 📋 Planned | Reduce MCP tool listing overhead |
+| **Per-agent MCP configs** | ✅ | Agents can have different MCP servers |
+
 ### Agents (v2.0.28+)
 
 | Feature | Status | Notes |
@@ -93,6 +113,7 @@ Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
 
 ### New Files
 - `scripts/subagent_start_hook.py` - Agent spawn monitoring
+- `scripts/context_injector_hook.py` - PreToolUse context injection (2.1.9)
 - `.claude/rules/database-rules.md` - SQL patterns
 - `.claude/rules/commit-rules.md` - Git commit standards
 - `.claude/rules/testing-rules.md` - Test requirements
@@ -107,6 +128,13 @@ Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
 
 ### Database Updates
 - `claude.config_templates` - hooks-base v2 with once:true, SubagentStart
+- `claude.context_rules` - Added `tool_patterns` column for PreToolUse matching
+
+### MUI Updates (claude-manager-mui)
+- `src/types/index.ts` - Added `ContextRule` type
+- `src/services/api.ts` - Added context rules API stubs
+- `src/features/configuration/global/ContextRulesManager.tsx` - New component
+- `src/features/configuration/global/GlobalSettings.tsx` - Added Context Rules tab
 
 ---
 
@@ -137,7 +165,7 @@ Database-driven config auto-regenerates on SessionStart:
 
 ---
 
-**Version**: 2.0 (Added 2.1.2 features)
+**Version**: 3.1 (Implemented PreToolUse context injection system)
 **Created**: 2026-01-08
-**Updated**: 2026-01-09
+**Updated**: 2026-01-17
 **Location**: knowledge-vault/Claude Family/Claude Code 2.1.x Integration.md

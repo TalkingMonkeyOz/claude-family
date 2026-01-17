@@ -1,9 +1,12 @@
 {
   "description": "Claude Agent Orchestrator - Specialized agent type definitions (STREAMLINED)",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "created": "2025-11-04",
-  "updated": "2026-01-10",
+  "updated": "2026-01-17",
   "note": "Added coder-sonnet for complex/convention-heavy coding tasks where Haiku fails. Haiku struggles with ~4000 token context (lost in the middle). Sonnet processes long context better.",
+  "default_env": {
+    "ENABLE_TOOL_SEARCH": "auto:5"
+  },
   "agent_types": {
     "coder-haiku": {
       "model": "claude-haiku-4-5",

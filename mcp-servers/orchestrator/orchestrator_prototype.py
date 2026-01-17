@@ -296,15 +296,26 @@ class AgentOrchestrator:
                 f.write(mcp_config_str)
             print(f"DEBUG: [{spawn_id}] Wrote MCP config to {agent_mcp_json}", file=sys.stderr)
 
-            # Also create .claude/settings.local.json with disableAllHooks
+            # Also create .claude/settings.local.json with disableAllHooks and env vars
             claude_dir = agent_workspace / ".claude"
             claude_dir.mkdir(exist_ok=True)
             settings_path = claude_dir / "settings.local.json"
+
+            # Build agent settings - start with defaults, layer in spec-specific env
+            agent_settings = {
+                "disableAllHooks": True,
+                "permissions": {"allow": ["mcp__*"], "deny": [], "ask": []}
+            }
+
+            # Add env vars from default_env (top-level in agent_specs)
+            default_env = self.agent_specs.get('default_env', {})
+            agent_env = spec.get('env', {})
+            combined_env = {**default_env, **agent_env}  # agent-specific overrides default
+            if combined_env:
+                agent_settings["env"] = combined_env
+
             with open(settings_path, 'w') as f:
-                json.dump({
-                    "disableAllHooks": True,
-                    "permissions": {"allow": ["mcp__*"], "deny": [], "ask": []}
-                }, f)
+                json.dump(agent_settings, f)
         except Exception as e:
             print(f"DEBUG: [{spawn_id}] Error setting up workspace: {e}", file=sys.stderr)
 
