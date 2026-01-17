@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-01-12T18:28:58.371668",
+    "generated_at": "2026-01-17T21:16:57.768933",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -34,6 +34,11 @@
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
+    },
+    "mcp-search-test": {
+      "path": "C:\\Projects\\mcp-search-test",
+      "type": "infrastructure",
+      "description": "Test project for MCPSearch auto mode verification"
     },
     "ATO-Tax-Agent": {
       "path": "C:\\Projects\\ATO-Tax-Agent",
