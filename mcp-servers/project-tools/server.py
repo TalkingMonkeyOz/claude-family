@@ -504,12 +504,21 @@ async def tool_add_build_task(
     try:
         cur = conn.cursor()
 
-        # Get feature and project info
-        cur.execute("""
-            SELECT feature_id, project_id::text, feature_name
-            FROM claude.features
-            WHERE feature_id = %s::uuid OR ('F' || short_code) = %s
-        """, (feature_id, feature_id))
+        # Get feature and project info (handle both UUID and short_code like "F69")
+        if feature_id.upper().startswith('F') and feature_id[1:].isdigit():
+            # Short code format (F69)
+            cur.execute("""
+                SELECT feature_id, project_id::text, feature_name
+                FROM claude.features
+                WHERE short_code = %s
+            """, (int(feature_id[1:]),))
+        else:
+            # UUID format
+            cur.execute("""
+                SELECT feature_id, project_id::text, feature_name
+                FROM claude.features
+                WHERE feature_id = %s::uuid
+            """, (feature_id,))
         feature = cur.fetchone()
 
         if not feature:
@@ -530,7 +539,7 @@ async def tool_add_build_task(
                 (task_id, feature_id, project_id, task_name, task_description, task_type,
                  status, step_order, files_affected, blocked_by_task_id, created_at, created_session_id)
             VALUES
-                (gen_random_uuid(), %s, %s::uuid, %s, %s, %s, 'pending', %s, %s, %s, NOW(), %s)
+                (gen_random_uuid(), %s, %s::uuid, %s, %s, %s, 'todo', %s, %s, %s, NOW(), %s)
             RETURNING task_id::text, short_code
         """, (feature['feature_id'], feature['project_id'], task_name, task_description, task_type,
               next_order, files_affected,
@@ -576,7 +585,7 @@ async def tool_get_ready_tasks(project: str) -> Dict:
             FROM claude.build_tasks bt
             JOIN claude.features f ON bt.feature_id = f.feature_id
             WHERE bt.project_id = %s::uuid
-              AND bt.status = 'pending'
+              AND bt.status = 'todo'
               AND (bt.blocked_by_task_id IS NULL
                    OR bt.blocked_by_task_id IN (
                        SELECT task_id FROM claude.build_tasks WHERE status = 'completed'
@@ -758,7 +767,7 @@ async def tool_todos_to_build_tasks(
 
         for todo in todos:
             step_order += 1
-            task_status = 'completed' if todo['status'] == 'completed' else 'pending'
+            task_status = 'completed' if todo['status'] == 'completed' else 'todo'
 
             cur.execute("""
                 INSERT INTO claude.build_tasks
