@@ -16,8 +16,12 @@ Create a new project with governance-compliant structure.
    - `README.md` - User documentation
 3. **Registers in database**:
    - Creates entry in `claude.projects` with phase='planning'
+   - Creates entry in `claude.workspaces` with project_type
    - Links documents via `claude.document_projects`
-4. **Runs document scanner** to index files
+4. **Sets up slash commands**:
+   - Copies standard commands from claude-family to project
+   - Registers commands in `claude.shared_commands`
+5. **Runs document scanner** to index files
 
 ## Instructions
 
@@ -48,17 +52,36 @@ VALUES ('{project_name}', '{description}', 'active', 'planning')
 RETURNING project_id;
 ```
 
-6. **Run document scanner**:
+6. **Set up slash commands**:
+   - Create `.claude/commands/` directory in project
+   - Copy all standard commands from claude-family:
+```bash
+python C:\Projects\claude-family\scripts\propagate_commands.py --all
+```
+   - Register commands in database:
+```sql
+-- Copy standard commands for the new project
+INSERT INTO claude.shared_commands (command_name, filename, description, content, tags, version, scope, scope_ref, is_core, is_active)
+SELECT
+    command_name, filename, description, content, tags, version,
+    'project', '{project_id}', false, true
+FROM claude.shared_commands
+WHERE scope = 'project'
+AND scope_ref = '9b563af2-4762-4878-b5bf-429dac0cc481'  -- Use nimbus-import as template
+ON CONFLICT DO NOTHING;
+```
+
+7. **Run document scanner**:
 ```bash
 python C:\Projects\claude-family\scripts\scan_documents.py --project {project_name}
 ```
 
-7. **Verify compliance**:
+8. **Verify compliance**:
 ```sql
 SELECT * FROM claude.v_project_governance WHERE project_name = '{project_name}';
 ```
 
-8. **Report to user**:
+9. **Report to user**:
    - Confirm project created
    - Show compliance status (should be 100%)
    - Provide next steps
@@ -77,7 +100,7 @@ Then answer prompts for project type and description.
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-06
-**Updated**: 2026-01-08
+**Updated**: 2026-01-21
 **Location**: .claude/commands/project-init.md

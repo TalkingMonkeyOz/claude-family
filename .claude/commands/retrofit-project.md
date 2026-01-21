@@ -7,8 +7,9 @@ Add missing governance documents to an existing project.
 1. Checks which core documents are missing
 2. Creates missing documents from templates
 3. Updates CLAUDE.md to governance standard
-4. Rescans documents
-5. Verifies 100% compliance
+4. **Sets up slash commands** (if missing)
+5. Rescans documents
+6. Verifies 100% compliance
 
 ## Instructions
 
@@ -57,17 +58,40 @@ RETURNING project_id;
 
 5. **Update CLAUDE.md** with project_id if missing
 
-6. **Rescan documents**:
+6. **Set up slash commands** (if missing):
+   - Check if `.claude/commands/` exists and has all standard commands
+   - If missing, run propagation:
+```bash
+python C:\Projects\claude-family\scripts\propagate_commands.py --all
+```
+   - Register commands in database if not present:
+```sql
+-- Check if project has commands
+SELECT COUNT(*) FROM claude.shared_commands
+WHERE scope = 'project' AND scope_ref = '{project_id}';
+
+-- If count is 0, copy from template
+INSERT INTO claude.shared_commands (command_name, filename, description, content, tags, version, scope, scope_ref, is_core, is_active)
+SELECT
+    command_name, filename, description, content, tags, version,
+    'project', '{project_id}', false, true
+FROM claude.shared_commands
+WHERE scope = 'project'
+AND scope_ref = '9b563af2-4762-4878-b5bf-429dac0cc481'  -- nimbus-import template
+ON CONFLICT DO NOTHING;
+```
+
+7. **Rescan documents**:
 ```bash
 python C:\Projects\claude-family\scripts\scan_documents.py --project {project}
 ```
 
-7. **Verify compliance**:
+8. **Verify compliance**:
 ```sql
 SELECT * FROM claude.v_project_governance WHERE project_name = '{project}';
 ```
 
-8. **Report**:
+9. **Report**:
    - What was created/updated
    - New compliance percentage (should be 100%)
 
@@ -85,7 +109,7 @@ In project directory, will detect project and add missing docs.
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-06
-**Updated**: 2026-01-08
+**Updated**: 2026-01-21
 **Location**: .claude/commands/retrofit-project.md
