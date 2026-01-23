@@ -5,10 +5,11 @@ RAG Query Hook for UserPromptSubmit
 Automatically queries Voyage AI embeddings on every user prompt to inject
 relevant vault knowledge into Claude's context.
 
-SELF-LEARNING: Also captures implicit feedback signals:
-- Explicit negative phrases ("that didn't work", "wrong doc")
-- Query rephrasing within recent prompts
-- No mention of returned docs (low confidence)
+FEATURES:
+1. CORE PROTOCOL INJECTION - Always injects input processing protocol (~60 tokens)
+2. KNOWLEDGE RECALL - Queries claude.knowledge for learned patterns/gotchas
+3. VAULT RAG - Queries vault embeddings for documentation
+4. SELF-LEARNING - Captures implicit feedback signals
 
 This is SILENT - no visible output to user, just additionalContext injection.
 
@@ -18,6 +19,29 @@ Output Format:
     "systemMessage": "",
     "environment": {}
 }
+"""
+
+# =============================================================================
+# CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
+# =============================================================================
+# This ensures Claude always has the input processing workflow fresh in context.
+# ~60 tokens - minimal overhead for reliable behavior.
+
+CORE_PROTOCOL = """
+## Input Processing Protocol
+When receiving a task request:
+1. **ANALYZE** - Read entire message before acting
+2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TodoWrite immediately
+3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
+4. **EXECUTE** - Work through each todo sequentially, marking in_progress
+5. **COMPLETE** - Mark each todo done immediately after finishing
+
+## Working Memory Protocol
+For data-heavy tasks (Excel, large JSON, complex analysis):
+- **REPL as state container**: Store data in Python variables, not context window
+- **Query, don't dump**: `print(df.columns)` not `print(df)` - only print what you need
+- **session_facts for important info**: API creds, endpoints, key decisions → `store_session_fact()`
+- **Lost-in-middle defense**: If user gives critical info early, store it immediately
 """
 
 import json
@@ -238,6 +262,30 @@ SESSION_KEYWORDS = [
     "session resume",
     "/session-resume",
 ]
+
+# Command patterns - skip RAG for imperative commands (not questions)
+COMMAND_PATTERNS = [
+    r'^(commit|push|pull|add|delete|remove|create|run|execute|install|build|test|deploy)\b',
+    r'^(yes|no|ok|sure|fine|continue|proceed|go ahead|do it)\b',
+    r'^(save|close|open|start|stop|restart|refresh|reload)\b',
+]
+
+def is_command(prompt: str) -> bool:
+    """Detect if prompt is an imperative command (not a question).
+
+    Returns True for commands like 'commit changes', 'yes do it', etc.
+    These don't benefit from RAG - they're actions, not questions.
+    """
+    prompt_lower = prompt.lower().strip()
+
+    # Skip if it's a question (has question mark or question words)
+    if '?' in prompt or any(w in prompt_lower for w in ['how', 'what', 'where', 'why', 'when', 'which', 'can you', 'could you']):
+        return False
+
+    for pattern in COMMAND_PATTERNS:
+        if re.match(pattern, prompt_lower):
+            return True
+    return False
 
 
 def detect_explicit_negative(user_prompt: str) -> Optional[Tuple[str, float]]:
@@ -609,6 +657,143 @@ def process_implicit_feedback(conn, user_prompt: str, session_id: str = None):
                 update_doc_quality(conn, doc_path, is_hit=False)
 
 
+def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
+                    top_k: int = 3, min_similarity: float = 0.40) -> str:
+    """Query knowledge table for relevant entries.
+
+    Args:
+        user_prompt: The user's question/prompt
+        project_name: Current project name
+        session_id: Current session ID (for logging)
+        top_k: Number of results to return
+        min_similarity: Minimum similarity score (0-1)
+
+    Returns:
+        Formatted context string or None if no results
+    """
+    if not DB_AVAILABLE or not VOYAGE_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+
+        # Extract query from user prompt
+        query_text = extract_query_from_prompt(user_prompt)
+
+        # Generate embedding for query
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+
+        # Search knowledge table for similar entries
+        # Filter by project if applies_to_projects is set, or include general knowledge
+        # Note: applies_to_projects can be NULL, empty array [], or contain project names
+        cur.execute("""
+            SELECT
+                knowledge_id::text,
+                title,
+                description,
+                knowledge_type,
+                knowledge_category,
+                code_example,
+                confidence_level,
+                times_applied,
+                1 - (embedding <=> %s::vector) as similarity_score
+            FROM claude.knowledge
+            WHERE embedding IS NOT NULL
+              AND 1 - (embedding <=> %s::vector) >= %s
+              AND (
+                  applies_to_projects IS NULL
+                  OR cardinality(applies_to_projects) = 0
+                  OR %s = ANY(applies_to_projects)
+              )
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, query_embedding, min_similarity, project_name, query_embedding, top_k))
+
+        results = cur.fetchall()
+
+        if not results:
+            conn.close()
+            return None
+
+        # Update access tracking for returned knowledge
+        for r in results:
+            knowledge_id = r['knowledge_id'] if isinstance(r, dict) else r[0]
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET last_accessed_at = NOW(),
+                    access_count = COALESCE(access_count, 0) + 1
+                WHERE knowledge_id = %s::uuid
+            """, (knowledge_id,))
+        conn.commit()
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Format results
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        context_lines.append(f"KNOWLEDGE RECALL ({len(results)} relevant entries, {latency_ms}ms)")
+        context_lines.append("=" * 70)
+        context_lines.append("")
+
+        for r in results:
+            if isinstance(r, dict):
+                title = r['title']
+                description = r['description']
+                knowledge_type = r['knowledge_type']
+                category = r['knowledge_category']
+                code_example = r['code_example']
+                confidence = r['confidence_level']
+                times_applied = r['times_applied']
+                similarity = round(r['similarity_score'], 3)
+            else:
+                title = r[1]
+                description = r[2]
+                knowledge_type = r[3]
+                category = r[4]
+                code_example = r[5]
+                confidence = r[6]
+                times_applied = r[7]
+                similarity = round(r[8], 3)
+
+            # Format entry
+            type_info = knowledge_type or 'knowledge'
+            if category:
+                type_info += f"/{category}"
+            confidence_str = f"conf={confidence}%" if confidence else ""
+            applied_str = f"used {times_applied}x" if times_applied else "never used"
+
+            context_lines.append(f"💡 {title} ({similarity} match, {type_info})")
+            context_lines.append(f"   {confidence_str} | {applied_str}")
+            context_lines.append("")
+            context_lines.append(description)
+
+            if code_example:
+                context_lines.append("")
+                context_lines.append("Code Example:")
+                context_lines.append(code_example)
+
+            context_lines.append("")
+            context_lines.append("-" * 70)
+            context_lines.append("")
+
+        logger.info(f"Knowledge query success: {len(results)} entries, latency={latency_ms}ms")
+        conn.close()
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Knowledge query failed: {e}", exc_info=True)
+        return None
+
+
 def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
                     top_k: int = 3, min_similarity: float = 0.30) -> str:
     """Query vault embeddings and return formatted context.
@@ -656,6 +841,9 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
         cur = conn.cursor()
 
         # Search for similar documents (prefer vault docs, include project docs)
+        # EXCLUSIONS: awesome-copilot-reference is reference material, not searchable knowledge
+        # DEDUPLICATION: Fetch extra results, then dedupe by doc_path (take best chunk per doc)
+        fetch_count = top_k * 3  # Fetch 3x to allow for deduplication
         cur.execute("""
             SELECT
                 doc_path,
@@ -666,11 +854,26 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
             FROM claude.vault_embeddings
             WHERE 1 - (embedding <=> %s::vector) >= %s
               AND (doc_source = 'vault' OR (doc_source = 'project' AND project_name = %s))
+              AND doc_path NOT LIKE '%%awesome-copilot%%'
             ORDER BY embedding <=> %s::vector
             LIMIT %s
-        """, (query_embedding, query_embedding, min_similarity, project_name, query_embedding, top_k))
+        """, (query_embedding, query_embedding, min_similarity, project_name, query_embedding, fetch_count))
 
-        results = cur.fetchall()
+        raw_results = cur.fetchall()
+
+        # DEDUPLICATION: Group by doc_path, keep highest similarity chunk per doc
+        # This prevents the same document appearing 2-3 times with different chunks
+        seen_docs = {}
+        for r in raw_results:
+            doc_path = r['doc_path'] if isinstance(r, dict) else r[0]
+            similarity = r['similarity_score'] if isinstance(r, dict) else r[4]
+
+            if doc_path not in seen_docs or similarity > (seen_docs[doc_path]['similarity_score'] if isinstance(seen_docs[doc_path], dict) else seen_docs[doc_path][4]):
+                seen_docs[doc_path] = r
+
+        # Convert back to list and take top_k
+        results = list(seen_docs.values())[:top_k]
+        logger.info(f"Deduplication: {len(raw_results)} raw -> {len(seen_docs)} unique docs -> {len(results)} returned")
 
         # Log usage
         latency_ms = int((time.time() - start_time) * 1000)
@@ -792,6 +995,19 @@ def main():
             print(json.dumps(result))
             return
 
+        # Skip RAG for imperative commands (commit, yes, push, etc.)
+        # These are actions, not questions - RAG adds no value
+        if is_command(user_prompt):
+            logger.info(f"Skipping RAG for command: {user_prompt[:50]}")
+            result = {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": CORE_PROTOCOL  # Still inject core protocol
+                }
+            }
+            print(json.dumps(result))
+            return
+
         # Get project context
         cwd = os.getcwd()
         project_name = os.path.basename(cwd)
@@ -818,7 +1034,17 @@ def main():
             logger.info("Session keywords detected - loading session context from database")
             session_context = get_session_context(project_name)
 
-        # Query RAG (vault knowledge)
+        # Query KNOWLEDGE TABLE (learned patterns, gotchas, facts)
+        # This provides memory-like recall of previously learned information
+        knowledge_context = query_knowledge(
+            user_prompt=user_prompt,
+            project_name=project_name,
+            session_id=session_id,
+            top_k=2,  # Keep it focused - just 2 relevant knowledge entries
+            min_similarity=0.45  # Higher threshold for knowledge to reduce noise
+        )
+
+        # Query RAG (vault knowledge - documentation)
         rag_context = query_vault_rag(
             user_prompt=user_prompt,
             project_name=project_name,
@@ -827,10 +1053,20 @@ def main():
             min_similarity=0.30
         )
 
-        # Combine contexts: session context first (if present), then RAG results
+        # Combine contexts in priority order:
+        # 0. Core protocol (ALWAYS - ensures input processing workflow)
+        # 1. Session context (if session keywords detected)
+        # 2. Knowledge recall (learned patterns - high signal)
+        # 3. Vault RAG (documentation - broader context)
         combined_context_parts = []
+
+        # ALWAYS inject core protocol FIRST (positioned prominently, never lost)
+        combined_context_parts.append(CORE_PROTOCOL)
+
         if session_context:
             combined_context_parts.append(session_context)
+        if knowledge_context:
+            combined_context_parts.append(knowledge_context)
         if rag_context:
             combined_context_parts.append(rag_context)
 

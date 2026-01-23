@@ -7,6 +7,8 @@ Provides project-aware tooling that makes development easier:
 - Todo management (restore, convert to build_tasks)
 - Work tracking (feedback, features, build_tasks) with validation
 - Skill discovery (search skill_content by task)
+- Knowledge operations (store, recall, link) with semantic search
+- Session facts (crash-resistant cache for important info)
 
 Tools:
 - get_project_context: Load project info, settings, active work
@@ -19,9 +21,19 @@ Tools:
 - update_work_status: Update status of feedback/feature/build_task
 - find_skill: Search skill_content by task description
 - todos_to_build_tasks: Convert session todos to persistent build_tasks
+- store_knowledge: Store new knowledge with automatic embedding
+- recall_knowledge: Semantic search over knowledge entries
+- link_knowledge: Create typed relations between knowledge entries
+- store_session_fact: Cache important facts (credentials, configs) within session
+- recall_session_fact: Retrieve a fact by key
+- list_session_facts: List all facts in current session
+- recall_previous_session_facts: Recover facts from previous sessions (crash recovery)
+- store_session_notes: Store structured notes (decisions, progress, blockers) - survives crashes
+- get_session_notes: Retrieve session notes for current project
 
 Author: Claude Family
 Created: 2026-01-17
+Updated: 2026-01-23
 """
 
 import asyncio
@@ -32,6 +44,14 @@ from typing import Any, Dict, List, Optional
 from pathlib import Path
 from datetime import datetime
 import re
+
+# For Voyage AI embeddings
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    print("WARNING: requests not installed. Knowledge embedding disabled.", file=sys.stderr)
 
 # MCP SDK imports
 try:
@@ -141,6 +161,98 @@ def get_project_id(project_identifier: str) -> Optional[str]:
         return row['project_id'] if row else None
     finally:
         conn.close()
+
+
+# ============================================================================
+# Embedding Helper
+# ============================================================================
+
+VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY')
+EMBEDDING_MODEL = "voyage-3"
+
+
+def generate_embedding(text: str) -> Optional[List[float]]:
+    """Generate embedding for a single text using Voyage AI."""
+    if not REQUESTS_AVAILABLE:
+        return None
+    if not VOYAGE_API_KEY:
+        return None
+
+    try:
+        response = requests.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {VOYAGE_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "input": [text],
+                "model": EMBEDDING_MODEL,
+                "input_type": "document"
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result["data"][0]["embedding"]
+    except Exception as e:
+        print(f"Embedding generation failed: {e}", file=sys.stderr)
+        return None
+
+
+def generate_query_embedding(query: str) -> Optional[List[float]]:
+    """Generate embedding for a query (uses query input_type for better retrieval)."""
+    if not REQUESTS_AVAILABLE:
+        return None
+    if not VOYAGE_API_KEY:
+        return None
+
+    try:
+        response = requests.post(
+            "https://api.voyageai.com/v1/embeddings",
+            headers={
+                "Authorization": f"Bearer {VOYAGE_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "input": [query],
+                "model": EMBEDDING_MODEL,
+                "input_type": "query"
+            },
+            timeout=30
+        )
+        response.raise_for_status()
+        result = response.json()
+        return result["data"][0]["embedding"]
+    except Exception as e:
+        print(f"Query embedding generation failed: {e}", file=sys.stderr)
+        return None
+
+
+def format_knowledge_for_embedding(entry: dict) -> str:
+    """Format a knowledge entry as text for embedding."""
+    parts = []
+
+    if entry.get('title'):
+        parts.append(f"# {entry['title']}")
+
+    if entry.get('knowledge_type') or entry.get('knowledge_category'):
+        type_cat = f"Type: {entry.get('knowledge_type', 'unknown')}"
+        if entry.get('knowledge_category'):
+            type_cat += f" | Category: {entry['knowledge_category']}"
+        parts.append(type_cat)
+
+    if entry.get('description'):
+        parts.append(entry['description'])
+
+    if entry.get('code_example'):
+        parts.append(f"\nCode Example:\n{entry['code_example']}")
+
+    if entry.get('applies_to_projects'):
+        projects = ', '.join(entry['applies_to_projects']) if isinstance(entry['applies_to_projects'], list) else str(entry['applies_to_projects'])
+        parts.append(f"\nApplies to: {projects}")
+
+    return '\n\n'.join(parts)
 
 
 # ============================================================================
@@ -810,6 +922,748 @@ async def tool_todos_to_build_tasks(
 
 
 # ============================================================================
+# Knowledge Tool Implementations
+# ============================================================================
+
+async def tool_store_knowledge(
+    title: str,
+    description: str,
+    knowledge_type: str = "learned",
+    knowledge_category: Optional[str] = None,
+    code_example: Optional[str] = None,
+    applies_to_projects: Optional[List[str]] = None,
+    applies_to_platforms: Optional[List[str]] = None,
+    confidence_level: int = 80,
+    source: Optional[str] = None
+) -> Dict:
+    """Store new knowledge with automatic embedding."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Create the knowledge entry
+        entry = {
+            'title': title,
+            'description': description,
+            'knowledge_type': knowledge_type,
+            'knowledge_category': knowledge_category,
+            'code_example': code_example,
+            'applies_to_projects': applies_to_projects
+        }
+
+        # Generate embedding
+        text_for_embedding = format_knowledge_for_embedding(entry)
+        embedding = generate_embedding(text_for_embedding)
+
+        if embedding:
+            cur.execute("""
+                INSERT INTO claude.knowledge
+                    (knowledge_id, title, description, knowledge_type, knowledge_category,
+                     code_example, applies_to_projects, applies_to_platforms,
+                     confidence_level, source, embedding, created_at)
+                VALUES
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, NOW())
+                RETURNING knowledge_id::text
+            """, (title, description, knowledge_type, knowledge_category, code_example,
+                  applies_to_projects, applies_to_platforms, confidence_level, source,
+                  embedding))
+        else:
+            # Store without embedding if generation failed
+            cur.execute("""
+                INSERT INTO claude.knowledge
+                    (knowledge_id, title, description, knowledge_type, knowledge_category,
+                     code_example, applies_to_projects, applies_to_platforms,
+                     confidence_level, source, created_at)
+                VALUES
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                RETURNING knowledge_id::text
+            """, (title, description, knowledge_type, knowledge_category, code_example,
+                  applies_to_projects, applies_to_platforms, confidence_level, source))
+
+        result = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "knowledge_id": result['knowledge_id'],
+            "title": title,
+            "has_embedding": embedding is not None,
+            "message": f"Stored knowledge: {title}"
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to store knowledge: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_recall_knowledge(
+    query: str,
+    limit: int = 5,
+    knowledge_type: Optional[str] = None,
+    project: Optional[str] = None,
+    min_similarity: float = 0.5
+) -> Dict:
+    """Semantic search over knowledge entries."""
+    if not VOYAGE_API_KEY:
+        return {"error": "VOYAGE_API_KEY not set - cannot perform semantic search"}
+
+    # Generate query embedding
+    query_embedding = generate_query_embedding(query)
+    if not query_embedding:
+        return {"error": "Failed to generate query embedding"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Build query with optional filters
+        filters = []
+        params = [query_embedding, min_similarity]
+
+        if knowledge_type:
+            filters.append("AND knowledge_type = %s")
+            params.append(knowledge_type)
+
+        if project:
+            filters.append("AND (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)")
+            params.append(project)
+
+        params.append(limit)
+        filter_clause = " ".join(filters)
+
+        cur.execute(f"""
+            SELECT
+                knowledge_id::text,
+                title,
+                description,
+                knowledge_type,
+                knowledge_category,
+                code_example,
+                applies_to_projects,
+                confidence_level,
+                times_applied,
+                1 - (embedding <=> %s::vector) as similarity
+            FROM claude.knowledge
+            WHERE embedding IS NOT NULL
+              AND 1 - (embedding <=> %s::vector) >= %s
+              {filter_clause}
+            ORDER BY similarity DESC
+            LIMIT %s
+        """, [query_embedding] + params)
+
+        results = []
+        for row in cur.fetchall():
+            # Update access tracking
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET last_accessed_at = NOW(),
+                    access_count = COALESCE(access_count, 0) + 1
+                WHERE knowledge_id = %s::uuid
+            """, (row['knowledge_id'],))
+
+            results.append({
+                "knowledge_id": row['knowledge_id'],
+                "title": row['title'],
+                "description": row['description'],
+                "knowledge_type": row['knowledge_type'],
+                "knowledge_category": row['knowledge_category'],
+                "code_example": row['code_example'],
+                "applies_to_projects": row['applies_to_projects'],
+                "confidence_level": row['confidence_level'],
+                "times_applied": row['times_applied'],
+                "similarity": round(float(row['similarity']), 4)
+            })
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "query": query,
+            "results_count": len(results),
+            "min_similarity": min_similarity,
+            "results": results
+        }
+
+    except Exception as e:
+        return {"error": f"Knowledge recall failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_link_knowledge(
+    from_knowledge_id: str,
+    to_knowledge_id: str,
+    relation_type: str,
+    strength: float = 1.0,
+    notes: Optional[str] = None
+) -> Dict:
+    """Create a typed relation between knowledge entries."""
+    valid_relation_types = [
+        'extends', 'contradicts', 'supports', 'supersedes',
+        'depends_on', 'relates_to', 'part_of', 'caused_by'
+    ]
+
+    if relation_type not in valid_relation_types:
+        return {
+            "error": f"Invalid relation_type: {relation_type}. Valid types: {valid_relation_types}"
+        }
+
+    if strength < 0 or strength > 1:
+        return {"error": "strength must be between 0 and 1"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Verify both knowledge entries exist
+        cur.execute("""
+            SELECT knowledge_id::text, title
+            FROM claude.knowledge
+            WHERE knowledge_id IN (%s::uuid, %s::uuid)
+        """, (from_knowledge_id, to_knowledge_id))
+
+        found = {str(r['knowledge_id']): r['title'] for r in cur.fetchall()}
+
+        if from_knowledge_id not in found:
+            return {"error": f"From knowledge not found: {from_knowledge_id}"}
+        if to_knowledge_id not in found:
+            return {"error": f"To knowledge not found: {to_knowledge_id}"}
+
+        # Create relation
+        cur.execute("""
+            INSERT INTO claude.knowledge_relations
+                (from_knowledge_id, to_knowledge_id, relation_type, strength, notes)
+            VALUES
+                (%s::uuid, %s::uuid, %s, %s, %s)
+            ON CONFLICT (from_knowledge_id, to_knowledge_id, relation_type) DO UPDATE
+            SET strength = EXCLUDED.strength, notes = EXCLUDED.notes
+            RETURNING relation_id::text
+        """, (from_knowledge_id, to_knowledge_id, relation_type, strength, notes))
+
+        result = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "relation_id": result['relation_id'],
+            "from": found[from_knowledge_id],
+            "to": found[to_knowledge_id],
+            "relation_type": relation_type,
+            "strength": strength
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to link knowledge: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_get_related_knowledge(
+    knowledge_id: str,
+    relation_types: Optional[List[str]] = None,
+    include_reverse: bool = True
+) -> Dict:
+    """Get related knowledge entries via knowledge_relations."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get the source knowledge
+        cur.execute("""
+            SELECT knowledge_id::text, title, description
+            FROM claude.knowledge
+            WHERE knowledge_id = %s::uuid
+        """, (knowledge_id,))
+        source = cur.fetchone()
+
+        if not source:
+            return {"error": f"Knowledge not found: {knowledge_id}"}
+
+        # Build relation type filter
+        type_filter = ""
+        type_params = []
+        if relation_types:
+            type_filter = "AND r.relation_type = ANY(%s)"
+            type_params = [relation_types]
+
+        # Get outgoing relations
+        cur.execute(f"""
+            SELECT
+                r.relation_id::text,
+                r.relation_type,
+                r.strength,
+                r.notes,
+                'outgoing' as direction,
+                k.knowledge_id::text as related_id,
+                k.title as related_title,
+                k.description as related_description,
+                k.knowledge_type
+            FROM claude.knowledge_relations r
+            JOIN claude.knowledge k ON r.to_knowledge_id = k.knowledge_id
+            WHERE r.from_knowledge_id = %s::uuid
+            {type_filter}
+            ORDER BY r.strength DESC
+        """, [knowledge_id] + type_params)
+
+        outgoing = [dict(r) for r in cur.fetchall()]
+
+        incoming = []
+        if include_reverse:
+            cur.execute(f"""
+                SELECT
+                    r.relation_id::text,
+                    r.relation_type,
+                    r.strength,
+                    r.notes,
+                    'incoming' as direction,
+                    k.knowledge_id::text as related_id,
+                    k.title as related_title,
+                    k.description as related_description,
+                    k.knowledge_type
+                FROM claude.knowledge_relations r
+                JOIN claude.knowledge k ON r.from_knowledge_id = k.knowledge_id
+                WHERE r.to_knowledge_id = %s::uuid
+                {type_filter}
+                ORDER BY r.strength DESC
+            """, [knowledge_id] + type_params)
+
+            incoming = [dict(r) for r in cur.fetchall()]
+
+        cur.close()
+
+        return {
+            "source": {
+                "knowledge_id": source['knowledge_id'],
+                "title": source['title'],
+                "description": source['description']
+            },
+            "relations_count": len(outgoing) + len(incoming),
+            "outgoing": outgoing,
+            "incoming": incoming
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to get related knowledge: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Session Facts Tool Implementations
+# ============================================================================
+
+async def tool_store_session_fact(
+    fact_key: str,
+    fact_value: str,
+    fact_type: str = "note",
+    is_sensitive: bool = False,
+    project_name: Optional[str] = None
+) -> Dict:
+    """Store a fact for the current session (crash-resistant cache)."""
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    # Validate fact_type
+    valid, msg = validate_value('session_facts', 'fact_type', fact_type)
+    if not valid:
+        return {"error": msg}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Upsert the fact (update if key exists for this session)
+        cur.execute("""
+            INSERT INTO claude.session_facts
+                (fact_id, session_id, project_name, fact_type, fact_key, fact_value, is_sensitive, created_at)
+            VALUES
+                (gen_random_uuid(), %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (session_id, fact_key) DO UPDATE SET
+                fact_value = EXCLUDED.fact_value,
+                fact_type = EXCLUDED.fact_type,
+                is_sensitive = EXCLUDED.is_sensitive,
+                created_at = NOW()
+            RETURNING fact_id::text
+        """, (session_id if session_id else None, project_name, fact_type, fact_key, fact_value, is_sensitive))
+
+        result = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        log_msg = f"Stored fact: {fact_key}" if not is_sensitive else f"Stored sensitive fact: {fact_key}"
+        return {
+            "success": True,
+            "fact_id": result['fact_id'],
+            "fact_key": fact_key,
+            "fact_type": fact_type,
+            "is_sensitive": is_sensitive,
+            "message": log_msg
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to store fact: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_recall_session_fact(
+    fact_key: str,
+    project_name: Optional[str] = None
+) -> Dict:
+    """Recall a specific fact by key from current session."""
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Try current session first, then fall back to recent sessions
+        cur.execute("""
+            SELECT fact_id::text, fact_key, fact_value, fact_type, is_sensitive, created_at, session_id::text
+            FROM claude.session_facts
+            WHERE fact_key = %s
+              AND project_name = %s
+              AND (session_id = %s::uuid OR session_id IS NULL OR %s::text IS NULL)
+            ORDER BY
+                CASE WHEN session_id = %s::uuid THEN 0 ELSE 1 END,
+                created_at DESC
+            LIMIT 1
+        """, (fact_key, project_name, session_id, session_id, session_id))
+
+        result = cur.fetchone()
+        cur.close()
+
+        if not result:
+            return {"found": False, "fact_key": fact_key, "message": f"No fact found for key: {fact_key}"}
+
+        return {
+            "found": True,
+            "fact_id": result['fact_id'],
+            "fact_key": result['fact_key'],
+            "fact_value": result['fact_value'],
+            "fact_type": result['fact_type'],
+            "is_sensitive": result['is_sensitive'],
+            "created_at": result['created_at'].isoformat() if result['created_at'] else None,
+            "from_session": result['session_id']
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to recall fact: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_list_session_facts(
+    project_name: Optional[str] = None,
+    include_sensitive: bool = False
+) -> Dict:
+    """List all facts for the current session."""
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT fact_id::text, fact_key, fact_value, fact_type, is_sensitive, created_at
+            FROM claude.session_facts
+            WHERE project_name = %s
+              AND (session_id = %s OR session_id IS NULL)
+            ORDER BY created_at DESC
+        """, (project_name, session_id))
+
+        facts = []
+        for row in cur.fetchall():
+            fact = {
+                "fact_id": row['fact_id'],
+                "fact_key": row['fact_key'],
+                "fact_type": row['fact_type'],
+                "is_sensitive": row['is_sensitive'],
+                "created_at": row['created_at'].isoformat() if row['created_at'] else None
+            }
+            # Only include value if not sensitive or explicitly requested
+            if not row['is_sensitive'] or include_sensitive:
+                fact["fact_value"] = row['fact_value']
+            else:
+                fact["fact_value"] = "[REDACTED - use include_sensitive=true]"
+            facts.append(fact)
+
+        cur.close()
+
+        return {
+            "project_name": project_name,
+            "session_id": session_id,
+            "facts_count": len(facts),
+            "facts": facts
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to list facts: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_recall_previous_session_facts(
+    project_name: Optional[str] = None,
+    n_sessions: int = 3,
+    fact_types: Optional[List[str]] = None
+) -> Dict:
+    """Recall facts from previous sessions (crash recovery)."""
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get recent sessions for this project
+        cur.execute("""
+            SELECT DISTINCT session_id
+            FROM claude.session_facts
+            WHERE project_name = %s
+              AND session_id IS NOT NULL
+            ORDER BY (SELECT MAX(created_at) FROM claude.session_facts sf2 WHERE sf2.session_id = session_facts.session_id) DESC
+            LIMIT %s
+        """, (project_name, n_sessions))
+
+        session_ids = [row['session_id'] for row in cur.fetchall()]
+
+        if not session_ids:
+            return {"message": "No previous session facts found", "facts": []}
+
+        # Build query with optional type filter
+        type_filter = ""
+        params = [project_name, tuple(session_ids)]
+        if fact_types:
+            type_filter = "AND fact_type = ANY(%s)"
+            params.append(fact_types)
+
+        cur.execute(f"""
+            SELECT
+                fact_id::text,
+                fact_key,
+                fact_value,
+                fact_type,
+                is_sensitive,
+                created_at,
+                session_id::text
+            FROM claude.session_facts
+            WHERE project_name = %s
+              AND session_id IN %s
+              {type_filter}
+            ORDER BY created_at DESC
+        """, params)
+
+        facts = []
+        for row in cur.fetchall():
+            facts.append({
+                "fact_id": row['fact_id'],
+                "fact_key": row['fact_key'],
+                "fact_value": row['fact_value'] if not row['is_sensitive'] else "[REDACTED]",
+                "fact_type": row['fact_type'],
+                "is_sensitive": row['is_sensitive'],
+                "created_at": row['created_at'].isoformat() if row['created_at'] else None,
+                "session_id": row['session_id']
+            })
+
+        cur.close()
+
+        return {
+            "project_name": project_name,
+            "sessions_checked": len(session_ids),
+            "facts_count": len(facts),
+            "facts": facts
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to recall previous facts: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_mark_knowledge_applied(
+    knowledge_id: str,
+    success: bool = True
+) -> Dict:
+    """Track when knowledge is applied (success or failure)."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if success:
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET times_applied = COALESCE(times_applied, 0) + 1,
+                    last_applied_at = NOW(),
+                    confidence_level = LEAST(100, COALESCE(confidence_level, 80) + 1)
+                WHERE knowledge_id = %s::uuid
+                RETURNING knowledge_id::text, title, times_applied, confidence_level
+            """, (knowledge_id,))
+        else:
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET times_failed = COALESCE(times_failed, 0) + 1,
+                    confidence_level = GREATEST(0, COALESCE(confidence_level, 80) - 5)
+                WHERE knowledge_id = %s::uuid
+                RETURNING knowledge_id::text, title, times_failed, confidence_level
+            """, (knowledge_id,))
+
+        result = cur.fetchone()
+        if not result:
+            return {"error": f"Knowledge not found: {knowledge_id}"}
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "knowledge_id": result['knowledge_id'],
+            "title": result['title'],
+            "applied_success": success,
+            "new_confidence": result['confidence_level'],
+            "times_applied": result.get('times_applied'),
+            "times_failed": result.get('times_failed')
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to mark knowledge: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_store_session_notes(
+    content: str,
+    section: str = "general",
+    append: bool = True
+) -> Dict:
+    """
+    Store structured notes during a session.
+
+    Notes persist to a markdown file for crash recovery and cross-session reference.
+    Use for: progress tracking, key decisions, architectural notes, important findings.
+
+    Args:
+        content: Note content to store
+        section: Section header (e.g., "decisions", "progress", "blockers", "findings")
+        append: If True, append to section. If False, replace section.
+    """
+    session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')
+    project_name = os.path.basename(os.getcwd())
+
+    # Notes directory: ~/.claude/session_notes/
+    notes_dir = Path.home() / ".claude" / "session_notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+
+    # File per project (not session) so notes persist
+    notes_file = notes_dir / f"{project_name}.md"
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    try:
+        # Read existing content or create new
+        if notes_file.exists():
+            existing = notes_file.read_text(encoding='utf-8')
+        else:
+            existing = f"# Session Notes: {project_name}\n\n"
+
+        # Format the new note
+        note_entry = f"- [{timestamp}] {content}\n"
+
+        # Find or create section
+        section_header = f"## {section.title()}\n"
+
+        if section_header in existing:
+            if append:
+                # Insert note after section header
+                parts = existing.split(section_header)
+                parts[1] = note_entry + parts[1]
+                new_content = section_header.join(parts)
+            else:
+                # Replace section content until next ## or end
+                import re
+                pattern = rf"(## {re.escape(section.title())}\n)(.*?)(?=\n## |\Z)"
+                new_content = re.sub(pattern, rf"\1{note_entry}", existing, flags=re.DOTALL)
+        else:
+            # Add new section at end
+            new_content = existing.rstrip() + f"\n\n{section_header}{note_entry}"
+
+        # Write back
+        notes_file.write_text(new_content, encoding='utf-8')
+
+        return {
+            "success": True,
+            "notes_file": str(notes_file),
+            "section": section,
+            "content_added": content[:100] + "..." if len(content) > 100 else content,
+            "project": project_name,
+            "session_id": session_id
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to store notes: {str(e)}"}
+
+
+async def tool_get_session_notes(
+    section: Optional[str] = None
+) -> Dict:
+    """
+    Retrieve session notes for the current project.
+
+    Args:
+        section: Optional section to retrieve (e.g., "decisions"). If None, returns all.
+    """
+    project_name = os.path.basename(os.getcwd())
+    notes_file = Path.home() / ".claude" / "session_notes" / f"{project_name}.md"
+
+    try:
+        if not notes_file.exists():
+            return {
+                "found": False,
+                "message": f"No notes found for project: {project_name}",
+                "notes_file": str(notes_file)
+            }
+
+        content = notes_file.read_text(encoding='utf-8')
+
+        if section:
+            # Extract specific section
+            import re
+            pattern = rf"## {re.escape(section.title())}\n(.*?)(?=\n## |\Z)"
+            match = re.search(pattern, content, flags=re.DOTALL)
+            if match:
+                return {
+                    "found": True,
+                    "section": section,
+                    "content": match.group(1).strip(),
+                    "notes_file": str(notes_file)
+                }
+            else:
+                return {
+                    "found": False,
+                    "message": f"Section '{section}' not found",
+                    "available_sections": re.findall(r"## (\w+)", content)
+                }
+
+        return {
+            "found": True,
+            "content": content,
+            "notes_file": str(notes_file),
+            "project": project_name
+        }
+
+    except Exception as e:
+        return {"error": f"Failed to get notes: {str(e)}"}
+
+
+# ============================================================================
 # MCP Tool Definitions
 # ============================================================================
 
@@ -982,6 +1836,187 @@ async def list_tools() -> List[Tool]:
                 },
                 "required": ["feature_id", "project"]
             }
+        ),
+        # Knowledge Tools
+        Tool(
+            name="store_knowledge",
+            description="Store new knowledge with automatic embedding for semantic search. Use for learnings, patterns, gotchas, etc.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short descriptive title"},
+                    "description": {"type": "string", "description": "Detailed knowledge content"},
+                    "knowledge_type": {
+                        "type": "string",
+                        "description": "Type: learned, pattern, gotcha, preference, fact, procedure (default: learned)"
+                    },
+                    "knowledge_category": {"type": "string", "description": "Category (e.g., 'database', 'react', 'testing')"},
+                    "code_example": {"type": "string", "description": "Optional code example"},
+                    "applies_to_projects": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Projects this knowledge applies to (null = all)"
+                    },
+                    "applies_to_platforms": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Platforms (windows, mac, linux)"
+                    },
+                    "confidence_level": {"type": "integer", "description": "Confidence 0-100 (default: 80)"},
+                    "source": {"type": "string", "description": "Source of knowledge (e.g., 'session', 'documentation')"}
+                },
+                "required": ["title", "description"]
+            }
+        ),
+        Tool(
+            name="recall_knowledge",
+            description="Semantic search over knowledge entries. Use to find relevant learnings, patterns, or facts.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language query"},
+                    "limit": {"type": "integer", "description": "Max results (default: 5)"},
+                    "knowledge_type": {"type": "string", "description": "Filter by type (optional)"},
+                    "project": {"type": "string", "description": "Filter by project (optional)"},
+                    "min_similarity": {"type": "number", "description": "Minimum similarity 0-1 (default: 0.5)"}
+                },
+                "required": ["query"]
+            }
+        ),
+        Tool(
+            name="link_knowledge",
+            description="Create a typed relation between knowledge entries (extends, contradicts, supports, etc.).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "from_knowledge_id": {"type": "string", "description": "Source knowledge UUID"},
+                    "to_knowledge_id": {"type": "string", "description": "Target knowledge UUID"},
+                    "relation_type": {
+                        "type": "string",
+                        "description": "Type: extends, contradicts, supports, supersedes, depends_on, relates_to, part_of, caused_by"
+                    },
+                    "strength": {"type": "number", "description": "Relation strength 0-1 (default: 1.0)"},
+                    "notes": {"type": "string", "description": "Optional notes about the relation"}
+                },
+                "required": ["from_knowledge_id", "to_knowledge_id", "relation_type"]
+            }
+        ),
+        Tool(
+            name="get_related_knowledge",
+            description="Get knowledge entries related to a given entry via knowledge_relations.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "knowledge_id": {"type": "string", "description": "Knowledge UUID to find relations for"},
+                    "relation_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by relation types (optional)"
+                    },
+                    "include_reverse": {"type": "boolean", "description": "Include incoming relations (default: true)"}
+                },
+                "required": ["knowledge_id"]
+            }
+        ),
+        Tool(
+            name="mark_knowledge_applied",
+            description="Track when knowledge is applied successfully or fails. Updates confidence level.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "knowledge_id": {"type": "string", "description": "Knowledge UUID that was applied"},
+                    "success": {"type": "boolean", "description": "Whether application was successful (default: true)"}
+                },
+                "required": ["knowledge_id"]
+            }
+        ),
+        # Session Facts Tools
+        Tool(
+            name="store_session_fact",
+            description="Store a fact for the current session. Use for important info (credentials, configs, decisions) that might get lost in long conversations. Survives crashes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "fact_key": {"type": "string", "description": "Unique key for the fact (e.g., 'api_endpoint', 'nimbus_creds')"},
+                    "fact_value": {"type": "string", "description": "The fact value to store"},
+                    "fact_type": {
+                        "type": "string",
+                        "description": "Type: credential, config, endpoint, decision, note, data, reference (default: note)"
+                    },
+                    "is_sensitive": {"type": "boolean", "description": "If true, value won't appear in logs (default: false)"},
+                    "project_name": {"type": "string", "description": "Project name (default: current directory)"}
+                },
+                "required": ["fact_key", "fact_value"]
+            }
+        ),
+        Tool(
+            name="recall_session_fact",
+            description="Recall a specific fact by key. Looks in current session first, falls back to recent sessions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "fact_key": {"type": "string", "description": "The key of the fact to recall"},
+                    "project_name": {"type": "string", "description": "Project name (default: current directory)"}
+                },
+                "required": ["fact_key"]
+            }
+        ),
+        Tool(
+            name="list_session_facts",
+            description="List all facts stored in the current session.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name (default: current directory)"},
+                    "include_sensitive": {"type": "boolean", "description": "Include sensitive fact values (default: false)"}
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="recall_previous_session_facts",
+            description="Recall facts from previous sessions (crash recovery). Use when you've lost context and need to recover important info.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project_name": {"type": "string", "description": "Project name (default: current directory)"},
+                    "n_sessions": {"type": "integer", "description": "Number of previous sessions to check (default: 3)"},
+                    "fact_types": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Filter by fact types (optional)"
+                    }
+                },
+                "required": []
+            }
+        ),
+        # Session Notes Tools
+        Tool(
+            name="store_session_notes",
+            description="Store structured notes during a session. Notes persist to markdown file for crash recovery. Use for: progress tracking, decisions, blockers, findings.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Note content to store"},
+                    "section": {
+                        "type": "string",
+                        "description": "Section header: decisions, progress, blockers, findings, general (default: general)"
+                    },
+                    "append": {"type": "boolean", "description": "Append to section (default: true). False replaces section."}
+                },
+                "required": ["content"]
+            }
+        ),
+        Tool(
+            name="get_session_notes",
+            description="Retrieve session notes for the current project. Useful after crash recovery to see what was done.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "section": {"type": "string", "description": "Section to retrieve (optional). If omitted, returns all notes."}
+                },
+                "required": []
+            }
         )
     ]
 
@@ -1040,6 +2075,82 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
                 arguments['feature_id'],
                 arguments['project'],
                 arguments.get('include_completed', False)
+            )
+        # Knowledge tools
+        elif name == "store_knowledge":
+            result = await tool_store_knowledge(
+                arguments['title'],
+                arguments['description'],
+                arguments.get('knowledge_type', 'learned'),
+                arguments.get('knowledge_category'),
+                arguments.get('code_example'),
+                arguments.get('applies_to_projects'),
+                arguments.get('applies_to_platforms'),
+                arguments.get('confidence_level', 80),
+                arguments.get('source')
+            )
+        elif name == "recall_knowledge":
+            result = await tool_recall_knowledge(
+                arguments['query'],
+                arguments.get('limit', 5),
+                arguments.get('knowledge_type'),
+                arguments.get('project'),
+                arguments.get('min_similarity', 0.5)
+            )
+        elif name == "link_knowledge":
+            result = await tool_link_knowledge(
+                arguments['from_knowledge_id'],
+                arguments['to_knowledge_id'],
+                arguments['relation_type'],
+                arguments.get('strength', 1.0),
+                arguments.get('notes')
+            )
+        elif name == "get_related_knowledge":
+            result = await tool_get_related_knowledge(
+                arguments['knowledge_id'],
+                arguments.get('relation_types'),
+                arguments.get('include_reverse', True)
+            )
+        elif name == "mark_knowledge_applied":
+            result = await tool_mark_knowledge_applied(
+                arguments['knowledge_id'],
+                arguments.get('success', True)
+            )
+        # Session Facts tools
+        elif name == "store_session_fact":
+            result = await tool_store_session_fact(
+                arguments['fact_key'],
+                arguments['fact_value'],
+                arguments.get('fact_type', 'note'),
+                arguments.get('is_sensitive', False),
+                arguments.get('project_name')
+            )
+        elif name == "recall_session_fact":
+            result = await tool_recall_session_fact(
+                arguments['fact_key'],
+                arguments.get('project_name')
+            )
+        elif name == "list_session_facts":
+            result = await tool_list_session_facts(
+                arguments.get('project_name'),
+                arguments.get('include_sensitive', False)
+            )
+        elif name == "recall_previous_session_facts":
+            result = await tool_recall_previous_session_facts(
+                arguments.get('project_name'),
+                arguments.get('n_sessions', 3),
+                arguments.get('fact_types')
+            )
+        # Session Notes tools
+        elif name == "store_session_notes":
+            result = await tool_store_session_notes(
+                arguments['content'],
+                arguments.get('section', 'general'),
+                arguments.get('append', True)
+            )
+        elif name == "get_session_notes":
+            result = await tool_get_session_notes(
+                arguments.get('section')
             )
         else:
             result = {"error": f"Unknown tool: {name}"}
