@@ -1,8 +1,8 @@
 ---
 title: Core Protocol Injection
 created: 2026-01-21
-updated: 2026-01-21
-tags: [rag, hooks, context-injection, input-processing]
+updated: 2026-01-24
+tags: [rag, hooks, context-injection, input-processing, tasks]
 category: system
 status: active
 ---
@@ -19,11 +19,27 @@ Static text injection on **every user prompt** to ensure Claude always has the i
 ## Input Processing Protocol
 When receiving a task request:
 1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TodoWrite immediately
+2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
 3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
-4. **EXECUTE** - Work through each todo sequentially, marking in_progress
-5. **COMPLETE** - Mark each todo done immediately after finishing
+4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
+5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+
+Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
 ```
+
+## Tasks vs Todos
+
+| Concept | Scope | Tool | Persistence |
+|---------|-------|------|-------------|
+| **Task** | Session | TaskCreate/TaskUpdate/TaskList | In-memory only |
+| **Todo** | Cross-session | TodoWrite → claude.todos | Database |
+
+**Lifecycle:**
+1. Session start: Load Todos from database
+2. User gives work: Create Tasks (session-scoped)
+3. Work through Tasks: Mark in_progress → completed
+4. Session end: Incomplete Tasks → Todos (persist to DB)
+5. Next session: Todos reload, cycle continues
 
 ## Why This Exists
 
@@ -32,7 +48,7 @@ When receiving a task request:
 | CLAUDE.md loaded once at session start | Protocol injected every prompt |
 | Long conversations lose context | Always first in injection order |
 | Semantic search unreliable for meta-instructions | Static text, no matching needed |
-| ~60 tokens | Negligible overhead |
+| ~80 tokens | Negligible overhead |
 
 ## Implementation
 
@@ -44,9 +60,12 @@ CORE_PROTOCOL = """
 ## Input Processing Protocol
 When receiving a task request:
 1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TodoWrite immediately
-3. **EXECUTE** - Work through each todo sequentially, marking in_progress
-4. **COMPLETE** - Mark each todo done immediately after finishing
+2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
+3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
+4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
+5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+
+Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
 """
 ```
 
@@ -77,9 +96,11 @@ To change the injected protocol:
 
 ## Related
 
+- [[Tasks vs Todos Lifecycle]] - Full lifecycle documentation
 - [[RAG Usage Guide]] - Full RAG system documentation
 - [[PreToolUse Context Injection]] - Tool-specific context injection
 - [[Claude Code Hooks]] - Hook system overview
+- [[Session Lifecycle - Session End]] - Session end workflow
 
 ---
 
@@ -103,7 +124,7 @@ To change the injected protocol:
 
 ---
 
-**Version**: 1.1
+**Version**: 2.0
 **Created**: 2026-01-21
-**Updated**: 2026-01-21
+**Updated**: 2026-01-24
 **Location**: knowledge-vault/20-Domains/Core Protocol Injection.md

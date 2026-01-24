@@ -956,7 +956,9 @@ def main():
                 context_lines.append("Note: Obvious completed todos (like 'restart') auto-completed on session start")
                 context_lines.append("=" * 50)
                 context_lines.append("")
-                context_lines.append("IMPORTANT: Call TodoWrite immediately to populate the tool with the above todos:")
+                context_lines.append("PERSISTENT TODOS (from previous sessions):")
+                context_lines.append("Use TaskCreate for current session work. Incomplete tasks become Todos at /session-end.")
+                context_lines.append("If you need to restore these to TodoWrite state, use:")
                 context_lines.append("")
                 context_lines.append("TodoWrite([")
                 for idx, todo in enumerate(db_todos):

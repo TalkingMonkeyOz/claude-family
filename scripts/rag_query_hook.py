@@ -31,10 +31,12 @@ CORE_PROTOCOL = """
 ## Input Processing Protocol
 When receiving a task request:
 1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TodoWrite immediately
+2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
 3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
-4. **EXECUTE** - Work through each todo sequentially, marking in_progress
-5. **COMPLETE** - Mark each todo done immediately after finishing
+4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
+5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+
+Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
 
 ## Working Memory Protocol
 For data-heavy tasks (Excel, large JSON, complex analysis):
