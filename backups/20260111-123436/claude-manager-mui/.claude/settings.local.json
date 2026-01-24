@@ -1,0 +1,153 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/stop_hook_enforcer.py\"",
+            "timeout": 5,
+            "description": "Self-enforcing periodic checks: git status, inbox, CLAUDE.md refresh, test reminders"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/precompact_hook.py\"",
+            "timeout": 5,
+            "description": "Re-examine CLAUDE.md and vault before compaction (manual /compact)"
+          }
+        ],
+        "matcher": "manual"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/precompact_hook.py\"",
+            "timeout": 5,
+            "description": "Re-examine CLAUDE.md and vault before compaction (auto-compact)"
+          }
+        ],
+        "matcher": "auto"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/standards_validator.py\"",
+            "timeout": 10,
+            "description": "Validate file content against coding standards (block-and-correct pattern)"
+          }
+        ],
+        "matcher": "Write"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/standards_validator.py\"",
+            "timeout": 10,
+            "description": "Validate file content against coding standards (block-and-correct pattern)"
+          }
+        ],
+        "matcher": "Edit"
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Before ending, save session state by running /session-end to preserve your todo list and work focus for next session.",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/mcp_usage_logger.py\"",
+            "timeout": 30
+          }
+        ],
+        "matcher": "mcp__.*"
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/todo_sync_hook.py\"",
+            "timeout": 10,
+            "description": "Sync TodoWrite calls to claude.todos database"
+          }
+        ],
+        "matcher": "TodoWrite"
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
+            "timeout": 30,
+            "description": "Auto-log session and load state/messages"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Projects/claude-family/scripts/rag_query_hook.py\"",
+            "timeout": 10,
+            "description": "Auto-query Voyage AI RAG on every user prompt for vault context injection"
+          }
+        ]
+      }
+    ]
+  },
+  "mcp_servers": [
+    "postgres",
+    "memory"
+  ],
+  "skills": [
+    "code-review",
+    "testing-patterns"
+  ],
+  "instructions": [
+    "playwright.instructions.md",
+    "a11y.instructions.md"
+  ],
+  "pinned": true,
+  "mcp_configs": {
+    "mui": {
+      "args": [
+        "-y",
+        "@mui/mcp"
+      ],
+      "type": "stdio",
+      "command": "npx"
+    }
+  },
+  "enabledMcpjsonServers": [
+    "mui"
+  ],
+  "permissions": {
+    "allow": [],
+    "deny": [],
+    "ask": []
+  }
+}
