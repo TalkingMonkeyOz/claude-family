@@ -28,7 +28,7 @@ What we log, how it's analyzed, and gaps to address.
 | `reviewer_runs` | 14 | Reviewer script executions | ✅ Active |
 | `todos` | 1200 | Persistent todos across sessions | ✅ Active |
 | `mcp_usage_stats` | 2 | MCP tool calls | ⚠️ Barely used |
-| `enforcement_log` | 0 | Rule violations | ❌ NOT USED |
+| `enforcement_log` | 0 | Rule violations | ❌ OBSOLETE (reminders merged into RAG hook) |
 
 **Note**: `process_classification_log` deprecated - skills-first replaced process router (ADR-005)
 
@@ -144,7 +144,7 @@ GROUP BY classification_method;
 
 ## Action Items
 
-- [ ] Implement enforcement_log writes
+- [x] ~~Implement enforcement_log writes~~ → Merged into RAG hook as periodic reminders
 - [ ] Add MCP usage tracking to orchestrator
 - [ ] Create MCW observability dashboard
 - [ ] Add exit code semantics to MUI scheduler (exit 1 = issues found, exit 2+ = error)
@@ -154,7 +154,7 @@ GROUP BY classification_method;
 
 ---
 
-**Version**: 3.0 (Current data, scheduled jobs status)
+**Version**: 3.1 (Enforcement merged into RAG hook)
 **Created**: 2025-12-26
-**Updated**: 2026-01-17
+**Updated**: 2026-01-24
 **Location**: Claude Family/Observability.md

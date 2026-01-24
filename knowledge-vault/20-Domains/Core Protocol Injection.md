@@ -85,6 +85,21 @@ combined_context_parts.append(CORE_PROTOCOL)
 | 2 | Session Context | If session keywords detected |
 | 3 | Knowledge Recall | If semantic match ≥ 0.45 |
 | 4 | Vault RAG | If semantic match ≥ 0.30 |
+| 5 | **Periodic Reminders** | At intervals (see below) |
+
+## Periodic Reminders
+
+The RAG hook also handles interval-based reminders (merged from stop_hook_enforcer.py):
+
+| Reminder | Interval | Purpose |
+|----------|----------|---------|
+| Inbox Check | Every 15 prompts | Check for messages from other Claudes |
+| Vault Refresh | Every 25 prompts | Re-read CLAUDE.md if unsure |
+| Git Check | Every 10 prompts | Check for uncommitted changes |
+
+**State File**: `~/.claude/state/rag_hook_state.json`
+
+This consolidates all context injection into a single UserPromptSubmit hook, eliminating the need for a separate Stop hook.
 
 ## Modifying the Protocol
 
@@ -124,7 +139,7 @@ To change the injected protocol:
 
 ---
 
-**Version**: 2.0
+**Version**: 2.1 (Added periodic reminders, merged stop_hook_enforcer)
 **Created**: 2026-01-21
 **Updated**: 2026-01-24
 **Location**: knowledge-vault/20-Domains/Core Protocol Injection.md

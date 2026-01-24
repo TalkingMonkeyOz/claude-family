@@ -52,9 +52,88 @@ import sys
 import time
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
+
+# =============================================================================
+# PERIODIC REMINDERS - Interval-based context injection
+# =============================================================================
+# Merged from stop_hook_enforcer.py - single injection point for all context.
+# Reminders are injected at intervals to prevent context drift.
+
+REMINDER_INTERVALS = {
+    "inbox_check": 15,       # Every 15 interactions - check for messages
+    "vault_refresh": 25,     # Every 25 interactions - refresh vault understanding
+    "git_check": 10,         # Every 10 interactions - check uncommitted changes
+}
+
+# State file for tracking interaction count
+STATE_DIR = Path.home() / ".claude" / "state"
+STATE_FILE = STATE_DIR / "rag_hook_state.json"
+
+
+def load_reminder_state() -> Dict[str, Any]:
+    """Load reminder state from file."""
+    default_state = {
+        "interaction_count": 0,
+        "last_inbox_check": 0,
+        "last_vault_refresh": 0,
+        "last_git_check": 0,
+        "session_start": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        if STATE_FILE.exists():
+            with open(STATE_FILE, 'r', encoding='utf-8') as f:
+                state = json.load(f)
+                return {**default_state, **state}
+    except (json.JSONDecodeError, IOError):
+        pass
+    return default_state
+
+
+def save_reminder_state(state: Dict[str, Any]):
+    """Save reminder state to file."""
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        state["last_interaction"] = datetime.now(timezone.utc).isoformat()
+        with open(STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, indent=2)
+    except IOError:
+        pass  # Silent fail - don't break the hook
+
+
+def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
+    """Generate periodic reminders based on interaction count.
+
+    Returns formatted reminder string or None if no reminders due.
+    """
+    count = state.get("interaction_count", 0)
+    reminders = []
+
+    # Check each interval
+    if count > 0 and count % REMINDER_INTERVALS["inbox_check"] == 0:
+        if count != state.get("last_inbox_check", 0):
+            reminders.append("📬 **Inbox Check**: Use `mcp__orchestrator__check_inbox` to see pending messages")
+            state["last_inbox_check"] = count
+
+    if count > 0 and count % REMINDER_INTERVALS["vault_refresh"] == 0:
+        if count != state.get("last_vault_refresh", 0):
+            reminders.append("📚 **Vault Refresh**: Re-read CLAUDE.md if unsure about project conventions")
+            state["last_vault_refresh"] = count
+
+    if count > 0 and count % REMINDER_INTERVALS["git_check"] == 0:
+        if count != state.get("last_git_check", 0):
+            reminders.append("🔀 **Git Check**: Run `git status` to check for uncommitted changes")
+            state["last_git_check"] = count
+
+    if reminders:
+        return "\n## Periodic Reminders (Interaction #{})\n{}".format(
+            count,
+            "\n".join(f"- {r}" for r in reminders)
+        )
+    return None
 
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
@@ -978,6 +1057,10 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
 
 def main():
     """Main hook entry point."""
+    # Load reminder state (for periodic injection)
+    reminder_state = load_reminder_state()
+    reminder_state["interaction_count"] = reminder_state.get("interaction_count", 0) + 1
+
     try:
         # Read hook input from stdin
         hook_input = json.loads(sys.stdin.read())
@@ -989,6 +1072,7 @@ def main():
         if not user_prompt or len(user_prompt.strip()) < 5:
             # Skip very short prompts (likely not substantive questions)
             # Note: Lowered from 10 to 5 to catch short feedback like "wrong doc"
+            save_reminder_state(reminder_state)  # Still save state
             result = {
                 "additionalContext": "",
                 "systemMessage": "",
@@ -1001,10 +1085,16 @@ def main():
         # These are actions, not questions - RAG adds no value
         if is_command(user_prompt):
             logger.info(f"Skipping RAG for command: {user_prompt[:50]}")
+            # Still check for periodic reminders on commands
+            periodic_reminders = get_periodic_reminders(reminder_state)
+            context = CORE_PROTOCOL
+            if periodic_reminders:
+                context += "\n" + periodic_reminders
+            save_reminder_state(reminder_state)
             result = {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": CORE_PROTOCOL  # Still inject core protocol
+                    "additionalContext": context
                 }
             }
             print(json.dumps(result))
@@ -1072,7 +1162,16 @@ def main():
         if rag_context:
             combined_context_parts.append(rag_context)
 
+        # PERIODIC REMINDERS: Inject at intervals (merged from stop_hook_enforcer)
+        periodic_reminders = get_periodic_reminders(reminder_state)
+        if periodic_reminders:
+            combined_context_parts.append(periodic_reminders)
+            logger.info(f"Injected periodic reminders at interaction #{reminder_state['interaction_count']}")
+
         combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
+
+        # Save reminder state
+        save_reminder_state(reminder_state)
 
         # Build result (CORRECT format per Claude Code docs)
         result = {
