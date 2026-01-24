@@ -900,6 +900,10 @@ def main():
             else:
                 logger.warning("Session creation failed - no environment variables set")
 
+        # Set Windows Terminal tab title via ANSI escape sequence
+        # Format: \033]0;Title\007 (OSC 0 = set window title)
+        context_lines.append(f"\033]0;{project_name}\007")
+
         context_lines.append(f"=== Claude Family Session {'Resumed' if is_resume else 'Started'} ===")
         context_lines.append(f"Project: {project_name}")
         context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")

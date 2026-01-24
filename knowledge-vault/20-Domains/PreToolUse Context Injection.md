@@ -44,13 +44,33 @@ Automatic injection of relevant standards and context BEFORE Claude writes code 
 
 ```sql
 -- Key columns in claude.context_rules
-tool_patterns TEXT[]      -- Tools that trigger rule: ['Write', 'Edit']
-file_patterns TEXT[]      -- Optional glob patterns: ['**/*.md']
-inject_standards TEXT[]   -- Standard files to load: ['markdown']
+tool_patterns TEXT[]       -- Tools that trigger rule: ['Write', 'Edit']
+file_patterns TEXT[]       -- Optional glob patterns: ['**/*.md']
+inject_standards TEXT[]    -- Standard files to load: ['markdown']
 inject_static_context TEXT -- Inline context to inject
-priority INTEGER          -- Higher = applied first (default 50)
-active BOOLEAN           -- Enable/disable rule
+skill_content_ids UUID[]   -- Hot-load skills from claude.skill_content (see below)
+inject_vault_query TEXT    -- RAG query for vault context (TODO: not implemented)
+priority INTEGER           -- Higher = applied first (default 50)
+active BOOLEAN             -- Enable/disable rule
 ```
+
+### Skill Content Hot-Loading
+
+The `skill_content_ids` column allows loading comprehensive skills from `claude.skill_content` at execution time. This is for "architect mode" scenarios where you need substantial domain knowledge injected.
+
+**CAUTION**: Each skill can be 4-9K chars. Loading multiple skills adds significant context overhead per tool call. Use sparingly.
+
+```sql
+-- Check what skills a rule loads
+SELECT sc.name, LENGTH(sc.content) as chars
+FROM claude.skill_content sc
+WHERE sc.content_id IN (
+    SELECT unnest(skill_content_ids)
+    FROM claude.context_rules WHERE name = 'your-rule'
+);
+```
+
+**Status**: Needs review - some imported skills (from awesome-copilot) are VS Code-specific and not useful for Claude Code.
 
 ## Current Rules
 
@@ -129,7 +149,7 @@ Context rules can be viewed/edited in Claude Manager MUI:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-01-17
-**Updated**: 2026-01-17
+**Updated**: 2026-01-24
 **Location**: knowledge-vault/20-Domains/PreToolUse Context Injection.md
