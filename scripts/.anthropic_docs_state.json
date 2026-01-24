@@ -52,16 +52,16 @@
     }
   },
   "hashes": {
-    "advanced-tool-use": "5eaa4b172acd7c68",
-    "claude-code-best-practices": "1cd050821448f6f5",
-    "building-agents": "8b32e7dfe9bfb9b1",
-    "claude-code-sandboxing": "95775d09144fd848",
-    "models-overview": "dedbc6e9b4687871",
-    "computer-use": "da34458e986b2207",
-    "token-efficient-tools": "939fd0bdb09d313e",
-    "extended-thinking": "5d5731d8bf63fc59",
-    "mcp-overview": "7fbe0543d61b45ba",
-    "claude-code-changelog": "8db8acfbfb2a43fb"
+    "advanced-tool-use": "f1dbd8fb795ea310",
+    "claude-code-best-practices": "18ab1022c4038d69",
+    "building-agents": "2093cde166aa841b",
+    "claude-code-sandboxing": "3b61bd032f27d9f9",
+    "models-overview": "10447c86d11936ef",
+    "computer-use": "ea272bceeadc8e79",
+    "token-efficient-tools": "ba73e8c873f49d4f",
+    "extended-thinking": "23a19afb99492e08",
+    "mcp-overview": "4fe46862b947af95",
+    "claude-code-changelog": "74af611ae6dc53ab"
   },
-  "last_check": "2026-01-13T22:17:04.438511"
+  "last_check": "2026-01-24T11:51:08.577181"
 }
