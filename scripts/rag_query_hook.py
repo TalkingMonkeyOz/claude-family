@@ -1055,6 +1055,100 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
         return None
 
 
+def query_skill_suggestions(user_prompt: str, project_name: str,
+                             top_k: int = 2, min_similarity: float = 0.50) -> str:
+    """Query skill_content for relevant skills by semantic similarity.
+
+    Args:
+        user_prompt: The user's question/prompt
+        project_name: Current project name
+        top_k: Number of skills to suggest
+        min_similarity: Minimum similarity score (0-1)
+
+    Returns:
+        Formatted skill suggestions or None if no matches
+    """
+    if not DB_AVAILABLE or not VOYAGE_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+
+        # Generate embedding for query
+        query_text = extract_query_from_prompt(user_prompt)
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+
+        # Search skill_content by embedding similarity
+        cur.execute("""
+            SELECT
+                name,
+                description,
+                category,
+                1 - (description_embedding <=> %s::vector) as similarity_score
+            FROM claude.skill_content
+            WHERE active = true
+              AND description_embedding IS NOT NULL
+              AND 1 - (description_embedding <=> %s::vector) >= %s
+            ORDER BY description_embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, query_embedding, min_similarity, query_embedding, top_k))
+
+        results = cur.fetchall()
+        conn.close()
+
+        if not results:
+            logger.info(f"No skill matches >= {min_similarity} for query: {query_text[:50]}")
+            return None
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Format suggestions
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        context_lines.append(f"SKILL SUGGESTIONS ({len(results)} matches, {latency_ms}ms)")
+        context_lines.append("=" * 70)
+        context_lines.append("")
+
+        for r in results:
+            if isinstance(r, dict):
+                name = r['name']
+                description = r['description']
+                category = r['category']
+                similarity = round(r['similarity_score'], 2)
+            else:
+                name = r[0]
+                description = r[1]
+                category = r[2]
+                similarity = round(r[3], 2)
+
+            # Truncate description
+            desc_short = description[:100] + "..." if len(description) > 100 else description
+
+            context_lines.append(f">> {name} ({similarity} match, {category})")
+            context_lines.append(f"   {desc_short}")
+            context_lines.append(f"   Action: Use Skill tool to load if task is complex")
+            context_lines.append("")
+
+        context_lines.append("-" * 70)
+        context_lines.append("")
+
+        logger.info(f"Skill suggestions: {len(results)} matches, top={results[0]['similarity_score'] if isinstance(results[0], dict) else results[0][3]:.2f}")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Skill suggestion query failed: {e}", exc_info=True)
+        return None
+
+
 def main():
     """Main hook entry point."""
     # Load reminder state (for periodic injection)
@@ -1145,11 +1239,23 @@ def main():
             min_similarity=0.30
         )
 
+        # Query SKILL SUGGESTIONS (semantic match against skill_content)
+        # This suggests relevant skills Claude can load for complex tasks
+        # Note: Threshold is low (0.25) because skill descriptions are expertise-focused
+        # not task-focused. Semantic match is approximate.
+        skill_context = query_skill_suggestions(
+            user_prompt=user_prompt,
+            project_name=project_name,
+            top_k=2,
+            min_similarity=0.25  # Low threshold - skill descriptions don't match tasks directly
+        )
+
         # Combine contexts in priority order:
         # 0. Core protocol (ALWAYS - ensures input processing workflow)
         # 1. Session context (if session keywords detected)
         # 2. Knowledge recall (learned patterns - high signal)
         # 3. Vault RAG (documentation - broader context)
+        # 4. Skill suggestions (actionable - Claude can load these)
         combined_context_parts = []
 
         # ALWAYS inject core protocol FIRST (positioned prominently, never lost)
@@ -1161,6 +1267,8 @@ def main():
             combined_context_parts.append(knowledge_context)
         if rag_context:
             combined_context_parts.append(rag_context)
+        if skill_context:
+            combined_context_parts.append(skill_context)
 
         # PERIODIC REMINDERS: Inject at intervals (merged from stop_hook_enforcer)
         periodic_reminders = get_periodic_reminders(reminder_state)
