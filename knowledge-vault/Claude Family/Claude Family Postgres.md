@@ -21,10 +21,11 @@ Schema: `claude` (consolidated - 52 tables)
 | `sessions` | Session logging |
 | `projects` | Project registry |
 | `knowledge` | Synced from Obsidian vault |
-| `process_registry` | Workflow definitions |
-| `scheduled_jobs` | Cron-like jobs |
+| `features` | Feature tracking |
+| `build_tasks` | Development tasks |
 | `feedback` | Issue tracking |
 | `column_registry` | Data Gateway constraints |
+| `scheduled_jobs` | Cron-like jobs |
 
 ## Data Gateway
 
@@ -41,7 +42,7 @@ Via MCP postgres server - see [[MCP configuration]]
 See also: [[Claude Hooks]] (validates writes)
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-19
 **Location**: Claude Family/Claude Family Postgres.md

@@ -85,7 +85,7 @@ These FKs reference `sessions.session_id` and cause violations when session does
 | `project_config_assignments` | `template_id` | `config_templates.template_id` |
 | `project_command_assignments` | `command_id` | `shared_commands.command_id` |
 | `todos` | `source_message_id` | `messages.message_id` |
-| Process tables (5) | Various | `process_registry.process_id` |
+| ~~Process tables (5)~~ | Various | `process_registry.process_id` ⚠️ DEPRECATED |
 
 ---
 
@@ -97,7 +97,7 @@ These FKs reference `sessions.session_id` and cause violations when session does
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-01-04
-**Updated**: 2026-01-04 (RAG Self-Learning FKs added)
+**Updated**: 2026-01-19 (Process tables marked deprecated)
 **Location**: knowledge-vault/20-Domains/Database FK Constraints.md

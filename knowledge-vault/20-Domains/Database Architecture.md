@@ -26,7 +26,7 @@ This is the authoritative reference for the Claude Family database schema.
 |--------|--------|-------------|
 | [[#Sessions]] | 3 | Session tracking, state persistence |
 | [[#Projects]] | 5 | Project registry, hierarchy |
-| [[#Process Workflow]] | 8 | Workflow engine, process automation |
+| [[#Process Workflow]] | 8 | ~~Workflow engine~~ (DEPRECATED - use skills) |
 | [[#Work Items]] | 8 | Tasks, feedback, features |
 | [[#Knowledge]] | 5 | Knowledge sync, documents |
 | [[#RAG Self-Learning]] | 3 | Feedback capture, doc quality, patterns |
@@ -109,28 +109,22 @@ WHERE project_name = 'claude-family';
 
 ---
 
-## Process Workflow
+## Process Workflow ⚠️ DEPRECATED
 
-Workflow engine for automation and enforcement.
+**Status**: Archived (Jan 2026). Replaced by skills system (`skill_content`) and RAG.
 
-| Table | Purpose | Key Columns |
-|-------|---------|-------------|
-| `process_registry` | Workflow definitions | process_id, process_name, category, enforcement |
-| `process_steps` | Steps within process | process_id, step_number, instruction |
-| `process_triggers` | Keyword triggers | trigger_id, process_id, trigger_pattern |
-| `process_runs` | Execution history | run_id, process_id, status, started_at |
-| `process_dependencies` | Process interconnections | from_process, to_process, dependency_type |
-| `process_classification_log` | Router decisions | request_text, matched_process |
-| `workflow_state` | Active workflow state | workflow_id, current_step, context |
-| `procedures` | Legacy procedures | procedure_id, name, content |
+| Table | Purpose | Status |
+|-------|---------|--------|
+| `process_registry` | Workflow definitions | Archived |
+| `process_steps` | Steps within process | Archived |
+| `process_triggers` | Keyword triggers | Archived |
+| `process_runs` | Execution history | Archived |
+| `process_dependencies` | Process interconnections | Archived |
+| `process_classification_log` | Router decisions | Archived |
+| `workflow_state` | Active workflow state | Archived |
+| `procedures` | Legacy procedures | Archived |
 
-```sql
--- Active processes by category
-SELECT category, COUNT(*)
-FROM claude.process_registry
-WHERE is_active = true
-GROUP BY category;
-```
+**Replacement**: Use `claude.skill_content` for domain skills and `rag_query_hook.py` for context injection.
 
 ---
 
@@ -322,7 +316,7 @@ These tables exist in legacy schemas and will be dropped:
 
 ---
 
-**Version**: 1.3
+**Version**: 1.4
 **Created**: 2025-12-20
-**Updated**: 2026-01-04 (RAG Self-Learning tables added)
+**Updated**: 2026-01-19 (Process Workflow marked deprecated)
 **Location**: knowledge-vault/20-Domains/Database Architecture.md

@@ -11,13 +11,28 @@ synced: false
 
 # Claude Code 2.1.x Integration
 
-**Status**: In Progress | **Date**: 2026-01-17 (Updated for 2.1.9)
+**Status**: In Progress | **Date**: 2026-01-23 (Updated for 2.1.17)
 
 ---
 
 ## Summary
 
-Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
+Integrated Claude Code 2.1.x features into Claude Family infrastructure.
+
+---
+
+## ⚠️ IMPORTANT: Installation Change (v2.1.15+)
+
+**npm installations are DEPRECATED.** Use native installer instead:
+
+```bash
+# Run this to switch to native installer
+claude install
+```
+
+Or visit: https://docs.anthropic.com/en/docs/claude-code/getting-started
+
+**Note**: The docs site has moved from `docs.anthropic.com` to `code.claude.com/docs`
 
 ---
 
@@ -99,6 +114,45 @@ Integrated Claude Code 2.1.0-2.1.2 features into Claude Family infrastructure.
 | **`mcpToolSearch: "auto:N"`** | 📋 Planned | Reduce MCP tool listing overhead |
 | **Per-agent MCP configs** | ✅ | Agents can have different MCP servers |
 
+### v2.1.10-2.1.12 Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Setup hook event** | ✅ 2.1.10 | Triggered via `--init`, `--init-only`, or `--maintenance` flags |
+| **winget installation** | ✅ 2.1.10 | Auto-detects Windows Package Manager installations |
+| **File suggestions as attachments** | ✅ 2.1.10 | Shows as removable attachments, not inline text |
+| **Keystroke buffering** | ✅ 2.1.10 | Captures keystrokes typed before REPL ready |
+| **Plugin install count** | ✅ 2.1.10 | VSCode shows install counts |
+| **Plugin trust warning** | ✅ 2.1.10 | VSCode shows trust warning on install |
+
+### v2.1.14 Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **Bash history autocomplete** | ✅ | Press `!` then Tab to complete from command history |
+| **Plugin search** | ✅ | Filter installed plugins by name/description |
+| **Plugin SHA pinning** | ✅ | Pin plugins to specific git commit SHAs |
+| **Context window fix** | ✅ | Fixed blocking limit (was ~65%, now ~98%) |
+| **Memory leak fix** | ✅ | Stream resource cleanup in long sessions |
+| **VSCode /usage command** | ✅ | Display current plan usage |
+
+### v2.1.15-2.1.16 Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **npm deprecation** | ⚠️ | Use `claude install` for native installer |
+| **React Compiler** | ✅ 2.1.15 | Improved UI rendering performance |
+| **Task management system** | ✅ 2.1.16 | Native dependency tracking for tasks |
+| **VSCode plugin management** | ✅ 2.1.16 | Native plugin management support |
+| **Remote session resume** | ✅ 2.1.16 | OAuth users can resume remote sessions from Sessions dialog |
+| **Memory optimization** | ✅ 2.1.16 | Fixed OOM crashes on heavy subagent resumption |
+
+### v2.1.17 Features
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| **AVX processor fix** | ✅ | Fixed crashes on processors without AVX instruction support |
+
 ### Agents (v2.0.28+)
 
 | Feature | Status | Notes |
@@ -165,7 +219,7 @@ Database-driven config auto-regenerates on SessionStart:
 
 ---
 
-**Version**: 3.1 (Implemented PreToolUse context injection system)
+**Version**: 4.0 (Updated for v2.1.17 - npm deprecation, task management, memory fixes)
 **Created**: 2026-01-08
-**Updated**: 2026-01-17
+**Updated**: 2026-01-23
 **Location**: knowledge-vault/Claude Family/Claude Code 2.1.x Integration.md

@@ -37,17 +37,19 @@ These 50+ tables support the core functionality. Grouped by domain:
 | feedback_screenshots | Screenshot attachments |
 | ideas | Idea capture |
 
-### Process Workflow (8 tables)
-| Table | Purpose |
-|-------|---------|
-| process_registry | Workflow definitions |
-| process_steps | Steps within processes |
-| process_triggers | Keyword triggers |
-| process_runs | Execution history |
-| process_dependencies | Process interconnections |
-| process_classification_log | Router decisions |
-| workflow_state | Active workflow state |
-| procedures | Legacy procedures |
+### Process Workflow (8 tables) ⚠️ DEPRECATED
+| Table | Purpose | Status |
+|-------|---------|--------|
+| process_registry | Workflow definitions | Archived |
+| process_steps | Steps within processes | Archived |
+| process_triggers | Keyword triggers | Archived |
+| process_runs | Execution history | Archived |
+| process_dependencies | Process interconnections | Archived |
+| process_classification_log | Router decisions | Archived |
+| workflow_state | Active workflow state | Archived |
+| procedures | Legacy procedures | Archived |
+
+**Note**: Process workflow replaced by skills (`skill_content`) and RAG (Jan 2026).
 
 ### Governance (8 tables)
 | Table | Purpose |
@@ -193,7 +195,7 @@ The 57 tables are organized into 10 domains:
 
 1. **Core Tracking** (7 tables) - Sessions, identities, projects, workspaces, agents, MCP usage, state
 2. **Work Items** (8 tables) - Feedback, features, tasks, ideas
-3. **Process Workflow** (8 tables) - Process registry, execution, triggers
+3. **Process Workflow** (8 tables) - ~~Process registry~~ (DEPRECATED)
 4. **Governance** (8 tables) - Compliance, audits, validation, testing
 5. **Knowledge** (5 tables) - Document registry, templates, retrieval
 6. **MCP Orchestration** (5 tables) - Configs, messaging, async tasks
@@ -227,7 +229,7 @@ See **[[Database Schema - Overview]]** for full navigation.
 
 ---
 
-**Version**: 2.0 (split from Database Schema - Core Tables)
+**Version**: 2.1 (marked process_registry as deprecated)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-19
 **Location**: knowledge-vault/10-Projects/claude-family/Database Schema - Supporting Tables.md

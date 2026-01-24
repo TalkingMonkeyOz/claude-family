@@ -78,16 +78,18 @@ postgresql://postgres:{PASSWORD}@localhost:5432/ai_company_foundation
 | `project_docs` | Project-specific docs |
 | `doc_templates` | Document templates |
 
-### Process & Workflow (7 tables)
+### Process & Workflow (7 tables) ⚠️ DEPRECATED
 | Table | Purpose |
 |-------|---------|
-| `process_registry` | 32 defined workflows |
-| `process_steps` | Steps for each process |
-| `process_triggers` | Keywords that trigger processes |
-| `process_runs` | Execution history |
-| `process_dependencies` | Workflow interconnections |
-| `process_classification_log` | Classification history |
-| `workflow_state` | Active workflow state |
+| `process_registry` | ~~Workflow definitions~~ (replaced by skills) |
+| `process_steps` | ~~Steps for each process~~ |
+| `process_triggers` | ~~Keywords that trigger processes~~ |
+| `process_runs` | ~~Execution history~~ |
+| `process_dependencies` | ~~Workflow interconnections~~ |
+| `process_classification_log` | ~~Classification history~~ |
+| `workflow_state` | ~~Active workflow state~~ |
+
+**Note**: Process workflow system replaced by skills (`skill_content`) and RAG. Tables archived.
 
 ### MCP & Agents (5 tables)
 | Table | Purpose |
@@ -199,7 +201,7 @@ Mission Control uses **dynamic configuration** - database drives the UI:
 
 1. **Actions table** (`claude.actions`) - Defines available actions for each context
 2. **Column registry** (`claude.column_registry`) - Provides valid values for dropdowns
-3. **Process registry** (`claude.process_registry`) - Defines workflows
+3. **Skill content** (`claude.skill_content`) - Domain skills for guidance
 
 ### Adding New Actions
 ```sql
@@ -271,6 +273,7 @@ WHERE table_name = 'TABLE_NAME';
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Marked process_registry as deprecated)
 **Created**: 2025-12-20
+**Updated**: 2026-01-19
 **Location**: knowledge-vault/20-Domains/Database Integration Guide.md

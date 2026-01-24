@@ -1,29 +1,47 @@
 **QUICK SESSION RESUME - Database-Driven Context**
 
-Use project-tools MCP for efficient queries (consolidates multiple SQL into single calls).
+Query DATABASE for session context - this is the source of truth, not files.
 
 ---
 
 ## Execute These Steps
 
-### Step 1: Get Project Context (ONE MCP call)
+### Step 1: Get Project Info
+Use the current working directory basename as project_name.
 
-Use `mcp__project-tools__get_project_context` with project path from current directory.
+### Step 2: Query Last Session (MCP)
+```sql
+SELECT session_summary, session_end, tasks_completed
+FROM claude.sessions
+WHERE project_name = '{project_name}' AND session_end IS NOT NULL
+ORDER BY session_end DESC LIMIT 1;
+```
 
-This returns: project info, phase, active features, last session summary, feedback count, todo count.
+### Step 3: Query Session State (MCP)
+```sql
+SELECT current_focus, next_steps
+FROM claude.session_state
+WHERE project_name = '{project_name}';
+```
 
-### Step 2: Get Actual Todos (ONE MCP call)
+### Step 4: Query Active Todos (MCP)
+```sql
+SELECT content, status, priority
+FROM claude.todos t
+JOIN claude.projects p ON t.project_id = p.project_id
+WHERE p.project_name = '{project_name}'
+  AND t.is_deleted = false
+  AND t.status IN ('pending', 'in_progress')
+ORDER BY
+  CASE status WHEN 'in_progress' THEN 1 ELSE 2 END,
+  priority ASC
+LIMIT 10;
+```
 
-Use `mcp__project-tools__get_incomplete_todos` with project name.
-
-This returns: todo items with content, status, priority.
-
-### Step 3: Check Messages (ONE MCP call)
-
+### Step 5: Check Messages
 Use `mcp__orchestrator__check_inbox` with project_name parameter.
 
-### Step 4: Check Git Status
-
+### Step 6: Check Git Status
 Run `git status --short` via Bash tool.
 
 ---
@@ -34,11 +52,8 @@ Run `git status --short` via Bash tool.
 +==================================================================+
 |  SESSION RESUME - {project_name}                                 |
 +==================================================================+
-|  Phase: {phase} | Status: {status}                               |
-|  Last Session: {last_session.started} - {last_session.summary}   |
-+------------------------------------------------------------------+
-|  ACTIVE FEATURES:                                                |
-|    {F-code}: {feature_name} ({status})                           |
+|  Last Session: {session_end} - {session_summary}                 |
+|  Focus: {current_focus}                                          |
 +------------------------------------------------------------------+
 |  ACTIVE TODOS ({count}):                                         |
 |  In Progress:                                                    |
@@ -48,8 +63,9 @@ Run `git status --short` via Bash tool.
 |    [P2] {priority 2 items}                                       |
 |    [P3] {priority 3 items}                                       |
 +------------------------------------------------------------------+
+|  NEXT STEPS: {from session_state.next_steps, top 3}              |
++------------------------------------------------------------------+
 |  UNCOMMITTED: {count} files | MESSAGES: {pending count}          |
-|  FEEDBACK: {pending_feedback_count} open items                   |
 +==================================================================+
 ```
 
@@ -57,14 +73,13 @@ Run `git status --short` via Bash tool.
 
 ## Notes
 
-- **Efficient**: Uses project-tools MCP (2 calls) instead of raw SQL (4 queries)
-- **Source of truth**: Database via MCP tools
-- **Auto-injection**: Session context also auto-injected by RAG hook
+- **Source of truth**: Database (claude.todos, claude.sessions, claude.session_state)
+- **Auto-injection**: Session context is also auto-injected by RAG hook on keywords like "where was I" or "my todos"
 - **Priority icons**: P1 = critical, P2 = important, P3 = normal
 
 ---
 
-**Version**: 3.0
+**Version**: 2.0
 **Created**: 2025-12-26
-**Updated**: 2026-01-24
+**Updated**: 2026-01-07
 **Location**: .claude/commands/session-resume.md

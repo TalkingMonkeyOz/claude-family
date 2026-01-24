@@ -1,23 +1,141 @@
 ---
 title: RAG Usage Guide - When Claude Should Use Semantic Search
-tags: [claude-family, rag, mcp, semantic-search, best-practices, project-docs, session-preload, logging]
+tags: [claude-family, rag, mcp, semantic-search, best-practices, project-docs, session-preload, logging, knowledge-recall]
 created: 2025-12-30
-updated: 2025-12-30
+updated: 2026-01-18
 ---
 
 # RAG Usage Guide - When Claude Should Use Semantic Search
 
 ## Purpose
 
-Guide for Claude instances on when RAG (semantic search) is used for vault knowledge retrieval.
+Guide for Claude instances on when RAG (semantic search) is used for vault knowledge retrieval and **knowledge recall**.
 
 **Key benefit**: 85% reduction in vault documentation tokens by loading only relevant docs on-demand.
 
-**NEW (2025-12-31)**: RAG now works **AUTOMATICALLY** via UserPromptSubmit hook! No manual tool calls needed for most questions.
+**NEW (2026-01-18)**: Knowledge recall now works alongside vault RAG! Learned patterns, gotchas, and facts are automatically recalled on every prompt.
 
 ---
 
-## How RAG Works (Two Modes)
+## Two Search Systems (Both Automatic)
+
+The RAG hook now queries **TWO** systems on every user prompt:
+
+| System | Table | What It Searches | Similarity Threshold |
+|--------|-------|------------------|---------------------|
+| **Knowledge Recall** | `claude.knowledge` | Learned patterns, gotchas, facts, preferences | 0.45 (higher = less noise) |
+| **Vault RAG** | `claude.vault_embeddings` | Documentation from knowledge-vault/ | 0.30 (broader coverage) |
+
+**Context injection order**:
+1. Session context (if session keywords detected)
+2. Knowledge recall (2 most relevant entries)
+3. Vault RAG (3 most relevant docs)
+
+**Why two systems?**
+- **Knowledge**: High-signal learned information (patterns, gotchas) - replaces memory MCP
+- **Vault**: Comprehensive documentation - SOPs, domain knowledge, procedures
+
+---
+
+## Knowledge System (NEW 2026-01-18)
+
+### What Is Knowledge Recall?
+
+Knowledge recall provides **memory-like functionality** using the `claude.knowledge` table with Voyage AI embeddings.
+
+**Replaces**: The memory MCP (which was rarely used and had no database integration)
+
+**Capabilities**:
+- Semantic search over 290+ learned knowledge entries
+- Auto-recall on every prompt via RAG hook
+- Confidence tracking (increases on successful application)
+- Typed relations between knowledge entries
+- Project-specific and global knowledge
+
+### Knowledge Types
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| pattern | Reusable code/design patterns | WinForms dark theme pattern |
+| gotcha | Things that often go wrong | Designer file serialization rules |
+| learned | Discovered during work | API rate limit workaround |
+| preference | User/project preferences | Prefer composition over inheritance |
+| fact | Factual information | PostgreSQL max connections = 100 |
+| procedure | Step-by-step processes | How to add MCP server |
+
+### MCP Tools (project-tools)
+
+The `project-tools` MCP server provides knowledge operations:
+
+| Tool | Purpose |
+|------|---------|
+| `store_knowledge` | Store new knowledge with auto-embedding |
+| `recall_knowledge` | Semantic search (manual, more control than auto) |
+| `link_knowledge` | Create typed relations (extends, contradicts, etc.) |
+| `get_related_knowledge` | Traverse knowledge graph |
+| `mark_knowledge_applied` | Track success/failure (adjusts confidence) |
+
+**Example - Store knowledge**:
+```python
+store_knowledge(
+    title="WinForms Designer can't parse lambdas",
+    description="Never use lambda expressions in InitializeComponent...",
+    knowledge_type="gotcha",
+    knowledge_category="winforms",
+    confidence_level=90
+)
+```
+
+**Example - Recall knowledge**:
+```python
+recall_knowledge(
+    query="WinForms designer problems",
+    limit=3,
+    min_similarity=0.5
+)
+```
+
+### Knowledge Relations
+
+The `claude.knowledge_relations` table enables typed relationships:
+
+| Relation Type | Meaning |
+|---------------|---------|
+| extends | Builds upon another entry |
+| contradicts | Conflicts with (newer may supersede) |
+| supports | Provides evidence for |
+| supersedes | Replaces older knowledge |
+| depends_on | Requires another entry first |
+| relates_to | General association |
+| part_of | Component of larger concept |
+| caused_by | Root cause relationship |
+
+**Example**:
+```python
+link_knowledge(
+    from_knowledge_id="uuid-of-dark-theme-v2",
+    to_knowledge_id="uuid-of-dark-theme-v1",
+    relation_type="supersedes",
+    notes="V2 adds system theme detection"
+)
+```
+
+### Embedding Knowledge
+
+All 290 knowledge entries have embeddings (100% coverage).
+
+**Update embeddings**:
+```bash
+# Embed knowledge entries (incremental)
+python scripts/embed_knowledge.py
+
+# Force re-embed all
+python scripts/embed_knowledge.py --force
+```
+
+---
+
+## How RAG Works (Three Modes)
 
 ### 1. **AUTOMATIC Mode** (Primary - UserPromptSubmit Hook) ✨
 
@@ -742,6 +860,7 @@ python scripts/embed_vault_documents.py --all-projects
 
 ---
 
-**Version**: 1.0
-**Last Updated**: 2025-12-30
+**Version**: 2.0
+**Last Updated**: 2026-01-18
 **Owner**: Claude Family Infrastructure
+**Changes**: Added knowledge recall system (replaces memory MCP), project-tools MCP integration

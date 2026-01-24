@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-01-17T21:16:57.768933",
+    "generated_at": "2026-01-24T14:01:09.656314",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -50,10 +50,20 @@
       "type": "tauri-react",
       "description": "Modern desktop app for Claude Family management using Material-UI"
     },
+    "monash-nimbus-reports": {
+      "path": "C:\\Projects\\monash-nimbus-reports",
+      "type": "tauri-react",
+      "description": "Read-only Nimbus reporting app for Monash University"
+    },
     "nimbus-import": {
       "path": "C:\\Projects\\nimbus-import",
       "type": "tauri-react",
       "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
+    },
+    "bee-game": {
+      "path": "C:\\Projects\\bee-game",
+      "type": "unity-game",
+      "description": "Retro-styled third-person bee flying game with pollination mechanics"
     },
     "finance-mui": {
       "path": "C:\\Projects\\finance-mui",

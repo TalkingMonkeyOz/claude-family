@@ -56,7 +56,7 @@ We are the **Claude Family** - multiple Claude instances coordinating across pro
 ## Coordination Rules
 
 1. **One task at a time** - Don't step on other instances' work
-2. **Log decisions** - Add to `claude.shared_knowledge` if it helps others
+2. **Log decisions** - Add to `claude.knowledge` if it helps others
 3. **Check before creating** - Search vault/database before creating duplicate content
 4. **Update docs** - If you change behavior, update relevant CLAUDE.md
 
@@ -79,13 +79,15 @@ Available across all projects (varies by platform):
 | Server | Code | Desktop | Purpose |
 |--------|------|---------|---------|
 | postgres | ✅ | ✅ | Database access, session logging |
-| memory | ✅ | ✅ | Persistent memory graph |
-| filesystem | ✅ | ✅ | File operations (scoped) |
+| project-tools | ✅ | ❌ | Work tracking, knowledge, todos |
 | orchestrator | ✅ | ❌ | Agent spawning, messaging |
 | sequential-thinking | ✅ | ✅ | Complex problem solving |
-| python-repl | ✅ | ❌ | Code execution |
 
-**Note**: Desktop has narrower filesystem scope (knowledge-vault only) and cannot spawn agents or execute code.
+**Deprecated MCPs** (Jan 2026):
+- `memory` - Replaced by `project-tools` knowledge functions
+- `vault-rag` - Replaced by automatic RAG via UserPromptSubmit hook
+
+**Note**: Desktop cannot spawn agents or execute code. RAG is automatic via hooks.
 
 ---
 
@@ -102,10 +104,10 @@ Available across all projects (varies by platform):
 
 ---
 
-**Version**: 1.2
+**Version**: 1.3
 **Created**: 2025-12-20
-**Updated**: 2025-12-29
+**Updated**: 2026-01-19
 **Location**: knowledge-vault/40-Procedures/Family Rules.md
 **Changelog**:
-- Added Desktop platform to MCP servers table
-- Added [[Claude Desktop Setup]] to related docs
+- 1.3: Fixed shared_knowledge→knowledge, updated MCP servers (removed deprecated)
+- 1.2: Added Desktop platform to MCP servers table

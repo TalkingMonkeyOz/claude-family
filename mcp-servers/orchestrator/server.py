@@ -989,6 +989,174 @@ def get_unactioned_messages(project_name: str) -> dict:
         conn.close()
 
 
+def get_message_history(
+    project_name: Optional[str] = None,
+    message_type: Optional[str] = None,
+    days: int = 7,
+    include_sent: bool = True,
+    include_received: bool = True,
+    limit: int = 50
+) -> dict:
+    """Get message history with filtering options.
+
+    Args:
+        project_name: Filter to messages sent to/from this project
+        message_type: Filter by message type (task_request, status_update, etc.)
+        days: Number of days to look back (default: 7)
+        include_sent: Include messages sent by this project
+        include_received: Include messages received by this project
+        limit: Maximum messages to return (default: 50)
+
+    Returns:
+        dict with sent and received message lists
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        results = {"sent": [], "received": []}
+
+        # Build base conditions
+        time_condition = f"created_at > NOW() - INTERVAL '{days} days'"
+        type_condition = f"message_type = '{message_type}'" if message_type else "1=1"
+
+        if include_received and project_name:
+            cur.execute(f"""
+                SELECT
+                    message_id::text,
+                    from_session_id::text,
+                    to_project,
+                    message_type,
+                    priority,
+                    subject,
+                    body,
+                    status,
+                    created_at,
+                    read_at,
+                    acknowledged_at
+                FROM claude.messages
+                WHERE (to_project = %s OR (to_session_id IS NULL AND to_project IS NULL))
+                  AND {time_condition}
+                  AND {type_condition}
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (project_name, limit))
+
+            for msg in cur.fetchall():
+                msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+                for key in ['created_at', 'read_at', 'acknowledged_at']:
+                    if msg_dict.get(key):
+                        msg_dict[key] = msg_dict[key].isoformat()
+                results["received"].append(msg_dict)
+
+        if include_sent and project_name:
+            # Get session IDs associated with this project
+            cur.execute("""
+                SELECT DISTINCT session_id::text
+                FROM claude.sessions
+                WHERE project_name = %s
+                ORDER BY session_start DESC
+                LIMIT 10
+            """, (project_name,))
+            session_ids = [row['session_id'] for row in cur.fetchall()]
+
+            if session_ids:
+                placeholders = ','.join(['%s'] * len(session_ids))
+                cur.execute(f"""
+                    SELECT
+                        message_id::text,
+                        from_session_id::text,
+                        to_project,
+                        to_session_id::text,
+                        message_type,
+                        priority,
+                        subject,
+                        body,
+                        status,
+                        created_at
+                    FROM claude.messages
+                    WHERE from_session_id::text IN ({placeholders})
+                      AND {time_condition}
+                      AND {type_condition}
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                """, (*session_ids, limit))
+
+                for msg in cur.fetchall():
+                    msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+                    if msg_dict.get('created_at'):
+                        msg_dict['created_at'] = msg_dict['created_at'].isoformat()
+                    results["sent"].append(msg_dict)
+
+        cur.close()
+
+        return {
+            "project": project_name,
+            "days": days,
+            "message_type_filter": message_type,
+            "received_count": len(results["received"]),
+            "sent_count": len(results["sent"]),
+            "messages": results
+        }
+    finally:
+        conn.close()
+
+
+def bulk_acknowledge(message_ids: List[str], action: str = "read") -> dict:
+    """Acknowledge multiple messages at once.
+
+    Args:
+        message_ids: List of message UUIDs
+        action: 'read' or 'acknowledged'
+
+    Returns:
+        dict with success count and any errors
+    """
+    if action not in ('read', 'acknowledged'):
+        return {"success": False, "error": "action must be 'read' or 'acknowledged'"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        success_count = 0
+        errors = []
+
+        for msg_id in message_ids:
+            try:
+                if action == "read":
+                    cur.execute("""
+                        UPDATE claude.messages
+                        SET status = 'read', read_at = NOW()
+                        WHERE message_id = %s AND status = 'pending'
+                        RETURNING message_id::text
+                    """, (msg_id,))
+                else:
+                    cur.execute("""
+                        UPDATE claude.messages
+                        SET status = 'acknowledged', acknowledged_at = NOW()
+                        WHERE message_id = %s
+                        RETURNING message_id::text
+                    """, (msg_id,))
+
+                if cur.fetchone():
+                    success_count += 1
+            except Exception as e:
+                errors.append({"message_id": msg_id, "error": str(e)})
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "processed": len(message_ids),
+            "updated": success_count,
+            "errors": errors if errors else None
+        }
+    finally:
+        conn.close()
+
+
 def get_spec_timeout(agent_type: str) -> int:
     """Get recommended timeout from agent_specs.json.
 
@@ -1597,6 +1765,64 @@ async def list_tools() -> List[Tool]:
                     "required": ["project_name"]
                 }
             ),
+            Tool(
+                name="get_message_history",
+                description="Get message history for a project with filtering options. Shows both sent and received messages with date range and type filters.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "project_name": {
+                            "type": "string",
+                            "description": "Project name to get message history for"
+                        },
+                        "message_type": {
+                            "type": "string",
+                            "enum": ["task_request", "status_update", "question", "notification", "handoff", "broadcast"],
+                            "description": "Filter by message type (optional)"
+                        },
+                        "days": {
+                            "type": "integer",
+                            "description": "Number of days to look back (default: 7)",
+                            "minimum": 1,
+                            "maximum": 90
+                        },
+                        "include_sent": {
+                            "type": "boolean",
+                            "description": "Include messages sent by this project (default: true)"
+                        },
+                        "include_received": {
+                            "type": "boolean",
+                            "description": "Include messages received by this project (default: true)"
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum messages to return (default: 50)",
+                            "minimum": 1,
+                            "maximum": 100
+                        }
+                    }
+                }
+            ),
+            Tool(
+                name="bulk_acknowledge",
+                description="Acknowledge multiple messages at once. Useful for clearing inbox after reviewing messages.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "message_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "List of message UUIDs to acknowledge"
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["read", "acknowledged"],
+                            "description": "Action to apply: 'read' or 'acknowledged' (default: read)"
+                        }
+                    },
+                    "required": ["message_ids"]
+                }
+            ),
             # Context injection tools
             Tool(
                 name="get_context_for_task",
@@ -1779,6 +2005,10 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         return await handle_get_mcp_stats(arguments)
     elif name == "get_unactioned_messages":
         return await handle_get_unactioned_messages(arguments)
+    elif name == "get_message_history":
+        return await handle_get_message_history(arguments)
+    elif name == "bulk_acknowledge":
+        return await handle_bulk_acknowledge(arguments)
 
     # Context injection tools
     elif name == "get_context_for_task":
@@ -2155,6 +2385,28 @@ async def handle_get_unactioned_messages(arguments: dict) -> List[TextContent]:
     """Handle get_unactioned_messages tool call."""
     project_name = arguments['project_name']
     result = get_unactioned_messages(project_name)
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_get_message_history(arguments: dict) -> List[TextContent]:
+    """Handle get_message_history tool call."""
+    result = get_message_history(
+        project_name=arguments.get('project_name'),
+        message_type=arguments.get('message_type'),
+        days=arguments.get('days', 7),
+        include_sent=arguments.get('include_sent', True),
+        include_received=arguments.get('include_received', True),
+        limit=arguments.get('limit', 50)
+    )
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_bulk_acknowledge(arguments: dict) -> List[TextContent]:
+    """Handle bulk_acknowledge tool call."""
+    result = bulk_acknowledge(
+        message_ids=arguments['message_ids'],
+        action=arguments.get('action', 'read')
+    )
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

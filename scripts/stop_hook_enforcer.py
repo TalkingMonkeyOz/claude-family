@@ -36,13 +36,24 @@ try:
 except ImportError:
     HAS_DB = False
 
-# Database connection settings
-DB_CONFIG = {
-    "host": os.environ.get("CLAUDE_DB_HOST", "localhost"),
-    "database": os.environ.get("CLAUDE_DB_NAME", "ai_company_foundation"),
-    "user": os.environ.get("CLAUDE_DB_USER", "postgres"),
-    "password": os.environ.get("CLAUDE_DB_PASSWORD", "05OX79HNFCjQwhotDjVx"),
-}
+# Database connection settings - secure config loading
+DB_CONFIG = None
+if os.environ.get("CLAUDE_DB_PASSWORD"):
+    # Use environment variables if available
+    DB_CONFIG = {
+        "host": os.environ.get("CLAUDE_DB_HOST", "localhost"),
+        "database": os.environ.get("CLAUDE_DB_NAME", "ai_company_foundation"),
+        "user": os.environ.get("CLAUDE_DB_USER", "postgres"),
+        "password": os.environ.get("CLAUDE_DB_PASSWORD"),
+    }
+else:
+    # Try to load from secure config file
+    try:
+        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+        from config import POSTGRES_CONFIG
+        DB_CONFIG = POSTGRES_CONFIG
+    except ImportError:
+        DB_CONFIG = None  # No fallback - will gracefully fail
 
 # Fix Windows encoding
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):

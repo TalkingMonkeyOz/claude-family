@@ -53,16 +53,18 @@ python scripts/sync_obsidian_to_db.py
 python scripts/sync_obsidian_to_db.py --force
 ```
 
-### 3. Process Router (Delivery)
+### 3. RAG System (Delivery)
 
-**Script**: `scripts/process_router.py`
+**Script**: `scripts/rag_query_hook.py`
 **Hook**: UserPromptSubmit
 
 On prompt submit:
-1. Check `process_triggers` (regex)
-2. LLM classification fallback
-3. Inject workflow guidance
-4. Log retrieval
+1. Query `claude.knowledge` embeddings (Voyage AI)
+2. Query `claude.vault_embeddings` for vault docs
+3. Inject relevant context (top 2 knowledge + top 3 vault)
+4. Log retrieval to `rag_usage_log`
+
+**Note**: Process router (process_registry) is deprecated. Skills system replaced it.
 
 ---
 
@@ -71,11 +73,11 @@ On prompt submit:
 ```
 Obsidian Vault (edit .md files)
     ↓
-sync_obsidian_to_db.py
+embed_vault_documents.py (Voyage AI embeddings)
     ↓
-claude.knowledge (PostgreSQL)
+claude.vault_embeddings + claude.knowledge (PostgreSQL)
     ↓
-process_router.py (UserPromptSubmit hook)
+rag_query_hook.py (UserPromptSubmit hook)
     ↓
 Claude Session (context injection)
 ```
@@ -104,10 +106,12 @@ synced_at: '2025-12-20'  # Managed by sync script
 
 | Table | Purpose |
 |-------|---------|
-| `claude.knowledge` | Vault content |
-| `claude.knowledge_retrieval_log` | Query tracking |
-| `claude.process_registry` | Workflow definitions |
-| `claude.process_triggers` | Keyword/regex triggers |
+| `claude.knowledge` | Vault content + embeddings |
+| `claude.vault_embeddings` | Document chunk embeddings |
+| `claude.rag_usage_log` | RAG query tracking |
+| `claude.skill_content` | Skills repository |
+
+**Deprecated**: `process_registry`, `process_triggers` (replaced by skills system)
 
 **Quick queries**:
 ```sql
@@ -128,9 +132,9 @@ ORDER BY retrieved_at DESC LIMIT 10;
 
 | Symptom | Fix |
 |---------|-----|
-| Knowledge not showing | Run `sync_obsidian_to_db.py` |
+| Knowledge not showing | Run `embed_vault_documents.py` |
 | Wrong project filter | Add `projects:` to YAML |
-| Process not triggering | Add pattern to `process_triggers` |
+| Low RAG similarity | Check embedding quality in `rag_usage_log` |
 | Hook not running | Check `.claude/settings.json` |
 
 ---
@@ -144,7 +148,7 @@ ORDER BY retrieved_at DESC LIMIT 10;
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 2.1 (RAG system update, removed process_registry refs)
 **Created**: 2025-12-20
-**Updated**: 2025-12-27
+**Updated**: 2026-01-19
 **Location**: knowledge-vault/Claude Family/Knowledge System.md
