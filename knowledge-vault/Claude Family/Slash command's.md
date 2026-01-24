@@ -85,12 +85,13 @@ Session commands query the `claude.*` schema:
 
 | Date | Change |
 |------|--------|
+| 2026-01-24 | Optimized session-resume: uses project-tools MCP (2 calls) instead of 4 raw SQL |
 | 2026-01-07 | Updated session-resume to database-driven (global) |
 | 2025-12-27 | Removed duplicate commands from ATO-Tax-Agent |
 
 ---
 
-**Version**: 2.0
+**Version**: 2.1
 **Created**: 2025-12-26
-**Updated**: 2026-01-07
+**Updated**: 2026-01-24
 **Location**: Claude Family/Slash command's.md

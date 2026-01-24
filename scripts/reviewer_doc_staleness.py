@@ -275,7 +275,9 @@ def main():
         print(json.dumps(findings, indent=2))
 
     conn.close()
-    return 0 if total_issues == 0 else 1
+    # Always return 0 on successful run (scheduler interprets non-zero as failure)
+    # Issues are reported via output and database logging
+    return 0
 
 
 if __name__ == "__main__":

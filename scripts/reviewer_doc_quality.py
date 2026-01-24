@@ -329,13 +329,8 @@ def main():
 
     print(json.dumps(results, indent=2, default=str))
 
-    # Exit code based on critical findings
-    if isinstance(results, dict):
-        if 'summary' in results and results['summary'].get('critical', 0) > 0:
-            return 1
-        if 'total_summary' in results and results['total_summary'].get('critical', 0) > 0:
-            return 1
-
+    # Always return 0 on successful run (scheduler interprets non-zero as failure)
+    # Critical findings are reported via JSON output
     return 0
 
 

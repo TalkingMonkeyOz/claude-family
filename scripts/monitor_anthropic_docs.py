@@ -282,10 +282,10 @@ def main():
     report = generate_report(results)
     print(report)
 
-    # Exit with code 1 if changes detected (useful for CI/scheduling)
+    # Always return 0 on successful run (scheduler interprets non-zero as failure)
+    # Changes are reported via output and database logging
     if results["changed"]:
         print("\n[!] Documentation changes detected! Review the changes above.")
-        return 1
 
     return 0
 

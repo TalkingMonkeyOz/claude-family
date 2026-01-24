@@ -71,13 +71,13 @@ Pending (top 5):
 
 **Command**: `/session-resume` (`.claude/commands/session-resume.md`)
 
-Queries:
-1. Last session from `claude.sessions`
-2. Active todos from `claude.todos`
-3. Pending messages from `claude.messages`
-4. Uncommitted files from git
+Uses project-tools MCP for efficiency (2 calls instead of 4 raw SQL):
+1. `get_project_context` - Returns project info, phase, features, last session, counts
+2. `get_incomplete_todos` - Returns todo items with content, status, priority
+3. `check_inbox` (orchestrator MCP) - Pending messages
+4. `git status --short` - Uncommitted files
 
-**NO file reading** - Pure database queries
+**NO file reading** - Pure MCP/database queries
 
 ### Session End
 
@@ -205,7 +205,7 @@ WHERE project_id = 'YOUR-PROJECT-ID'::uuid
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-01-02
-**Updated**: 2026-01-02
+**Updated**: 2026-01-24
 **Location**: knowledge-vault/40-Procedures/Session Handoff - Database Approach.md

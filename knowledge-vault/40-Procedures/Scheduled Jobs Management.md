@@ -133,6 +133,22 @@ Run: `python scripts/monitor_anthropic_docs.py --verbose`
 
 ---
 
+## Recent Changes (2026-01-24 Audit)
+
+**Deleted 4 jobs:**
+- `Review Local LLM Usage` - purpose served (llama3.3 removed)
+- `Windows: Document Scanner` - duplicate of `Document Scanner`
+- `Stale Session Cleanup` - no script, placeholder
+- `transcript_cleanup` - Windows version supersedes
+
+**Fixed bugs:**
+- Path bug in `compliance-audit-check`, `consistency-check` (changed to relative paths)
+- Exit code bug in 3 scripts - now return 0 on successful run
+
+**Current count**: 15 jobs (12 DB-triggered, 3 Windows refs)
+
+---
+
 ## Maintenance
 
 ### Disable a job
@@ -153,7 +169,7 @@ ORDER BY last_run DESC;
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-01-13
-**Updated**: 2026-01-13
+**Updated**: 2026-01-24
 **Location**: knowledge-vault/40-Procedures/Scheduled Jobs Management.md
