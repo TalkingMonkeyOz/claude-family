@@ -6,7 +6,7 @@ Automatically queries Voyage AI embeddings on every user prompt to inject
 relevant vault knowledge into Claude's context.
 
 FEATURES:
-1. CORE PROTOCOL INJECTION - Always injects input processing protocol (~60 tokens)
+1. CORE PROTOCOL INJECTION - Always injects input processing protocol (~110 tokens)
 2. KNOWLEDGE RECALL - Queries claude.knowledge for learned patterns/gotchas
 3. VAULT RAG - Queries vault embeddings for documentation
 4. SELF-LEARNING - Captures implicit feedback signals
@@ -25,16 +25,24 @@ Output Format:
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
 # This ensures Claude always has the input processing workflow fresh in context.
-# ~60 tokens - minimal overhead for reliable behavior.
+# ~110 tokens - contract-style enforcement for task discipline.
 
 CORE_PROTOCOL = """
 ## Input Processing Protocol
-When receiving a task request:
-1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
-3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
-4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
-5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+
+**MANDATORY RULES (non-negotiable):**
+1. **NEVER guess** - Do not assume files, tables, or features exist. VERIFY first by reading/querying.
+2. **NEVER skip TaskCreate** - Every discrete action (file edit, DB write, command) MUST have a task.
+3. **ALWAYS mark status** - TaskUpdate(in_progress) BEFORE starting. TaskUpdate(completed) IMMEDIATELY after.
+
+**WORKFLOW:**
+1. ANALYZE - Read the ENTIRE user message first
+2. EXTRACT - TaskCreate for EACH action you will perform (no exceptions)
+3. VERIFY - Query/read to confirm existence BEFORE claiming "X exists" or "X doesn't exist"
+4. EXECUTE - One task at a time, status=in_progress first
+5. COMPLETE - TaskUpdate(completed) the instant you finish each action
+
+**SELF-CHECK before responding:** Did I create tasks for ALL actions I'm about to take?
 
 Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
 
@@ -66,6 +74,7 @@ REMINDER_INTERVALS = {
     "inbox_check": 15,       # Every 15 interactions - check for messages
     "vault_refresh": 25,     # Every 25 interactions - refresh vault understanding
     "git_check": 10,         # Every 10 interactions - check uncommitted changes
+    "tool_awareness": 8,     # Every 8 interactions - remind about MCP tools
 }
 
 # State file for tracking interaction count
@@ -80,6 +89,7 @@ def load_reminder_state() -> Dict[str, Any]:
         "last_inbox_check": 0,
         "last_vault_refresh": 0,
         "last_git_check": 0,
+        "last_tool_awareness": 0,
         "session_start": datetime.now(timezone.utc).isoformat(),
     }
     try:
@@ -127,6 +137,17 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
         if count != state.get("last_git_check", 0):
             reminders.append("🔀 **Git Check**: Run `git status` to check for uncommitted changes")
             state["last_git_check"] = count
+
+    if count > 0 and count % REMINDER_INTERVALS["tool_awareness"] == 0:
+        if count != state.get("last_tool_awareness", 0):
+            reminders.append("""🔧 **When to use MCP tools** (ToolSearch first):
+  - **User reports bug/idea?** → `project-tools.create_feedback` (NOT raw SQL)
+  - **Planning 3+ file feature?** → `project-tools.create_feature` + `add_build_task`
+  - **Task too complex for me?** → `orchestrator.spawn_agent` (delegate to coder/analyst)
+  - **Need deep reasoning?** → `sequential-thinking` for multi-step analysis
+  - **Processing Excel/CSV?** → `python-repl` (keep data in REPL, not context)
+  - **Learned something useful?** → `project-tools.store_knowledge` (persists for future)""")
+            state["last_tool_awareness"] = count
 
     if reminders:
         return "\n## Periodic Reminders (Interaction #{})\n{}".format(
