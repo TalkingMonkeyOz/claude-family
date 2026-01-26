@@ -28,30 +28,67 @@ Output Format:
 # ~110 tokens - contract-style enforcement for task discipline.
 
 CORE_PROTOCOL = """
-## Input Processing Protocol
+## ⛔ STOP - READ THIS BEFORE RESPONDING
 
-**MANDATORY RULES (non-negotiable):**
-1. **NEVER guess** - Do not assume files, tables, or features exist. VERIFY first by reading/querying.
-2. **NEVER skip TaskCreate** - Every discrete action (file edit, DB write, command) MUST have a task.
-3. **ALWAYS mark status** - TaskUpdate(in_progress) BEFORE starting. TaskUpdate(completed) IMMEDIATELY after.
+**SELF-CHECK (answer before ANY response):**
+→ Does user's message contain a request/task/question requiring action?
+→ If YES: Have I called TaskCreate for EACH action I will take?
+→ If NO tasks created: **STOP. Create tasks FIRST. Then respond.**
 
-**WORKFLOW:**
-1. ANALYZE - Read the ENTIRE user message first
-2. EXTRACT - TaskCreate for EACH action you will perform (no exceptions)
-3. VERIFY - Query/read to confirm existence BEFORE claiming "X exists" or "X doesn't exist"
-4. EXECUTE - One task at a time, status=in_progress first
-5. COMPLETE - TaskUpdate(completed) the instant you finish each action
+---
 
-**SELF-CHECK before responding:** Did I create tasks for ALL actions I'm about to take?
+## Task Discipline (NON-NEGOTIABLE)
 
-Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
+**Every file edit, DB write, search, or command = 1 task.**
 
-## Working Memory Protocol
-For data-heavy tasks (Excel, large JSON, complex analysis):
-- **REPL as state container**: Store data in Python variables, not context window
-- **Query, don't dump**: `print(df.columns)` not `print(df)` - only print what you need
-- **session_facts for important info**: API creds, endpoints, key decisions → `store_session_fact()`
-- **Lost-in-middle defense**: If user gives critical info early, store it immediately
+```
+User: "update the vault"
+  ↓
+TaskCreate: "Update Database Integration Guide"
+TaskCreate: "Update RAG Usage Guide"
+  ↓
+TaskUpdate(in_progress) → Execute → TaskUpdate(completed)
+  ↓
+Next task...
+```
+
+**THE RULE:** No tool calls until TaskCreate is done. Period.
+
+---
+
+## Working Memory (Session Facts = Your Notepad)
+
+Long conversations compress. Things get lost. **Use session facts as your notepad.**
+
+| When This Happens | Do This |
+|-------------------|---------|
+| User gives credential/key | `store_session_fact("api_key", "...", "credential", is_sensitive=True)` |
+| User tells you config/endpoint | `store_session_fact("api_url", "...", "endpoint")` |
+| A decision is made | `store_session_fact("auth_approach", "JWT with refresh", "decision")` |
+| You discover something important | `store_session_fact("finding_X", "...", "note")` |
+| Multi-step task in progress | `store_session_fact("task_progress", "Done: A,B. Next: C", "note")` |
+
+**Valid types:** credential, config, endpoint, decision, note, data, reference
+
+**Anytime:** Run `list_session_facts()` to see your notepad.
+**Session feels long?** Check your notepad for what you stored earlier.
+
+---
+
+## Quick Reference
+
+| User says... | I do FIRST |
+|--------------|------------|
+| "fix X" | TaskCreate for each fix |
+| "check Y" | TaskCreate: "Check Y" |
+| "update Z" | TaskCreate for each file |
+| Short question | Answer directly (no task needed) |
+
+---
+
+## Other Rules
+- **NEVER guess** - Verify files/tables exist before claiming they do/don't
+- **Large data?** - Use python-repl to keep data out of context
 """
 
 import json
@@ -365,6 +402,36 @@ SESSION_KEYWORDS = [
     "/session-resume",
 ]
 
+# Keywords that should trigger config management warning
+# These patterns indicate Claude might be about to edit config files
+CONFIG_KEYWORDS = [
+    "settings.local.json",
+    "settings.json",
+    ".claude/settings",
+    "hooks.json",
+    "edit config",
+    "change config",
+    "modify config",
+    "update config",
+    "fix hooks",
+    "change hooks",
+    "add hook",
+    "remove hook",
+]
+
+CONFIG_WARNING = """
+⚠️ **CONFIG WARNING**: `.claude/settings.local.json` is **database-generated**.
+
+**DO NOT manually edit** - changes will be overwritten on next SessionStart.
+
+**To change permanently:**
+1. Update database: `config_templates` (all projects) or `workspaces.startup_config` (one project)
+2. Regenerate: `python scripts/generate_project_settings.py <project>` (from project dir)
+3. Restart Claude Code
+
+See: `knowledge-vault/40-Procedures/Config Management SOP.md`
+"""
+
 # Command patterns - skip RAG for imperative commands (not questions)
 COMMAND_PATTERNS = [
     r'^(commit|push|pull|add|delete|remove|create|run|execute|install|build|test|deploy)\b',
@@ -553,6 +620,20 @@ def detect_session_keywords(user_prompt: str) -> bool:
     for keyword in SESSION_KEYWORDS:
         if keyword in prompt_lower:
             logger.info(f"Detected session keyword: '{keyword}'")
+            return True
+    return False
+
+
+def detect_config_keywords(user_prompt: str) -> bool:
+    """Detect if user prompt mentions config files that are database-generated.
+
+    Returns True if prompt mentions settings.local.json, hooks, or config editing.
+    This triggers a warning that these files should not be manually edited.
+    """
+    prompt_lower = user_prompt.lower()
+    for keyword in CONFIG_KEYWORDS:
+        if keyword in prompt_lower:
+            logger.info(f"Detected config keyword: '{keyword}'")
             return True
     return False
 
@@ -893,6 +974,151 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
 
     except Exception as e:
         logger.error(f"Knowledge query failed: {e}", exc_info=True)
+        return None
+
+
+# Nimbus project names that should trigger nimbus_context queries
+NIMBUS_PROJECTS = [
+    'monash-nimbus-reports',
+    'nimbus-user-loader',
+    'nimbus-customer-app',
+    'ATO-Tax-Agent',
+]
+
+
+def query_nimbus_context(user_prompt: str, project_name: str, top_k: int = 3) -> str:
+    """Query nimbus_context schema for Nimbus project knowledge.
+
+    Uses keyword search (no embeddings) for:
+    - code_patterns: Reusable code patterns
+    - project_learnings: Lessons learned
+    - project_facts: Known facts about the codebase
+
+    Args:
+        user_prompt: The user's question/prompt
+        project_name: Current project name
+        top_k: Number of results per table
+
+    Returns:
+        Formatted context string or None if no results
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    # Only query for Nimbus projects
+    if project_name not in NIMBUS_PROJECTS:
+        return None
+
+    try:
+        start_time = time.time()
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+
+        # Extract keywords from prompt (simple tokenization)
+        keywords = [w.lower() for w in re.findall(r'\w+', user_prompt) if len(w) > 3]
+        if not keywords:
+            conn.close()
+            return None
+
+        # Build search pattern (any keyword match)
+        search_pattern = '%' + '%'.join(keywords[:5]) + '%'  # Limit to 5 keywords
+
+        results = []
+
+        # 1. Search code_patterns
+        try:
+            cur.execute("""
+                SELECT 'pattern' as source, pattern_type, solution, context, created_at
+                FROM nimbus_context.code_patterns
+                WHERE solution ILIKE %s OR context ILIKE %s OR pattern_type ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (search_pattern, search_pattern, search_pattern, top_k))
+            results.extend([('pattern', r) for r in cur.fetchall()])
+        except Exception as e:
+            logger.warning(f"code_patterns query failed: {e}")
+
+        # 2. Search project_learnings
+        try:
+            cur.execute("""
+                SELECT 'learning' as source, category, learning, context, created_at
+                FROM nimbus_context.project_learnings
+                WHERE learning ILIKE %s OR context ILIKE %s OR category ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (search_pattern, search_pattern, search_pattern, top_k))
+            results.extend([('learning', r) for r in cur.fetchall()])
+        except Exception as e:
+            logger.warning(f"project_learnings query failed: {e}")
+
+        # 3. Search project_facts
+        try:
+            cur.execute("""
+                SELECT 'fact' as source, category, fact_key, fact_value, created_at
+                FROM nimbus_context.project_facts
+                WHERE fact_key ILIKE %s OR fact_value ILIKE %s OR category ILIKE %s
+                ORDER BY created_at DESC
+                LIMIT %s
+            """, (search_pattern, search_pattern, search_pattern, top_k))
+            results.extend([('fact', r) for r in cur.fetchall()])
+        except Exception as e:
+            logger.warning(f"project_facts query failed: {e}")
+
+        conn.close()
+
+        if not results:
+            logger.info(f"No nimbus_context results for keywords: {keywords[:3]}")
+            return None
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Format results
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        context_lines.append(f"NIMBUS PROJECT CONTEXT ({len(results)} entries, {latency_ms}ms)")
+        context_lines.append("=" * 70)
+        context_lines.append("")
+
+        for source_type, r in results:
+            if isinstance(r, dict):
+                if source_type == 'pattern':
+                    context_lines.append(f"🔧 PATTERN [{r['pattern_type']}]")
+                    context_lines.append(f"   Context: {r['context'] or 'N/A'}")
+                    context_lines.append(f"   Solution: {r['solution'][:200]}...")
+                elif source_type == 'learning':
+                    context_lines.append(f"💡 LEARNING [{r['category']}]")
+                    context_lines.append(f"   Context: {r['context'] or 'N/A'}")
+                    context_lines.append(f"   {r['learning']}")
+                elif source_type == 'fact':
+                    context_lines.append(f"📋 FACT [{r['category']}]")
+                    context_lines.append(f"   {r['fact_key']}: {r['fact_value']}")
+            else:
+                # Tuple format (psycopg2)
+                if source_type == 'pattern':
+                    context_lines.append(f"🔧 PATTERN [{r[1]}]")
+                    context_lines.append(f"   Context: {r[3] or 'N/A'}")
+                    context_lines.append(f"   Solution: {r[2][:200] if r[2] else 'N/A'}...")
+                elif source_type == 'learning':
+                    context_lines.append(f"💡 LEARNING [{r[1]}]")
+                    context_lines.append(f"   Context: {r[3] or 'N/A'}")
+                    context_lines.append(f"   {r[2]}")
+                elif source_type == 'fact':
+                    context_lines.append(f"📋 FACT [{r[1]}]")
+                    context_lines.append(f"   {r[2]}: {r[3]}")
+            context_lines.append("")
+
+        context_lines.append("-" * 70)
+        context_lines.append("")
+
+        logger.info(f"Nimbus context query: {len(results)} results, latency={latency_ms}ms")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Nimbus context query failed: {e}", exc_info=True)
         return None
 
 
@@ -1241,6 +1467,13 @@ def main():
             logger.info("Session keywords detected - loading session context from database")
             session_context = get_session_context(project_name)
 
+        # CONFIG WARNING: Detect if user is asking about config files
+        # These files are database-generated and should not be manually edited
+        config_warning = None
+        if detect_config_keywords(user_prompt):
+            logger.info("Config keywords detected - injecting config management warning")
+            config_warning = CONFIG_WARNING
+
         # Query KNOWLEDGE TABLE (learned patterns, gotchas, facts)
         # This provides memory-like recall of previously learned information
         knowledge_context = query_knowledge(
@@ -1271,12 +1504,21 @@ def main():
             min_similarity=0.25  # Low threshold - skill descriptions don't match tasks directly
         )
 
+        # Query NIMBUS CONTEXT (keyword search for Nimbus projects only)
+        # This provides project-specific patterns, learnings, and facts
+        nimbus_context = query_nimbus_context(
+            user_prompt=user_prompt,
+            project_name=project_name,
+            top_k=3
+        )
+
         # Combine contexts in priority order:
         # 0. Core protocol (ALWAYS - ensures input processing workflow)
         # 1. Session context (if session keywords detected)
         # 2. Knowledge recall (learned patterns - high signal)
         # 3. Vault RAG (documentation - broader context)
         # 4. Skill suggestions (actionable - Claude can load these)
+        # 5. Nimbus context (for Nimbus projects - project-specific knowledge)
         combined_context_parts = []
 
         # ALWAYS inject core protocol FIRST (positioned prominently, never lost)
@@ -1284,12 +1526,16 @@ def main():
 
         if session_context:
             combined_context_parts.append(session_context)
+        if config_warning:
+            combined_context_parts.append(config_warning)
         if knowledge_context:
             combined_context_parts.append(knowledge_context)
         if rag_context:
             combined_context_parts.append(rag_context)
         if skill_context:
             combined_context_parts.append(skill_context)
+        if nimbus_context:
+            combined_context_parts.append(nimbus_context)
 
         # PERIODIC REMINDERS: Inject at intervals (merged from stop_hook_enforcer)
         periodic_reminders = get_periodic_reminders(reminder_state)

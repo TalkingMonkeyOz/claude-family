@@ -135,6 +135,50 @@ python scripts/embed_knowledge.py --force
 
 ---
 
+## Session Facts (Your Notepad)
+
+**NEW (2026-01-26)**: Session facts are your **working memory** for long conversations.
+
+### Why Use Session Facts?
+
+Long conversations get compressed. Earlier context gets lost. Use session facts as a **notepad** to:
+- Store things the user tells you (credentials, endpoints, preferences)
+- Track progress on multi-step tasks
+- Record decisions made during the session
+- Preserve discoveries/findings for later reference
+
+### When to Store Facts
+
+| Situation | Fact Type | Example |
+|-----------|-----------|---------|
+| User gives API key/credential | `credential` | `store_session_fact("api_key", "sk-...", "credential", is_sensitive=True)` |
+| User tells you a URL/endpoint | `endpoint` | `store_session_fact("api_url", "https://...", "endpoint")` |
+| User specifies config value | `config` | `store_session_fact("db_name", "production", "config")` |
+| A decision is made | `decision` | `store_session_fact("auth_method", "JWT with refresh", "decision")` |
+| You discover something | `note` | `store_session_fact("finding_rate_limit", "API limited to 60/min", "note")` |
+| Multi-step task progress | `note` | `store_session_fact("task_progress", "Done: A,B. Next: C", "note")` |
+
+**Valid fact_types**: `credential`, `config`, `endpoint`, `decision`, `note`, `data`, `reference`
+
+### Session Facts Tools (project-tools MCP)
+
+| Tool | Purpose |
+|------|---------|
+| `store_session_fact` | Store a fact (key, value, type) |
+| `list_session_facts` | See all facts in current session (your notepad) |
+| `recall_session_fact` | Get a specific fact by key |
+| `recall_previous_session_facts` | Crash recovery - get facts from N previous sessions |
+
+### Best Practice
+
+**At any point**: Run `list_session_facts()` to see your notepad.
+
+**Session feels long?** Check your notepad for context you stored earlier.
+
+**After crash/restart**: Use `recall_previous_session_facts(n_sessions=3)` to recover.
+
+---
+
 ## How RAG Works (Three Modes)
 
 ### 1. **AUTOMATIC Mode** (Primary - UserPromptSubmit Hook) ✨
@@ -852,15 +896,62 @@ python scripts/embed_vault_documents.py --all-projects
 
 ---
 
+## Nimbus Project Context (NEW 2026-01-26)
+
+**Feature**: For Nimbus projects, the RAG hook also queries `nimbus_context` schema for project-specific knowledge.
+
+**Supported Projects**:
+- monash-nimbus-reports
+- nimbus-user-loader
+- nimbus-customer-app
+- ATO-Tax-Agent
+
+**What Gets Queried** (keyword search, not semantic):
+
+| Table | Content |
+|-------|---------|
+| `code_patterns` | Reusable code patterns for Nimbus API |
+| `project_learnings` | Lessons learned from past work |
+| `project_facts` | Known facts (e.g., API endpoints, limits) |
+| `api_field_mappings` | OData↔REST field name mappings |
+
+**Context Output Example**:
+```
+======================================================================
+NIMBUS PROJECT CONTEXT (5 entries, 12ms)
+======================================================================
+
+🔧 PATTERN [api-pagination]
+   Context: OData queries with large result sets
+   Solution: Use $top and $skip parameters...
+
+💡 LEARNING [rate-limits]
+   Context: Heavy API usage
+   API has 60 req/min limit per user...
+
+📋 FACT [odata-endpoint]
+   ODataBaseUrl: https://monash.nimbus.cloud/odata/v4/
+```
+
+**How It Works**:
+1. Hook detects project is a Nimbus project (from cwd)
+2. Extracts keywords from user prompt
+3. Queries nimbus_context tables via ILIKE pattern matching
+4. Returns matching patterns, learnings, facts
+5. Injected after vault RAG but before skill suggestions
+
+---
+
 ## Related Documents
 
 - [[Vault Embeddings Management SOP]] - Maintaining embeddings
 - [[Claude Tools Reference]] - All available MCP tools
 - [[Knowledge Capture SOP]] - Adding content to vault
+- [[Database Integration Guide]] - nimbus_context schema details
 
 ---
 
-**Version**: 2.0
-**Last Updated**: 2026-01-18
+**Version**: 2.2
+**Last Updated**: 2026-01-26
 **Owner**: Claude Family Infrastructure
-**Changes**: Added knowledge recall system (replaces memory MCP), project-tools MCP integration
+**Changes**: Added Session Facts as Notepad section - working memory for long conversations

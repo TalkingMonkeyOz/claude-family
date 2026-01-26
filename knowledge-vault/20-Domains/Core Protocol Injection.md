@@ -16,30 +16,83 @@ Static text injection on **every user prompt** to ensure Claude always has the i
 ## The Protocol
 
 ```
-## Input Processing Protocol
-When receiving a task request:
-1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
-3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
-4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
-5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+## ⛔ STOP - READ THIS BEFORE RESPONDING
 
-Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
+**SELF-CHECK (answer before ANY response):**
+→ Does user's message contain a request/task/question requiring action?
+→ If YES: Have I called TaskCreate for EACH action I will take?
+→ If NO tasks created: **STOP. Create tasks FIRST. Then respond.**
+
+---
+
+## Task Discipline (NON-NEGOTIABLE)
+
+**Every file edit, DB write, search, or command = 1 task.**
+
+User: "update the vault"
+  ↓
+TaskCreate: "Update Database Integration Guide"
+TaskCreate: "Update RAG Usage Guide"
+  ↓
+TaskUpdate(in_progress) → Execute → TaskUpdate(completed)
+  ↓
+Next task...
+
+**THE RULE:** No tool calls until TaskCreate is done. Period.
+
+---
+
+## Working Memory (Session Facts = Your Notepad)
+
+Long conversations compress. Things get lost. **Use session facts as your notepad.**
+
+| When This Happens | Do This |
+|-------------------|---------|
+| User gives credential/key | store_session_fact("api_key", "...", "credential", is_sensitive=True) |
+| User tells you config/endpoint | store_session_fact("api_url", "...", "endpoint") |
+| A decision is made | store_session_fact("auth_approach", "JWT with refresh", "decision") |
+| You discover something important | store_session_fact("finding_X", "...", "note") |
+| Multi-step task in progress | store_session_fact("task_progress", "Done: A,B. Next: C", "note") |
+
+**Valid types:** credential, config, endpoint, decision, note, data, reference
+
+**Anytime:** Run list_session_facts() to see your notepad.
+**Session feels long?** Check your notepad for what you stored earlier.
+
+---
+
+## Quick Reference
+
+| User says... | I do FIRST |
+|--------------|------------|
+| "fix X" | TaskCreate for each fix |
+| "check Y" | TaskCreate: "Check Y" |
+| "update Z" | TaskCreate for each file |
+| Short question | Answer directly (no task needed) |
+
+---
+
+## Other Rules
+- **NEVER guess** - Verify files/tables exist before claiming they do/don't
+- **Large data?** - Use python-repl to keep data out of context
 ```
 
-## Tasks vs Todos
+## Tasks vs Todos vs Session Facts
 
-| Concept | Scope | Tool | Persistence |
-|---------|-------|------|-------------|
-| **Task** | Session | TaskCreate/TaskUpdate/TaskList | In-memory only |
-| **Todo** | Cross-session | TodoWrite → claude.todos | Database |
+| Concept | Scope | Tool | Persistence | Use For |
+|---------|-------|------|-------------|---------|
+| **Task** | Session | TaskCreate/TaskUpdate/TaskList | In-memory only | Tracking current work |
+| **Todo** | Cross-session | TodoWrite → claude.todos | Database | Work that spans sessions |
+| **Session Fact** | Session+ | store_session_fact/list_session_facts | Database | Notepad - things told to you, findings, decisions |
 
 **Lifecycle:**
 1. Session start: Load Todos from database
 2. User gives work: Create Tasks (session-scoped)
-3. Work through Tasks: Mark in_progress → completed
-4. Session end: Incomplete Tasks → Todos (persist to DB)
-5. Next session: Todos reload, cycle continues
+3. User tells you important info: Store as Session Fact (your notepad)
+4. Work through Tasks: Mark in_progress → completed
+5. Make discoveries/decisions: Store as Session Facts
+6. Session end: Incomplete Tasks → Todos (persist to DB)
+7. Next session: Todos reload, Session Facts recoverable via recall_previous_session_facts()
 
 ## Why This Exists
 
@@ -48,7 +101,7 @@ Note: Tasks are session-scoped. At /session-end, incomplete tasks become persist
 | CLAUDE.md loaded once at session start | Protocol injected every prompt |
 | Long conversations lose context | Always first in injection order |
 | Semantic search unreliable for meta-instructions | Static text, no matching needed |
-| ~80 tokens | Negligible overhead |
+| ~110 tokens | Negligible overhead |
 
 ## Implementation
 
@@ -58,12 +111,20 @@ Note: Tasks are session-scoped. At /session-end, incomplete tasks become persist
 ```python
 CORE_PROTOCOL = """
 ## Input Processing Protocol
-When receiving a task request:
-1. **ANALYZE** - Read entire message before acting
-2. **EXTRACT** - Identify ALL tasks (explicit + implied) → TaskCreate for session tracking
-3. **VERIFY** - Don't guess, don't assume. Check the database, vault, or codebase first.
-4. **EXECUTE** - Work through each task sequentially (TaskUpdate to in_progress)
-5. **COMPLETE** - Mark each task done immediately after finishing (TaskUpdate to completed)
+
+**MANDATORY RULES (non-negotiable):**
+1. **NEVER guess** - Do not assume files, tables, or features exist. VERIFY first by reading/querying.
+2. **NEVER skip TaskCreate** - Every discrete action (file edit, DB write, command) MUST have a task.
+3. **ALWAYS mark status** - TaskUpdate(in_progress) BEFORE starting. TaskUpdate(completed) IMMEDIATELY after.
+
+**WORKFLOW:**
+1. ANALYZE - Read the ENTIRE user message first
+2. EXTRACT - TaskCreate for EACH action you will perform (no exceptions)
+3. VERIFY - Query/read to confirm existence BEFORE claiming "X exists" or "X doesn't exist"
+4. EXECUTE - One task at a time, status=in_progress first
+5. COMPLETE - TaskUpdate(completed) the instant you finish each action
+
+**SELF-CHECK before responding:** Did I create tasks for ALL actions I'm about to take?
 
 Note: Tasks are session-scoped. At /session-end, incomplete tasks become persistent Todos.
 """
@@ -106,7 +167,7 @@ This consolidates all context injection into a single UserPromptSubmit hook, eli
 To change the injected protocol:
 
 1. Edit `CORE_PROTOCOL` constant in `scripts/rag_query_hook.py`
-2. Keep it short (~60-100 tokens max)
+2. Keep it focused (~100-150 tokens max)
 3. No restart needed - takes effect on next prompt
 
 ## Related
@@ -139,7 +200,7 @@ To change the injected protocol:
 
 ---
 
-**Version**: 2.1 (Added periodic reminders, merged stop_hook_enforcer)
+**Version**: 3.1 (Added Working Memory section - session facts as notepad)
 **Created**: 2026-01-21
-**Updated**: 2026-01-24
+**Updated**: 2026-01-26
 **Location**: knowledge-vault/20-Domains/Core Protocol Injection.md
