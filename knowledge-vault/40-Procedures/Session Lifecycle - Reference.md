@@ -84,17 +84,36 @@ SELECT * FROM claude.session_state WHERE project_name = 'YOUR-PROJECT';
 
 ---
 
+## Session Commands Quick Reference
+
+| Command | When to Use | Closes Session? |
+|---------|-------------|-----------------|
+| `/session-end` | Done for the day | Yes |
+| `/session-commit` | Done + want to git commit | Yes |
+| `/session-save` | Mid-session checkpoint | No |
+| `/session-status` | Quick check without starting work | No |
+| `/session-resume` | Restore context at session start | No |
+
+---
+
 ## Best Practices
 
-### 1. Always Run /session-end
+### 1. Use /session-save for Checkpoints
 
-**Why**: Preserves state for next session
+**Why**: Preserves state without closing session
+
+**When**:
+- Before risky refactoring
+- Mid-session progress save
+- Taking a break but continuing later
+
+### 2. Use /session-end or /session-commit to Close
+
+**Why**: Properly closes session and generates summary
 
 **When**:
 - End of work day
-- Before long break
-- After completing major milestone
-- Multiple times per session (to checkpoint)
+- Finished with the task
 
 ### 2. Use TodoWrite Frequently
 
@@ -129,7 +148,7 @@ SELECT * FROM claude.session_state WHERE project_name = 'YOUR-PROJECT';
 
 ---
 
-**Version**: 2.0 (split 2025-12-26)
+**Version**: 2.1 (Added session commands quick reference)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-26
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Reference.md

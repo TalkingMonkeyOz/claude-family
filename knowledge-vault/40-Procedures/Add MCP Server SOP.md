@@ -3,7 +3,7 @@ title: Add MCP Server SOP
 category: procedure
 status: active
 created: 2025-12-27
-updated: 2025-12-31
+updated: 2026-01-26
 tags:
 - sop
 - mcp
@@ -27,15 +27,109 @@ Standard procedure for adding MCP servers to Claude Family projects.
 
 ---
 
-## Method 0: Add Project-Specific MCP (Single Project Only)
+## Method 0: Add Project-Specific MCP (Database-Driven, RECOMMENDED)
 
 **Use this for**: Project-specific tools (MUI docs, Playwright, project-specific APIs)
 
-**Location**: `<project-root>/.mcp.json` (project-specific, not centralized)
+**Source of Truth**: Database `workspaces.startup_config.mcp_configs`
 
-### 1. Create .mcp.json in Project Root
+**Generated File**: `<project-root>/.mcp.json` (auto-generated, self-healing)
 
-Create file at project root (e.g., `C:\Projects\nimbus-mui\.mcp.json`):
+### How It Works
+
+```
+Database (mcp_configs)  →  generate_mcp_config.py  →  .mcp.json (Generated)
+                                   ↑
+                            Called by start-claude.bat
+```
+
+The launcher generates `.mcp.json` from database on every startup. Manual edits are overwritten.
+
+### 1. Add MCP Config to Database
+
+```sql
+-- Add MCP server config for a project
+UPDATE claude.workspaces
+SET startup_config = startup_config || '{
+  "mcp_configs": {
+    "mui": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@mui/mcp"]
+    }
+  },
+  "enabledMcpjsonServers": ["mui"]
+}'::jsonb
+WHERE project_name = 'nimbus-mui';
+```
+
+**Note**: Use simple npx command - Windows wrapper is applied automatically!
+
+### 2. Regenerate Config (or Launch via Launcher)
+
+```bash
+# Manual regeneration
+python C:\Projects\claude-family\scripts\generate_mcp_config.py PROJECT_NAME
+
+# Or just launch via start-claude.bat - it regenerates automatically
+```
+
+### 3. Verify
+
+```bash
+# Check generated file
+cat .mcp.json
+
+# Should see Windows wrapper applied automatically:
+# "command": "cmd", "args": ["/c", "npx", "-y", ...]
+```
+
+### Adding Multiple Servers
+
+```sql
+UPDATE claude.workspaces
+SET startup_config = startup_config || '{
+  "mcp_configs": {
+    "mui": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@mui/mcp"]
+    },
+    "ag-grid": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["ag-mcp"]
+    },
+    "custom-server": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "C:/path/to/server.py"]
+    }
+  },
+  "enabledMcpjsonServers": ["mui", "ag-grid", "custom-server"]
+}'::jsonb
+WHERE project_name = 'your-project';
+```
+
+### Windows Wrapper (Automatic)
+
+The generator automatically applies `cmd /c` wrapper for npx commands on Windows:
+
+**You write in database**:
+```json
+{ "command": "npx", "args": ["-y", "@mui/mcp"] }
+```
+
+**Generated .mcp.json**:
+```json
+{ "command": "cmd", "args": ["/c", "npx", "-y", "@mui/mcp"] }
+```
+
+Non-npx commands (uv, python, node) are left unchanged.
+
+### Legacy: Manual .mcp.json (NOT RECOMMENDED)
+
+If you need to create `.mcp.json` manually (not database-driven):
 
 ```json
 {
@@ -49,56 +143,7 @@ Create file at project root (e.g., `C:\Projects\nimbus-mui\.mcp.json`):
 }
 ```
 
-**IMPORTANT: Windows requires `cmd /c` wrapper for npx commands**
-
-❌ **Wrong (will fail on Windows)**:
-```json
-{
-  "command": "npx",
-  "args": ["-y", "@mui/mcp"]
-}
-```
-
-✅ **Correct (Windows-compatible)**:
-```json
-{
-  "command": "cmd",
-  "args": ["/c", "npx", "-y", "@mui/mcp"]
-}
-```
-
-**Unix/macOS** can use npx directly (no cmd wrapper needed):
-```json
-{
-  "command": "npx",
-  "args": ["-y", "@mui/mcp"]
-}
-```
-
-### 2. Add to Database Configuration (Optional)
-
-For centralized system tracking, also add to `claude.workspaces`:
-
-```sql
-UPDATE claude.workspaces
-SET startup_config = jsonb_set(
-    COALESCE(startup_config, '{}'::jsonb),
-    '{enabledMcpjsonServers}',
-    COALESCE(startup_config->'enabledMcpjsonServers', '[]'::jsonb) || '["mui"]'::jsonb
-)
-WHERE project_name = 'nimbus-mui';
-```
-
-This tracks which .mcp.json servers should be active but doesn't replace the .mcp.json file itself.
-
-### 3. Reload Claude Code
-
-Restart Claude Code or run `/mcp reload` (if available) to pick up .mcp.json.
-
-**Verification**:
-```bash
-/mcp list  # Should show mui in the list
-```
+**Warning**: Manual files will be overwritten if database has `mcp_configs` for the project.
 
 ---
 
@@ -390,7 +435,7 @@ cat ~/.claude/hooks.log | tail -50
 
 ---
 
-**Version**: 2.2 (Added project-specific MCP config, Windows cmd /c wrapper)
+**Version**: 3.0 (Database-driven .mcp.json generation with auto Windows wrapper)
 **Created**: 2025-12-27
-**Updated**: 2025-12-31
+**Updated**: 2026-01-26
 **Location**: 40-Procedures/Add MCP Server SOP.md

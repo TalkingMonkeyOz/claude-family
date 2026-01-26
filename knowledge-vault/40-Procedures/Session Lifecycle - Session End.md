@@ -91,46 +91,55 @@ WHERE project_name = $PROJECT
 
 ---
 
+## Session Commands Reference
+
+| Command | Purpose | Sets session_end? |
+|---------|---------|-------------------|
+| `/session-end` | Close session with summary | Yes |
+| `/session-commit` | Close session + git commit | Yes |
+| `/session-save` | Mid-session checkpoint | No |
+| `/session-status` | Quick read-only check | No |
+| `/session-resume` | Restore context at start | No |
+
+---
+
 ## Manual End (/session-end command)
 
 **File**: `.claude/commands/session-end.md`
 
-When you run `/session-end`, the skill does:
+When you run `/session-end`:
 
-### 1. Generate Summary
-
-Uses your conversation history to create `session_summary`:
-- What was accomplished
-- What you learned
-- Challenges encountered
-
-### 2. Save State
+### 1. Close Session Record
 
 ```sql
--- Save session state
-INSERT INTO claude.session_state
-(project_name, todo_list, current_focus, next_steps, updated_at)
-VALUES (...)
-ON CONFLICT (project_name)
-DO UPDATE SET ...;
-
--- Update session record
 UPDATE claude.sessions
 SET
     session_end = NOW(),
-    session_summary = $SUMMARY,
-    tasks_completed = $TASKS_ARRAY,
-    learnings_gained = $LEARNINGS_ARRAY,
-    challenges_encountered = $CHALLENGES_ARRAY
+    session_summary = 'Summary of work done',
+    tasks_completed = ARRAY['Task 1', 'Task 2'],
+    learnings_gained = ARRAY['Pattern discovered']
 WHERE session_id = $SESSION_ID;
 ```
 
-### 3. Knowledge Capture
+### 2. Save State for Next Session
 
-Optionally creates knowledge note in vault:
-- Location: `knowledge-vault/00-Inbox/`
-- Format: Markdown with frontmatter
-- Content: Session insights, patterns discovered
+```sql
+INSERT INTO claude.session_state
+(project_name, current_focus, next_steps, updated_at)
+VALUES ($PROJECT, $FOCUS, $NEXT_STEPS_JSON, NOW())
+ON CONFLICT (project_name)
+DO UPDATE SET ...;
+```
+
+### 3. Store Knowledge (Optional)
+
+If you discovered a reusable pattern:
+
+```sql
+INSERT INTO claude.knowledge
+(pattern_name, category, description, example_code, gotchas, confidence_level)
+VALUES (...);
+```
 
 ---
 
@@ -239,7 +248,7 @@ When you start Claude again on the same project:
 
 ---
 
-**Version**: 2.0 (split 2025-12-26)
+**Version**: 2.1 (Added session commands reference table)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-01-26
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Session End.md

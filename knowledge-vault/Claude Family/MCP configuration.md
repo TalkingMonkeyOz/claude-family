@@ -4,123 +4,181 @@ projects:
 tags:
 - mcp
 - configuration
-- database-driven
 synced: false
 ---
 
 # MCP Configuration
 
-Database-driven MCP configuration across Claude projects.
+How MCP servers are configured across Claude projects.
 
 ---
 
 ## Configuration Tiers
 
-| Tier | Location | Scope | Update Method |
-|------|----------|-------|---------------|
-| 1. Global | `~/.claude.json` | All projects | Manual file edit |
-| 2. Project Type | `project_type_configs.default_mcp_servers` | All projects of type | `UPDATE project_type_configs` |
-| 3. Project Override | `workspaces.startup_config` | Single project | `UPDATE workspaces` |
-| 4. Generated | `.claude/settings.local.json` | Runtime (regenerated) | Auto on SessionStart |
+| Tier | Source of Truth | Generated File | Update Method |
+|------|-----------------|----------------|---------------|
+| **1. Global/User MCPs** | `~/.claude.json` | — | Manual file edit |
+| **2. Project MCPs** | Database `mcp_configs` | `.mcp.json` | Database UPDATE |
+| 3. Enable Control | Database `enabledMcpjsonServers` | `settings.local.json` | Database UPDATE |
 
 **Global MCPs**: postgres, orchestrator, sequential-thinking, python-repl
 
 ---
 
-## Architecture
+## Architecture (Database-Driven)
+
+**IMPORTANT**: As of 2026-01-26, `.mcp.json` is GENERATED from database.
 
 ```
-project_type_configs → workspaces.startup_config → generate_project_settings.py → settings.local.json
+Database (Source of Truth)
+    workspaces.startup_config.mcp_configs
+        ↓
+    generate_mcp_config.py (called by start-claude.bat)
+        ↓
+    .mcp.json (Generated, self-healing)
+        ↓
+    Claude Code reads .mcp.json
 ```
 
-**Self-Healing**: Settings regenerate every SessionStart from database.
+**Key Points**:
+- Database `mcp_configs` is the source of truth
+- `.mcp.json` is auto-generated on every launch
+- Manual edits to `.mcp.json` are overwritten
+- Windows `cmd /c` wrapper auto-applied to npx commands
 
 ---
 
 ## Common Tasks
 
-### Add MCP to All Infrastructure Projects
+### Add Project-Specific MCP
+
+**Update database** - `.mcp.json` will be generated automatically:
 
 ```sql
-UPDATE claude.project_type_configs
-SET default_mcp_servers = ARRAY_APPEND(default_mcp_servers, 'custom-mcp')
-WHERE project_type = 'infrastructure';
+-- Add MCP config to a project
+UPDATE claude.workspaces
+SET startup_config = startup_config || '{
+  "mcp_configs": {
+    "ag-grid": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["ag-mcp"]
+    }
+  },
+  "enabledMcpjsonServers": ["ag-grid"]
+}'::jsonb
+WHERE project_name = 'your-project';
 ```
 
-### Add MCP to One Project
+**Note**: Use simple `npx` command - Windows wrapper is applied automatically!
+
+Then regenerate or restart via launcher:
+```bash
+python scripts/generate_mcp_config.py your-project
+```
+
+### Add Multiple Servers
 
 ```sql
 UPDATE claude.workspaces
-SET startup_config = jsonb_set(
-  COALESCE(startup_config, '{}'::jsonb),
-  '{mcp_servers}',
-  jsonb_build_array('postgres', 'orchestrator', 'custom-mcp')
-)
-WHERE project_name = 'claude-family';
+SET startup_config = startup_config || '{
+  "mcp_configs": {
+    "mui": { "type": "stdio", "command": "npx", "args": ["-y", "@mui/mcp"] },
+    "ag-grid": { "type": "stdio", "command": "npx", "args": ["ag-mcp"] },
+    "custom": { "type": "stdio", "command": "uv", "args": ["run", "server.py"] }
+  },
+  "enabledMcpjsonServers": ["mui", "ag-grid", "custom"]
+}'::jsonb
+WHERE project_name = 'your-project';
 ```
 
-### Remove MCP from Type
+### Disable an MCP (Keep Config)
 
 ```sql
-UPDATE claude.project_type_configs
-SET default_mcp_servers = ARRAY_REMOVE(default_mcp_servers, 'memory')
-WHERE project_type = 'infrastructure';
+-- Remove from enabledMcpjsonServers (keeps config for later)
+UPDATE claude.workspaces
+SET startup_config = jsonb_set(
+  startup_config,
+  '{enabledMcpjsonServers}',
+  (SELECT jsonb_agg(elem) FROM jsonb_array_elements_text(startup_config->'enabledMcpjsonServers') elem
+   WHERE elem != 'ag-grid')
+)
+WHERE project_name = 'your-project';
 ```
+
+### Add Global MCP (All Projects)
+
+Edit `~/.claude.json` directly (manual file edit - not database-driven).
 
 ---
 
 ## Database Tables
 
-| Table | Purpose |
-|-------|---------|
-| `project_type_configs` | MCP defaults by project type |
-| `workspaces` | Project-specific overrides (startup_config) |
-| `mcp_configs` | Audit tracking |
-| `config_deployment_log` | Change history |
+| Table/Column | Purpose | Used? |
+|--------------|---------|-------|
+| `workspaces.startup_config.mcp_configs` | MCP server definitions | ✅ Source of truth |
+| `workspaces.startup_config.enabledMcpjsonServers` | Which servers to include | ✅ Filters output |
+| `mcp_configs` (table) | Audit tracking only | ⚠️ Informational |
+
+---
+
+## Generated File Structure
+
+The generator creates `.mcp.json` with:
+
+```json
+{
+  "_comment": "Generated from database - DO NOT EDIT MANUALLY",
+  "_generated": true,
+  "_project": "project-name",
+  "mcpServers": {
+    "server-name": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "package-name"]
+    }
+  }
+}
+```
+
+---
+
+## Windows npx Wrapper (Automatic)
+
+On Windows, the generator auto-applies `cmd /c` wrapper for npx commands:
+
+**You write in database**:
+```json
+{ "command": "npx", "args": ["-y", "@mui/mcp"] }
+```
+
+**Generated .mcp.json**:
+```json
+{ "command": "cmd", "args": ["/c", "npx", "-y", "@mui/mcp"] }
+```
+
+**Why?** Without wrapper, closing dev servers (Vite, webpack) kills MCP servers.
+
+Non-npx commands (uv, python, node) are left unchanged.
 
 ---
 
 ## Checking Configuration
 
-**Current loaded MCPs**:
+**Database config** (source of truth):
+```sql
+SELECT startup_config->'mcp_configs' FROM claude.workspaces WHERE project_name = 'X';
+```
+
+**Generated .mcp.json**:
 ```bash
-cat .claude/settings.local.json | jq '.mcp_servers'
-```
-
-**Project type defaults**:
-```sql
-SELECT default_mcp_servers FROM claude.project_type_configs
-WHERE project_type = 'infrastructure';
-```
-
-**Project overrides**:
-```sql
-SELECT startup_config FROM claude.workspaces WHERE project_name = 'X';
+cat .mcp.json
 ```
 
 **Regenerate manually**:
 ```bash
-python scripts/generate_project_settings.py claude-family
+python C:\Projects\claude-family\scripts\generate_mcp_config.py PROJECT_NAME
 ```
-
----
-
-## Windows npx Wrapper (CRITICAL)
-
-On Windows, npx-based MCPs MUST use `cmd /c` wrapper for process isolation:
-
-```json
-{
-  "memory": {
-    "command": "cmd",
-    "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-memory"]
-  }
-}
-```
-
-**Why?** Without wrapper, closing dev servers (Vite, webpack) kills MCP servers and crashes Claude.
-
-See [[MCP Windows npx Wrapper Pattern]] for full details.
 
 ---
 
@@ -128,36 +186,35 @@ See [[MCP Windows npx Wrapper Pattern]] for full details.
 
 | Issue | Fix |
 |-------|-----|
-| MCP won't load | Check `mcp_servers` in settings.local.json |
-| Changes not applying | Regenerate or wait for next SessionStart |
-| Wrong MCPs loaded | Check project type matches expected |
-| Database update ignored | Verify `project_type_configs` was updated, check logs |
-| Claude crashes when closing dev server | Apply `cmd /c` wrapper to npx MCPs (Windows) |
+| MCP not in .mcp.json | Check database has `mcp_configs` AND server is in `enabledMcpjsonServers` |
+| .mcp.json edits lost | Expected - file is generated from database. Update database instead |
+| MCP loads but fails | Check command/args are correct in database |
+| npx fails on Windows | Generator should auto-wrap. Check logs: `~/.claude/hooks.log` |
+| No .mcp.json generated | Check `startup_config->'mcp_configs'` exists in workspaces |
 
 **Debug**:
 ```bash
-# Check what's loaded
-cat .claude/settings.local.json | grep -A 10 mcp_servers
-
-# Check database
-psql -d ai_company_foundation -c "SELECT default_mcp_servers FROM claude.project_type_configs"
+# Check logs
+cat ~/.claude/hooks.log | grep mcp_config
 
 # Regenerate
-python scripts/generate_project_settings.py PROJECT
+python scripts/generate_mcp_config.py PROJECT_NAME
+
+# Check database
+psql -c "SELECT startup_config->'mcp_configs' FROM claude.workspaces WHERE project_name = 'X';"
 ```
 
 ---
 
 ## Related
 
-- [[MCP Registry]] - Complete MCP list
-- [[Settings File]] - Database-driven settings
+- [[Add MCP Server SOP]] - Step-by-step procedure
 - [[Config Management SOP]] - Full config system
-- [[Orchestrator MCP]] - Agent spawning
+- [[MCP Windows npx Wrapper Pattern]] - Why wrapper is needed
 
 ---
 
-**Version**: 2.1 (Added Windows npx wrapper section)
+**Version**: 4.0 (Database-driven .mcp.json generation)
 **Created**: 2025-12-26
-**Updated**: 2026-01-03
+**Updated**: 2026-01-26
 **Location**: Claude Family/MCP configuration.md
