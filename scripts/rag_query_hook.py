@@ -977,6 +977,100 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
         return None
 
 
+# =============================================================================
+# SESSION FACTS AUTO-INJECTION (No embedding - just SQL)
+# =============================================================================
+# Lightweight query to inject critical session facts (credentials, endpoints,
+# decisions) into every prompt. No Voyage AI needed - just a simple SELECT.
+
+CRITICAL_FACT_TYPES = ['credential', 'endpoint', 'decision', 'config']
+
+
+def query_critical_session_facts(project_name: str, session_id: str = None,
+                                  limit: int = 5) -> Optional[str]:
+    """Query critical session facts for auto-injection.
+
+    This is LIGHTWEIGHT - no embeddings, just a simple SQL query.
+    Only returns facts of critical types that Claude should always see.
+
+    Args:
+        project_name: Current project name
+        session_id: Current session ID (optional)
+        limit: Max facts to return
+
+    Returns:
+        Formatted context string or None if no facts
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+
+        # Simple query - no embeddings needed
+        cur.execute("""
+            SELECT fact_key, fact_value, fact_type, is_sensitive
+            FROM claude.session_facts
+            WHERE project_name = %s
+              AND fact_type = ANY(%s)
+              AND (session_id = %s OR session_id IS NULL OR %s IS NULL)
+            ORDER BY
+                CASE fact_type
+                    WHEN 'credential' THEN 1
+                    WHEN 'endpoint' THEN 2
+                    WHEN 'config' THEN 3
+                    WHEN 'decision' THEN 4
+                    ELSE 5
+                END,
+                created_at DESC
+            LIMIT %s
+        """, (project_name, CRITICAL_FACT_TYPES, session_id, session_id, limit))
+
+        facts = cur.fetchall()
+        conn.close()
+
+        if not facts:
+            return None
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Format as compact notepad view
+        lines = []
+        lines.append("")
+        lines.append("📓 YOUR NOTEPAD (auto-loaded critical facts):")
+
+        for f in facts:
+            if isinstance(f, dict):
+                key = f['fact_key']
+                value = f['fact_value'] if not f['is_sensitive'] else '[SENSITIVE]'
+                ftype = f['fact_type']
+            else:
+                key = f[0]
+                value = f[1] if not f[3] else '[SENSITIVE]'
+                ftype = f[2]
+
+            # Truncate long values
+            if len(value) > 60:
+                value = value[:57] + "..."
+
+            lines.append(f"  [{ftype}] {key}: {value}")
+
+        lines.append(f"  (Use list_session_facts() for full notepad | {latency_ms}ms)")
+        lines.append("")
+
+        logger.info(f"Session facts auto-inject: {len(facts)} facts, {latency_ms}ms")
+        return "\n".join(lines)
+
+    except Exception as e:
+        logger.warning(f"Session facts query failed: {e}")
+        return None
+
+
 # Nimbus project names that should trigger nimbus_context queries
 NIMBUS_PROJECTS = [
     'monash-nimbus-reports',
@@ -1460,6 +1554,14 @@ def main():
             except Exception as e:
                 logger.warning(f"Implicit feedback processing failed: {e}")
 
+        # CRITICAL SESSION FACTS: Always inject (lightweight, no embedding)
+        # These are credentials, endpoints, decisions - always visible to Claude
+        critical_facts = query_critical_session_facts(
+            project_name=project_name,
+            session_id=session_id,
+            limit=5
+        )
+
         # SESSION CONTEXT: Check for session-related keywords and inject context
         # This implements the "progressive context loading" pattern from Anthropic
         session_context = None
@@ -1514,6 +1616,7 @@ def main():
 
         # Combine contexts in priority order:
         # 0. Core protocol (ALWAYS - ensures input processing workflow)
+        # 0.5. Critical session facts (credentials, endpoints, decisions - your notepad)
         # 1. Session context (if session keywords detected)
         # 2. Knowledge recall (learned patterns - high signal)
         # 3. Vault RAG (documentation - broader context)
@@ -1523,6 +1626,10 @@ def main():
 
         # ALWAYS inject core protocol FIRST (positioned prominently, never lost)
         combined_context_parts.append(CORE_PROTOCOL)
+
+        # ALWAYS inject critical session facts (lightweight - no embedding query)
+        if critical_facts:
+            combined_context_parts.append(critical_facts)
 
         if session_context:
             combined_context_parts.append(session_context)
