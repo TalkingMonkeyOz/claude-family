@@ -207,7 +207,7 @@ logger = logging.getLogger('rag_query')
 
 # Try to import required libraries
 DB_AVAILABLE = False
-VOYAGE_AVAILABLE = False
+# Note: VOYAGE_AVAILABLE is set below (lazy-loaded)
 
 try:
     import psycopg
@@ -223,11 +223,10 @@ except ImportError:
     except ImportError:
         DB_AVAILABLE = False
 
-try:
-    import voyageai
-    VOYAGE_AVAILABLE = True
-except ImportError:
-    VOYAGE_AVAILABLE = False
+# Voyage AI is lazy-loaded in generate_embedding() to save ~100ms startup time
+# Only imported when embeddings are actually needed
+VOYAGE_AVAILABLE = None  # Will be set on first use
+_voyageai_module = None  # Cached module reference
 
 # Default connection string - loaded from environment or ai-workspace config
 DEFAULT_CONN_STR = None
@@ -256,14 +255,34 @@ def get_db_connection():
 
 
 def generate_embedding(text: str) -> list:
-    """Generate embedding using Voyage AI API."""
+    """Generate embedding using Voyage AI API.
+
+    Lazy-loads voyageai module on first call to save ~100ms startup time
+    when embeddings aren't needed (commands, simple questions).
+    """
+    global VOYAGE_AVAILABLE, _voyageai_module
+
+    # Lazy load voyageai on first use
+    if VOYAGE_AVAILABLE is None:
+        try:
+            import voyageai
+            _voyageai_module = voyageai
+            VOYAGE_AVAILABLE = True
+            logger.info("Lazy-loaded voyageai module")
+        except ImportError:
+            VOYAGE_AVAILABLE = False
+            logger.warning("voyageai not installed - embeddings unavailable")
+
+    if not VOYAGE_AVAILABLE:
+        return None
+
     try:
         api_key = os.environ.get('VOYAGE_API_KEY')
         if not api_key:
             logger.warning("VOYAGE_API_KEY not set - skipping RAG")
             return None
 
-        client = voyageai.Client(api_key=api_key)
+        client = _voyageai_module.Client(api_key=api_key)
         result = client.embed([text], model="voyage-3", input_type="query")
         return result.embeddings[0]
     except Exception as e:
@@ -854,8 +873,10 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
     Returns:
         Formatted context string or None if no results
     """
-    if not DB_AVAILABLE or not VOYAGE_AVAILABLE:
+    if not DB_AVAILABLE:
         return None
+
+    # Note: VOYAGE_AVAILABLE is checked inside generate_embedding() (lazy-loaded)
 
     try:
         start_time = time.time()
@@ -863,7 +884,7 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
         # Extract query from user prompt
         query_text = extract_query_from_prompt(user_prompt)
 
-        # Generate embedding for query
+        # Generate embedding for query (lazy-loads voyageai if needed)
         query_embedding = generate_embedding(query_text)
         if not query_embedding:
             return None
@@ -1234,9 +1255,7 @@ def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
         logger.warning("Database not available - skipping RAG")
         return None
 
-    if not VOYAGE_AVAILABLE:
-        logger.warning("Voyage AI not available - skipping RAG")
-        return None
+    # Note: VOYAGE_AVAILABLE is checked inside generate_embedding() (lazy-loaded)
 
     try:
         start_time = time.time()
@@ -1409,13 +1428,15 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
     Returns:
         Formatted skill suggestions or None if no matches
     """
-    if not DB_AVAILABLE or not VOYAGE_AVAILABLE:
+    if not DB_AVAILABLE:
         return None
+
+    # Note: VOYAGE_AVAILABLE is checked inside generate_embedding() (lazy-loaded)
 
     try:
         start_time = time.time()
 
-        # Generate embedding for query
+        # Generate embedding for query (lazy-loads voyageai if needed)
         query_text = extract_query_from_prompt(user_prompt)
         query_embedding = generate_embedding(query_text)
         if not query_embedding:
