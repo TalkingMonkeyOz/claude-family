@@ -27,7 +27,7 @@ Tools:
 - store_session_fact: Cache important facts (credentials, configs) within session
 - recall_session_fact: Retrieve a fact by key
 - list_session_facts: List all facts in current session
-- recall_previous_session_facts: Recover facts from previous sessions (crash recovery)
+- recall_previous_session_facts: Recover facts from previous sessions (after compaction)
 - store_session_notes: Store structured notes (decisions, progress, blockers) - survives crashes
 - get_session_notes: Retrieve session notes for current project
 
@@ -1262,7 +1262,7 @@ async def tool_store_session_fact(
     is_sensitive: bool = False,
     project_name: Optional[str] = None
 ) -> Dict:
-    """Store a fact for the current session (crash-resistant cache)."""
+    """Store a fact in the session notepad (auto-injected into context)."""
     session_id = os.environ.get('CLAUDE_SESSION_ID')
     if not project_name:
         project_name = os.path.basename(os.getcwd())
@@ -1416,7 +1416,7 @@ async def tool_recall_previous_session_facts(
     n_sessions: int = 3,
     fact_types: Optional[List[str]] = None
 ) -> Dict:
-    """Recall facts from previous sessions (crash recovery)."""
+    """Recall facts from previous sessions (after context compaction)."""
     if not project_name:
         project_name = os.path.basename(os.getcwd())
 
@@ -1547,7 +1547,7 @@ async def tool_store_session_notes(
     """
     Store structured notes during a session.
 
-    Notes persist to a markdown file for crash recovery and cross-session reference.
+    Notes persist to a markdown file for cross-session reference.
     Use for: progress tracking, key decisions, architectural notes, important findings.
 
     Args:
@@ -1663,6 +1663,104 @@ async def tool_get_session_notes(
         return {"error": f"Failed to get notes: {str(e)}"}
 
 
+async def tool_get_session_resume(project: str) -> Dict:
+    """
+    Get all session resume context in a single call.
+
+    Returns consolidated session context:
+    - Last session summary and tasks completed
+    - Session state (current_focus, next_steps)
+    - Active todos (full content)
+    - Pending messages count
+
+    This is designed to replace multiple individual queries for /session-resume.
+    """
+    project_id = get_project_id(project)
+    project_name = project.split('/')[-1].split('\\')[-1]  # Extract basename
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        result = {
+            "project_name": project_name,
+            "last_session": None,
+            "session_state": None,
+            "active_todos": {
+                "in_progress": [],
+                "pending": []
+            },
+            "pending_messages": 0
+        }
+
+        # 1. Get last completed session
+        cur.execute("""
+            SELECT session_summary, session_end, tasks_completed
+            FROM claude.sessions
+            WHERE project_name = %s AND session_end IS NOT NULL
+            ORDER BY session_end DESC LIMIT 1
+        """, (project_name,))
+        last_session = cur.fetchone()
+        if last_session:
+            result["last_session"] = {
+                "summary": last_session['session_summary'],
+                "ended": last_session['session_end'].isoformat() if last_session['session_end'] else None,
+                "tasks_completed": last_session['tasks_completed'] or []
+            }
+
+        # 2. Get session state
+        cur.execute("""
+            SELECT current_focus, next_steps
+            FROM claude.session_state
+            WHERE project_name = %s
+        """, (project_name,))
+        session_state = cur.fetchone()
+        if session_state:
+            result["session_state"] = {
+                "current_focus": session_state['current_focus'],
+                "next_steps": session_state['next_steps'] or []
+            }
+
+        # 3. Get active todos
+        if project_id:
+            cur.execute("""
+                SELECT t.content, t.status, t.priority
+                FROM claude.todos t
+                WHERE t.project_id = %s::uuid
+                  AND t.is_deleted = false
+                  AND t.status IN ('pending', 'in_progress')
+                ORDER BY
+                  CASE t.status WHEN 'in_progress' THEN 1 ELSE 2 END,
+                  t.priority ASC
+                LIMIT 15
+            """, (project_id,))
+
+            for row in cur.fetchall():
+                todo = {
+                    "content": row['content'],
+                    "priority": row['priority']
+                }
+                if row['status'] == 'in_progress':
+                    result["active_todos"]["in_progress"].append(todo)
+                else:
+                    result["active_todos"]["pending"].append(todo)
+
+        # 4. Get pending messages count
+        cur.execute("""
+            SELECT COUNT(*) as count
+            FROM claude.messages
+            WHERE status = 'pending'
+              AND (to_project = %s OR to_project IS NULL)
+        """, (project_name,))
+        result["pending_messages"] = cur.fetchone()['count']
+
+        cur.close()
+        return result
+
+    finally:
+        conn.close()
+
+
 # ============================================================================
 # MCP Tool Definitions
 # ============================================================================
@@ -1683,6 +1781,20 @@ async def list_tools() -> List[Tool]:
                     }
                 },
                 "required": ["project_path"]
+            }
+        ),
+        Tool(
+            name="get_session_resume",
+            description="Get all session resume context in ONE call. Returns: last session summary, session state (focus/next_steps), active todos, pending messages. Use for /session-resume to avoid multiple SQL queries.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {
+                        "type": "string",
+                        "description": "Project name (defaults to current directory basename)"
+                    }
+                },
+                "required": ["project"]
             }
         ),
         Tool(
@@ -1933,7 +2045,7 @@ async def list_tools() -> List[Tool]:
         # Session Facts Tools
         Tool(
             name="store_session_fact",
-            description="Store a fact for the current session. Use for important info (credentials, configs, decisions) that might get lost in long conversations. Survives crashes.",
+            description="Store a fact in your session notepad. Use for: credentials, configs, endpoints, decisions, findings. These facts auto-inject into context so you don't forget them.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1975,7 +2087,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="recall_previous_session_facts",
-            description="Recall facts from previous sessions (crash recovery). Use when you've lost context and need to recover important info.",
+            description="Recall facts from previous sessions. Use when resuming work or context got compacted and you need to recover important info from your old notepad.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1993,7 +2105,7 @@ async def list_tools() -> List[Tool]:
         # Session Notes Tools
         Tool(
             name="store_session_notes",
-            description="Store structured notes during a session. Notes persist to markdown file for crash recovery. Use for: progress tracking, decisions, blockers, findings.",
+            description="Store structured notes during a session. Use for: progress tracking, decisions, blockers, findings. Notes persist to markdown file.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2009,7 +2121,7 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="get_session_notes",
-            description="Retrieve session notes for the current project. Useful after crash recovery to see what was done.",
+            description="Retrieve session notes for the current project. Useful after context compaction to review what was done.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -2027,6 +2139,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
     try:
         if name == "get_project_context":
             result = await tool_get_project_context(arguments['project_path'])
+        elif name == "get_session_resume":
+            result = await tool_get_session_resume(arguments['project'])
         elif name == "get_incomplete_todos":
             result = await tool_get_incomplete_todos(arguments['project'])
         elif name == "restore_session_todos":
