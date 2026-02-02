@@ -452,19 +452,34 @@ See: `knowledge-vault/40-Procedures/Config Management SOP.md`
 """
 
 # Command patterns - skip RAG for imperative commands (not questions)
+# These must match SHORT commands only - not long prompts that happen to start with these words
 COMMAND_PATTERNS = [
-    r'^(commit|push|pull|add|delete|remove|create|run|execute|install|build|test|deploy)\b',
-    r'^(yes|no|ok|sure|fine|continue|proceed|go ahead|do it)\b',
-    r'^(save|close|open|start|stop|restart|refresh|reload)\b',
+    # Short git/dev commands (must be short - under 50 chars)
+    r'^(commit|push|pull)\s*[a-zA-Z0-9\s\-]*$',
+    # Simple affirmations - ONLY if the entire prompt is short (<=30 chars)
+    # This avoids skipping "ok lets build the tool and also create a document"
+    r'^(yes|no|ok|sure|fine|continue|proceed|go ahead|do it)[\s\.,!]*$',
+    # Short action verbs - only if prompt is very short
+    r'^(save|close|restart|refresh|reload)[\s\w]*$',
 ]
+
+# Minimum prompt length to always process (chars) - longer prompts always get RAG
+MIN_COMMAND_SKIP_LENGTH = 30
 
 def is_command(prompt: str) -> bool:
     """Detect if prompt is an imperative command (not a question).
 
     Returns True for commands like 'commit changes', 'yes do it', etc.
     These don't benefit from RAG - they're actions, not questions.
+
+    IMPORTANT: Long prompts (>30 chars) that contain substantive content
+    should ALWAYS get RAG, even if they start with command-like words.
     """
     prompt_lower = prompt.lower().strip()
+
+    # Long prompts always get RAG - they contain substantive content
+    if len(prompt_lower) > MIN_COMMAND_SKIP_LENGTH:
+        return False
 
     # Skip if it's a question (has question mark or question words)
     if '?' in prompt or any(w in prompt_lower for w in ['how', 'what', 'where', 'why', 'when', 'which', 'can you', 'could you']):
@@ -1034,12 +1049,13 @@ def query_critical_session_facts(project_name: str, session_id: str = None,
         cur = conn.cursor()
 
         # Simple query - no embeddings needed
+        # Cast session_id to text for type inference on NULL check (fixes PostgreSQL parameter $4 error)
         cur.execute("""
             SELECT fact_key, fact_value, fact_type, is_sensitive
             FROM claude.session_facts
             WHERE project_name = %s
               AND fact_type = ANY(%s)
-              AND (session_id = %s OR session_id IS NULL OR %s IS NULL)
+              AND (session_id::text = %s OR session_id IS NULL OR %s::text IS NULL)
             ORDER BY
                 CASE fact_type
                     WHEN 'credential' THEN 1
