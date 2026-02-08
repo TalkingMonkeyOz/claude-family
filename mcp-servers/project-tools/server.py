@@ -94,8 +94,7 @@ def get_db_connection():
     """Get PostgreSQL connection."""
     conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
     if not conn_string:
-        # Local development fallback
-        conn_string = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation'
+        raise RuntimeError("DATABASE_URI or POSTGRES_CONNECTION_STRING environment variable required")
 
     if PSYCOPG_VERSION == 3:
         return psycopg.connect(conn_string, row_factory=dict_row)
@@ -666,7 +665,7 @@ async def tool_add_build_task(
             "success": True,
             "task_id": result['task_id'],
             "short_code": f"BT{result['short_code']}",
-            "feature": f"F{feature['feature_name']}",
+            "feature": feature['feature_name'],
             "step_order": next_order,
             "message": f"Created task BT{result['short_code']}: {task_name}"
         }
@@ -1020,18 +1019,20 @@ async def tool_recall_knowledge(
 
         # Build query with optional filters
         filters = []
-        params = [query_embedding, min_similarity]
+        filter_params = []
 
         if knowledge_type:
             filters.append("AND knowledge_type = %s")
-            params.append(knowledge_type)
+            filter_params.append(knowledge_type)
 
         if project:
             filters.append("AND (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)")
-            params.append(project)
+            filter_params.append(project)
 
-        params.append(limit)
         filter_clause = " ".join(filters)
+
+        # Parameters in order: similarity SELECT, WHERE similarity calc, min_similarity, ...filters, limit
+        params = [query_embedding, query_embedding, min_similarity] + filter_params + [limit]
 
         cur.execute(f"""
             SELECT
@@ -1051,7 +1052,7 @@ async def tool_recall_knowledge(
               {filter_clause}
             ORDER BY similarity DESC
             LIMIT %s
-        """, [query_embedding] + params)
+        """, params)
 
         results = []
         for row in cur.fetchall():
@@ -1255,6 +1256,33 @@ async def tool_get_related_knowledge(
 # Session Facts Tool Implementations
 # ============================================================================
 
+def _resolve_session_id(project_name: Optional[str] = None) -> Optional[str]:
+    """Resolve session_id from env var, falling back to most recent active session."""
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    if session_id:
+        return session_id
+
+    # Fallback: find most recent session for this project (< 24h old, no end time)
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT session_id::text FROM claude.sessions
+            WHERE project_name = %s
+              AND session_end IS NULL
+              AND session_start > NOW() - INTERVAL '24 hours'
+            ORDER BY session_start DESC
+            LIMIT 1
+        """, (project_name or os.path.basename(os.getcwd()),))
+        row = cur.fetchone()
+        cur.close()
+        return row['session_id'] if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 async def tool_store_session_fact(
     fact_key: str,
     fact_value: str,
@@ -1263,9 +1291,9 @@ async def tool_store_session_fact(
     project_name: Optional[str] = None
 ) -> Dict:
     """Store a fact in the session notepad (auto-injected into context)."""
-    session_id = os.environ.get('CLAUDE_SESSION_ID')
     if not project_name:
         project_name = os.path.basename(os.getcwd())
+    session_id = _resolve_session_id(project_name)
 
     # Validate fact_type
     valid, msg = validate_value('session_facts', 'fact_type', fact_type)
@@ -1315,9 +1343,9 @@ async def tool_recall_session_fact(
     project_name: Optional[str] = None
 ) -> Dict:
     """Recall a specific fact by key from current session."""
-    session_id = os.environ.get('CLAUDE_SESSION_ID')
     if not project_name:
         project_name = os.path.basename(os.getcwd())
+    session_id = _resolve_session_id(project_name)
 
     conn = get_db_connection()
     try:
@@ -1364,9 +1392,9 @@ async def tool_list_session_facts(
     include_sensitive: bool = False
 ) -> Dict:
     """List all facts for the current session."""
-    session_id = os.environ.get('CLAUDE_SESSION_ID')
     if not project_name:
         project_name = os.path.basename(os.getcwd())
+    session_id = _resolve_session_id(project_name)
 
     conn = get_db_connection()
     try:
@@ -1426,11 +1454,12 @@ async def tool_recall_previous_session_facts(
 
         # Get recent sessions for this project
         cur.execute("""
-            SELECT DISTINCT session_id
+            SELECT session_id, MAX(created_at) as latest_fact
             FROM claude.session_facts
             WHERE project_name = %s
               AND session_id IS NOT NULL
-            ORDER BY (SELECT MAX(created_at) FROM claude.session_facts sf2 WHERE sf2.session_id = session_facts.session_id) DESC
+            GROUP BY session_id
+            ORDER BY latest_fact DESC
             LIMIT %s
         """, (project_name, n_sessions))
 
