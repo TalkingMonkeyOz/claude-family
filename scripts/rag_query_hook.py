@@ -762,6 +762,29 @@ def get_session_context(project_name: str) -> Optional[str]:
         msg_row = cur.fetchone()
         msg_count = msg_row['count'] if isinstance(msg_row, dict) else msg_row[0]
 
+        # 6. Get active features + ready build tasks
+        cur.execute("""
+            SELECT f.feature_name, f.status, 'F' || f.short_code as code,
+                   (SELECT COUNT(*) FROM claude.build_tasks bt
+                    WHERE bt.feature_id = f.feature_id AND bt.status IN ('todo', 'in_progress')) as pending_tasks
+            FROM claude.features f
+            WHERE f.project_id = %s::uuid AND f.status IN ('in_progress', 'planned')
+            ORDER BY f.updated_at DESC LIMIT 5
+        """, (project_id,))
+        features = cur.fetchall()
+
+        cur.execute("""
+            SELECT bt.task_name, bt.status, 'BT' || bt.short_code as code,
+                   'F' || f.short_code as feature_code
+            FROM claude.build_tasks bt
+            JOIN claude.features f ON bt.feature_id = f.feature_id
+            WHERE bt.project_id = %s::uuid AND bt.status = 'todo'
+              AND (bt.blocked_by_task_id IS NULL
+                OR bt.blocked_by_task_id IN (SELECT task_id FROM claude.build_tasks WHERE status = 'completed'))
+            ORDER BY bt.step_order ASC LIMIT 5
+        """, (project_id,))
+        ready_tasks = cur.fetchall()
+
         conn.close()
 
         latency_ms = int((time.time() - start_time) * 1000)
@@ -823,6 +846,26 @@ def get_session_context(project_name: str) -> Optional[str]:
                     context_lines.append(f"      {p_icon} {content}")
                 if len(pending) > 5:
                     context_lines.append(f"      ... and {len(pending) - 5} more")
+
+        # Active features + ready tasks
+        if features:
+            context_lines.append("")
+            context_lines.append(f"🏗️ ACTIVE FEATURES ({len(features)}):")
+            for f in features:
+                name = f['feature_name'] if isinstance(f, dict) else f[0]
+                status = f['status'] if isinstance(f, dict) else f[1]
+                code = f['code'] if isinstance(f, dict) else f[2]
+                pending = f['pending_tasks'] if isinstance(f, dict) else f[3]
+                context_lines.append(f"      [{code}] {name} ({status}, {pending} tasks remaining)")
+
+        if ready_tasks:
+            context_lines.append("")
+            context_lines.append(f"🔨 READY TASKS ({len(ready_tasks)}):")
+            for t in ready_tasks:
+                name = t['task_name'] if isinstance(t, dict) else t[0]
+                code = t['code'] if isinstance(t, dict) else t[2]
+                fc = t['feature_code'] if isinstance(t, dict) else t[3]
+                context_lines.append(f"      [{code}] {name} (from {fc})")
 
         # Message count
         if msg_count > 0:
