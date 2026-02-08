@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-01-24T19:42:35.772873",
+    "generated_at": "2026-02-08T11:18:45.888322",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -9,6 +9,11 @@
       "path": "C:\\Projects\\nimbus-mui",
       "type": "application",
       "description": "Modern Tauri + React + MUI desktop application for Nimbus workforce management system data imports"
+    },
+    "nimbus-odata-configurator": {
+      "path": "C:\\Projects\\nimbus-odata-configurator",
+      "type": "application",
+      "description": "Desktop app to construct and test OData queries against Nimbus Time2Work API"
     },
     "ATO-Infrastructure": {
       "path": "C:\\Projects\\ATO-Infrastructure",

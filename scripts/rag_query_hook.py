@@ -86,9 +86,28 @@ Long conversations compress. Things get lost. **Use session facts as your notepa
 
 ---
 
+## MCP Tools (MANDATORY - Use BEFORE Raw SQL)
+
+**⚠️ Raw SQL to claude.* tables is PROHIBITED when an MCP tool exists.**
+
+| Instead of... | Use This (ToolSearch first) |
+|---------------|-----------------------------|
+| `INSERT INTO claude.feedback` | `project-tools.create_feedback` |
+| `INSERT INTO claude.features` | `project-tools.create_feature` |
+| `INSERT INTO claude.build_tasks` | `project-tools.add_build_task` |
+| `UPDATE claude.*.status` | `project-tools.update_work_status` |
+| `SELECT...build_tasks WHERE status='todo'` | `project-tools.get_ready_tasks` |
+| `INSERT INTO claude.knowledge` | `project-tools.store_knowledge` |
+| `SELECT FROM claude.knowledge` | `project-tools.recall_knowledge` |
+| `INSERT INTO claude.session_facts` | `project-tools.store_session_fact` |
+
+**Raw SQL is OK for**: SELECT queries without MCP equivalent, analytics, schema inspection.
+
+**Schema rule**: ALWAYS use `claude.*` schema. NEVER `claude_family.*` or `claude_pm.*`.
+
 ## Other Rules
 - **NEVER guess** - Verify files/tables exist before claiming they do/don't
-- **Large data?** - Use python-repl to keep data out of context
+- **Config files are generated** - Don't edit settings.local.json (DB is source of truth)
 """
 
 import json

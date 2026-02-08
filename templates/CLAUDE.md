@@ -82,6 +82,24 @@ ORDER BY session_start DESC LIMIT 10;
 
 ---
 
+## Configuration (Claude Family)
+
+This project is part of the **Claude Family** ecosystem with centralized configuration:
+
+| File | Source | Editable? |
+|------|--------|-----------|
+| `.claude/settings.local.json` | **Generated from database** | No - regenerates each session |
+| `CLAUDE.md` | Manually maintained | Yes - but coordinate changes |
+
+**Key points**:
+- Hook configurations, MCP servers, and skills are managed centrally in `claude.config_templates`
+- Changes to settings.local.json are temporary - they regenerate on next session
+- To request config changes, message `claude-family` project via orchestrator
+
+**For CLAUDE.md updates**: Message the claude-family project with requested changes. This ensures all projects stay coordinated.
+
+---
+
 ## When Working Here
 
 You're likely:

@@ -52,16 +52,16 @@
     }
   },
   "hashes": {
-    "advanced-tool-use": "f1dbd8fb795ea310",
-    "claude-code-best-practices": "18ab1022c4038d69",
-    "building-agents": "2093cde166aa841b",
-    "claude-code-sandboxing": "3b61bd032f27d9f9",
-    "models-overview": "10447c86d11936ef",
-    "computer-use": "ea272bceeadc8e79",
-    "token-efficient-tools": "ba73e8c873f49d4f",
-    "extended-thinking": "23a19afb99492e08",
-    "mcp-overview": "4fe46862b947af95",
-    "claude-code-changelog": "74af611ae6dc53ab"
+    "advanced-tool-use": "a27c31a586e8a099",
+    "claude-code-best-practices": "b4aab30af8c4e3db",
+    "building-agents": "8760b552c19bd56a",
+    "claude-code-sandboxing": "f56440bebe7c5ca8",
+    "models-overview": "ddacf4fd7a72b2b0",
+    "computer-use": "858ebdfa28a1f6f4",
+    "token-efficient-tools": "0401bd362b78914f",
+    "extended-thinking": "a46d6e14b402e83d",
+    "mcp-overview": "fb516a7afa66d3da",
+    "claude-code-changelog": "f2e3fa6d909a2a63"
   },
-  "last_check": "2026-01-24T11:51:08.577181"
+  "last_check": "2026-02-08T10:45:45.153064"
 }

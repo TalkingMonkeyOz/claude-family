@@ -24,6 +24,30 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 ---
 
+## CRITICAL: Config Management (READ FIRST)
+
+**Database is source of truth. Config files are GENERATED and self-heal.**
+
+| File | Source | Behavior |
+|------|--------|----------|
+| `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | Regenerates on SessionStart |
+| `CLAUDE.md` | `profiles.config->behavior` | Can be synced to/from DB |
+
+**DO NOT manually edit settings.local.json** - changes will be overwritten.
+
+**To change config permanently:**
+```sql
+-- All projects: Update config_templates (template_id=1 = hooks-base)
+-- Project type: Update project_type_configs
+-- Single project: Update workspaces.startup_config
+```
+
+**Regenerate manually:** `python scripts/generate_project_settings.py <project-name>` (run from project directory)
+
+**Full details**: See `knowledge-vault/40-Procedures/Config Management SOP.md`
+
+---
+
 ## Current Phase
 
 **Phase**: Implementation (governance system)
