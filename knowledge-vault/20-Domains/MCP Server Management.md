@@ -170,10 +170,11 @@ WHERE project_name = 'finance-htmx';
 | MCP | Package | Purpose |
 |-----|---------|---------|
 | **postgres** | `postgres-mcp` | Database access, schema introspection |
-| **memory** | `@modelcontextprotocol/server-memory` | Persistent knowledge graph |
-| **filesystem** | `@modelcontextprotocol/server-filesystem` | File operations |
+| **project-tools** | Custom Python | Work tracking, knowledge, session facts |
 | **sequential-thinking** | `@modelcontextprotocol/server-sequential-thinking` | Complex reasoning |
 | **orchestrator** | Custom Python | Agent spawning, messaging |
+| ~~memory~~ | ~~`@modelcontextprotocol/server-memory`~~ | Removed 2026-01 (replaced by project-tools knowledge) |
+| ~~filesystem~~ | ~~`@modelcontextprotocol/server-filesystem`~~ | Removed 2026-01 (Claude has built-in Read/Write/Edit) |
 
 ### Tech Stack Specific (Project)
 

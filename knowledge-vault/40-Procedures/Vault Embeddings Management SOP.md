@@ -197,60 +197,34 @@ $env:VOYAGE_API_KEY="pa-your-key-here"
 
 ---
 
-## vault-rag MCP Server
+## Searching the Vault (Current Approach)
 
-### Using Semantic Search
+> **Note**: The `vault-rag` MCP server was removed (2026-01). RAG is now fully automatic via the UserPromptSubmit hook. For manual searches, use project-tools MCP.
 
-The `vault-rag` MCP provides tools for semantic search:
+### Automatic (Default)
 
-#### 1. **semantic_search**
-Find relevant docs by natural language query:
+Every user prompt triggers `rag_query_hook.py` which queries:
+1. **Knowledge table** (`claude.knowledge`) - 2 most relevant entries (similarity >= 0.45)
+2. **Vault embeddings** (`claude.vault_embeddings`) - 3 most relevant docs (similarity >= 0.30)
 
-```python
-# Example queries:
-"How do I add an MCP server?"
-"Session lifecycle procedures"
-"Database schema conventions"
-"WinForms dark theme implementation"
+Results are silently injected into context.
+
+### Manual Search
+
+Use the `project-tools` MCP:
+
+```
+recall_knowledge(query="How do I add an MCP server?")
 ```
 
-Returns top-k matching chunks with similarity scores.
+### Embedding Stats
 
-#### 2. **get_document**
-Retrieve full document by path:
+Check embedding coverage via SQL:
 
-```python
-get_document("40-Procedures/Add MCP Server SOP.md")
+```sql
+SELECT COUNT(*) as docs, COUNT(DISTINCT file_path) as files
+FROM claude.vault_embeddings;
 ```
-
-#### 3. **list_vault_documents**
-Browse available docs:
-
-```python
-list_vault_documents()  # All docs
-list_vault_documents(folder="40-Procedures")  # Specific folder
-```
-
-#### 4. **vault_stats**
-Check embedding database stats:
-
-```python
-vault_stats()
-# Returns: document count, chunk count, table size, model info
-```
-
-### When Claude Should Use RAG
-
-**Use semantic search when**:
-- User asks "how do I..." questions
-- Looking for specific procedures or patterns
-- Searching domain knowledge (APIs, DB, WinForms, etc.)
-- Unsure which vault doc has the answer
-
-**Don't use RAG when**:
-- Answer is in current conversation context
-- Question about code in current project (use Grep/Read)
-- Already know which specific file to read
 
 ---
 

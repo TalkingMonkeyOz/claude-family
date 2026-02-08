@@ -329,27 +329,27 @@ The launcher script (`C:\claude\start-claude.bat`) will:
 What you get automatically based on project type:
 
 ### infrastructure
-- **MCP Servers**: postgres, memory, orchestrator
+- **MCP Servers**: postgres, project-tools, orchestrator
 - **Skills**: database-operations, work-item-routing, session-management, code-review, project-ops, messaging, agentic-orchestration
 - **Instructions**: sql-postgres.instructions.md
 
 ### csharp-desktop
-- **MCP Servers**: postgres, memory
+- **MCP Servers**: postgres, project-tools
 - **Skills**: code-review, testing-patterns
 - **Instructions**: csharp.instructions.md, a11y.instructions.md
 
 ### csharp-winforms
-- **MCP Servers**: postgres, memory
+- **MCP Servers**: postgres, project-tools
 - **Skills**: code-review, testing-patterns
 - **Instructions**: csharp.instructions.md, winforms.instructions.md, winforms-dark-theme.instructions.md, a11y.instructions.md
 
 ### web-app
-- **MCP Servers**: postgres, memory
+- **MCP Servers**: postgres, project-tools
 - **Skills**: code-review, testing-patterns
 - **Instructions**: playwright.instructions.md, a11y.instructions.md
 
 ### tauri-react
-- **MCP Servers**: postgres, memory
+- **MCP Servers**: postgres, project-tools
 - **Skills**: code-review, testing-patterns
 - **Instructions**: playwright.instructions.md, a11y.instructions.md
 
@@ -363,7 +363,7 @@ To override defaults for a specific project:
 -- Add project-specific config overrides
 UPDATE claude.workspaces
 SET startup_config = '{
-  "mcp_servers": ["postgres", "memory", "custom-mcp"],
+  "mcp_servers": ["postgres", "project-tools", "custom-mcp"],
   "hooks": {
     "PostToolUse": [{
       "matcher": "Bash",

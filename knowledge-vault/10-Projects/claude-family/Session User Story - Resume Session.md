@@ -126,9 +126,11 @@ status: pending
 
 ---
 
-### 5. Claude Queries Memory Graph
+### 5. Claude Queries Knowledge (Automatic via RAG)
 
-**MCP Tool**: `mcp__memory__search_nodes`
+**Mechanism**: UserPromptSubmit hook auto-queries `claude.knowledge` + `claude.vault_embeddings` on every prompt. No manual tool call needed.
+
+**Manual fallback**: `mcp__project-tools__recall_knowledge`
 
 ```json
 {

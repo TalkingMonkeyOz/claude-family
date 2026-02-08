@@ -135,26 +135,20 @@ updated_at: 2025-12-26 14:30:00
 
 ### 5. Claude Captures Knowledge
 
-**MCP Tool**: `mcp__memory__create_entities`
+**MCP Tool**: `mcp__project-tools__store_knowledge` (replaced memory MCP, 2026-01)
 
 **Knowledge Captured**:
-```json
-{
-  "entities": [
-    {
-      "name": "ATO Tax Calculation Rules",
-      "entityType": "domain-knowledge",
-      "observations": [
-        "ATO tax forms require special rounding rules (round to nearest dollar)",
-        "Deductions must be validated against income thresholds",
-        "Form 1040 has different validation rules than Form 1099"
-      ]
-    }
-  ]
-}
+```python
+store_knowledge(
+    title="ATO Tax Calculation Rules",
+    content="ATO tax forms require special rounding rules (round to nearest dollar). Deductions must be validated against income thresholds. Form 1040 has different validation rules than Form 1099.",
+    knowledge_type="pattern",
+    topic="tax-calculation",
+    confidence=90
+)
 ```
 
-**Database Write** → Memory graph (internal to memory MCP server)
+**Database Write** → `claude.knowledge` table (with auto-embedding via Voyage AI)
 
 ---
 

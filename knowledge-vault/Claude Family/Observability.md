@@ -29,7 +29,7 @@ What we log, how it's analyzed, and gaps to address.
 | `todos` | 1618 | Persistent todos across sessions | ✅ Active |
 | `mcp_usage_stats` | 53 | MCP aggregated stats | ✅ Active |
 | `mcp_usage` | 3509 | MCP tool call details | ✅ Active |
-| `enforcement_log` | 1333 | Rule violation reminders | ✅ Active
+| `enforcement_log` | 1333 | Rule violation reminders | ⚠️ Orphaned (writer `stop_hook_enforcer.py` removed 2026-02) |
 
 **Note**: `process_classification_log` deprecated - skills-first replaced process router (ADR-005)
 **Note**: PostToolUse MCP logger now uses catch-all matcher (no matcher = fires for ALL tools, script filters to `mcp__` prefix internally). This replaced 68 individual matchers (2026-02-07).
@@ -92,7 +92,7 @@ For complex tasks:
 ## Gaps to Address
 
 ### High Priority
-1. ~~`enforcement_log` empty~~ ✅ Fixed - 1,333 rows logged
+1. ~~`enforcement_log` empty~~ ✅ Was fixed (1,333 rows) → ⚠️ Now orphaned (writer removed 2026-02)
 2. ~~`mcp_usage_stats` barely used~~ ✅ Fixed - 53 aggregated + 3,509 detailed in `mcp_usage`
 3. ~~researcher-opus 17% success~~ ✅ Mitigated with task breakdown
 
@@ -149,7 +149,7 @@ ORDER BY calls DESC;
 
 ## Action Items
 
-- [x] ~~Implement enforcement_log writes~~ → Working (1,333 rows)
+- [x] ~~Implement enforcement_log writes~~ → Was working (1,333 rows) → ⚠️ Orphaned since stop_hook_enforcer.py removal (2026-02)
 - [x] ~~Add MCP usage tracking~~ → Working via PostToolUse hooks (3,509 calls logged)
 - [ ] Create MCW observability dashboard
 - [ ] Add exit code semantics to MUI scheduler (exit 1 = issues found, exit 2+ = error)

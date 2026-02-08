@@ -150,7 +150,7 @@ combined_context_parts.append(CORE_PROTOCOL)
 
 ## Periodic Reminders
 
-The RAG hook also handles interval-based reminders (merged from stop_hook_enforcer.py):
+The RAG hook also handles interval-based reminders (originally from stop_hook_enforcer.py, now integrated directly):
 
 | Reminder | Interval | Purpose |
 |----------|----------|---------|
