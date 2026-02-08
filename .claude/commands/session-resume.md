@@ -6,43 +6,33 @@ Query DATABASE for session context - this is the source of truth, not files.
 
 ## Execute These Steps
 
-### Step 1: Get Project Info
-Use the current working directory basename as project_name.
+### Step 1: Get Project Context (MCP)
 
-### Step 2: Query Last Session (MCP)
-```sql
-SELECT session_summary, session_end, tasks_completed
-FROM claude.sessions
-WHERE project_name = '{project_name}' AND session_end IS NOT NULL
-ORDER BY session_end DESC LIMIT 1;
-```
+Use `mcp__project-tools__get_project_context` with the current project name.
 
-### Step 3: Query Session State (MCP)
+This returns: project info, phase, last session summary, active feature count, todo count.
+
+### Step 2: Get Active Todos (MCP)
+
+Use `mcp__project-tools__get_incomplete_todos` with the current project name.
+
+### Step 3: Check Session State
+
 ```sql
 SELECT current_focus, next_steps
 FROM claude.session_state
 WHERE project_name = '{project_name}';
 ```
 
-### Step 4: Query Active Todos (MCP)
-```sql
-SELECT content, status, priority
-FROM claude.todos t
-JOIN claude.projects p ON t.project_id = p.project_id
-WHERE p.project_name = '{project_name}'
-  AND t.is_deleted = false
-  AND t.status IN ('pending', 'in_progress')
-ORDER BY
-  CASE status WHEN 'in_progress' THEN 1 ELSE 2 END,
-  priority ASC
-LIMIT 10;
+### Step 4: Check Messages (MCP)
+
+Use `mcp__orchestrator__check_inbox` with `project_name` parameter.
+
+### Step 5: Check Git Status
+
+```bash
+git status --short
 ```
-
-### Step 5: Check Messages
-Use `mcp__orchestrator__check_inbox` with project_name parameter.
-
-### Step 6: Check Git Status
-Run `git status --short` via Bash tool.
 
 ---
 
@@ -52,7 +42,7 @@ Run `git status --short` via Bash tool.
 +==================================================================+
 |  SESSION RESUME - {project_name}                                 |
 +==================================================================+
-|  Last Session: {session_end} - {session_summary}                 |
+|  Last Session: {date} - {summary}                                |
 |  Focus: {current_focus}                                          |
 +------------------------------------------------------------------+
 |  ACTIVE TODOS ({count}):                                         |
@@ -79,7 +69,7 @@ Run `git status --short` via Bash tool.
 
 ---
 
-**Version**: 2.0
+**Version**: 3.0 (Simplified: MCP tools instead of raw SQL for todos/context)
 **Created**: 2025-12-26
-**Updated**: 2026-01-07
+**Updated**: 2026-02-08
 **Location**: .claude/commands/session-resume.md

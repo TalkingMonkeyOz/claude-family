@@ -139,14 +139,10 @@ FROM claude.knowledge;
 cat ~/.claude/settings.json | grep -c "mcpServers" || echo "No MCP config"
 ```
 
-### Step 9: Recent Errors (if enforcement_log has errors)
-```sql
-SELECT rule_name, COUNT(*) as violations, MAX(triggered_at) as last_violation
-FROM claude.enforcement_log
-WHERE triggered_at > NOW() - INTERVAL '7 days'
-GROUP BY rule_name
-ORDER BY violations DESC
-LIMIT 10;
+### Step 9: Recent Hook Errors (from hooks.log)
+```bash
+# Check for recent hook errors (enforcement_log table is orphaned - writer deleted)
+tail -50 ~/.claude/hooks.log 2>/dev/null | grep -i "error\|fail\|exception" || echo "No recent hook errors"
 ```
 
 ---

@@ -1,103 +1,74 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Before ending this session, complete ALL of the following:
+Performs session summary, knowledge capture, and cleanup before ending.
+
+**Use this for:** Intentional session endings where you want to capture learnings.
+**Automatic fallback:** If you forget, SessionEnd hook auto-closes with a basic summary.
 
 ---
 
-## 🚨 MCP USAGE CHECKLIST 🚨
+## Step 1: Session Summary
 
-### ✅ Session Logging (postgres MCP)
+Summarize the session work:
+
+1. **What was accomplished** (bullet points)
+2. **Key decisions made** (if any)
+3. **What's next** (for future sessions)
+
+### Save Session Notes (MCP)
+
+Use `mcp__project-tools__store_session_notes` to save:
+- `progress`: What was completed
+- `decisions`: Key decisions made
+- `blockers`: Any blockers encountered
+
+### Update Session Focus
 
 ```sql
--- 1. Get your latest session ID
-SELECT id FROM claude_family.session_history
-WHERE identity_id = 5
-ORDER BY session_start DESC LIMIT 1;
-
--- 2. Update session with summary
-UPDATE claude_family.session_history
-SET
-    session_end = NOW(),
-    summary = 'What was accomplished',
-    files_modified = ARRAY['file1.cs', 'file2.cs'],
-    outcome = 'success',
-    tokens_used = <estimated_tokens>
-WHERE id = <session_id>;
-```
-
-### ✅ Store Reusable Knowledge (postgres MCP)
-
-**If you discovered a reusable pattern:**
-
-```sql
-INSERT INTO claude_family.universal_knowledge
-(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
-VALUES (
-    'Pattern Name',
-    'Clear description',
-    'When to use this',
-    'Code example',
-    'Things to watch out for',
-    5
-);
-```
-
-**If project-specific:**
-
-```sql
-INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
-VALUES ('bug-fix', 'Solution details', 'When this applies');
-```
-
-### ✅ Store in Memory Graph (memory MCP)
-
-```
-mcp__memory__create_entities(entities=[{
-    "name": "Session Summary",
-    "entityType": "Session",
-    "observations": [
-        "Completed: X",
-        "Key decision: Y",
-        "Files modified: Z",
-        "Pattern discovered: P"
-    ]
-}])
-```
-
-**If you solved a problem:**
-
-```
-mcp__memory__create_relations(relations=[{
-    "from": "Problem Name",
-    "relationType": "solved-by",
-    "to": "Solution Pattern"
-}])
+UPDATE claude.session_state
+SET current_focus = 'Brief description of current state',
+    next_steps = '[{"step": "Next action", "priority": 2}]'::jsonb,
+    updated_at = NOW()
+WHERE project_name = '{project_name}';
 ```
 
 ---
 
-## Verification Questions
+## Step 2: Store Knowledge (If Applicable)
 
-Ask yourself:
+If you discovered a reusable pattern, gotcha, or solution:
 
-- [ ] Did I log session start to postgres?
-- [ ] Did I query for existing knowledge before proposing solutions?
-- [ ] Did I use tree-sitter for code analysis (if applicable)?
-- [ ] Did I store learnings in memory graph?
-- [ ] Did I update session log with summary?
-- [ ] Did I store reusable patterns in postgres?
-
-**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
+Use `mcp__project-tools__store_knowledge` with:
+- `title`: Clear name
+- `content`: What was learned
+- `knowledge_type`: pattern, gotcha, solution, fact, or procedure
+- `topic`: Relevant topic
+- `confidence`: 1-100
 
 ---
 
-## Cost of Skipping MCPs
+## Step 3: Persist Incomplete Work
 
-- Next Claude spends 30 minutes rediscovering your solution
-- Same bug gets solved 3 times by different Claudes
-- Institutional knowledge stays at zero
-- User gets frustrated repeating themselves
+Check TaskList for any incomplete tasks. For each unfinished task:
+- If it should persist: Ensure it exists as a Todo (task_sync_hook should handle this automatically)
+- If it's no longer needed: Mark as completed or deleted
 
 ---
 
-**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.
+## Step 4: Verification
+
+- [ ] Session notes saved via MCP
+- [ ] Knowledge stored (if applicable)
+- [ ] Incomplete tasks persisted as todos
+- [ ] Session state updated with next steps
+
+---
+
+**Note**: Session close timestamp is set automatically by the SessionEnd hook. No manual SQL needed.
+
+---
+
+**Version**: 3.0 (Simplified: MCP tools, removed legacy schema/memory MCP references)
+**Created**: 2025-12-15
+**Updated**: 2026-02-08
+**Location**: .claude/commands/session-end.md
