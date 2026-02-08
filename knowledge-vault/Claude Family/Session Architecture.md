@@ -10,62 +10,39 @@ synced: false
 
 # Session Architecture
 
-Human-friendly overview of how Claude sessions work, including database-driven config sync.
+How Claude sessions work end-to-end, including all hooks, database tables, and built-in features.
 
 ---
 
 ## The Big Picture
 
 ```
-Session Start → Config Sync → Identity → Load State → Work → Session End → Save All
+SessionStart Hook → Load State → Work → PreCompact Hook → SessionEnd Hook
+     (auto)          (auto)              (if compaction)     (auto-close)
+                                              ↓
+                                    /session-end (manual)
+                                    Full summary + knowledge
 ```
 
 **Goal**: Never lose context. Always know who did what, when, and why.
 
 ---
 
-## Core Components
+## Hook Chain (Complete)
 
-| Component | Purpose | Table |
-|-----------|---------|-------|
-| Session logging | Track all Claude work | `sessions` |
-| State persistence | Save todos, focus, next steps | `session_state` |
-| Identity resolution | Determine "which Claude" | `identities` |
-| Agent tracking | Log spawned agents | `agent_sessions` |
-| MCP usage | Track tool calls | `mcp_usage` |
-| Config sync | Auto-regenerate settings from DB | `project_type_configs`, `workspaces` |
+| Order | Hook Event | Script | What It Does |
+|-------|-----------|--------|--------------|
+| 1 | **SessionStart** | `session_startup_hook_enhanced.py` | Log session, load state, health check |
+| 2 | **UserPromptSubmit** | `rag_query_hook.py` | RAG context + core protocol + periodic reminders |
+| 3 | **PreToolUse** (Write/Edit) | `context_injector_hook.py` | Inject coding standards from context_rules |
+| 3b | **PreToolUse** (Write/Edit) | `standards_validator.py` | Validate content against standards |
+| 4 | **PostToolUse** (TodoWrite) | `todo_sync_hook.py` | Sync todos to claude.todos |
+| 5 | **PostToolUse** (all) | `mcp_usage_logger.py` | Log MCP tool usage (filters to mcp__ prefix) |
+| 6 | **SubagentStart** | `subagent_start_hook.py` | Log agent spawns to agent_sessions |
+| 7 | **PreCompact** | `precompact_hook.py` | Inject active work items before compaction |
+| 8 | **SessionEnd** | `session_end_hook.py` | Auto-close session in database |
 
----
-
-## Session Lifecycle
-
-### 1. Session Start
-
-1. SessionStart hook → `session_startup_hook.py`
-2. **Config sync**: `generate_project_settings.py` regenerates `.claude/settings.local.json` from database
-3. Determine project name (from cwd)
-4. Resolve identity (currently hardcoded)
-5. Create session record in `claude.sessions`
-6. Load saved state from `claude.session_state`
-7. Check messages from other Claudes
-8. Return context to Claude
-
-**Config Sync**: Self-healing. Settings regenerate from database every session. See [[Config Management SOP]]
-
-### 2. During Session
-
-- TodoWrite updates tracked (saved at end)
-- Agent spawns logged to `agent_sessions`
-- MCP calls should log to `mcp_usage` (broken)
-- Hooks fire per configuration
-
-### 3. Session End
-
-1. Run `/session-end`
-2. Generate summary, extract tasks/learnings
-3. Update session record (`session_end`, `summary`, `tasks_completed`)
-4. Save state to `session_state` (todo list, focus, next steps)
-5. Capture knowledge to memory graph
+**Key design**: MCP usage logger uses a catch-all matcher (no matcher = fires for ALL PostToolUse). The script internally filters to `tool_name.startswith('mcp__')`.
 
 ---
 
@@ -73,63 +50,89 @@ Session Start → Config Sync → Identity → Load State → Work → Session E
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
-| `sessions` | All Claude sessions | session_id, identity_id, project_name, session_start/end |
-| `session_state` | Per-project state | project_name (PK), todo_list, current_focus, next_steps |
-| `identities` | Claude instances | identity_id, identity_name, platform |
-| `projects` | Project registry | project_id, project_name, phase, status |
-| `workspaces` | Project paths + config | workspace_id, path, project_name, startup_config |
-| `agent_sessions` | Spawned agents | session_id, agent_type, task, success, cost_usd |
-| `mcp_usage` | MCP tool calls | session_id, tool_name, success, duration_ms |
+| `claude.sessions` | All sessions | session_id, identity_id, project_name, session_start/end, session_summary |
+| `claude.session_state` | Per-project state | project_name (PK), current_focus, next_steps |
+| `claude.todos` | Persistent todos | project_id, content, status, priority |
+| `claude.session_facts` | Crash-recoverable facts | session_id, fact_key, fact_value, fact_type |
+| `claude.identities` | Claude instances | identity_id, identity_name, platform |
+| `claude.agent_sessions` | Spawned agents | session_id, agent_type, task_description |
+| `claude.mcp_usage` | MCP tool calls | mcp_server, tool_name, session_id, success |
 
-**Key Relationships**:
-- `sessions.identity_id` → `identities.identity_id` (FK **MISSING**)
-- `sessions.project_name` → `projects.project_name` (string, not FK)
-- `agent_sessions` → `sessions` (parent link **MISSING**)
+**FK Constraints**:
+- `sessions.identity_id` → `identities.identity_id` (exists)
+- `agent_sessions.parent_session_id` → `sessions.session_id` (exists)
+
+---
+
+## Built-in Claude Code Features (No Custom Code Needed)
+
+| Feature | What | Command |
+|---------|------|---------|
+| Resume session | Full conversation history restored | `claude --resume` |
+| Continue last | Pick up most recent session | `claude --continue` |
+| Session naming | Name sessions for easy resume | `/rename my-feature` |
+| Context compression | Summarize conversation | `/compact` (instant) |
+| Task persistence | Tasks survive compaction | Built-in TaskList |
+| Auto memory | Persistent patterns across sessions | `MEMORY.md` (200 lines loaded) |
+| Session export | Save conversation to file | `/export` |
+| Session stats | Usage, streaks, tokens | `/stats` |
+
+---
+
+## Our Custom Enhancements (Beyond Built-in)
+
+| Enhancement | Why We Need It |
+|-------------|----------------|
+| DB session tracking | Cross-instance visibility, queryable history |
+| Todo sync to DB | Persistence beyond local session, cross-project visibility |
+| RAG on every prompt | Auto-inject relevant vault + knowledge context |
+| PreCompact state injection | Preserve active work items across compaction |
+| Auto session close | Prevent orphaned unclosed sessions |
+| MCP usage logging | Analytics on tool usage patterns |
+| Session facts | Crash recovery for credentials, decisions |
+| Inter-Claude messaging | Multi-agent coordination |
+
+---
+
+## Configuration (Database-Driven)
+
+```
+config_templates (hooks-base) → generate_project_settings.py → settings.local.json
+     ↑                                                               ↓
+project_type_configs (defaults)                              Claude Code reads this
+     ↑
+workspaces.startup_config (overrides)
+```
+
+**Self-healing**: Settings regenerate from DB on every `generate_project_settings.py` run.
+**Central deployment**: Same script works for all projects.
 
 ---
 
 ## System Status
 
-| Component | Status | Issue/Note |
-|-----------|--------|------------|
-| Session creation | ✅ Working | SessionStart hook creates records |
-| State persistence | ✅ Working | Todos, focus, next steps saved |
-| Agent tracking | ✅ Working | All spawns logged |
-| Config sync | ✅ Working | Auto-regenerates settings from database |
-| Identity resolution | ⚠️ Broken | Hardcoded, not per-project |
-| FK constraints | ⚠️ Missing | No FKs on sessions→identities, agents→sessions |
-| MCP usage logging | ❌ Broken | CLAUDE_SESSION_ID env var not exported |
-
-**Data Quality**:
-- 395 total sessions (39 with NULL identity, 10%)
-- 144 agent spawns (all orphaned, no parent_session_id)
-- 13 MCP usage records (should be thousands)
-
----
-
-## Key Principles
-
-1. **Config Syncs First** - Every session starts with database config sync (self-healing)
-2. **Self-Healing** - Manual edits to `settings.local.json` get overwritten (by design)
-3. **Database is Source of Truth** - Update database for permanent changes
-4. **Sessions Auto-Logged** - SessionStart hook creates record automatically
-5. **State Persists** - Todos and focus saved at session end
-6. **Everything Tracked** - Sessions, agents, MCP calls (when working) all logged
+| Component | Status | Note |
+|-----------|--------|------|
+| Session creation | Working | SessionStart hook creates records |
+| State persistence | Working | Todos, focus, next steps saved |
+| Agent tracking | Working | All spawns logged with FK |
+| Config sync | Working | Self-healing from database |
+| MCP usage logging | Working | Catch-all matcher, 3,500+ records |
+| PreCompact hook | Working | Injects session state from DB |
+| SessionEnd auto-close | Working | Command hook auto-closes sessions |
+| Identity resolution | Hardcoded | Uses default identity |
 
 ---
 
 ## Related
 
-- [[Session Lifecycle - Overview]] - Complete session flow
-- [[Session Quick Reference]] - Quick SQL queries
-- [[Database Schema - Core Tables]] - Detailed table docs
-- [[Identity System - Overview]] - Identity resolution
 - [[Config Management SOP]] - Database-driven config system
 - [[Family Rules]] - Mandatory procedures
+- [[Claude Hooks]] - Hook system details
 
 ---
 
-**Version**: 2.0 (Condensed)
+**Version**: 3.0 (Full rewrite - accurate to 2026-02-07 system state)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-02-07
 **Location**: Claude Family/Session Architecture.md

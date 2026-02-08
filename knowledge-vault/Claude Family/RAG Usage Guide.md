@@ -200,103 +200,27 @@ Long conversations get compressed. Earlier context gets lost. Use session facts 
 
 **Threshold**: `min_similarity = 0.45` (lower = more results, higher = more precise)
 
-### 2. **MANUAL Mode** (vault-rag MCP Tools)
+### 2. **MANUAL Mode** (project-tools MCP)
 
-Use manual MCP tools when you need:
-- Deeper searches (top_k > 3)
-- Lower similarity thresholds
-- Full document retrieval
-- Folder browsing
-- Vault statistics
+The `vault-rag` MCP was removed (2026-01). For manual knowledge searches, use:
 
----
+| Tool | Purpose |
+|------|---------|
+| `recall_knowledge` | Semantic search over `claude.knowledge` (290+ entries) |
+| `store_knowledge` | Store new knowledge with auto-embedding |
+| Read tool | Read vault documents directly by path |
 
-## When to Use Manual RAG (vault-rag MCP)
-
-**Note**: Most common questions are now handled AUTOMATICALLY! Only use manual tools for specialized searches.
-
-### ✅ Use Semantic Search For:
-
-#### 1. **"How do I..." Questions**
-User needs procedural knowledge from vault SOPs:
-
-**Examples**:
-- "How do I add an MCP server?"
-- "How do I start a new project?"
-- "How do I configure database-driven settings?"
-- "How do I write a new skill?"
-
-**Action**: Use `semantic_search` tool with the question as query
+**When to use manual mode**:
+- Need more control over similarity thresholds
+- Searching for specific knowledge types (gotcha, pattern, etc.)
+- Storing new knowledge for future sessions
 
 ```python
-# Example
-semantic_search(query="How do I add an MCP server?", top_k=3)
-# Returns: Chunks from "40-Procedures/Add MCP Server SOP.md"
-```
+# Manual knowledge search
+recall_knowledge(query="WinForms dark theme patterns", limit=5, min_similarity=0.4)
 
-#### 2. **Domain Knowledge Lookup**
-User asks about technical patterns or domain-specific info:
-
-**Examples**:
-- "What are the WinForms dark theme patterns?"
-- "How does the database architecture work?"
-- "What are the Claude Code hooks?"
-- "What's the MCP server registry?"
-
-**Action**: Use `semantic_search` for discovery, then `get_document` for full content
-
-```python
-# Discovery
-semantic_search(query="WinForms dark theme", top_k=3)
-# Returns: 20-Domains/WinForms/winforms-dark-theme.md
-
-# Full document
-get_document("20-Domains/WinForms/winforms-dark-theme.md")
-```
-
-#### 3. **Searching for Patterns**
-User needs reusable patterns or gotchas:
-
-**Examples**:
-- "Are there any Windows Bash gotchas?"
-- "What patterns exist for auto-apply instructions?"
-- "Any patterns for post-compaction hooks?"
-
-**Action**: Search the `30-Patterns/` folder
-
-```python
-semantic_search(query="Windows Bash gotchas", top_k=5)
-list_vault_documents(folder="30-Patterns")  # Browse available patterns
-```
-
-#### 4. **Finding Relevant SOPs**
-You need a procedure but unsure which SOP covers it:
-
-**Examples**:
-- "Is there an SOP for knowledge capture?"
-- "What's the session lifecycle procedure?"
-- "How should I manage configurations?"
-
-**Action**: Search procedures folder
-
-```python
-semantic_search(query="knowledge capture procedure", top_k=3)
-list_vault_documents(folder="40-Procedures")  # List all SOPs
-```
-
-#### 5. **Architectural Understanding**
-User asks about system design or infrastructure:
-
-**Examples**:
-- "How does the orchestrator MCP work?"
-- "What's the purpose of the knowledge vault?"
-- "How do Claude hooks enforce procedures?"
-
-**Action**: Search Claude Family infrastructure docs
-
-```python
-semantic_search(query="orchestrator MCP architecture", top_k=5)
-list_vault_documents(folder="Claude Family")
+# Read a vault doc directly
+Read("C:/Projects/claude-family/knowledge-vault/40-Procedures/Add MCP Server SOP.md")
 ```
 
 ---
@@ -347,85 +271,30 @@ Questions about external systems, current events, or non-vault topics:
 
 ---
 
-## RAG Tools Reference
+## Available RAG Tools
 
-### semantic_search
+### Automatic (RAG Hook - every prompt)
 
-**Purpose**: Find relevant chunks by natural language query
+The `rag_query_hook.py` handles all RAG automatically:
+- Queries `claude.knowledge` (2 results, similarity >= 0.45)
+- Queries `claude.vault_embeddings` (3 results, similarity >= 0.30)
+- Injects context silently via `additionalContext`
 
-**Parameters**:
-- `query` (required): Natural language question/description
-- `top_k` (optional): Max results (default 5)
-- `min_similarity` (optional): Min score 0-1 (default 0.7)
+### Manual (project-tools MCP)
 
-**Returns**: Matching chunks with similarity scores
+| Tool | Purpose | When to Use |
+|------|---------|-------------|
+| `recall_knowledge` | Semantic search over knowledge | Need more results or different threshold |
+| `store_knowledge` | Store new knowledge | Learned something worth preserving |
+| `link_knowledge` | Create relations | Connect related knowledge entries |
+| `mark_knowledge_applied` | Track usage | After successfully using knowledge |
 
-**Example**:
+### Direct File Access (Read tool)
+
+For vault documents, use the Read tool directly:
 ```python
-semantic_search(
-    query="How do I configure MCP servers?",
-    top_k=5,
-    min_similarity=0.6
-)
+Read("C:/Projects/claude-family/knowledge-vault/40-Procedures/Add MCP Server SOP.md")
 ```
-
-**Use when**: You need to find relevant docs but don't know exact path
-
----
-
-### get_document
-
-**Purpose**: Retrieve full document by path
-
-**Parameters**:
-- `doc_path` (required): Path from semantic_search result
-
-**Returns**: Complete document content (all chunks reassembled)
-
-**Example**:
-```python
-# After semantic_search finds: "40-Procedures/Add MCP Server SOP.md"
-get_document("40-Procedures/Add MCP Server SOP.md")
-```
-
-**Use when**: semantic_search identified the right doc, now you need full content
-
----
-
-### list_vault_documents
-
-**Purpose**: Browse available documents
-
-**Parameters**:
-- `folder` (optional): Filter by folder (e.g., "40-Procedures")
-
-**Returns**: List of all documents with metadata
-
-**Example**:
-```python
-list_vault_documents()  # All documents
-list_vault_documents(folder="20-Domains")  # Domain knowledge only
-```
-
-**Use when**: User wants to know what documentation exists
-
----
-
-### vault_stats
-
-**Purpose**: Check embedding database status
-
-**Parameters**: None
-
-**Returns**: Document count, chunk count, table size, model info
-
-**Example**:
-```python
-vault_stats()
-# Returns: {total_documents: 88, total_chunks: 768, table_size: "11 MB", ...}
-```
-
-**Use when**: Debugging RAG system or checking if embeddings are current
 
 ---
 
@@ -436,82 +305,35 @@ vault_stats()
 **User**: "How do I add a new MCP server?"
 
 **Claude's workflow**:
-1. Recognize as "how-to" procedural question
-2. Use semantic search:
+1. RAG hook **automatically** finds `Add MCP Server SOP.md` (injected into context)
+2. Claude answers using the auto-injected SOP content
+3. If more detail needed, Read the full doc directly:
    ```python
-   result = semantic_search("How do I add a new MCP server?", top_k=3)
+   Read("C:/Projects/claude-family/knowledge-vault/40-Procedures/Add MCP Server SOP.md")
    ```
-3. Check top result: `40-Procedures/Add MCP Server SOP.md` (similarity: 0.645)
-4. Get full document:
-   ```python
-   doc = get_document("40-Procedures/Add MCP Server SOP.md")
-   ```
-5. Answer user's question using the SOP content
-6. Provide file path reference for user: `knowledge-vault/40-Procedures/Add MCP Server SOP.md`
-
----
 
 ### Example 2: User Asks About Domain Knowledge
 
 **User**: "What are the database schema conventions?"
 
 **Claude's workflow**:
-1. Recognize as domain knowledge question
-2. Search for database-related docs:
+1. RAG hook auto-injects relevant vault docs + knowledge entries
+2. Claude answers from auto-injected context
+3. If insufficient, use manual knowledge search:
    ```python
-   result = semantic_search("database schema conventions", top_k=5)
+   recall_knowledge(query="database schema conventions", limit=5)
    ```
-3. Top results show:
-   - `20-Domains/Database Architecture.md`
-   - `40-Procedures/Documentation Standards.md`
-4. Get the most relevant document:
-   ```python
-   doc = get_document("20-Domains/Database Architecture.md")
-   ```
-5. Answer using the domain knowledge
-6. Optionally reference related docs found in search
-
----
 
 ### Example 3: User Wants to Browse
 
 **User**: "What procedures are documented?"
 
 **Claude's workflow**:
-1. Recognize as browsing request (not search)
-2. List procedures:
+1. Use Glob to list vault documents:
    ```python
-   docs = list_vault_documents(folder="40-Procedures")
+   Glob("knowledge-vault/40-Procedures/*.md")
    ```
-3. Present formatted list:
-   ```
-   Available SOPs (40-Procedures):
-   - Add MCP Server SOP.md
-   - Config Management SOP.md
-   - Documentation Standards.md
-   - Family Rules.md
-   - Knowledge Capture SOP.md
-   ...
-   ```
-
----
-
-### Example 4: Uncertain About Vault Content
-
-**User**: "Is there documentation about session lifecycle?"
-
-**Claude's workflow**:
-1. Uncertain if doc exists → Use semantic search to check
-2. Search:
-   ```python
-   result = semantic_search("session lifecycle", top_k=3)
-   ```
-3. Results show multiple matches:
-   - `40-Procedures/Session Lifecycle - Overview.md`
-   - `40-Procedures/Session Lifecycle - Session Start.md`
-   - `40-Procedures/Session Lifecycle - Session End.md`
-4. Confirm to user: "Yes, there are 3 session lifecycle docs..."
-5. Ask if they want a specific one or overview
+2. Present formatted list of available SOPs
 
 ---
 
@@ -538,29 +360,12 @@ More specific queries = better results
 
 ---
 
-### 3. **Combine Tools**
-Use semantic_search to discover, then get_document to retrieve full content
+### 3. **Combine Auto + Manual**
+Auto RAG handles most cases. Use manual `recall_knowledge` for deeper searches:
 
 ```python
-# Discovery
-matches = semantic_search("WinForms dark theme", top_k=3)
-
-# Get top match full content
-doc = get_document(matches["documents"][0]["doc_path"])
-```
-
----
-
-### 4. **Adjust Similarity Threshold**
-If no results, try lowering `min_similarity`:
-
-```python
-# First try (strict)
-result = semantic_search("topic", min_similarity=0.7)
-
-# If no results, broaden search
-if not result["found"]:
-    result = semantic_search("topic", min_similarity=0.5)
+# Auto RAG didn't surface what you need? Search manually:
+recall_knowledge(query="WinForms dark theme pattern", limit=5, min_similarity=0.3)
 ```
 
 ---
@@ -582,51 +387,39 @@ According to the Add MCP Server SOP
 ## Integration with Other Tools
 
 ### RAG + Grep
-1. RAG finds which vault doc has the pattern
+1. Auto RAG injects relevant vault knowledge
 2. Grep finds code implementing the pattern in project
 
 **Example**:
 ```python
-# Find pattern in vault
-pattern_doc = semantic_search("WinForms dark theme pattern")
-
-# Read pattern
-pattern = get_document("20-Domains/WinForms/winforms-dark-theme.md")
-
-# Find code implementing this pattern
-code = Grep(pattern="DarkTheme", glob="**/*.cs")
+# RAG auto-injected WinForms dark theme pattern
+# Now find code implementing this pattern
+Grep(pattern="DarkTheme", glob="**/*.cs")
 ```
 
----
-
 ### RAG + Read
-1. RAG identifies relevant vault doc
-2. Read tool gets project-specific CLAUDE.md or config
+1. Auto RAG surfaces relevant docs
+2. Read tool gets full content when needed
 
 **Example**:
 ```python
-# General procedure from vault
-sop = semantic_search("config management procedure")
-
-# Project-specific config
-project_config = Read("C:/Projects/claude-family/CLAUDE.md")
+# RAG auto-injected Config Management SOP summary
+# Read full SOP for detailed steps
+Read("C:/Projects/claude-family/knowledge-vault/40-Procedures/Config Management SOP.md")
 ```
 
 ---
 
 ## Troubleshooting
 
-### "No documents found"
+### "No knowledge recalled"
 
-**Cause**: Query too specific or embeddings not current
+**Cause**: Query too specific, embeddings outdated, or low similarity
 
 **Solution**:
-1. Try broader query
-2. Lower min_similarity
-3. Check vault_stats() to verify embeddings exist
-4. Re-run embedding pipeline if vault recently changed
-
----
+1. Use manual `recall_knowledge` with lower `min_similarity` (e.g., 0.3)
+2. Re-run embedding pipeline: `python scripts/embed_vault_documents.py`
+3. Check embeddings exist: query `claude.vault_embeddings` table
 
 ### "Wrong results returned"
 
@@ -634,25 +427,8 @@ project_config = Read("C:/Projects/claude-family/CLAUDE.md")
 
 **Solution**:
 1. Make query more specific
-2. Add context to query (e.g., "How do I configure MCP servers in claude-family project?")
-3. Increase top_k to see more results
-4. Filter by folder if you know domain:
-   ```python
-   # Instead of semantic_search across all docs
-   list_vault_documents(folder="40-Procedures")
-   # Then search within that folder
-   ```
-
----
-
-### "RAG too slow"
-
-**Cause**: Large result sets or network latency
-
-**Solution**:
-1. Reduce top_k (default 5 is usually enough)
-2. Increase min_similarity to get fewer, better matches
-3. Use list_vault_documents for browsing instead of search
+2. Use `recall_knowledge` with `knowledge_type` filter
+3. Browse vault directly with Glob tool
 
 ---
 
@@ -675,104 +451,30 @@ project_config = Read("C:/Projects/claude-family/CLAUDE.md")
 
 ---
 
-## New Features (2025-12-30)
+## Architecture Details
 
-### Project Document Support
+### Embedding Storage
 
-The vault-rag system now indexes project documents (CLAUDE.md, ARCHITECTURE.md, PROBLEM_STATEMENT.md) alongside vault knowledge.
+Two embedding tables power the RAG system:
 
-**Document Sources**:
+| Table | Content | Embedding Model |
+|-------|---------|-----------------|
+| `claude.vault_embeddings` | Vault documents (118+ files) | Voyage AI voyage-3 (1024 dim) |
+| `claude.knowledge` (embedding column) | Learned knowledge (290+ entries) | Voyage AI voyage-3 (1024 dim) |
+
+### Document Sources
+
+The vault embeddings table supports multiple document sources:
 - `vault`: Knowledge vault documents (knowledge-vault/)
-- `project`: Project-specific documentation
-- `global`: Cross-project documentation
+- `project`: Project-specific documentation (CLAUDE.md, ARCHITECTURE.md)
 
-**Filtering by Source**:
-```python
-# Search only vault knowledge
-semantic_search("database patterns", source="vault")
+### How Auto RAG Works
 
-# Search only project docs
-semantic_search("project architecture", source="project", project="claude-family")
-
-# Search both (default)
-semantic_search("configuration", source="all")
-```
-
-**Why This Matters**:
-- Project docs now searchable alongside vault
-- Can find project-specific info (CLAUDE.md) and general knowledge (SOPs) in one search
-- Reduces need to manually read CLAUDE.md repeatedly
-
-**Examples**:
-```python
-# Find project-specific conventions
-semantic_search("claude-family coding standards", source="project", project="claude-family")
-
-# Compare vault SOP vs project implementation
-vault_sop = semantic_search("config management", source="vault")
-project_doc = semantic_search("config", source="project", project="claude-family")
-```
-
----
-
-### SessionStart Automatic Pre-loading
-
-**Feature**: Relevant vault docs are automatically injected at session start.
-
-**How It Works**:
-1. Session starts → system queries project type and phase
-2. Generates semantic search: "{project_type} {phase} procedures and standards"
-3. Pre-loads top 3 most relevant docs (min similarity 0.6)
-4. Injects into initial context automatically
-
-**Benefits**:
-- No manual search needed for common project info
-- Fresh, relevant knowledge every session
-- Adapts to project type and phase
-
-**What Gets Pre-loaded**:
-- For `infrastructure` projects: Infrastructure patterns, governance, procedures
-- For `web-app` projects: Frontend patterns, API design, testing guides
-- For `desktop-app` projects: WinForms patterns, accessibility, packaging
-
-**Configuration**:
-Pre-loading happens automatically if:
-- ✅ VOYAGE_API_KEY is set
-- ✅ Database connection available
-- ✅ Vault embeddings exist
-- ✅ Session (not resume) start
-
-**Logging**:
-All pre-loads logged to `claude.rag_usage_log`:
-```sql
-SELECT * FROM claude.rag_usage_log
-WHERE query_type = 'session_preload'
-ORDER BY created_at DESC
-LIMIT 5;
-```
-
-**Example Pre-loaded Context**:
-```
-============================================================
-PRE-LOADED KNOWLEDGE (3 docs, 245ms)
-============================================================
-
-📄 Config Management SOP (0.712 similarity)
-   Path: 40-Procedures/Config Management SOP.md
-
-Database-driven configuration system...
-[Content preview]
-
-------------------------------------------------------------
-
-📄 Session Lifecycle - Overview (0.685 similarity)
-   Path: 40-Procedures/Session Lifecycle - Overview.md
-
-Session management procedures...
-[Content preview]
-
-------------------------------------------------------------
-```
+1. User sends prompt (>=10 chars)
+2. `rag_query_hook.py` runs via UserPromptSubmit hook
+3. Generates Voyage AI embedding for the prompt
+4. Queries both tables via pgvector cosine similarity
+5. Returns results via `additionalContext` (injected silently)
 
 ---
 
@@ -951,7 +653,8 @@ NIMBUS PROJECT CONTEXT (5 entries, 12ms)
 
 ---
 
-**Version**: 2.2
-**Last Updated**: 2026-01-26
-**Owner**: Claude Family Infrastructure
-**Changes**: Added Session Facts as Notepad section - working memory for long conversations
+**Version**: 3.0
+**Created**: 2025-12-30
+**Updated**: 2026-02-07
+**Location**: Claude Family/RAG Usage Guide.md
+**Changes**: Removed all vault-rag MCP references (removed 2026-01). RAG is now fully automatic via hook. Manual search via project-tools recall_knowledge.

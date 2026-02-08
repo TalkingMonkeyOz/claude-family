@@ -15,16 +15,19 @@ Enforcement layer for Claude Family governance.
 
 ## Active Hooks
 
-| Event | Script | Purpose | Status |
-|-------|--------|---------|--------|
-| SessionStart | `session_startup_hook.py` | Log session, load state, check inbox | ✅ Working |
-| UserPromptSubmit | `rag_query_hook.py` | Auto-query RAG for vault context | ✅ Active |
-| PreToolUse (Write/Edit) | `standards_validator.py` | Validate against coding standards | ✅ Working |
-| PostToolUse (TodoWrite) | `todo_sync_hook.py` | Sync todos to database | ✅ Working |
-| PostToolUse (MCP) | `mcp_usage_logger.py` | Analytics logging | ✅ Working |
-| Stop | `stop_hook_enforcer.py` | Vault check every 5 interactions | ✅ Working |
-| PreCompact | `precompact_hook.py` | CLAUDE.md/vault refresh | ✅ Working |
-| SessionEnd | (prompt) | Reminder to run /session-end | ✅ Working |
+| Order | Event | Script | Purpose | Status |
+|-------|-------|--------|---------|--------|
+| 1 | SessionStart | `session_startup_hook.py` | Log session, load state, check inbox | ✅ Working |
+| 2 | UserPromptSubmit | `rag_query_hook.py` | RAG context + core protocol + periodic reminders | ✅ Active |
+| 3 | PreToolUse (Write/Edit) | `context_injector_hook.py` | Inject coding standards from context_rules | ✅ Working |
+| 3b | PreToolUse (Write/Edit) | `standards_validator.py` | Validate content against standards | ✅ Working |
+| 4 | PostToolUse (TodoWrite) | `todo_sync_hook.py` | Sync todos to database | ✅ Working |
+| 5 | PostToolUse (catch-all) | `mcp_usage_logger.py` | Log MCP tool usage (filters to mcp__ prefix) | ✅ Working |
+| 6 | SubagentStart | `subagent_start_hook.py` | Log agent spawns to agent_sessions | ✅ Working |
+| 7 | PreCompact (manual+auto) | `precompact_hook.py` | Inject active todos, features, session state | ✅ Working |
+| 8 | SessionEnd | `session_end_hook.py` | Auto-close session in database | ✅ Working |
+
+**Key design**: MCP usage logger uses a catch-all matcher (no matcher = fires for ALL PostToolUse). The script internally filters to `tool_name.startswith('mcp__')`.
 
 ## New Hook Features (v2.1.0)
 
@@ -85,6 +88,14 @@ generate_project_settings.py
 
 ## Recent Changes
 
+**2026-02-07**:
+- SessionEnd hook changed from prompt type → command type (`session_end_hook.py`)
+- PreCompact hook enhanced: now queries DB for active todos, features, session state
+- PostToolUse MCP logger changed to catch-all matcher (68 entries → 2)
+- Deleted dead code: `stop_hook_enforcer.py` (merged into rag_query_hook.py)
+- Deleted security risk: `end_current_session.py` (hardcoded credentials)
+- Added `context_injector_hook.py` and `subagent_start_hook.py` to Active Hooks table
+
 **2026-01-09**:
 - Added `agent_type` in SessionStart hook input (v2.1.2)
 - Large bash/tool outputs now saved to disk instead of truncated (v2.1.2)
@@ -101,7 +112,7 @@ generate_project_settings.py
 
 ---
 
-**Version**: 1.5
+**Version**: 2.0 (Full hook chain audit, SessionEnd/PreCompact rework)
 **Created**: 2025-12-26
-**Updated**: 2026-01-09
+**Updated**: 2026-02-07
 **Location**: Claude Family/Claude Hooks.md

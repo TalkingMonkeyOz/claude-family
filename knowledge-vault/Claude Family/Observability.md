@@ -14,23 +14,25 @@ What we log, how it's analyzed, and gaps to address.
 
 ---
 
-## Logging Tables (Updated 2026-01-17)
+## Logging Tables (Updated 2026-02-03)
 
 | Table | Rows | Purpose | Status |
 |-------|------|---------|--------|
-| `sessions` | 532 | Claude Code sessions | ✅ Active |
-| `rag_usage_log` | 664 | RAG queries via UserPromptSubmit hook | ✅ Active |
-| `messages` | 146 | Inter-Claude messaging | ✅ Active |
-| `agent_sessions` | ~130 | Spawned agent tracking | ✅ Active |
-| `feedback` | 53 | Issue tracking | ✅ Active |
+| `sessions` | 606 | Claude Code sessions | ✅ Active |
+| `rag_usage_log` | 1504 | RAG queries via UserPromptSubmit hook | ✅ Active |
+| `messages` | 176 | Inter-Claude messaging | ✅ Active |
+| `agent_sessions` | 43 | Spawned agent tracking | ✅ Active |
+| `feedback` | 82 | Issue tracking | ✅ Active |
 | `vocabulary_mappings` | 28 | Informal → canonical mappings | ✅ Active |
 | `scheduled_jobs` | 25 | Job definitions + history | ✅ Active |
 | `reviewer_runs` | 14 | Reviewer script executions | ✅ Active |
-| `todos` | 1200 | Persistent todos across sessions | ✅ Active |
-| `mcp_usage_stats` | 2 | MCP tool calls | ⚠️ Barely used |
-| `enforcement_log` | 0 | Rule violations | ❌ OBSOLETE (reminders merged into RAG hook) |
+| `todos` | 1618 | Persistent todos across sessions | ✅ Active |
+| `mcp_usage_stats` | 53 | MCP aggregated stats | ✅ Active |
+| `mcp_usage` | 3509 | MCP tool call details | ✅ Active |
+| `enforcement_log` | 1333 | Rule violation reminders | ✅ Active
 
 **Note**: `process_classification_log` deprecated - skills-first replaced process router (ADR-005)
+**Note**: PostToolUse MCP logger now uses catch-all matcher (no matcher = fires for ALL tools, script filters to `mcp__` prefix internally). This replaced 68 individual matchers (2026-02-07).
 
 ---
 
@@ -90,8 +92,8 @@ For complex tasks:
 ## Gaps to Address
 
 ### High Priority
-1. `enforcement_log` empty - violations not logged
-2. `mcp_usage_stats` barely used - tracking incomplete
+1. ~~`enforcement_log` empty~~ ✅ Fixed - 1,333 rows logged
+2. ~~`mcp_usage_stats` barely used~~ ✅ Fixed - 53 aggregated + 3,509 detailed in `mcp_usage`
 3. ~~researcher-opus 17% success~~ ✅ Mitigated with task breakdown
 
 ### Medium Priority
@@ -117,11 +119,14 @@ HAVING COUNT(*) > 5
 ORDER BY success_rate ASC;
 ```
 
-**Classification performance**:
+**MCP usage by server**:
 ```sql
-SELECT classification_method, COUNT(*), ROUND(AVG(latency_ms)) as avg_ms
-FROM claude.process_classification_log
-GROUP BY classification_method;
+SELECT mcp_server, COUNT(*) as calls,
+  ROUND(100.0 * SUM(CASE WHEN success THEN 1 ELSE 0 END) / COUNT(*)) as success_rate
+FROM claude.mcp_usage
+WHERE created_at > NOW() - INTERVAL '30 days'
+GROUP BY mcp_server
+ORDER BY calls DESC;
 ```
 
 ---
@@ -144,8 +149,8 @@ GROUP BY classification_method;
 
 ## Action Items
 
-- [x] ~~Implement enforcement_log writes~~ → Merged into RAG hook as periodic reminders
-- [ ] Add MCP usage tracking to orchestrator
+- [x] ~~Implement enforcement_log writes~~ → Working (1,333 rows)
+- [x] ~~Add MCP usage tracking~~ → Working via PostToolUse hooks (3,509 calls logged)
 - [ ] Create MCW observability dashboard
 - [ ] Add exit code semantics to MUI scheduler (exit 1 = issues found, exit 2+ = error)
 - [x] Add keyword triggers to reduce LLM classification
@@ -154,7 +159,7 @@ GROUP BY classification_method;
 
 ---
 
-**Version**: 3.1 (Enforcement merged into RAG hook)
+**Version**: 3.3 (Fixed deprecated query, added catch-all matcher note)
 **Created**: 2025-12-26
-**Updated**: 2026-01-24
+**Updated**: 2026-02-07
 **Location**: Claude Family/Observability.md

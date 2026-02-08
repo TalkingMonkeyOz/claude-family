@@ -265,6 +265,62 @@ WHERE table_name = 'TABLE_NAME';
 
 ---
 
+## Referential Integrity
+
+The `claude` schema uses FK constraints to maintain data integrity. Key relationships:
+
+| Child Table | Column | References | On Delete |
+|-------------|--------|------------|-----------|
+| `feedback_comments` | `feedback_id` | `feedback` | CASCADE |
+| `feedback_screenshots` | `feedback_id` | `feedback` | CASCADE |
+| `build_tasks` | `feature_id` | `features` | RESTRICT |
+| `build_tasks` | `project_id` | `projects` | RESTRICT |
+| `sessions` | `identity_id` | `identities` | RESTRICT |
+| `todos` | `project_id` | `projects` | NO ACTION |
+| `enforcement_log` | `session_id` | `sessions` | SET NULL |
+| `knowledge_retrieval_log` | `session_id` | `sessions` | SET NULL |
+
+**Full FK list**: 71 constraints in `claude` schema (as of Jan 2026).
+
+### Important Indexes
+
+| Table | Column | Purpose |
+|-------|--------|---------|
+| `sessions` | `project_name` | Fast project session lookup |
+| `messages` | `to_project` | Message routing queries |
+| `knowledge` | `knowledge_category` | Category filtering |
+
+---
+
+## nimbus_context Schema
+
+The `nimbus_context` schema stores Nimbus-specific knowledge:
+
+| Table | Purpose |
+|-------|---------|
+| `api_entities` | OData entity metadata |
+| `api_properties` | Entity property details |
+| `code_patterns` | Reusable code patterns |
+| `project_learnings` | Lessons learned |
+| `project_facts` | Known facts |
+| `api_field_mappings` | **OData↔REST field name mappings** |
+
+### API Field Mappings
+
+Maps OData field names (PascalCase) to REST API field names (camelCase):
+
+```sql
+SELECT odata_field, rest_field, data_type
+FROM nimbus_context.api_field_mappings
+WHERE entity_name = 'User';
+-- LocationID -> locationId
+-- UserName -> userName
+```
+
+Entities covered: User, Location, Department, Schedule, Shift (54 mappings).
+
+---
+
 ## Related Documents
 
 - [[Family Rules]] - Coordination rules
@@ -273,7 +329,7 @@ WHERE table_name = 'TABLE_NAME';
 
 ---
 
-**Version**: 1.1 (Marked process_registry as deprecated)
+**Version**: 1.2 (Added FK constraints, indexes, nimbus_context schema)
 **Created**: 2025-12-20
-**Updated**: 2026-01-19
+**Updated**: 2026-01-26
 **Location**: knowledge-vault/20-Domains/Database Integration Guide.md

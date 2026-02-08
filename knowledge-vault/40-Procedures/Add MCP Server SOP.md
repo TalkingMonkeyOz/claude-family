@@ -149,7 +149,7 @@ If you need to create `.mcp.json` manually (not database-driven):
 
 ## Method 1: Add Global MCP (All Claude Instances)
 
-**Use this for**: Core infrastructure MCPs (postgres, orchestrator, vault-rag, etc.)
+**Use this for**: Core infrastructure MCPs (postgres, orchestrator, project-tools, etc.)
 
 **Location**: `~/.claude/mcp.json` (manually maintained)
 
@@ -170,7 +170,7 @@ Add entry following the pattern:
       "command": "C:/venvs/mcp/Scripts/python.exe",
       "args": ["C:/Projects/claude-family/mcp-servers/your-mcp/server.py"],
       "env": {
-        "DATABASE_URL": "postgresql://..."
+        "DATABASE_URI": "postgresql://user:password@localhost/db_name"
       }
     }
   }
@@ -375,14 +375,13 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 
 | MCP Server | Purpose | Scope | Projects Using |
 |------------|---------|-------|----------------|
-| postgres | Database access, session logging | Global | All |
-| memory | Persistent memory graph | Global | All |
+| postgres | Database access | Global | All |
 | orchestrator | Agent spawning, messaging | Global | All |
-| vault-rag | Semantic knowledge search | Global | All |
+| project-tools | Work tracking, knowledge, session facts | Global | All |
 | sequential-thinking | Complex problem solving | Global | All |
 | python-repl | Python code execution | Global | All |
-| filesystem | File operations | Global | All |
-| mui | Material-UI docs/components | Project (.mcp.json) | nimbus-mui |
+| nimbus-knowledge | Nimbus API domain knowledge | Global (Nimbus projects) | nimbus-* |
+| mui | MUI X component docs | Project (.mcp.json) | nimbus-mui, ATO-Tax-Agent |
 
 ---
 
@@ -421,7 +420,8 @@ cat ~/.claude/hooks.log | tail -50
 2. **Test First** - Test in one project before adding to project type
 3. **Database-Driven** - Add to database, not manually to settings files
 4. **Audit Trail** - Use `mcp_configs` table to track installations
-5. **Security** - Never commit API keys, use environment variables
+5. **No Hardcoded Credentials** - Custom MCP servers MUST use `DATABASE_URI` env var, never hardcode connection strings in source code
+6. **Security** - Never commit API keys or DB passwords, use environment variables
 
 ---
 
@@ -435,7 +435,7 @@ cat ~/.claude/hooks.log | tail -50
 
 ---
 
-**Version**: 3.0 (Database-driven .mcp.json generation with auto Windows wrapper)
+**Version**: 3.1 (Updated MCP server list, added DATABASE_URI requirement, removed deprecated MCPs)
 **Created**: 2025-12-27
-**Updated**: 2026-01-26
+**Updated**: 2026-02-07
 **Location**: 40-Procedures/Add MCP Server SOP.md

@@ -160,27 +160,30 @@ Automatically injected into spawned agents:
 
 ---
 
-## Agent Types (17 total)
+## Agent Types (19 total)
 
 ### Fast/Cheap (Haiku $0.01-0.08)
 
 | Agent | Cost | Use Case |
 |-------|------|----------|
 | `lightweight-haiku` | $0.01 | Simple file ops |
-| `git-haiku` | $0.015 | **NEW** Git operations |
+| `git-haiku` | $0.015 | Git operations |
 | `coder-haiku` | $0.035 | New code, bug fixes |
 | `python-coder-haiku` | $0.045 | Python + DB + REPL |
 | `winforms-coder-haiku` | $0.045 | WinForms development |
 | `tester-haiku` | $0.052 | Unit/integration tests |
 | `web-tester-haiku` | $0.05 | E2E Playwright tests |
 | `doc-keeper-haiku` | $0.03 | Doc maintenance |
+| `ux-tax-screen-analyzer` | $0.08 | ATO tax wizard UX |
 
 ### Balanced (Sonnet $0.10-0.35)
 
 | Agent | Cost | Use Case |
 |-------|------|----------|
 | `reviewer-sonnet` | $0.105 | Code review |
-| `mui-coder-sonnet` | $0.12 | **NEW** MUI X components (design quality) |
+| `coder-sonnet` | $0.12 | Complex multi-file code |
+| `designer-sonnet` | $0.12 | UI/UX design specs |
+| `mui-coder-sonnet` | $0.12 | MUI X components |
 | `planner-sonnet` | $0.21 | Task breakdown |
 | `security-sonnet` | $0.24 | Security audits |
 | `analyst-sonnet` | $0.30 | Research, docs |
@@ -222,7 +225,7 @@ send_message(to_project="ATO-Tax-Agent", message_type="notification", ...)
 
 ## Progressive Discovery Pattern
 
-**Problem**: Loading all 15 agent definitions upfront wastes tokens
+**Problem**: Loading all 19 agent definitions upfront wastes tokens
 
 **Solution**: Use `search_agents` first, load details on-demand
 
@@ -255,10 +258,12 @@ send_message(to_project="ATO-Tax-Agent", message_type="notification", ...)
 **Agent specs**: `mcp-servers/orchestrator/agent_specs.json`
 **Per-agent MCPs**: `mcp-servers/orchestrator/configs/*.mcp.json`
 
-Each agent has isolated MCP access:
-- `coder-haiku` → filesystem only
-- `python-coder-haiku` → filesystem + postgres + python-repl
-- `web-tester-haiku` → filesystem + playwright
+Each agent has isolated MCP access (built-in Read/Write/Edit/Glob/Grep always available):
+- `coder-haiku` → built-in tools only (no MCPs)
+- `python-coder-haiku` → postgres + python-repl
+- `web-tester-haiku` → playwright
+- `architect-opus` → orchestrator + sequential-thinking
+- `doc-keeper-haiku` → postgres
 
 ---
 
@@ -283,7 +288,7 @@ Each agent has isolated MCP access:
 
 ---
 
-**Version**: 5.0 (Agent Coordination System - context injection, status tracking, commands)
+**Version**: 5.1 (Updated agent count to 19, fixed MCP access list, removed vault-rag/filesystem refs)
 **Created**: 2025-12-26
-**Updated**: 2026-01-06
+**Updated**: 2026-02-07
 **Location**: Claude Family/Orchestrator MCP.md
