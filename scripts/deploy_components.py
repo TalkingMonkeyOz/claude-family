@@ -195,6 +195,8 @@ def get_target_path(component: Dict, project_path: str) -> Path:
             # Global skills don't have a standard file location
             # They're typically in project directories
             return None
+        elif comp_type == 'agent':
+            return GLOBAL_CLAUDE_DIR / "agents" / f"{name}.md"
 
     # Project-scoped components go to project/.claude/
     if project_path:
@@ -208,6 +210,8 @@ def get_target_path(component: Dict, project_path: str) -> Path:
             return project_path / ".claude" / "commands" / f"{name}.md"
         elif comp_type == 'instruction':
             return project_path / ".claude" / "instructions" / f"{name}.instructions.md"
+        elif comp_type == 'agent':
+            return project_path / ".claude" / "agents" / f"{name}.md"
 
     return None
 
@@ -600,7 +604,7 @@ def main():
                         help='Import files to database instead of deploying')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     parser.add_argument('--force', action='store_true', help='Deploy even if hashes match')
-    parser.add_argument('--component-type', choices=['claude_md', 'skill', 'instruction', 'rule', 'command', 'standard'],
+    parser.add_argument('--component-type', choices=['claude_md', 'skill', 'instruction', 'rule', 'command', 'standard', 'agent'],
                         help='Only deploy specific component type')
 
     args = parser.parse_args()
