@@ -81,11 +81,9 @@ def get_db_connection():
     if not POSTGRES_AVAILABLE:
         raise RuntimeError("PostgreSQL not available - neither psycopg nor psycopg2 installed")
 
-    # Try environment variables first, fall back to correct local dev connection
     conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
     if not conn_string:
-        # Local development fallback - use correct password
-        conn_string = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation'
+        raise RuntimeError("DATABASE_URI or POSTGRES_CONNECTION_STRING environment variable required")
 
     if PSYCOPG_VERSION == 3:
         # psycopg3 syntax
@@ -1016,11 +1014,15 @@ def get_message_history(
 
         results = {"sent": [], "received": []}
 
-        # Build base conditions
-        time_condition = f"created_at > NOW() - INTERVAL '{days} days'"
-        type_condition = f"message_type = '{message_type}'" if message_type else "1=1"
+        # Build parameterized conditions (avoid SQL injection)
+        time_condition = "created_at > NOW() - INTERVAL '%s days'"
+        type_condition = "message_type = %s" if message_type else "1=1"
 
         if include_received and project_name:
+            params = [project_name, days]
+            if message_type:
+                params.append(message_type)
+            params.append(limit)
             cur.execute(f"""
                 SELECT
                     message_id::text,
@@ -1040,7 +1042,7 @@ def get_message_history(
                   AND {type_condition}
                 ORDER BY created_at DESC
                 LIMIT %s
-            """, (project_name, limit))
+            """, params)
 
             for msg in cur.fetchall():
                 msg_dict = dict(msg) if not isinstance(msg, dict) else msg
@@ -1062,6 +1064,10 @@ def get_message_history(
 
             if session_ids:
                 placeholders = ','.join(['%s'] * len(session_ids))
+                params = list(session_ids) + [days]
+                if message_type:
+                    params.append(message_type)
+                params.append(limit)
                 cur.execute(f"""
                     SELECT
                         message_id::text,
@@ -1080,7 +1086,7 @@ def get_message_history(
                       AND {type_condition}
                     ORDER BY created_at DESC
                     LIMIT %s
-                """, (*session_ids, limit))
+                """, params)
 
                 for msg in cur.fetchall():
                     msg_dict = dict(msg) if not isinstance(msg, dict) else msg
@@ -1244,7 +1250,7 @@ def search_agents(query: str, detail_level: str = "summary") -> dict:
                 with open(mcp_config_path, 'r') as f:
                     mcp_config = json.load(f)
                     agent_info['mcp_servers'] = list(mcp_config.get('mcpServers', {}).keys())
-            except:
+            except Exception:
                 pass
             agents.append(agent_info)
         return {
@@ -1292,9 +1298,6 @@ def recommend_agent(task: str) -> dict:
 
     # Security tasks
     if any(w in task_lower for w in ['security', 'vulnerability', 'audit', 'owasp', 'penetration']):
-        if 'deep' in task_lower or 'comprehensive' in task_lower:
-            return {"agent": "security-opus", "reason": "Deep security audit", "cost": "$1.00", "timeout": get_spec_timeout("security-opus"),
-                    "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
         return {"agent": "security-sonnet", "reason": "Security analysis", "cost": "$0.24", "timeout": get_spec_timeout("security-sonnet"),
                 "governance": {"level": "read-only", "note": "Cannot modify code, findings returned to caller"}}
 

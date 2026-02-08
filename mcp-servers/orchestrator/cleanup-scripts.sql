@@ -349,7 +349,7 @@ LIMIT 20;
 UPDATE claude.knowledge 
 SET learned_by_identity_id = (
   SELECT identity_id 
-  FROM claude_family.identities 
+  FROM claude.identities
   WHERE name = 'system'
 )
 WHERE learned_by_identity_id IS NULL 

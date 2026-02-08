@@ -1,24 +1,3 @@
 {
-  "_comment": "MCP config for designer-sonnet agent",
-  "_created": "2026-01-09",
-  "_purpose": "UI/UX designer agent with vault-rag for design patterns and web search for inspiration",
-  "mcpServers": {
-    "vault-rag": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
-      }
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
-      }
-    }
-  }
+  "mcpServers": {}
 }

@@ -1,47 +1,14 @@
 {
-  "_comment": "MCP config for mui-coder-sonnet agent",
-  "_created": "2026-01-05",
-  "_updated": "2026-01-11",
-  "_purpose": "MUI X specialist with tree-sitter analysis, MUI docs, and vault-rag for patterns lookup",
   "mcpServers": {
     "mui": {
-      "type": "stdio",
       "command": "cmd",
-      "args": ["/c", "npx", "-y", "@mui/mcp@latest"],
-      "env": {}
-    },
-    "vault-rag": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
-      }
-    },
-    "tree-sitter": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\mcp-server-tree-sitter.exe",
-      "args": [],
-      "env": {}
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
       "args": [
+        "/c",
+        "npx",
         "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
+        "@anthropic/mcp-mui"
       ],
-      "env": {}
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
-      }
+      "type": "stdio"
     }
   }
 }

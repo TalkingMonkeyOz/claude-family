@@ -281,7 +281,7 @@ Set environment variable:
 
 2. Verify table exists:
    ```sql
-   SELECT * FROM claude_family.agent_sessions LIMIT 1;
+   SELECT * FROM claude.agent_sessions LIMIT 1;
    ```
 
 3. Check psycopg2 installed:
@@ -315,10 +315,10 @@ The orchestrator MCP adds ~1k tokens to context. If this is problematic:
 - Add indexes if logging thousands of sessions:
   ```sql
   CREATE INDEX idx_agent_sessions_workspace
-  ON claude_family.agent_sessions(workspace_dir);
+  ON claude.agent_sessions(workspace_dir);
 
   CREATE INDEX idx_agent_sessions_cost
-  ON claude_family.agent_sessions(estimated_cost_usd);
+  ON claude.agent_sessions(estimated_cost_usd);
   ```
 
 - Archive old sessions periodically
@@ -366,7 +366,7 @@ SELECT
   SUM(CASE WHEN success THEN 1 ELSE 0 END) as successful,
   AVG(execution_time_seconds) as avg_time,
   SUM(estimated_cost_usd) as total_cost
-FROM claude_family.agent_sessions
+FROM claude.agent_sessions
 GROUP BY agent_type
 ORDER BY total_sessions DESC;
 ```
@@ -380,7 +380,7 @@ SELECT
   execution_time_seconds,
   success,
   spawned_at
-FROM claude_family.agent_sessions
+FROM claude.agent_sessions
 ORDER BY spawned_at DESC
 LIMIT 20;
 ```
@@ -394,7 +394,7 @@ SELECT
   agent_type,
   COUNT(*) as sessions,
   SUM(estimated_cost_usd) as cost
-FROM claude_family.agent_sessions
+FROM claude.agent_sessions
 WHERE spawned_at >= CURRENT_DATE - INTERVAL '30 days'
 GROUP BY DATE(spawned_at), agent_type
 ORDER BY date DESC, cost DESC;

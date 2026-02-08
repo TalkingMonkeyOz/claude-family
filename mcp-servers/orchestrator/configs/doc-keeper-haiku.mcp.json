@@ -1,40 +1,11 @@
 {
-  "_comment": "MCP config for doc-keeper-haiku agent",
-  "_created": "2026-01-09",
-  "_purpose": "Documentation maintenance with vault-rag for verification and postgres for queries",
   "mcpServers": {
-    "vault-rag": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
-      }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "{workspace_dir}",
-        "C:\\Users\\johnd\\.claude"
-      ],
-      "env": {}
-    },
     "postgres": {
       "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
-      "args": ["--access-mode=unrestricted"],
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
-      }
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
+      "command": "C:/venvs/mcp/Scripts/postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }

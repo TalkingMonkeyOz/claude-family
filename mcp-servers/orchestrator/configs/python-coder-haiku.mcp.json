@@ -1,48 +1,19 @@
 {
-  "_comment": "MCP config for python-coder-haiku agent",
-  "_created": "2026-01-09",
-  "_purpose": "Python development with vault-rag, REPL testing, and database access",
   "mcpServers": {
-    "vault-rag": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\vault-rag\\server.py"],
-      "env": {
-        "DATABASE_URL": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
-      }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
-      ],
-      "env": {}
-    },
     "postgres": {
       "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
-      "args": ["--access-mode=unrestricted"],
+      "command": "C:/venvs/mcp/Scripts/postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }
     },
     "python-repl": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\mcp-python.exe",
+      "command": "C:/venvs/mcp/Scripts/mcp-python.exe",
       "args": [],
-      "env": {}
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
-      }
+      "type": "stdio"
     }
   }
 }

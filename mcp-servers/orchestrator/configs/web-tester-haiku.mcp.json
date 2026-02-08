@@ -1,29 +1,14 @@
 {
   "mcpServers": {
     "playwright": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@executeautomation/playwright-mcp-server@latest"],
-      "env": {}
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
+      "command": "cmd",
       "args": [
+        "/c",
+        "npx",
         "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
+        "@anthropic/mcp-playwright"
       ],
-      "env": {}
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
-      }
+      "type": "stdio"
     }
   }
 }

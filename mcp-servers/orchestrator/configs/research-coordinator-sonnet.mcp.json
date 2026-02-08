@@ -1,37 +1,35 @@
 {
   "mcpServers": {
-    "filesystem": {
+    "orchestrator": {
       "type": "stdio",
-      "command": "npx",
+      "command": "C:/venvs/mcp/Scripts/python.exe",
       "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "C:\\Projects"
+        "C:/Projects/claude-family/mcp-servers/orchestrator/server.py"
       ],
-      "env": {}
+      "env": {
+        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+      }
     },
     "postgres": {
       "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\postgres-mcp.exe",
-      "args": ["--access-mode=unrestricted"],
+      "command": "C:/venvs/mcp/Scripts/postgres-mcp.exe",
+      "args": [
+        "--access-mode=unrestricted"
+      ],
       "env": {
         "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
       }
     },
     "sequential-thinking": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
       "env": {}
-    },
-    "orchestrator": {
-      "type": "stdio",
-      "command": "C:\\venvs\\mcp\\Scripts\\python.exe",
-      "args": ["C:\\Projects\\claude-family\\mcp-servers\\orchestrator\\server.py"],
-      "cwd": "C:\\Projects\\claude-family\\mcp-servers\\orchestrator",
-      "env": {
-        "DATABASE_URI": "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost:5432/ai_company_foundation"
-      }
     }
   }
 }
