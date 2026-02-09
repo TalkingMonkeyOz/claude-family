@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-02-08T11:18:45.888322",
+    "generated_at": "2026-02-09T18:07:56.873401",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -64,6 +64,11 @@
       "path": "C:\\Projects\\nimbus-import",
       "type": "tauri-react",
       "description": "Tauri desktop app for bulk importing staff shifts and task attendance into Nimbus"
+    },
+    "trading-intelligence": {
+      "path": "C:\\Projects\\trading-intelligence",
+      "type": "tauri-react",
+      "description": "Trading Intelligence System - SMSF portfolio + market intelligence + automated trading"
     },
     "bee-game": {
       "path": "C:\\Projects\\bee-game",

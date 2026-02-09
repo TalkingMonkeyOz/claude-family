@@ -28,86 +28,14 @@ Output Format:
 # ~110 tokens - contract-style enforcement for task discipline.
 
 CORE_PROTOCOL = """
-## ⛔ STOP - READ THIS BEFORE RESPONDING
+## ⛔ TASK DISCIPLINE
 
-**SELF-CHECK (answer before ANY response):**
-→ Does user's message contain a request/task/question requiring action?
-→ If YES: Have I called TaskCreate for EACH action I will take?
-→ If NO tasks created: **STOP. Create tasks FIRST. Then respond.**
+**BEFORE responding to any request:** call TaskCreate for each action you will take.
+No tool calls until tasks are created. Mark in_progress when starting, completed when done.
+Short questions/confirmations don't need tasks.
 
----
-
-## Task Discipline (NON-NEGOTIABLE)
-
-**Every file edit, DB write, search, or command = 1 task.**
-
-```
-User: "update the vault"
-  ↓
-TaskCreate: "Update Database Integration Guide"
-TaskCreate: "Update RAG Usage Guide"
-  ↓
-TaskUpdate(in_progress) → Execute → TaskUpdate(completed)
-  ↓
-Next task...
-```
-
-**THE RULE:** No tool calls until TaskCreate is done. Period.
-
----
-
-## Working Memory (Session Facts = Your Notepad)
-
-Long conversations compress. Things get lost. **Use session facts as your notepad.**
-
-| When This Happens | Do This |
-|-------------------|---------|
-| User gives credential/key | `store_session_fact("api_key", "...", "credential", is_sensitive=True)` |
-| User tells you config/endpoint | `store_session_fact("api_url", "...", "endpoint")` |
-| A decision is made | `store_session_fact("auth_approach", "JWT with refresh", "decision")` |
-| You discover something important | `store_session_fact("finding_X", "...", "note")` |
-| Multi-step task in progress | `store_session_fact("task_progress", "Done: A,B. Next: C", "note")` |
-
-**Valid types:** credential, config, endpoint, decision, note, data, reference
-
-**Anytime:** Run `list_session_facts()` to see your notepad.
-**Session feels long?** Check your notepad for what you stored earlier.
-
----
-
-## Quick Reference
-
-| User says... | I do FIRST |
-|--------------|------------|
-| "fix X" | TaskCreate for each fix |
-| "check Y" | TaskCreate: "Check Y" |
-| "update Z" | TaskCreate for each file |
-| Short question | Answer directly (no task needed) |
-
----
-
-## MCP Tools (MANDATORY - Use BEFORE Raw SQL)
-
-**⚠️ Raw SQL to claude.* tables is PROHIBITED when an MCP tool exists.**
-
-| Instead of... | Use This (ToolSearch first) |
-|---------------|-----------------------------|
-| `INSERT INTO claude.feedback` | `project-tools.create_feedback` |
-| `INSERT INTO claude.features` | `project-tools.create_feature` |
-| `INSERT INTO claude.build_tasks` | `project-tools.add_build_task` |
-| `UPDATE claude.*.status` | `project-tools.update_work_status` |
-| `SELECT...build_tasks WHERE status='todo'` | `project-tools.get_ready_tasks` |
-| `INSERT INTO claude.knowledge` | `project-tools.store_knowledge` |
-| `SELECT FROM claude.knowledge` | `project-tools.recall_knowledge` |
-| `INSERT INTO claude.session_facts` | `project-tools.store_session_fact` |
-
-**Raw SQL is OK for**: SELECT queries without MCP equivalent, analytics, schema inspection.
-
-**Schema rule**: ALWAYS use `claude.*` schema. NEVER `claude_family.*` or `claude_pm.*`.
-
-## Other Rules
-- **NEVER guess** - Verify files/tables exist before claiming they do/don't
-- **Config files are generated** - Don't edit settings.local.json (DB is source of truth)
+**MCP-first:** Use project-tools MCP (ToolSearch first) before raw SQL for writes to claude.* tables.
+**Notepad:** Use store_session_fact for decisions, credentials, findings - they survive compaction.
 """
 
 import json
@@ -486,21 +414,16 @@ COMMAND_PATTERNS = [
 MIN_COMMAND_SKIP_LENGTH = 30
 
 def is_command(prompt: str) -> bool:
-    """Detect if prompt is an imperative command (not a question).
+    """Detect if prompt is a short imperative command.
 
     Returns True for commands like 'commit changes', 'yes do it', etc.
-    These don't benefit from RAG - they're actions, not questions.
-
-    IMPORTANT: Long prompts (>30 chars) that contain substantive content
-    should ALWAYS get RAG, even if they start with command-like words.
+    These skip ALL injection (no core protocol, no RAG).
     """
     prompt_lower = prompt.lower().strip()
 
-    # Long prompts always get RAG - they contain substantive content
     if len(prompt_lower) > MIN_COMMAND_SKIP_LENGTH:
         return False
 
-    # Skip if it's a question (has question mark or question words)
     if '?' in prompt or any(w in prompt_lower for w in ['how', 'what', 'where', 'why', 'when', 'which', 'can you', 'could you']):
         return False
 
@@ -508,6 +431,99 @@ def is_command(prompt: str) -> bool:
         if re.match(pattern, prompt_lower):
             return True
     return False
+
+
+# Patterns that indicate the prompt is a question or exploration (benefits from RAG)
+QUESTION_INDICATORS = [
+    '?',           # Direct questions
+    'how do',      # How-to questions
+    'how to',
+    'what is',     # Definitional
+    'what are',
+    'where is',    # Location questions
+    'where are',
+    'why does',    # Reasoning questions
+    'why is',
+    'explain',     # Requests for explanation
+    'describe',
+    'what does',
+    'show me',
+    'tell me about',
+    'help me understand',
+    'documentation',
+    'guide',
+    'tutorial',
+    'example of',
+    'best practice',
+    'pattern for',
+    'how should',
+]
+
+# Patterns that indicate an action/instruction (skip RAG)
+ACTION_INDICATORS = [
+    'implement',   # Direct action requests
+    'create',
+    'build',
+    'fix',
+    'update',
+    'change',
+    'add',
+    'remove',
+    'delete',
+    'move',
+    'rename',
+    'refactor',
+    'deploy',
+    'run',
+    'test',
+    'commit',
+    'push',
+    'merge',
+    'let\'s',      # Collaborative action
+    'go ahead',
+    'do it',
+    'start',
+    'continue',
+    'pick up',
+    'yes',
+    'no',
+    'ok',
+    'sure',
+]
+
+
+def needs_rag(prompt: str) -> bool:
+    """Determine if a prompt benefits from RAG knowledge retrieval.
+
+    Returns True for questions, exploration, "how do I" prompts.
+    Returns False for action instructions, commands, corrections.
+
+    This is the key gate that prevents ~70% of unnecessary RAG queries.
+    """
+    prompt_lower = prompt.lower().strip()
+
+    # Very short prompts never need RAG
+    if len(prompt_lower) < 15:
+        return False
+
+    # Explicit questions always get RAG
+    for indicator in QUESTION_INDICATORS:
+        if indicator in prompt_lower:
+            return True
+
+    # Check if prompt starts with an action verb
+    first_word = prompt_lower.split()[0] if prompt_lower.split() else ''
+    for indicator in ACTION_INDICATORS:
+        if first_word == indicator or prompt_lower.startswith(indicator):
+            return False
+
+    # Slash commands don't need RAG (they load their own context)
+    if prompt_lower.startswith('/'):
+        return False
+
+    # Default: if prompt is long enough, it might benefit from RAG
+    # But raise the bar - only if it's >100 chars (substantial question)
+    return len(prompt_lower) > 100
 
 
 def detect_explicit_negative(user_prompt: str) -> Optional[Tuple[str, float]]:
@@ -1590,11 +1606,14 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
 
 
 def main():
-    """Main hook entry point."""
-    # Load reminder state (for periodic injection)
-    reminder_state = load_reminder_state()
-    reminder_state["interaction_count"] = reminder_state.get("interaction_count", 0) + 1
+    """Main hook entry point.
 
+    Injects context into Claude's prompt based on what's needed:
+    - ALWAYS: Core protocol (~50 tokens) + session facts (~100 tokens)
+    - CONDITIONAL: Session context (on session keywords), config warning (on config keywords)
+    - ON-DEMAND: RAG + knowledge (only for questions/exploration, not actions)
+    - REMOVED: Skill suggestions (never acted on), periodic reminders (use hooks instead)
+    """
     try:
         # Read hook input from stdin
         hook_input = json.loads(sys.stdin.read())
@@ -1603,32 +1622,23 @@ def main():
         # UserPromptSubmit hook provides the prompt in the hook_input
         user_prompt = hook_input.get('prompt', '')
 
-        if not user_prompt or len(user_prompt.strip()) < 5:
-            # Skip very short prompts (likely not substantive questions)
-            # Note: Lowered from 10 to 5 to catch short feedback like "wrong doc"
-            save_reminder_state(reminder_state)  # Still save state
+        if not user_prompt:
             result = {
-                "additionalContext": "",
-                "systemMessage": "",
-                "environment": {}
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": ""
+                }
             }
             print(json.dumps(result))
             return
 
-        # Skip RAG for imperative commands (commit, yes, push, etc.)
-        # These are actions, not questions - RAG adds no value
+        # Skip ALL injection for short imperative commands (commit, yes, push)
         if is_command(user_prompt):
-            logger.info(f"Skipping RAG for command: {user_prompt[:50]}")
-            # Still check for periodic reminders on commands
-            periodic_reminders = get_periodic_reminders(reminder_state)
-            context = CORE_PROTOCOL
-            if periodic_reminders:
-                context += "\n" + periodic_reminders
-            save_reminder_state(reminder_state)
+            logger.info(f"Skipping injection for command: {user_prompt[:50]}")
             result = {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": context
+                    "additionalContext": CORE_PROTOCOL
                 }
             }
             print(json.dumps(result))
@@ -1675,61 +1685,56 @@ def main():
             logger.info("Config keywords detected - injecting config management warning")
             config_warning = CONFIG_WARNING
 
-        # Query KNOWLEDGE TABLE (learned patterns, gotchas, facts)
-        # This provides memory-like recall of previously learned information
-        knowledge_context = query_knowledge(
-            user_prompt=user_prompt,
-            project_name=project_name,
-            session_id=session_id,
-            top_k=2,  # Keep it focused - just 2 relevant knowledge entries
-            min_similarity=0.45  # Higher threshold for knowledge to reduce noise
-        )
+        # CONDITIONAL: Only query RAG/knowledge for questions and exploration
+        # Action prompts ("implement X", "fix Y") don't benefit from documentation retrieval
+        knowledge_context = None
+        rag_context = None
+        nimbus_context = None
 
-        # Query RAG (vault knowledge - documentation)
-        rag_context = query_vault_rag(
-            user_prompt=user_prompt,
-            project_name=project_name,
-            session_id=session_id,
-            top_k=3,
-            min_similarity=0.30
-        )
+        if needs_rag(user_prompt):
+            logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
 
-        # Query SKILL SUGGESTIONS (semantic match against skill_content)
-        # This suggests relevant skills Claude can load for complex tasks
-        # Note: Threshold is low (0.25) because skill descriptions are expertise-focused
-        # not task-focused. Semantic match is approximate.
-        skill_context = query_skill_suggestions(
-            user_prompt=user_prompt,
-            project_name=project_name,
-            top_k=2,
-            min_similarity=0.25  # Low threshold - skill descriptions don't match tasks directly
-        )
+            # Query KNOWLEDGE TABLE (learned patterns, gotchas, facts)
+            knowledge_context = query_knowledge(
+                user_prompt=user_prompt,
+                project_name=project_name,
+                session_id=session_id,
+                top_k=2,
+                min_similarity=0.45
+            )
 
-        # Query NIMBUS CONTEXT (keyword search for Nimbus projects only)
-        # This provides project-specific patterns, learnings, and facts
-        nimbus_context = query_nimbus_context(
-            user_prompt=user_prompt,
-            project_name=project_name,
-            top_k=3
-        )
+            # Query RAG (vault knowledge - documentation)
+            rag_context = query_vault_rag(
+                user_prompt=user_prompt,
+                project_name=project_name,
+                session_id=session_id,
+                top_k=3,
+                min_similarity=0.30
+            )
+
+            # Query NIMBUS CONTEXT (keyword search for Nimbus projects only)
+            nimbus_context = query_nimbus_context(
+                user_prompt=user_prompt,
+                project_name=project_name,
+                top_k=3
+            )
+        else:
+            logger.info(f"RAG skipped for action prompt: {user_prompt[:50]}")
 
         # Combine contexts in priority order:
-        # 0. Core protocol (ALWAYS - ensures input processing workflow)
-        # 0.5. Critical session facts (credentials, endpoints, decisions - your notepad)
-        # 1. Session context (if session keywords detected)
-        # 2. Knowledge recall (learned patterns - high signal)
-        # 3. Vault RAG (documentation - broader context)
-        # 4. Skill suggestions (actionable - Claude can load these)
-        # 5. Nimbus context (for Nimbus projects - project-specific knowledge)
+        # 1. Core protocol (ALWAYS - task discipline)
+        # 2. Critical session facts (ALWAYS - lightweight notepad)
+        # 3. Session context (if session keywords detected)
+        # 4. Config warning (if config keywords detected)
+        # 5. Knowledge recall (if RAG enabled - questions only)
+        # 6. Vault RAG (if RAG enabled - questions only)
+        # 7. Nimbus context (if RAG enabled + Nimbus project)
         combined_context_parts = []
 
-        # ALWAYS inject core protocol FIRST (positioned prominently, never lost)
         combined_context_parts.append(CORE_PROTOCOL)
 
-        # ALWAYS inject critical session facts (lightweight - no embedding query)
         if critical_facts:
             combined_context_parts.append(critical_facts)
-
         if session_context:
             combined_context_parts.append(session_context)
         if config_warning:
@@ -1738,21 +1743,10 @@ def main():
             combined_context_parts.append(knowledge_context)
         if rag_context:
             combined_context_parts.append(rag_context)
-        if skill_context:
-            combined_context_parts.append(skill_context)
         if nimbus_context:
             combined_context_parts.append(nimbus_context)
 
-        # PERIODIC REMINDERS: Inject at intervals (merged from stop_hook_enforcer)
-        periodic_reminders = get_periodic_reminders(reminder_state)
-        if periodic_reminders:
-            combined_context_parts.append(periodic_reminders)
-            logger.info(f"Injected periodic reminders at interaction #{reminder_state['interaction_count']}")
-
         combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
-
-        # Save reminder state
-        save_reminder_state(reminder_state)
 
         # Build result (CORRECT format per Claude Code docs)
         result = {
