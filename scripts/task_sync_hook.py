@@ -108,8 +108,14 @@ def load_task_map(project_name: str) -> dict:
     return {}
 
 
-def save_task_map(project_name: str, task_map: dict):
-    """Save task_number → todo_id mapping to temp file."""
+def save_task_map(project_name: str, task_map: dict, session_id: str = None):
+    """Save task_number → todo_id mapping to temp file.
+
+    Includes _session_id for session scoping - the discipline hook checks this
+    to ensure tasks were created in the CURRENT session, not a stale previous one.
+    """
+    if session_id:
+        task_map['_session_id'] = session_id
     path = get_task_map_path(project_name)
     try:
         with open(path, 'w') as f:
@@ -149,14 +155,78 @@ def get_project_id(project_name: str, conn) -> str:
 
 
 def extract_task_number(output: str) -> str:
-    """Extract task number from TaskCreate/TaskUpdate output."""
-    # "Task #3 created successfully: ..." or "Updated task #3 status"
-    match = re.search(r'#(\d+)', output)
+    """Extract task number from TaskCreate/TaskUpdate tool_response.
+
+    tool_response format (JSON): {"task": {"id": "4", "subject": "..."}}
+    Falls back to regex for text format: "Task #3 created successfully: ..."
+    """
+    # Try JSON format first (actual tool_response format)
+    try:
+        data = json.loads(output) if isinstance(output, str) else output
+        if isinstance(data, dict):
+            task = data.get('task', {})
+            if isinstance(task, dict) and 'id' in task:
+                return str(task['id'])
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Fallback: text format with #N
+    match = re.search(r'#(\d+)', str(output))
     return match.group(1) if match else None
 
 
-def handle_task_create(tool_input: dict, tool_output: str, project_name: str):
-    """Handle TaskCreate: insert new todo into claude.todos."""
+def similarity_ratio(a: str, b: str) -> float:
+    """Calculate similarity ratio between two strings (0.0 to 1.0)."""
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+
+def find_existing_todo(subject: str, project_id: str, conn, threshold: float = 0.75) -> dict:
+    """Check if a similar todo already exists in the database.
+
+    Prevents duplicates when TaskCreate is called for work that already
+    has a pending/in_progress todo. Uses two matching strategies:
+    1. Substring: task subject is contained in existing todo (or vice versa)
+    2. Similarity: SequenceMatcher ratio >= threshold
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT todo_id::text, content, status
+        FROM claude.todos
+        WHERE project_id = %s::uuid
+          AND is_deleted = false
+          AND status IN ('pending', 'in_progress')
+        ORDER BY created_at DESC
+        LIMIT 50
+    """, (project_id,))
+    existing = cur.fetchall()
+
+    subject_lower = subject.lower().strip()
+
+    for todo in existing:
+        content = todo['content'] if isinstance(todo, dict) else todo[1]
+        content_lower = content.lower().strip()
+
+        # Strategy 1: Substring containment (handles shortened task subjects)
+        # Only if the shorter string is at least 20 chars (avoid trivial matches)
+        shorter = min(len(subject_lower), len(content_lower))
+        if shorter >= 20 and (subject_lower in content_lower or content_lower in subject_lower):
+            todo_id = todo['todo_id'] if isinstance(todo, dict) else todo[0]
+            logger.info(f"Substring match: '{subject[:40]}' ⊂ '{content[:40]}' → reusing {todo_id[:8]}")
+            return {'todo_id': todo_id, 'content': content, 'status': todo['status'] if isinstance(todo, dict) else todo[2]}
+
+        # Strategy 2: Fuzzy similarity
+        ratio = similarity_ratio(subject, content)
+        if ratio >= threshold:
+            todo_id = todo['todo_id'] if isinstance(todo, dict) else todo[0]
+            logger.info(f"Similarity match ({ratio:.0%}): '{subject[:40]}' ≈ '{content[:40]}' → reusing {todo_id[:8]}")
+            return {'todo_id': todo_id, 'content': content, 'status': todo['status'] if isinstance(todo, dict) else todo[2]}
+
+    return None
+
+
+def handle_task_create(tool_input: dict, tool_output: str, project_name: str, hook_session_id: str = None):
+    """Handle TaskCreate: insert new todo or link to existing one in claude.todos."""
     subject = tool_input.get('subject', '')
     description = tool_input.get('description', '')
     active_form = tool_input.get('activeForm', subject)
@@ -183,25 +253,33 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str):
 
         session_id = get_current_session_id(project_name, conn)
 
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO claude.todos (project_id, content, active_form, status, priority, created_session_id)
-            VALUES (%s::uuid, %s, %s, 'pending', 3, %s::uuid)
-            RETURNING todo_id::text
-        """, (project_id, subject, active_form, session_id))
+        # Check for duplicate: does a similar todo already exist?
+        existing = find_existing_todo(subject, project_id, conn)
 
-        row = cur.fetchone()
-        todo_id = row['todo_id'] if isinstance(row, dict) else row[0]
+        if existing:
+            # Reuse existing todo instead of creating duplicate
+            todo_id = existing['todo_id']
+            logger.info(f"TaskCreate linked to existing todo: task #{task_number} → {todo_id[:8]}...")
+        else:
+            # Insert new todo
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO claude.todos (project_id, content, active_form, status, priority, created_session_id)
+                VALUES (%s::uuid, %s, %s, 'pending', 3, %s::uuid)
+                RETURNING todo_id::text
+            """, (project_id, subject, active_form, session_id))
+
+            row = cur.fetchone()
+            todo_id = row['todo_id'] if isinstance(row, dict) else row[0]
+            logger.info(f"TaskCreate synced: task #{task_number} → new todo {todo_id[:8]}... ({subject[:50]})")
 
         conn.commit()
         conn.close()
 
-        # Save mapping
+        # Save mapping with session_id for discipline hook scoping
         task_map = load_task_map(project_name)
         task_map[task_number] = todo_id
-        save_task_map(project_name, task_map)
-
-        logger.info(f"TaskCreate synced: task #{task_number} → todo {todo_id[:8]}... ({subject[:50]})")
+        save_task_map(project_name, task_map, session_id=hook_session_id)
 
     except Exception as e:
         logger.error(f"Failed to sync TaskCreate: {e}")
@@ -280,7 +358,11 @@ def main():
 
     tool_name = hook_input.get('tool_name', '')
     tool_input = hook_input.get('tool_input', {})
-    tool_output = hook_input.get('tool_output', '')
+    # Field is 'tool_response' (NOT 'tool_output' - that doesn't exist)
+    tool_output = hook_input.get('tool_response', '')
+    # Ensure string for regex matching
+    if not isinstance(tool_output, str):
+        tool_output = json.dumps(tool_output) if tool_output else ''
 
     # Only handle TaskCreate and TaskUpdate
     if tool_name not in ('TaskCreate', 'TaskUpdate'):
@@ -291,8 +373,11 @@ def main():
     cwd = hook_input.get('cwd', os.getcwd())
     project_name = os.path.basename(cwd.rstrip('/\\'))
 
+    # Pass session_id from hook_input for map file scoping
+    hook_session_id = hook_input.get('session_id', '')
+
     if tool_name == 'TaskCreate':
-        handle_task_create(tool_input, tool_output, project_name)
+        handle_task_create(tool_input, tool_output, project_name, hook_session_id)
     elif tool_name == 'TaskUpdate':
         handle_task_update(tool_input, tool_output, project_name)
 
