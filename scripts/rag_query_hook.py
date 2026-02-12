@@ -763,7 +763,7 @@ def process_implicit_feedback(conn, user_prompt: str, session_id: str = None):
 
 
 def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
-                    top_k: int = 3, min_similarity: float = 0.40) -> str:
+                    top_k: int = 3, min_similarity: float = 0.55) -> str:
     """Query knowledge table for relevant entries.
 
     Args:
@@ -1142,7 +1142,7 @@ def query_nimbus_context(user_prompt: str, project_name: str, top_k: int = 3) ->
 
 
 def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
-                    top_k: int = 3, min_similarity: float = 0.30) -> str:
+                    top_k: int = 3, min_similarity: float = 0.45) -> str:
     """Query vault embeddings and return formatted context.
 
     Args:
@@ -1507,7 +1507,7 @@ def main():
                 project_name=project_name,
                 session_id=session_id,
                 top_k=2,
-                min_similarity=0.45
+                min_similarity=0.55
             )
 
             # Query RAG (vault knowledge - documentation)
@@ -1516,7 +1516,7 @@ def main():
                 project_name=project_name,
                 session_id=session_id,
                 top_k=3,
-                min_similarity=0.30
+                min_similarity=0.45
             )
 
             # Query NIMBUS CONTEXT (keyword search for Nimbus projects only)
