@@ -1,8 +1,8 @@
 # Architecture - Claude Family Infrastructure
 
 **Project**: claude-family
-**Version**: 1.3
-**Updated**: 2026-01-04
+**Version**: 1.4
+**Updated**: 2026-02-10
 **Status**: Active
 
 ---
@@ -57,7 +57,7 @@ Multiple Claude Code instances can run simultaneously, each working on different
 - Slash commands (session-start, session-end, etc.)
 - Global CLAUDE.md (`~/.claude/CLAUDE.md`)
 - Database access via MCP postgres server
-- Memory graph via MCP memory server
+- Work tracking via MCP project-tools server
 
 ### 2. Project Layer
 
@@ -91,11 +91,12 @@ Model Context Protocol servers provide Claude instances with capabilities:
 | Server | Purpose |
 |--------|---------|
 | postgres | Database access, session logging |
-| memory | Persistent knowledge graph |
-| filesystem | File operations |
 | orchestrator | Agent spawning, messages |
 | python-repl | Python execution |
 | sequential-thinking | Complex problem solving |
+| project-tools | Work tracking, session facts, knowledge |
+| nimbus-knowledge | Entity search, patterns (Nimbus projects) |
+| mui | MUI component documentation |
 
 ### 5. Mission Control Web (MCW)
 

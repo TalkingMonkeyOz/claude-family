@@ -2,22 +2,30 @@
 """
 TaskCreate/TaskUpdate Sync Hook - PostToolUse Hook for Claude Code
 
-Intercepts TaskCreate and TaskUpdate tool calls and syncs them to claude.todos.
-This bridges the gap where TaskList (in-memory, session-scoped) items are lost
-on session end, while claude.todos persist across sessions.
+Intercepts TaskCreate and TaskUpdate tool calls and syncs them to claude.todos
+and claude.build_tasks. This bridges the gap where TaskList (in-memory, session-scoped)
+items are lost on session end, while database records persist across sessions.
 
 Hook Event: PostToolUse
 Triggers On: tool_name='TaskCreate' or tool_name='TaskUpdate'
 
 What it does:
-1. On TaskCreate: Inserts a new todo into claude.todos
-2. On TaskUpdate (status change): Updates the corresponding todo status
-3. Stores task_number → todo_id mapping in a temp file for correlation
+1. On TaskCreate:
+   - Inserts a new todo into claude.todos (or reuses existing)
+   - Checks for matching build_tasks using similarity matching (75% threshold)
+   - If matched, stores bt_code/bt_task_id in task_map for bridging
+2. On TaskUpdate (status change):
+   - Updates the corresponding todo status
+   - If bridged to build_task, updates build_task status
+   - On completion, checks if all tasks for parent feature are done
+   - Logs audit_log entries for build_task transitions
+3. Stores task_number → {todo_id, bt_code?, bt_task_id?} mapping in temp file
 
 Output: Standard hook JSON (no additional context needed for PostToolUse)
 
 Author: Claude Family
 Date: 2026-02-08
+Updated: 2026-02-11 (Added build_task bridging - BT318)
 """
 
 import json
@@ -225,8 +233,54 @@ def find_existing_todo(subject: str, project_id: str, conn, threshold: float = 0
     return None
 
 
+def find_matching_build_task(subject: str, project_name: str, conn, threshold: float = 0.75) -> dict:
+    """Find an active build_task that matches the task subject.
+
+    Queries build_tasks with status todo/in_progress and uses similarity matching.
+    Returns dict with {bt_code, bt_task_id, task_name} or None if no match.
+    """
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 'BT' || bt.short_code as code, bt.task_name, bt.task_id::text, bt.status
+        FROM claude.build_tasks bt
+        JOIN claude.features f ON bt.feature_id = f.feature_id
+        JOIN claude.projects p ON f.project_id = p.project_id
+        WHERE p.project_name = %s
+          AND bt.status IN ('todo', 'in_progress')
+        ORDER BY bt.created_at DESC
+        LIMIT 50
+    """, (project_name,))
+
+    build_tasks = cur.fetchall()
+    if not build_tasks:
+        return None
+
+    subject_lower = subject.lower().strip()
+
+    for bt in build_tasks:
+        task_name = bt['task_name'] if isinstance(bt, dict) else bt[1]
+        task_name_lower = task_name.lower().strip()
+
+        # Use the existing similarity_ratio function
+        ratio = similarity_ratio(subject, task_name)
+        if ratio >= threshold:
+            bt_code = bt['code'] if isinstance(bt, dict) else bt[0]
+            bt_task_id = bt['task_id'] if isinstance(bt, dict) else bt[2]
+            logger.info(f"Build task match ({ratio:.0%}): '{subject[:40]}' ≈ '{task_name[:40]}' → {bt_code}")
+            return {
+                'bt_code': bt_code,
+                'bt_task_id': bt_task_id,
+                'task_name': task_name
+            }
+
+    return None
+
+
 def handle_task_create(tool_input: dict, tool_output: str, project_name: str, hook_session_id: str = None):
-    """Handle TaskCreate: insert new todo or link to existing one in claude.todos."""
+    """Handle TaskCreate: insert new todo or link to existing one in claude.todos.
+
+    Also checks for matching build_tasks and creates a bridge if found.
+    """
     subject = tool_input.get('subject', '')
     description = tool_input.get('description', '')
     active_form = tool_input.get('activeForm', subject)
@@ -273,12 +327,26 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
             todo_id = row['todo_id'] if isinstance(row, dict) else row[0]
             logger.info(f"TaskCreate synced: task #{task_number} → new todo {todo_id[:8]}... ({subject[:50]})")
 
+        # NEW: Check for matching build_task
+        matched_bt = find_matching_build_task(subject, project_name, conn)
+
         conn.commit()
         conn.close()
 
         # Save mapping with session_id for discipline hook scoping
         task_map = load_task_map(project_name)
-        task_map[task_number] = todo_id
+
+        # Store todo_id plus optional build_task bridge
+        if matched_bt:
+            task_map[task_number] = {
+                "todo_id": todo_id,
+                "bt_code": matched_bt['bt_code'],
+                "bt_task_id": matched_bt['bt_task_id']
+            }
+            logger.info(f"Task #{task_number} bridged to {matched_bt['bt_code']}")
+        else:
+            task_map[task_number] = {"todo_id": todo_id}
+
         save_task_map(project_name, task_map, session_id=hook_session_id)
 
     except Exception as e:
@@ -291,20 +359,34 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
 
 
 def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
-    """Handle TaskUpdate: update todo status in claude.todos."""
+    """Handle TaskUpdate: update todo status in claude.todos.
+
+    If the task is bridged to a build_task, also updates the build_task status
+    and checks for feature completion.
+    """
     task_id = tool_input.get('taskId', '')
     new_status = tool_input.get('status', '')
 
     if not task_id or not new_status:
         return  # Not a status update, skip
 
-    # Look up the todo_id from our mapping
+    # Look up the todo_id (and optional build_task) from our mapping
     task_map = load_task_map(project_name)
-    todo_id = task_map.get(str(task_id))
+    map_entry = task_map.get(str(task_id))
 
-    if not todo_id:
+    if not map_entry:
         logger.debug(f"No todo mapping for task #{task_id} - may be pre-existing")
         return
+
+    # Handle both old format (string) and new format (dict)
+    if isinstance(map_entry, str):
+        todo_id = map_entry
+        bt_task_id = None
+        bt_code = None
+    else:
+        todo_id = map_entry.get('todo_id')
+        bt_task_id = map_entry.get('bt_task_id')
+        bt_code = map_entry.get('bt_code')
 
     conn = get_db_connection()
     if not conn:
@@ -312,9 +394,9 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
 
     try:
         session_id = get_current_session_id(project_name, conn)
-
         cur = conn.cursor()
 
+        # Update the todo status
         if new_status == 'deleted':
             cur.execute("""
                 UPDATE claude.todos
@@ -334,10 +416,55 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
                 WHERE todo_id = %s::uuid
             """, (new_status, todo_id))
 
+        logger.info(f"TaskUpdate synced: task #{task_id} → {new_status}")
+
+        # NEW: Update build_task if bridged
+        if bt_task_id:
+            if new_status == 'completed':
+                cur.execute("""
+                    UPDATE claude.build_tasks
+                    SET status = 'completed', completed_at = NOW()
+                    WHERE task_id = %s::uuid
+                """, (bt_task_id,))
+
+                # Insert audit log entry
+                cur.execute("""
+                    INSERT INTO claude.audit_log (entity_type, entity_id, entity_code, change_source, from_status, to_status)
+                    VALUES ('build_tasks', %s::uuid, %s, 'task_sync_hook', 'in_progress', 'completed')
+                """, (bt_task_id, bt_code))
+
+                logger.info(f"Build task {bt_code} marked completed")
+
+                # Check if all tasks for the parent feature are done
+                cur.execute("""
+                    SELECT COUNT(*) FILTER (WHERE status NOT IN ('completed', 'cancelled')) as remaining
+                    FROM claude.build_tasks
+                    WHERE feature_id = (SELECT feature_id FROM claude.build_tasks WHERE task_id = %s::uuid)
+                """, (bt_task_id,))
+
+                row = cur.fetchone()
+                remaining = row['remaining'] if isinstance(row, dict) else row[0]
+
+                if remaining == 0:
+                    logger.info(f"All tasks for feature complete - consider advancing feature status (triggered by {bt_code})")
+
+            elif new_status == 'in_progress':
+                cur.execute("""
+                    UPDATE claude.build_tasks
+                    SET status = 'in_progress', started_at = NOW()
+                    WHERE task_id = %s::uuid AND status = 'todo'
+                """, (bt_task_id,))
+
+                # Insert audit log entry
+                cur.execute("""
+                    INSERT INTO claude.audit_log (entity_type, entity_id, entity_code, change_source, from_status, to_status)
+                    VALUES ('build_tasks', %s::uuid, %s, 'task_sync_hook', 'todo', 'in_progress')
+                """, (bt_task_id, bt_code))
+
+                logger.info(f"Build task {bt_code} started")
+
         conn.commit()
         conn.close()
-
-        logger.info(f"TaskUpdate synced: task #{task_id} → {new_status}")
 
     except Exception as e:
         logger.error(f"Failed to sync TaskUpdate: {e}")

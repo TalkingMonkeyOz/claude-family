@@ -104,10 +104,11 @@ Available across all projects (varies by platform):
 
 ---
 
-**Version**: 1.3
+**Version**: 1.4
 **Created**: 2025-12-20
-**Updated**: 2026-01-19
+**Updated**: 2026-02-10
 **Location**: knowledge-vault/40-Procedures/Family Rules.md
 **Changelog**:
+- 1.4: Verified deprecated MCP servers removed (memory, vault-rag, filesystem)
 - 1.3: Fixed shared_knowledge→knowledge, updated MCP servers (removed deprecated)
 - 1.2: Added Desktop platform to MCP servers table

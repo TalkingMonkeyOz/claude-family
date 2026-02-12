@@ -25,17 +25,15 @@ Output Format:
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
 # This ensures Claude always has the input processing workflow fresh in context.
-# ~110 tokens - contract-style enforcement for task discipline.
+# ~80 tokens - core behavioral rules injected every prompt.
 
 CORE_PROTOCOL = """
-## ⛔ TASK DISCIPLINE
-
-**BEFORE responding to any request:** call TaskCreate for each action you will take.
-No tool calls until tasks are created. Mark in_progress when starting, completed when done.
-Short questions/confirmations don't need tasks.
-
-**MCP-first:** Use project-tools MCP (ToolSearch first) before raw SQL for writes to claude.* tables.
-**Notepad:** Use store_session_fact for decisions, credentials, findings - they survive compaction.
+**RULES (every prompt, no exceptions):**
+1. Break user input into tasks (TaskCreate) before any action. No code, writes, or edits without tasks.
+2. Never guess. Never assume. Verify via DB/file/grep before any claim.
+3. Before code or raw SQL: STOP. Check if an MCP tool does this (project-tools has 40+ tools).
+4. Config changes: use update_claude_md/sync_profile/deploy_project/regenerate_settings (NOT manual edits).
+5. store_session_fact for decisions/credentials/findings (survives compaction).
 """
 
 import json
@@ -668,7 +666,8 @@ def update_doc_quality(conn, doc_path: str, is_hit: bool):
             if result:
                 miss_count = result[0] if not isinstance(result, dict) else result['miss_count']
                 flagged = result[1] if not isinstance(result, dict) else result['flagged_for_review']
-                if flagged:
+                # Only warn on the exact transition to flagged (miss_count == 3), not on every subsequent miss
+                if flagged and miss_count == 3:
                     logger.warning(f"Doc flagged for review after {miss_count} misses: {doc_path}")
 
         conn.commit()
@@ -708,201 +707,12 @@ def detect_config_keywords(user_prompt: str) -> bool:
 
 
 def get_session_context(project_name: str) -> Optional[str]:
-    """Query database for session context: todos, focus, last session summary.
+    """Deprecated: Session context now served by project-tools get_work_context MCP tool.
 
-    Returns formatted context string or None if no context available.
+    Returns None - callers should use get_work_context(scope='project') instead.
     """
-    if not DB_AVAILABLE:
-        return None
-
-    conn = get_db_connection()
-    if not conn:
-        return None
-
-    try:
-        import time
-        start_time = time.time()
-        cur = conn.cursor()
-        context_lines = []
-
-        # 1. Get project_id
-        cur.execute("""
-            SELECT project_id::text FROM claude.projects WHERE project_name = %s
-        """, (project_name,))
-        project_row = cur.fetchone()
-        if not project_row:
-            conn.close()
-            return None
-        project_id = project_row['project_id'] if isinstance(project_row, dict) else project_row[0]
-
-        # 2. Get active todos from claude.todos (source of truth)
-        cur.execute("""
-            SELECT content, status, priority
-            FROM claude.todos
-            WHERE project_id = %s::uuid
-              AND is_deleted = false
-              AND status IN ('pending', 'in_progress')
-            ORDER BY
-                CASE status WHEN 'in_progress' THEN 1 ELSE 2 END,
-                priority ASC,
-                created_at ASC
-            LIMIT 10
-        """, (project_id,))
-        todos = cur.fetchall()
-
-        # 3. Get session_state (current_focus, next_steps)
-        cur.execute("""
-            SELECT current_focus, next_steps, updated_at
-            FROM claude.session_state
-            WHERE project_name = %s
-        """, (project_name,))
-        state_row = cur.fetchone()
-
-        # 4. Get last completed session summary
-        cur.execute("""
-            SELECT session_summary, session_end, tasks_completed
-            FROM claude.sessions
-            WHERE project_name = %s AND session_end IS NOT NULL
-            ORDER BY session_end DESC
-            LIMIT 1
-        """, (project_name,))
-        last_session = cur.fetchone()
-
-        # 5. Check for pending messages
-        cur.execute("""
-            SELECT COUNT(*) as count
-            FROM claude.messages
-            WHERE status = 'pending'
-              AND (to_project = %s OR message_type = 'broadcast')
-        """, (project_name,))
-        msg_row = cur.fetchone()
-        msg_count = msg_row['count'] if isinstance(msg_row, dict) else msg_row[0]
-
-        # 6. Get active features + ready build tasks
-        cur.execute("""
-            SELECT f.feature_name, f.status, 'F' || f.short_code as code,
-                   (SELECT COUNT(*) FROM claude.build_tasks bt
-                    WHERE bt.feature_id = f.feature_id AND bt.status IN ('todo', 'in_progress')) as pending_tasks
-            FROM claude.features f
-            WHERE f.project_id = %s::uuid AND f.status IN ('in_progress', 'planned')
-            ORDER BY f.updated_at DESC LIMIT 5
-        """, (project_id,))
-        features = cur.fetchall()
-
-        cur.execute("""
-            SELECT bt.task_name, bt.status, 'BT' || bt.short_code as code,
-                   'F' || f.short_code as feature_code
-            FROM claude.build_tasks bt
-            JOIN claude.features f ON bt.feature_id = f.feature_id
-            WHERE bt.project_id = %s::uuid AND bt.status = 'todo'
-              AND (bt.blocked_by_task_id IS NULL
-                OR bt.blocked_by_task_id IN (SELECT task_id FROM claude.build_tasks WHERE status = 'completed'))
-            ORDER BY bt.step_order ASC LIMIT 5
-        """, (project_id,))
-        ready_tasks = cur.fetchall()
-
-        conn.close()
-
-        latency_ms = int((time.time() - start_time) * 1000)
-
-        # Format context
-        context_lines.append("")
-        context_lines.append("=" * 70)
-        context_lines.append(f"SESSION CONTEXT (from database, {latency_ms}ms)")
-        context_lines.append("=" * 70)
-
-        # Last session info
-        if last_session:
-            summary = last_session['session_summary'] if isinstance(last_session, dict) else last_session[0]
-            end_time = last_session['session_end'] if isinstance(last_session, dict) else last_session[1]
-            if summary:
-                context_lines.append("")
-                context_lines.append(f"📅 LAST SESSION ({end_time.strftime('%Y-%m-%d %H:%M') if end_time else 'unknown'}):")
-                context_lines.append(f"   {summary[:300]}{'...' if len(summary) > 300 else ''}")
-
-        # Current focus
-        if state_row:
-            focus = state_row['current_focus'] if isinstance(state_row, dict) else state_row[0]
-            next_steps = state_row['next_steps'] if isinstance(state_row, dict) else state_row[1]
-
-            if focus:
-                context_lines.append("")
-                context_lines.append(f"🎯 CURRENT FOCUS: {focus}")
-
-            if next_steps:
-                context_lines.append("")
-                context_lines.append("📋 NEXT STEPS (from last session):")
-                if isinstance(next_steps, list):
-                    for i, step in enumerate(next_steps[:5], 1):
-                        step_text = step.get('content', str(step)) if isinstance(step, dict) else str(step)
-                        context_lines.append(f"   {i}. {step_text}")
-                elif isinstance(next_steps, str):
-                    context_lines.append(f"   {next_steps}")
-
-        # Active todos
-        if todos:
-            in_progress = [t for t in todos if (t['status'] if isinstance(t, dict) else t[1]) == 'in_progress']
-            pending = [t for t in todos if (t['status'] if isinstance(t, dict) else t[1]) == 'pending']
-
-            context_lines.append("")
-            context_lines.append(f"✅ ACTIVE TODOS ({len(todos)} total):")
-
-            if in_progress:
-                context_lines.append("   In Progress:")
-                for t in in_progress[:3]:
-                    content = t['content'] if isinstance(t, dict) else t[0]
-                    context_lines.append(f"      → {content}")
-
-            if pending:
-                context_lines.append("   Pending:")
-                for t in pending[:5]:
-                    content = t['content'] if isinstance(t, dict) else t[0]
-                    priority = t['priority'] if isinstance(t, dict) else t[2]
-                    p_icon = "🔴" if priority == 1 else "🟡" if priority == 2 else "🔵"
-                    context_lines.append(f"      {p_icon} {content}")
-                if len(pending) > 5:
-                    context_lines.append(f"      ... and {len(pending) - 5} more")
-
-        # Active features + ready tasks
-        if features:
-            context_lines.append("")
-            context_lines.append(f"🏗️ ACTIVE FEATURES ({len(features)}):")
-            for f in features:
-                name = f['feature_name'] if isinstance(f, dict) else f[0]
-                status = f['status'] if isinstance(f, dict) else f[1]
-                code = f['code'] if isinstance(f, dict) else f[2]
-                pending = f['pending_tasks'] if isinstance(f, dict) else f[3]
-                context_lines.append(f"      [{code}] {name} ({status}, {pending} tasks remaining)")
-
-        if ready_tasks:
-            context_lines.append("")
-            context_lines.append(f"🔨 READY TASKS ({len(ready_tasks)}):")
-            for t in ready_tasks:
-                name = t['task_name'] if isinstance(t, dict) else t[0]
-                code = t['code'] if isinstance(t, dict) else t[2]
-                fc = t['feature_code'] if isinstance(t, dict) else t[3]
-                context_lines.append(f"      [{code}] {name} (from {fc})")
-
-        # Message count
-        if msg_count > 0:
-            context_lines.append("")
-            context_lines.append(f"📬 INBOX: {msg_count} pending message(s) - use mcp__orchestrator__check_inbox")
-
-        context_lines.append("")
-        context_lines.append("-" * 70)
-        context_lines.append("")
-
-        logger.info(f"Session context loaded: {len(todos)} todos, focus={'yes' if state_row else 'no'}, latency={latency_ms}ms")
-        return "\n".join(context_lines)
-
-    except Exception as e:
-        logger.error(f"Failed to get session context: {e}", exc_info=True)
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return None
+    logger.info("get_session_context called but deprecated - use get_work_context MCP tool")
+    return None
 
 
 def process_implicit_feedback(conn, user_prompt: str, session_id: str = None):
@@ -1609,7 +1419,7 @@ def main():
     """Main hook entry point.
 
     Injects context into Claude's prompt based on what's needed:
-    - ALWAYS: Core protocol (~50 tokens) + session facts (~100 tokens)
+    - ALWAYS: Core principles (~80 tokens) + session facts (~100 tokens)
     - CONDITIONAL: Session context (on session keywords), config warning (on config keywords)
     - ON-DEMAND: RAG + knowledge (only for questions/exploration, not actions)
     - REMOVED: Skill suggestions (never acted on), periodic reminders (use hooks instead)
@@ -1671,12 +1481,9 @@ def main():
             limit=5
         )
 
-        # SESSION CONTEXT: Check for session-related keywords and inject context
-        # This implements the "progressive context loading" pattern from Anthropic
+        # SESSION CONTEXT: Removed (2026-02-10) - now served by get_work_context MCP tool
+        # Use: ToolSearch("get_work_context") → get_work_context(scope="project")
         session_context = None
-        if detect_session_keywords(user_prompt):
-            logger.info("Session keywords detected - loading session context from database")
-            session_context = get_session_context(project_name)
 
         # CONFIG WARNING: Detect if user is asking about config files
         # These files are database-generated and should not be manually edited

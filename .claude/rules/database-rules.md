@@ -24,23 +24,6 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 | `claude.features` | Feature tracking |
 | `claude.projects` | Project registry |
 
-## MCP-First (Use BEFORE Raw SQL)
-
-Raw SQL to claude.* tables is PROHIBITED when an MCP tool exists.
-
-| Instead of... | Use This (ToolSearch first) |
-|---------------|-----------------------------|
-| `INSERT INTO claude.feedback` | `project-tools.create_feedback` |
-| `INSERT INTO claude.features` | `project-tools.create_feature` |
-| `INSERT INTO claude.build_tasks` | `project-tools.add_build_task` |
-| `UPDATE claude.*.status` | `project-tools.update_work_status` |
-| `SELECT...build_tasks WHERE status='todo'` | `project-tools.get_ready_tasks` |
-| `INSERT INTO claude.knowledge` | `project-tools.store_knowledge` |
-| `SELECT FROM claude.knowledge` | `project-tools.recall_knowledge` |
-| `INSERT INTO claude.session_facts` | `project-tools.store_session_fact` |
-
-Raw SQL is OK for: SELECT queries without MCP equivalent, analytics, schema inspection.
-
 ## Common Constraints
 
 - `status` fields: Check registry (varies by table)

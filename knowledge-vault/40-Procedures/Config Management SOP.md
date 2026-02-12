@@ -106,6 +106,73 @@ WHERE template_name = 'hooks-base';
 
 ---
 
+## v3 Config Tools (MCP)
+
+**New in v3**: Config operations now available as MCP tools that handle file + DB atomically.
+
+### Available Tools
+
+| Tool | Purpose | Example |
+|------|---------|---------|
+| `update_claude_md(section, content)` | Update CLAUDE.md sections | Update "Architecture Overview" section |
+| `sync_profile(direction)` | Sync file ↔ DB | "file_to_db" or "db_to_file" |
+| `deploy_project(components)` | Deploy from DB to files | ["skills", "instructions", "rules"] |
+| `regenerate_settings()` | Regenerate settings.local.json | Force config refresh |
+
+### Benefits
+
+1. **Atomic operations**: File and database updated together (no drift)
+2. **Audit trail**: All changes logged to `config_deployment_log`
+3. **No manual SQL**: Tools handle validation and constraints
+4. **Idempotent**: Safe to re-run
+
+### Usage Examples
+
+**Update CLAUDE.md section**:
+```python
+# Via MCP tool
+update_claude_md(
+  section="Architecture Overview",
+  content="New architecture description..."
+)
+# Updates: CLAUDE.md file + profiles.config->'behavior'
+```
+
+**Sync configuration**:
+```python
+# File → Database
+sync_profile(direction="file_to_db")
+
+# Database → File
+sync_profile(direction="db_to_file")
+```
+
+**Deploy components**:
+```python
+# Deploy all skills from DB to .claude/skills/
+deploy_project(components=["skills"])
+
+# Deploy multiple
+deploy_project(components=["skills", "instructions", "rules"])
+```
+
+**Regenerate settings**:
+```python
+# Force regeneration from DB
+regenerate_settings()
+# Recreates .claude/settings.local.json
+```
+
+### When to Use
+
+- ✅ **Use tools**: When you need to update config during a session
+- ✅ **Use SQL**: When seeding initial data or bulk operations
+- ⚠️ **Never manual file edits**: Files regenerate from DB
+
+**See**: [[Application Layer v3]] for full v3 architecture.
+
+---
+
 ## Inspecting Configuration
 
 **Current generated config**:
@@ -261,7 +328,7 @@ If project has manual `.claude/settings.local.json`:
 
 ---
 
-**Version**: 3.1 (Added profiles table for CLAUDE.md)
+**Version**: 3.2 (Added v3 MCP config tools)
 **Created**: 2025-12-27
-**Updated**: 2026-01-11
+**Updated**: 2026-02-11
 **Location**: 40-Procedures/Config Management SOP.md

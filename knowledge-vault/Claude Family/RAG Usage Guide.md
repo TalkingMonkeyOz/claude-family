@@ -653,8 +653,8 @@ NIMBUS PROJECT CONTEXT (5 entries, 12ms)
 
 ---
 
-**Version**: 3.0
+**Version**: 3.1
 **Created**: 2025-12-30
-**Updated**: 2026-02-07
+**Updated**: 2026-02-10
 **Location**: Claude Family/RAG Usage Guide.md
-**Changes**: Removed all vault-rag MCP references (removed 2026-01). RAG is now fully automatic via hook. Manual search via project-tools recall_knowledge.
+**Changes**: Verified vault-rag MCP removal (2026-01). RAG automatic via hook. Manual search via project-tools recall_knowledge.

@@ -1,0 +1,3425 @@
+#!/usr/bin/env python3
+"""
+Claude Project Tools v2 - Application Layer MCP Server
+
+Rebuilt from CRUD wrapper to outcome-level application layer using FastMCP.
+Self-documenting schemas via type hints (Literal → enum, defaults, docstrings).
+
+Phase 1: Foundation + Schema
+- start_session: Returns ALL context in one call (replaces 4+ separate tools)
+- get_schema: Compact schema reference with constraints inlined
+- end_session: Saves state, closes session, captures knowledge
+- save_checkpoint: Mid-session state save
+
+Plus all existing tools from server.py (backward compatibility).
+
+Author: Claude Family
+Created: 2026-02-10
+"""
+
+import json
+import os
+import sys
+import re
+import glob
+from typing import Any, Literal, Optional
+from datetime import datetime
+from pathlib import Path
+
+# ============================================================================
+# FastMCP Setup
+# ============================================================================
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(
+    "claude-project-tools",
+    instructions=(
+        "Project-aware tooling for Claude Family development. "
+        "Use start_session at the beginning of work. "
+        "Use get_schema when you need to understand database tables. "
+        "Use end_session when finishing work."
+    ),
+)
+
+# ============================================================================
+# Database Connection (shared with server.py)
+# ============================================================================
+
+# PostgreSQL (supports both psycopg2 and psycopg3)
+POSTGRES_AVAILABLE = False
+psycopg = None
+PSYCOPG_VERSION = 0
+
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    POSTGRES_AVAILABLE = True
+    PSYCOPG_VERSION = 3
+except ImportError:
+    try:
+        import psycopg2 as psycopg
+        from psycopg2.extras import RealDictCursor
+        POSTGRES_AVAILABLE = True
+        PSYCOPG_VERSION = 2
+    except ImportError:
+        print("ERROR: Neither psycopg nor psycopg2 installed.", file=sys.stderr)
+        sys.exit(1)
+
+
+def get_db_connection():
+    """Get PostgreSQL connection."""
+    conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
+    if not conn_string:
+        raise RuntimeError("DATABASE_URI or POSTGRES_CONNECTION_STRING environment variable required")
+    if PSYCOPG_VERSION == 3:
+        return psycopg.connect(conn_string, row_factory=dict_row)
+    else:
+        return psycopg.connect(conn_string, cursor_factory=RealDictCursor)
+
+
+def get_project_id(project_identifier: str) -> Optional[str]:
+    """Get project_id from name or path."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT p.project_id::text
+            FROM claude.projects p
+            JOIN claude.workspaces w ON p.project_id = w.project_id
+            WHERE w.project_name = %s OR w.project_path = %s OR p.project_name = %s
+            LIMIT 1
+        """, (project_identifier, project_identifier, project_identifier))
+        row = cur.fetchone()
+        cur.close()
+        return row['project_id'] if row else None
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Schema Introspection Module
+# ============================================================================
+
+# Table tier system - determines which tables are shown for which project types
+TIER_1_TABLES = [
+    'sessions', 'todos', 'feedback', 'features', 'build_tasks',
+    'projects', 'workspaces', 'column_registry', 'session_state',
+    'session_facts', 'messages',
+]
+
+TIER_2_TABLES = [
+    'identities', 'knowledge', 'config_templates', 'profiles',
+    'agent_sessions', 'mcp_configs', 'context_rules', 'knowledge_relations',
+    'skill_content', 'project_type_configs',
+]
+
+# In-memory cache (schema doesn't change mid-session)
+_schema_cache: dict[str, Any] = {}
+
+
+def _get_schemas_for_project(project_name: str) -> list[str]:
+    """Get relevant schemas for a project from workspaces + project_type_configs."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT w.project_type, ptc.default_schemas
+            FROM claude.workspaces w
+            LEFT JOIN claude.project_type_configs ptc ON w.project_type = ptc.project_type
+            WHERE w.project_name = %s
+            LIMIT 1
+        """, (project_name,))
+        row = cur.fetchone()
+        cur.close()
+        if row and row.get('default_schemas'):
+            return row['default_schemas']
+        return ['claude']
+    finally:
+        conn.close()
+
+
+def _introspect_tables(schemas: list[str], tier: int = 1) -> list[dict]:
+    """Introspect tables from information_schema + column_registry.
+
+    Args:
+        schemas: List of schema names to introspect
+        tier: 1 = core tables only, 2 = include infrastructure tables
+    """
+    # Determine which tables to include
+    include_tables = list(TIER_1_TABLES)
+    if tier >= 2:
+        include_tables.extend(TIER_2_TABLES)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        tables = []
+        for schema in schemas:
+            # Get table info from information_schema
+            cur.execute("""
+                SELECT
+                    c.table_name,
+                    c.column_name,
+                    c.data_type,
+                    c.is_nullable,
+                    c.column_default,
+                    c.ordinal_position
+                FROM information_schema.columns c
+                WHERE c.table_schema = %s
+                  AND c.table_name = ANY(%s)
+                ORDER BY c.table_name, c.ordinal_position
+            """, (schema, include_tables))
+
+            columns_by_table: dict[str, list[dict]] = {}
+            for row in cur.fetchall():
+                tname = row['table_name']
+                if tname not in columns_by_table:
+                    columns_by_table[tname] = []
+                columns_by_table[tname].append({
+                    'name': row['column_name'],
+                    'type': row['data_type'],
+                    'nullable': row['is_nullable'] == 'YES',
+                    'default': row['column_default'],
+                })
+
+            # Get column_registry constraints for these tables
+            cur.execute("""
+                SELECT table_name, column_name, valid_values, description
+                FROM claude.column_registry
+                WHERE table_name = ANY(%s)
+            """, (include_tables,))
+
+            constraints: dict[str, dict[str, dict]] = {}
+            for row in cur.fetchall():
+                tname = row['table_name']
+                if tname not in constraints:
+                    constraints[tname] = {}
+                constraints[tname][row['column_name']] = {
+                    'valid_values': row['valid_values'],
+                    'description': row.get('description'),
+                }
+
+            # Get primary keys
+            cur.execute("""
+                SELECT
+                    tc.table_name,
+                    kcu.column_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                WHERE tc.constraint_type = 'PRIMARY KEY'
+                  AND tc.table_schema = %s
+                  AND tc.table_name = ANY(%s)
+            """, (schema, include_tables))
+
+            pkeys: dict[str, list[str]] = {}
+            for row in cur.fetchall():
+                tname = row['table_name']
+                if tname not in pkeys:
+                    pkeys[tname] = []
+                pkeys[tname].append(row['column_name'])
+
+            # Build table info
+            for tname, cols in sorted(columns_by_table.items()):
+                table_constraints = constraints.get(tname, {})
+
+                # Inline constraints into column info
+                for col in cols:
+                    if col['name'] in table_constraints:
+                        constraint = table_constraints[col['name']]
+                        if constraint['valid_values']:
+                            col['valid_values'] = constraint['valid_values']
+                        if constraint.get('description'):
+                            col['description'] = constraint['description']
+
+                tables.append({
+                    'schema': schema,
+                    'table': tname,
+                    'primary_key': pkeys.get(tname, []),
+                    'columns': cols,
+                })
+
+        cur.close()
+        return tables
+
+    finally:
+        conn.close()
+
+
+def _format_compact_reference(tables: list[dict]) -> str:
+    """Format tables as compact markdown reference (~600-1000 tokens)."""
+    lines = ["# Schema Reference\n"]
+
+    for tbl in tables:
+        pk_cols = set(tbl['primary_key'])
+        lines.append(f"## {tbl['schema']}.{tbl['table']}")
+
+        col_parts = []
+        for col in tbl['columns']:
+            name = col['name']
+            dtype = col['type']
+
+            # Shorten common types
+            type_map = {
+                'uuid': 'uuid',
+                'character varying': 'varchar',
+                'timestamp without time zone': 'timestamp',
+                'timestamp with time zone': 'timestamptz',
+                'ARRAY': 'text[]',
+                'boolean': 'bool',
+                'integer': 'int',
+                'text': 'text',
+                'jsonb': 'jsonb',
+                'double precision': 'float',
+                'smallint': 'smallint',
+                'numeric': 'numeric',
+                'USER-DEFINED': 'vector',
+            }
+            short_type = type_map.get(dtype, dtype)
+
+            # Build column descriptor
+            flags = []
+            if name in pk_cols:
+                flags.append('PK')
+            if not col['nullable'] and name not in pk_cols:
+                flags.append('NOT NULL')
+            if col.get('valid_values'):
+                vals = col['valid_values']
+                if len(vals) <= 8:
+                    flags.append(f"enum: {vals}")
+                else:
+                    flags.append(f"enum: {vals[:5]}... ({len(vals)} values)")
+            if col.get('description'):
+                flags.append(col['description'])
+
+            flag_str = f" ({', '.join(flags)})" if flags else ""
+            col_parts.append(f"  - {name}: {short_type}{flag_str}")
+
+        lines.append('\n'.join(col_parts))
+        lines.append('')
+
+    return '\n'.join(lines)
+
+
+# ============================================================================
+# Phase 1 Tools
+# ============================================================================
+
+@mcp.tool()
+def get_schema(
+    project: str = "",
+    detail: Literal["compact", "full"] = "compact",
+    tier: Literal[1, 2] = 1,
+) -> str:
+    """Get database schema reference with column constraints inlined.
+
+    Use when you need to understand table structures before writing SQL.
+    Returns column names, types, valid values (from column_registry), and keys.
+    Result is cached for the session - safe to call multiple times.
+
+    Args:
+        project: Project name. Defaults to current directory.
+        detail: 'compact' for readable reference, 'full' for raw JSON.
+        tier: 1 = core tables (sessions, todos, feedback, features, etc.),
+              2 = include infrastructure tables (identities, knowledge, configs).
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    cache_key = f"{project}:{detail}:{tier}"
+    if cache_key in _schema_cache:
+        return _schema_cache[cache_key]
+
+    schemas = _get_schemas_for_project(project)
+    tables = _introspect_tables(schemas, tier=tier)
+
+    if detail == "compact":
+        result = _format_compact_reference(tables)
+    else:
+        result = json.dumps(tables, indent=2, default=str)
+
+    _schema_cache[cache_key] = result
+    return result
+
+
+@mcp.tool()
+def start_session(
+    project: str = "",
+) -> dict:
+    """Start a session and get ALL context in one call.
+
+    Call this at the beginning of every work session. Returns: project info,
+    session state, active todos, work items (features + tasks), pending messages.
+
+    Use get_schema() separately if you need table structures.
+
+    Args:
+        project: Project name or path. Defaults to current directory basename.
+    """
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+
+    result: dict[str, Any] = {
+        "project_name": project,
+        "project_id": project_id,
+        "session_started_at": datetime.now().isoformat(),
+    }
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # CTE 1: Project context + session state + last session (single query)
+        cur.execute("""
+            WITH project_ctx AS (
+                SELECT p.status as project_status, p.phase, p.priority,
+                       w.project_path, w.project_type
+                FROM claude.workspaces w
+                LEFT JOIN claude.projects p ON w.project_id = p.project_id
+                WHERE w.project_name = %s
+                LIMIT 1
+            ),
+            session_st AS (
+                SELECT current_focus, next_steps
+                FROM claude.session_state
+                WHERE project_name = %s
+            ),
+            last_sess AS (
+                SELECT session_summary, session_end, tasks_completed
+                FROM claude.sessions
+                WHERE project_name = %s AND session_end IS NOT NULL
+                ORDER BY session_end DESC LIMIT 1
+            )
+            SELECT
+                (SELECT row_to_json(pc) FROM project_ctx pc) as project_ctx,
+                (SELECT row_to_json(ss) FROM session_st ss) as session_state,
+                (SELECT row_to_json(ls) FROM last_sess ls) as last_session
+        """, (project, project, project))
+        meta = cur.fetchone()
+
+        if meta and meta['project_ctx']:
+            pc = meta['project_ctx'] if isinstance(meta['project_ctx'], dict) else json.loads(meta['project_ctx'])
+            result["project_context"] = {
+                "type": pc.get('project_type'),
+                "status": pc.get('project_status'),
+                "phase": pc.get('phase'),
+                "priority": pc.get('priority'),
+                "path": pc.get('project_path'),
+            }
+        if meta and meta['session_state']:
+            ss = meta['session_state'] if isinstance(meta['session_state'], dict) else json.loads(meta['session_state'])
+            result["previous_state"] = {
+                "focus": ss.get('current_focus'),
+                "next_steps": ss.get('next_steps') or [],
+            }
+        if meta and meta['last_session']:
+            ls = meta['last_session'] if isinstance(meta['last_session'], dict) else json.loads(meta['last_session'])
+            result["last_session"] = {
+                "summary": ls.get('session_summary'),
+                "ended": ls.get('session_end'),
+                "tasks_completed": ls.get('tasks_completed') or [],
+            }
+
+        if project_id:
+            # CTE 2: Todos + features + ready tasks + feedback count (single query)
+            cur.execute("""
+                WITH todos AS (
+                    SELECT content, status, priority
+                    FROM claude.todos
+                    WHERE project_id = %s::uuid
+                      AND status IN ('pending', 'in_progress')
+                      AND NOT is_deleted
+                    ORDER BY CASE status WHEN 'in_progress' THEN 0 ELSE 1 END, priority ASC
+                    LIMIT 15
+                ),
+                features AS (
+                    SELECT
+                        'F' || f.short_code as code,
+                        f.feature_name,
+                        f.status,
+                        f.priority,
+                        (SELECT COUNT(*) FROM claude.build_tasks bt
+                         WHERE bt.feature_id = f.feature_id AND bt.status = 'completed') as tasks_done,
+                        (SELECT COUNT(*) FROM claude.build_tasks bt
+                         WHERE bt.feature_id = f.feature_id) as tasks_total
+                    FROM claude.features f
+                    WHERE f.project_id = %s::uuid
+                      AND f.status NOT IN ('completed', 'cancelled')
+                    ORDER BY f.priority, f.short_code
+                    LIMIT 10
+                ),
+                ready AS (
+                    SELECT
+                        'BT' || bt.short_code as task_code,
+                        bt.task_name,
+                        bt.task_type,
+                        bt.files_affected,
+                        'F' || f.short_code as feature_code,
+                        f.feature_name
+                    FROM claude.build_tasks bt
+                    JOIN claude.features f ON bt.feature_id = f.feature_id
+                    WHERE bt.project_id = %s::uuid AND bt.status = 'todo'
+                      AND (bt.blocked_by_task_id IS NULL
+                           OR bt.blocked_by_task_id IN (
+                               SELECT task_id FROM claude.build_tasks WHERE status = 'completed'))
+                    ORDER BY f.priority, f.short_code, bt.step_order
+                    LIMIT 5
+                ),
+                fb_count AS (
+                    SELECT COUNT(*) as count
+                    FROM claude.feedback
+                    WHERE project_id = %s::uuid
+                      AND status IN ('new', 'triaged', 'in_progress')
+                ),
+                msg_count AS (
+                    SELECT COUNT(*) as count
+                    FROM claude.messages
+                    WHERE status = 'pending'
+                      AND (to_project = %s OR to_project IS NULL)
+                )
+                SELECT
+                    (SELECT COALESCE(json_agg(row_to_json(t)), '[]') FROM todos t) as todos,
+                    (SELECT COALESCE(json_agg(row_to_json(f)), '[]') FROM features f) as features,
+                    (SELECT COALESCE(json_agg(row_to_json(r)), '[]') FROM ready r) as ready_tasks,
+                    (SELECT count FROM fb_count) as feedback_count,
+                    (SELECT count FROM msg_count) as message_count
+            """, (project_id, project_id, project_id, project_id, project))
+            work = cur.fetchone()
+
+            if work:
+                # Parse todos into buckets
+                todos_raw = work['todos']
+                if isinstance(todos_raw, str):
+                    todos_raw = json.loads(todos_raw)
+                todos = {"in_progress": [], "pending": []}
+                for t in todos_raw:
+                    bucket = "in_progress" if t['status'] == 'in_progress' else "pending"
+                    todos[bucket].append({"content": t['content'], "priority": t['priority']})
+                result["todos"] = todos
+
+                features_raw = work['features']
+                if isinstance(features_raw, str):
+                    features_raw = json.loads(features_raw)
+                result["active_features"] = features_raw
+
+                ready_raw = work['ready_tasks']
+                if isinstance(ready_raw, str):
+                    ready_raw = json.loads(ready_raw)
+                result["ready_tasks"] = ready_raw
+
+                result["pending_feedback_count"] = work['feedback_count']
+                result["pending_messages"] = work['message_count']
+
+                # Get recommended actions (unblocked todo tasks)
+                cur.execute("""
+                    SELECT 'BT' || bt.short_code as code, bt.task_name, bt.priority, bt.status,
+                           bt.verification, bt.blocked_by_task_id IS NOT NULL as is_blocked
+                    FROM claude.build_tasks bt
+                    JOIN claude.features f ON bt.feature_id = f.feature_id
+                    WHERE f.project_id = %s::uuid AND bt.status = 'todo'
+                      AND bt.blocked_by_task_id IS NULL  -- only unblocked tasks
+                    ORDER BY bt.priority, bt.short_code
+                    LIMIT 10
+                """, (project_id,))
+                recommended_raw = cur.fetchall()
+                result["recommended_actions"] = [dict(r) for r in recommended_raw]
+                result["recommended_actions_note"] = "Use TaskCreate for each task you plan to work on this session"
+
+                # Recent decisions from session facts
+                try:
+                    cur.execute("""
+                        SELECT sf.fact_key, sf.fact_value, sf.fact_type, s.session_start
+                        FROM claude.session_facts sf
+                        JOIN claude.sessions s ON sf.session_id = s.session_id
+                        WHERE s.project_name = %s
+                          AND sf.fact_type = 'decision'
+                        ORDER BY sf.created_at DESC
+                        LIMIT 10
+                    """, (project,))
+                    result["recent_decisions"] = [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    result["recent_decisions"] = []
+
+                # Relevant knowledge for this project
+                try:
+                    cur.execute("""
+                        SELECT k.title, k.description, k.knowledge_type, k.knowledge_category,
+                               k.confidence_level, k.created_at
+                        FROM claude.knowledge k
+                        WHERE (k.applies_to_projects IS NULL OR %s = ANY(k.applies_to_projects))
+                        ORDER BY k.created_at DESC
+                        LIMIT 5
+                    """, (project,))
+                    result["relevant_knowledge"] = [dict(r) for r in cur.fetchall()]
+                except Exception:
+                    result["relevant_knowledge"] = []
+        else:
+            # No project_id - still get messages
+            cur.execute("""
+                SELECT COUNT(*) as count FROM claude.messages
+                WHERE status = 'pending' AND (to_project = %s OR to_project IS NULL)
+            """, (project,))
+            result["pending_messages"] = cur.fetchone()['count']
+
+        cur.close()
+
+    finally:
+        conn.close()
+
+    return result
+
+
+def _extract_turns_from_jsonl(project: str, session_id: str = "") -> tuple[list[dict], str, str | None]:
+    """Helper function to extract conversation turns from JSONL file.
+
+    Returns:
+        Tuple of (turns, jsonl_file_path, warning_message)
+    """
+    # Find project directory in ~/.claude/projects/
+    home = Path.home()
+    projects_dir = home / ".claude" / "projects"
+
+    if not projects_dir.exists():
+        raise FileNotFoundError(f"Projects directory not found: {projects_dir}")
+
+    # Search for project directory (format: C--Projects-project-name)
+    project_dirs = list(projects_dir.glob(f"*{project.replace('/', '-').replace('\\', '-')}*"))
+
+    if not project_dirs:
+        raise FileNotFoundError(f"No project directory found for '{project}' in {projects_dir}")
+
+    project_dir = project_dirs[0]  # Take first match
+
+    # Find JSONL file
+    jsonl_files = list(project_dir.glob("*.jsonl"))
+
+    if not jsonl_files:
+        raise FileNotFoundError(f"No JSONL files found in {project_dir}")
+
+    # Filter by session_id if provided, otherwise get most recent
+    if session_id:
+        matching = [f for f in jsonl_files if session_id.lower() in f.name.lower()]
+        if not matching:
+            raise FileNotFoundError(f"No JSONL file found matching session_id '{session_id}'")
+        jsonl_file = matching[0]
+    else:
+        # Most recent by modification time
+        jsonl_file = max(jsonl_files, key=lambda f: f.stat().st_mtime)
+
+    # Check file size (limit to 10MB)
+    file_size_mb = jsonl_file.stat().st_size / (1024 * 1024)
+    truncate_warning = None
+    if file_size_mb > 10:
+        truncate_warning = f"File size {file_size_mb:.1f}MB > 10MB. Reading last 500 turns only."
+
+    # Parse JSONL
+    turns = []
+    with open(jsonl_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            if not line.strip():
+                continue
+            try:
+                entry = json.loads(line)
+                msg_type = entry.get('type')
+
+                if msg_type == 'user':
+                    # User message: content is in message.content
+                    content = entry.get('message', {}).get('content', '')
+                    if content:
+                        turns.append({"role": "user", "content": content})
+
+                elif msg_type == 'assistant':
+                    # Assistant message: extract text blocks only (skip tool_use)
+                    message = entry.get('message', {})
+                    content_blocks = message.get('content', [])
+
+                    if isinstance(content_blocks, str):
+                        turns.append({"role": "assistant", "content": content_blocks})
+                    elif isinstance(content_blocks, list):
+                        text_parts = []
+                        for block in content_blocks:
+                            if isinstance(block, dict) and block.get('type') == 'text':
+                                text_parts.append(block.get('text', ''))
+                        if text_parts:
+                            turns.append({"role": "assistant", "content": '\n\n'.join(text_parts)})
+
+            except json.JSONDecodeError:
+                continue  # Skip malformed lines
+
+    # Truncate if necessary
+    if truncate_warning and len(turns) > 500:
+        turns = turns[-500:]
+
+    return turns, str(jsonl_file), truncate_warning
+
+
+@mcp.tool()
+def end_session(
+    summary: str,
+    next_steps: list[str] | None = None,
+    tasks_completed: list[str] | None = None,
+    learnings: list[str] | None = None,
+    project: str = "",
+) -> dict:
+    """End the current session and save state to database.
+
+    Call this when finishing work. Saves summary, next steps, and learnings
+    so the next session can pick up where you left off.
+
+    Args:
+        summary: Brief summary of what was accomplished this session.
+        next_steps: List of things to do next session.
+        tasks_completed: List of completed task descriptions.
+        learnings: Key learnings or insights from this session.
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    next_steps = next_steps or []
+    tasks_completed = tasks_completed or []
+    learnings = learnings or []
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        results = {}
+
+        # 1. Close the session record
+        if session_id:
+            cur.execute("""
+                UPDATE claude.sessions
+                SET session_end = NOW(),
+                    session_summary = %s,
+                    tasks_completed = %s,
+                    learnings_gained = %s
+                WHERE session_id = %s::uuid
+                  AND session_end IS NULL
+                RETURNING session_id::text
+            """, (summary, tasks_completed, learnings, session_id))
+            closed = cur.fetchone()
+            results["session_closed"] = closed is not None
+            if closed:
+                results["session_id"] = closed['session_id']
+        else:
+            # Try to close the most recent open session for this project
+            cur.execute("""
+                UPDATE claude.sessions
+                SET session_end = NOW(),
+                    session_summary = %s,
+                    tasks_completed = %s,
+                    learnings_gained = %s
+                WHERE project_name = %s
+                  AND session_end IS NULL
+                  AND session_start > NOW() - INTERVAL '24 hours'
+                RETURNING session_id::text
+            """, (summary, tasks_completed, learnings, project))
+            closed = cur.fetchone()
+            results["session_closed"] = closed is not None
+            if closed:
+                results["session_id"] = closed['session_id']
+
+        # 2. Update session_state (upsert)
+        next_steps_json = json.dumps(next_steps) if next_steps else None
+        cur.execute("""
+            INSERT INTO claude.session_state (project_name, current_focus, next_steps, updated_at)
+            VALUES (%s, %s, %s, NOW())
+            ON CONFLICT (project_name) DO UPDATE SET
+                current_focus = EXCLUDED.current_focus,
+                next_steps = EXCLUDED.next_steps,
+                updated_at = NOW()
+        """, (project, summary, next_steps_json))
+
+        results["state_saved"] = True
+        results["next_steps_saved"] = len(next_steps)
+
+        conn.commit()
+
+        # 3. Extract and store conversation (after successful commit)
+        closed_session_id = results.get("session_id")
+        if closed_session_id:
+            try:
+                turns, jsonl_path, warning = _extract_turns_from_jsonl(project, closed_session_id)
+
+                if turns:
+                    # Calculate token estimate (rough: 1 token ≈ 4 characters)
+                    total_chars = sum(len(turn.get("content", "")) for turn in turns)
+                    token_estimate = total_chars // 4
+
+                    # Insert into conversations table
+                    cur.execute("""
+                        INSERT INTO claude.conversations (
+                            session_id, project_name, turns, turn_count,
+                            token_count_estimate, summary, extracted_at
+                        ) VALUES (
+                            %s::uuid, %s, %s::jsonb, %s, %s, %s, NOW()
+                        )
+                        RETURNING conversation_id::text
+                    """, (
+                        closed_session_id,
+                        project,
+                        json.dumps(turns),
+                        len(turns),
+                        token_estimate,
+                        summary
+                    ))
+                    conv_result = cur.fetchone()
+
+                    # Log to audit_log
+                    cur.execute("""
+                        INSERT INTO claude.audit_log (
+                            entity_type, entity_id, to_status, changed_by, change_source, metadata
+                        ) VALUES (
+                            'conversation', %s::uuid, 'extracted', 'end_session', 'end_session', %s::jsonb
+                        )
+                    """, (
+                        conv_result['conversation_id'],
+                        json.dumps({
+                            "session_id": closed_session_id,
+                            "turn_count": len(turns),
+                            "jsonl_path": jsonl_path,
+                            "truncated": warning is not None
+                        })
+                    ))
+
+                    conn.commit()
+
+                    results["conversation_extracted"] = True
+                    results["turn_count"] = len(turns)
+                    if warning:
+                        results["conversation_warning"] = warning
+                else:
+                    results["conversation_extracted"] = False
+                    results["conversation_note"] = "No turns found in JSONL"
+
+            except FileNotFoundError:
+                # Silently skip if JSONL not found
+                results["conversation_extracted"] = False
+                results["conversation_note"] = "JSONL file not found"
+            except Exception as conv_err:
+                # Don't fail the entire end_session if conversation extraction fails
+                results["conversation_extracted"] = False
+                results["conversation_error"] = str(conv_err)
+
+        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved."
+        return results
+
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"Failed to end session: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def save_checkpoint(
+    focus: str,
+    progress_notes: str = "",
+    project: str = "",
+) -> dict:
+    """Save a mid-session checkpoint without closing the session.
+
+    Use when you want to persist your current progress (e.g., before a risky
+    operation, or periodically during long sessions). Does NOT close the session.
+
+    Args:
+        focus: What you're currently working on.
+        progress_notes: Brief notes on progress so far.
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Upsert session_state
+        cur.execute("""
+            INSERT INTO claude.session_state (project_name, current_focus, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (project_name) DO UPDATE SET
+                current_focus = EXCLUDED.current_focus,
+                updated_at = NOW()
+        """, (project, focus))
+
+        # Optionally update current session metadata
+        session_id = os.environ.get('CLAUDE_SESSION_ID')
+        if session_id and progress_notes:
+            cur.execute("""
+                UPDATE claude.sessions
+                SET session_metadata = COALESCE(session_metadata, '{}'::jsonb)
+                    || jsonb_build_object(
+                        'last_checkpoint', NOW()::text,
+                        'checkpoint_notes', %s
+                    )
+                WHERE session_id = %s::uuid
+            """, (progress_notes, session_id))
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "project": project,
+            "focus_saved": focus,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"Failed to save checkpoint: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+# ============================================================================
+# Workflow Engine - State Machine Enforcement
+# ============================================================================
+
+class WorkflowEngine:
+    """Validates state transitions against claude.workflow_transitions table,
+    executes side effects, and logs all changes to claude.audit_log.
+
+    Usage:
+        engine = WorkflowEngine(conn)
+        result = engine.execute_transition('build_tasks', task_id, 'completed',
+                                           changed_by=session_id)
+    """
+
+    # Map entity_type to (table, pk_column, short_code_prefix)
+    ENTITY_MAP = {
+        'feedback':    ('claude.feedback',    'feedback_id', 'FB'),
+        'features':    ('claude.features',    'feature_id',  'F'),
+        'build_tasks': ('claude.build_tasks', 'task_id',     'BT'),
+    }
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def _resolve_entity(self, entity_type: str, item_id: str) -> tuple:
+        """Resolve item_id (UUID or short code like 'BT3') to (uuid, current_status, short_code).
+
+        Returns (entity_uuid, current_status, short_code) or raises ValueError.
+        """
+        if entity_type not in self.ENTITY_MAP:
+            raise ValueError(f"Unknown entity_type: {entity_type}")
+
+        table, pk_col, prefix = self.ENTITY_MAP[entity_type]
+        cur = self.conn.cursor()
+        try:
+            # Try short code first (e.g., 'BT3', 'F12', 'FB5')
+            clean_id = item_id.upper().strip()
+            if clean_id.startswith(prefix):
+                code_num = clean_id[len(prefix):]
+                if code_num.isdigit():
+                    cur.execute(f"""
+                        SELECT {pk_col}::text, status, short_code
+                        FROM {table}
+                        WHERE short_code = %s
+                    """, (int(code_num),))
+                    row = cur.fetchone()
+                    if row:
+                        return (row[pk_col], row['status'], row['short_code'])
+
+            # Try UUID
+            cur.execute(f"""
+                SELECT {pk_col}::text, status, short_code
+                FROM {table}
+                WHERE {pk_col}::text = %s
+            """, (item_id,))
+            row = cur.fetchone()
+            if row:
+                return (row[pk_col], row['status'], row['short_code'])
+
+            raise ValueError(f"{entity_type} '{item_id}' not found")
+        finally:
+            cur.close()
+
+    def validate_transition(self, entity_type: str, from_status: str, to_status: str) -> dict:
+        """Check if a transition is valid. Returns transition row or None."""
+        cur = self.conn.cursor()
+        try:
+            cur.execute("""
+                SELECT transition_id, requires_condition, side_effect, description
+                FROM claude.workflow_transitions
+                WHERE entity_type = %s AND from_status = %s AND to_status = %s
+            """, (entity_type, from_status, to_status))
+            return cur.fetchone()
+        finally:
+            cur.close()
+
+    def check_condition(self, condition_name: str, entity_type: str, entity_id: str) -> tuple:
+        """Evaluate a named condition. Returns (passed: bool, message: str)."""
+        cur = self.conn.cursor()
+        try:
+            if condition_name == 'all_tasks_done':
+                # All build_tasks for this feature must be completed or cancelled
+                cur.execute("""
+                    SELECT COUNT(*) as remaining
+                    FROM claude.build_tasks
+                    WHERE feature_id = %s::uuid
+                      AND status NOT IN ('completed', 'cancelled')
+                """, (entity_id,))
+                row = cur.fetchone()
+                remaining = row['remaining']
+                if remaining > 0:
+                    return (False, f"{remaining} task(s) still not completed")
+                return (True, "All tasks completed")
+
+            if condition_name == 'has_assignee':
+                cur.execute("""
+                    SELECT assigned_to FROM claude.build_tasks WHERE task_id = %s::uuid
+                """, (entity_id,))
+                row = cur.fetchone()
+                if row and row.get('assigned_to'):
+                    return (True, "Has assignee")
+                return (False, "No assignee set")
+
+            # Unknown condition - pass by default (log warning)
+            return (True, f"Unknown condition '{condition_name}' - passed by default")
+        finally:
+            cur.close()
+
+    def execute_side_effect(self, side_effect_name: str, entity_type: str, entity_id: str) -> str:
+        """Execute a named side effect. Returns description of what happened."""
+        cur = self.conn.cursor()
+        try:
+            if side_effect_name == 'check_feature_completion':
+                # When a build_task completes, check if all tasks for the parent feature are done
+                cur.execute("""
+                    SELECT f.feature_id::text, f.status, 'F' || f.short_code as code,
+                           (SELECT COUNT(*) FROM claude.build_tasks bt
+                            WHERE bt.feature_id = f.feature_id
+                              AND bt.status NOT IN ('completed', 'cancelled')) as remaining
+                    FROM claude.build_tasks bt
+                    JOIN claude.features f ON bt.feature_id = f.feature_id
+                    WHERE bt.task_id = %s::uuid
+                """, (entity_id,))
+                row = cur.fetchone()
+                if row and row['remaining'] == 0 and row['status'] == 'in_progress':
+                    return f"All tasks done for {row['code']}. Feature ready for completion."
+                elif row:
+                    return f"{row['remaining']} task(s) remaining for {row['code']}"
+                return "No parent feature found"
+
+            if side_effect_name == 'set_started_at':
+                cur.execute("""
+                    UPDATE claude.build_tasks
+                    SET started_at = COALESCE(started_at, NOW())
+                    WHERE task_id = %s::uuid
+                """, (entity_id,))
+                return "Set started_at timestamp"
+
+            if side_effect_name == 'archive_plan_data':
+                # Could archive plan_data to a history table - for now just log
+                return "Plan data archived (no-op)"
+
+            return f"Unknown side effect '{side_effect_name}'"
+        finally:
+            cur.close()
+
+    def execute_transition(
+        self,
+        entity_type: str,
+        item_id: str,
+        new_status: str,
+        changed_by: str = None,
+        change_source: str = 'workflow_engine',
+        metadata: dict = None,
+    ) -> dict:
+        """Validate and execute a state transition.
+
+        Returns dict with:
+            success: bool
+            from_status: previous status
+            to_status: new status
+            entity_code: short code (e.g., 'BT3')
+            side_effects: list of side effect results
+            condition_results: dict of condition checks
+            error: error message if failed
+        """
+        result = {
+            'success': False,
+            'entity_type': entity_type,
+            'item_id': item_id,
+            'side_effects': [],
+            'condition_results': {},
+        }
+
+        try:
+            # 1. Resolve entity
+            entity_uuid, current_status, short_code = self._resolve_entity(entity_type, item_id)
+            _, _, prefix = self.ENTITY_MAP[entity_type]
+            entity_code = f"{prefix}{short_code}"
+
+            result['from_status'] = current_status
+            result['to_status'] = new_status
+            result['entity_code'] = entity_code
+            result['entity_id'] = entity_uuid
+
+            # 2. Validate transition
+            transition = self.validate_transition(entity_type, current_status, new_status)
+            if not transition:
+                # Get valid transitions for error message
+                cur = self.conn.cursor()
+                try:
+                    cur.execute("""
+                        SELECT to_status, description
+                        FROM claude.workflow_transitions
+                        WHERE entity_type = %s AND from_status = %s
+                    """, (entity_type, current_status))
+                    valid = [f"{r['to_status']} ({r['description']})" for r in cur.fetchall()]
+                finally:
+                    cur.close()
+                result['error'] = (
+                    f"Invalid transition: {entity_code} cannot go from "
+                    f"'{current_status}' to '{new_status}'. "
+                    f"Valid transitions: {', '.join(valid) if valid else 'none'}"
+                )
+                return result
+
+            # 3. Check conditions
+            if transition.get('requires_condition'):
+                condition = transition['requires_condition']
+                passed, message = self.check_condition(condition, entity_type, entity_uuid)
+                result['condition_results'][condition] = {'passed': passed, 'message': message}
+                if not passed:
+                    result['error'] = f"Condition '{condition}' not met: {message}"
+                    return result
+
+            # 4. Execute the status update
+            table, pk_col, _ = self.ENTITY_MAP[entity_type]
+            cur = self.conn.cursor()
+            try:
+                cur.execute(f"""
+                    UPDATE {table}
+                    SET status = %s, updated_at = NOW()
+                    WHERE {pk_col} = %s::uuid
+                """, (new_status, entity_uuid))
+
+                # 5. Execute side effects
+                if transition.get('side_effect'):
+                    effect_result = self.execute_side_effect(
+                        transition['side_effect'], entity_type, entity_uuid
+                    )
+                    result['side_effects'].append({
+                        'name': transition['side_effect'],
+                        'result': effect_result,
+                    })
+
+                # 6. Log to audit_log
+                cur.execute("""
+                    INSERT INTO claude.audit_log
+                    (entity_type, entity_id, entity_code, from_status, to_status,
+                     changed_by, change_source, side_effects_executed, metadata)
+                    VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    entity_type, entity_uuid, entity_code,
+                    current_status, new_status,
+                    changed_by, change_source,
+                    [se['name'] for se in result['side_effects']] or None,
+                    json.dumps(metadata) if metadata else None,
+                ))
+
+                self.conn.commit()
+                result['success'] = True
+                return result
+            finally:
+                cur.close()
+
+        except ValueError as e:
+            result['error'] = str(e)
+            return result
+        except Exception as e:
+            try:
+                self.conn.rollback()
+            except Exception:
+                pass
+            result['error'] = f"Transition failed: {str(e)}"
+            return result
+
+
+# ============================================================================
+# Phase 2 Tools - Workflow-Enforced Operations
+# ============================================================================
+
+@mcp.tool()
+def advance_status(
+    item_type: Literal["feedback", "features", "build_tasks"],
+    item_id: str,
+    new_status: str,
+) -> dict:
+    """Move a work item to a new status through the workflow state machine.
+
+    Validates the transition is allowed, checks any required conditions,
+    executes side effects, and logs to audit_log.
+
+    Use short codes: FB12, F5, BT23.
+
+    Args:
+        item_type: Entity type: feedback, features, or build_tasks.
+        item_id: Item ID or short_code (e.g., 'FB12', 'F5', 'BT23').
+        new_status: Target status. Invalid transitions are rejected with valid options shown.
+    """
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    conn = get_db_connection()
+    try:
+        engine = WorkflowEngine(conn)
+        return engine.execute_transition(
+            entity_type=item_type,
+            item_id=item_id,
+            new_status=new_status,
+            changed_by=session_id,
+            change_source='mcp_tool',
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def start_work(
+    task_code: str,
+) -> dict:
+    """Start working on a build task: transitions todo→in_progress, sets focus, returns plan_data.
+
+    Shortcut for advance_status('build_tasks', code, 'in_progress') plus
+    context loading. Returns the task details and parent feature plan_data
+    so you know what to build.
+
+    Args:
+        task_code: Task short code (e.g., 'BT3') or UUID.
+    """
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    conn = get_db_connection()
+    try:
+        engine = WorkflowEngine(conn)
+
+        # Transition to in_progress
+        transition_result = engine.execute_transition(
+            entity_type='build_tasks',
+            item_id=task_code,
+            new_status='in_progress',
+            changed_by=session_id,
+            change_source='start_work',
+        )
+
+        if not transition_result.get('success'):
+            return transition_result
+
+        # Load task context + parent feature plan_data
+        entity_id = transition_result.get('entity_id')
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                bt.task_name,
+                bt.task_description,
+                bt.task_type,
+                bt.files_affected,
+                bt.verification,
+                'F' || f.short_code as feature_code,
+                f.feature_name,
+                f.plan_data
+            FROM claude.build_tasks bt
+            JOIN claude.features f ON bt.feature_id = f.feature_id
+            WHERE bt.task_id = %s::uuid
+        """, (entity_id,))
+        task_row = cur.fetchone()
+
+        if task_row:
+            transition_result['task_context'] = {
+                'task_name': task_row['task_name'],
+                'description': task_row['task_description'],
+                'type': task_row['task_type'],
+                'files_affected': task_row['files_affected'] or [],
+                'verification': task_row['verification'],
+                'feature_code': task_row['feature_code'],
+                'feature_name': task_row['feature_name'],
+                'plan_data': task_row['plan_data'],
+            }
+
+        # Update session focus
+        project = os.path.basename(os.getcwd())
+        focus_text = f"Working on {transition_result.get('entity_code')}: {task_row['task_name'] if task_row else 'unknown'}"
+        cur.execute("""
+            INSERT INTO claude.session_state (project_name, current_focus, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (project_name) DO UPDATE SET
+                current_focus = EXCLUDED.current_focus,
+                updated_at = NOW()
+        """, (project, focus_text))
+        conn.commit()
+
+        return transition_result
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def complete_work(
+    task_code: str,
+) -> dict:
+    """Complete a build task: transitions in_progress→completed, checks parent feature, returns next task.
+
+    Shortcut for advance_status('build_tasks', code, 'completed') plus
+    feature completion check and next-task suggestion.
+
+    Args:
+        task_code: Task short code (e.g., 'BT3') or UUID.
+    """
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    conn = get_db_connection()
+    try:
+        engine = WorkflowEngine(conn)
+
+        # Transition to completed
+        transition_result = engine.execute_transition(
+            entity_type='build_tasks',
+            item_id=task_code,
+            new_status='completed',
+            changed_by=session_id,
+            change_source='complete_work',
+        )
+
+        if not transition_result.get('success'):
+            return transition_result
+
+        # Find next ready task from same feature
+        entity_id = transition_result.get('entity_id')
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                'BT' || bt2.short_code as next_task_code,
+                bt2.task_name as next_task_name,
+                bt2.task_type as next_task_type
+            FROM claude.build_tasks bt
+            JOIN claude.build_tasks bt2 ON bt2.feature_id = bt.feature_id
+            WHERE bt.task_id = %s::uuid
+              AND bt2.status = 'todo'
+              AND (bt2.blocked_by_task_id IS NULL
+                   OR bt2.blocked_by_task_id IN (
+                       SELECT task_id FROM claude.build_tasks WHERE status = 'completed'
+                   ))
+            ORDER BY bt2.step_order
+            LIMIT 1
+        """, (entity_id,))
+        next_task = cur.fetchone()
+
+        if next_task:
+            transition_result['next_task'] = dict(next_task)
+        else:
+            transition_result['next_task'] = None
+            transition_result['message'] = "No more ready tasks for this feature."
+
+        return transition_result
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_work_context(
+    scope: Literal["current", "feature", "project"] = "current",
+    project: str = "",
+) -> dict:
+    """Get token-budgeted work context at different zoom levels.
+
+    - current (~200 tokens): Active task, its description, files_affected
+    - feature (~500 tokens): Current feature, all its tasks with statuses
+    - project (~800 tokens): All active features, ready tasks, pending feedback
+
+    Args:
+        scope: Zoom level: 'current' for active task, 'feature' for parent feature,
+               'project' for full project overview.
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        result = {"scope": scope, "project": project}
+
+        if scope == "current":
+            # Active task (in_progress build_task for this project)
+            cur.execute("""
+                SELECT
+                    'BT' || bt.short_code as code,
+                    bt.task_name,
+                    bt.task_description,
+                    bt.task_type,
+                    bt.files_affected,
+                    bt.verification,
+                    'F' || f.short_code as feature_code,
+                    f.feature_name
+                FROM claude.build_tasks bt
+                JOIN claude.features f ON bt.feature_id = f.feature_id
+                WHERE bt.project_id = %s::uuid AND bt.status = 'in_progress'
+                ORDER BY bt.updated_at DESC
+                LIMIT 1
+            """, (project_id,))
+            task = cur.fetchone()
+            result['active_task'] = dict(task) if task else None
+
+        elif scope == "feature":
+            # Current feature + all its tasks
+            # First: find feature via its in_progress task (most reliable)
+            # Fallback: feature with status 'in_progress'
+            cur.execute("""
+                (SELECT
+                    'F' || f.short_code as code,
+                    f.feature_name,
+                    f.description,
+                    f.status,
+                    f.plan_data
+                FROM claude.features f
+                JOIN claude.build_tasks bt ON bt.feature_id = f.feature_id
+                WHERE f.project_id = %s::uuid AND bt.status = 'in_progress'
+                ORDER BY bt.updated_at DESC
+                LIMIT 1)
+                UNION ALL
+                (SELECT
+                    'F' || f.short_code as code,
+                    f.feature_name,
+                    f.description,
+                    f.status,
+                    f.plan_data
+                FROM claude.features f
+                WHERE f.project_id = %s::uuid AND f.status = 'in_progress'
+                ORDER BY f.updated_at DESC
+                LIMIT 1)
+                LIMIT 1
+            """, (project_id, project_id))
+            feature = cur.fetchone()
+
+            if feature:
+                result['feature'] = dict(feature)
+                # Get all tasks for this feature
+                feature_code = feature['code']
+                short_code = int(feature_code[1:])
+                cur.execute("""
+                    SELECT
+                        'BT' || bt.short_code as code,
+                        bt.task_name,
+                        bt.status,
+                        bt.step_order
+                    FROM claude.build_tasks bt
+                    JOIN claude.features f ON bt.feature_id = f.feature_id
+                    WHERE f.short_code = %s AND f.project_id = %s::uuid
+                    ORDER BY bt.step_order
+                """, (short_code, project_id))
+                result['tasks'] = [dict(r) for r in cur.fetchall()]
+            else:
+                result['feature'] = None
+
+        elif scope == "project":
+            # All active features + ready tasks + feedback count
+            cur.execute("""
+                WITH active_features AS (
+                    SELECT
+                        'F' || f.short_code as code,
+                        f.feature_name,
+                        f.status,
+                        f.priority,
+                        (SELECT COUNT(*) FROM claude.build_tasks bt
+                         WHERE bt.feature_id = f.feature_id AND bt.status = 'completed') as done,
+                        (SELECT COUNT(*) FROM claude.build_tasks bt
+                         WHERE bt.feature_id = f.feature_id) as total
+                    FROM claude.features f
+                    WHERE f.project_id = %s::uuid
+                      AND f.status NOT IN ('completed', 'cancelled')
+                    ORDER BY f.priority, f.short_code
+                    LIMIT 10
+                ),
+                ready_tasks AS (
+                    SELECT
+                        'BT' || bt.short_code as code,
+                        bt.task_name,
+                        'F' || f.short_code as feature_code
+                    FROM claude.build_tasks bt
+                    JOIN claude.features f ON bt.feature_id = f.feature_id
+                    WHERE bt.project_id = %s::uuid AND bt.status = 'todo'
+                      AND (bt.blocked_by_task_id IS NULL
+                           OR bt.blocked_by_task_id IN (
+                               SELECT task_id FROM claude.build_tasks WHERE status = 'completed'))
+                    ORDER BY f.priority, bt.step_order
+                    LIMIT 5
+                ),
+                feedback_counts AS (
+                    SELECT
+                        status,
+                        COUNT(*) as cnt
+                    FROM claude.feedback
+                    WHERE project_id = %s::uuid
+                      AND status NOT IN ('resolved', 'wont_fix', 'duplicate')
+                    GROUP BY status
+                )
+                SELECT 'features' as section, json_agg(row_to_json(af)) as data FROM active_features af
+                UNION ALL
+                SELECT 'ready_tasks', json_agg(row_to_json(rt)) FROM ready_tasks rt
+                UNION ALL
+                SELECT 'feedback', json_agg(row_to_json(fc)) FROM feedback_counts fc
+            """, (project_id, project_id, project_id))
+
+            for row in cur.fetchall():
+                section = row['section']
+                data = row['data']
+                if data:
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    result[section] = data
+                else:
+                    result[section] = []
+
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def create_linked_task(
+    feature_code: str,
+    task_name: str,
+    task_description: str,
+    verification: str,
+    files_affected: list[str],
+    task_type: Literal["implementation", "testing", "documentation", "deployment", "investigation"] = "implementation",
+    priority: int = 3,
+    estimated_hours: float | None = None,
+    blocked_by: str | None = None,
+) -> dict:
+    """Create a build task linked to an active feature. Rejects if feature is not active.
+
+    Enforces that tasks must belong to a valid in-progress or planned feature.
+    Auto-assigns step_order based on existing tasks.
+
+    REQUIRED DETAIL LEVEL - the tool will reject vague tasks:
+    - task_description: Must be >= 100 chars. Include WHAT to build, WHERE in the code,
+      HOW it connects to existing code, and EDGE CASES to handle.
+    - verification: Must be non-empty. How to verify this task is complete.
+      Include specific test commands, expected output, or observable behavior.
+    - files_affected: Must have at least one file path. List every file this task modifies.
+
+    Args:
+        feature_code: Feature short code (e.g., 'F12') or UUID.
+        task_name: Name of the task (concise, imperative).
+        task_description: Detailed implementation spec (>= 100 chars). Must include:
+            what to build, where, how it connects, edge cases.
+        verification: How to verify completion (non-empty). Specific commands/checks.
+        files_affected: Files this task modifies (>= 1 file). Full relative paths.
+        task_type: implementation, testing, documentation, deployment, or investigation.
+        priority: 1=critical, 2=high, 3=normal, 4=low, 5=backlog. Default 3.
+        estimated_hours: Rough estimate (optional but recommended).
+        blocked_by: Task code that must complete first (e.g., 'BT316'). Optional.
+    """
+    # === QUALITY ENFORCEMENT (Tier 1 - tool rejects vague tasks) ===
+    errors = []
+    if not task_description or len(task_description.strip()) < 100:
+        errors.append(
+            f"task_description must be >= 100 chars (got {len(task_description.strip()) if task_description else 0}). "
+            "Include: WHAT to build, WHERE in the code, HOW it connects, EDGE CASES."
+        )
+    if not verification or len(verification.strip()) < 10:
+        errors.append(
+            "verification is required. Describe how to verify this task is complete: "
+            "test commands, expected output, or observable behavior."
+        )
+    if not files_affected or len(files_affected) == 0:
+        errors.append(
+            "files_affected must list at least one file path this task will modify."
+        )
+    if priority not in (1, 2, 3, 4, 5):
+        errors.append("priority must be 1-5 (1=critical, 5=backlog).")
+    if errors:
+        return {
+            "success": False,
+            "error": "Task rejected - insufficient detail. Fix these issues:\n" + "\n".join(f"  - {e}" for e in errors),
+            "hint": "Build tasks must be detailed enough for a future session to implement "
+                    "without the original conversation context."
+        }
+
+    # Resolve blocked_by to task_id if provided
+    blocked_by_task_id = None
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if blocked_by:
+            blocked_code = blocked_by.upper().strip()
+            if blocked_code.startswith('BT') and blocked_code[2:].isdigit():
+                cur.execute(
+                    "SELECT task_id::text FROM claude.build_tasks WHERE short_code = %s",
+                    (int(blocked_code[2:]),)
+                )
+                blocker = cur.fetchone()
+                if blocker:
+                    blocked_by_task_id = blocker['task_id']
+                else:
+                    return {"success": False, "error": f"Blocked-by task '{blocked_by}' not found"}
+
+        # Resolve feature
+        clean_code = feature_code.upper().strip()
+        if clean_code.startswith('F') and clean_code[1:].isdigit():
+            cur.execute("""
+                SELECT feature_id::text, project_id::text, status, feature_name
+                FROM claude.features
+                WHERE short_code = %s
+            """, (int(clean_code[1:]),))
+        else:
+            cur.execute("""
+                SELECT feature_id::text, project_id::text, status, feature_name
+                FROM claude.features
+                WHERE feature_id::text = %s
+            """, (feature_code,))
+
+        feature = cur.fetchone()
+        if not feature:
+            return {"success": False, "error": f"Feature '{feature_code}' not found"}
+
+        if feature['status'] not in ('planned', 'in_progress'):
+            return {
+                "success": False,
+                "error": f"Feature '{clean_code}' has status '{feature['status']}'. "
+                         f"Tasks can only be added to 'planned' or 'in_progress' features."
+            }
+
+        # Get next step_order
+        cur.execute("""
+            SELECT COALESCE(MAX(step_order), 0) + 1 as next_order
+            FROM claude.build_tasks
+            WHERE feature_id = %s::uuid
+        """, (feature['feature_id'],))
+        next_order = cur.fetchone()['next_order']
+
+        # Get next short_code
+        cur.execute("SELECT COALESCE(MAX(short_code), 0) + 1 as next_code FROM claude.build_tasks")
+        next_code = cur.fetchone()['next_code']
+
+        # Insert task with full detail
+        cur.execute("""
+            INSERT INTO claude.build_tasks
+            (task_id, feature_id, project_id, task_name, task_description,
+             task_type, files_affected, verification, priority, estimated_hours,
+             blocked_by_task_id, status, step_order, short_code, created_at, updated_at)
+            VALUES (gen_random_uuid(), %s::uuid, %s::uuid, %s, %s, %s, %s,
+                    %s, %s, %s, %s::uuid, 'todo', %s, %s, NOW(), NOW())
+            RETURNING task_id::text, short_code
+        """, (
+            feature['feature_id'], feature['project_id'],
+            task_name, task_description, task_type,
+            files_affected, verification, priority, estimated_hours,
+            blocked_by_task_id, next_order, next_code,
+        ))
+
+        new_task = cur.fetchone()
+        conn.commit()
+
+        return {
+            "success": True,
+            "task_code": f"BT{new_task['short_code']}",
+            "task_id": new_task['task_id'],
+            "feature_code": clean_code,
+            "feature_name": feature['feature_name'],
+            "step_order": next_order,
+            "priority": priority,
+            "verification": verification,
+            "blocked_by": blocked_by,
+            "status": "todo",
+        }
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Phase 3 Tools - Configuration & Session Management
+# ============================================================================
+
+@mcp.tool()
+def extract_conversation(
+    session_id: str = "",
+    project: str = "",
+) -> dict:
+    """Extract conversation turns from a session's JSONL log file.
+
+    Finds and parses the JSONL conversation log to extract user/assistant turns.
+    Skips tool_use blocks, returning only text content for readability.
+
+    Args:
+        session_id: Session ID (UUID or prefix). If omitted, uses most recent JSONL in project.
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    try:
+        turns, jsonl_file, warning = _extract_turns_from_jsonl(project, session_id)
+
+        return {
+            "success": True,
+            "session_file": jsonl_file,
+            "turn_count": len(turns),
+            "turns": turns,
+            "truncated": warning is not None,
+            "warning": warning,
+        }
+
+    except FileNotFoundError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        return {"success": False, "error": f"Failed to extract conversation: {str(e)}"}
+
+
+# ============================================================================
+# Phase 3 Tools - Book Reference System
+# ============================================================================
+
+@mcp.tool()
+def store_book(
+    title: str,
+    author: str = "",
+    isbn: str = "",
+    year: int | None = None,
+    topics: list[str] | None = None,
+    summary: str = "",
+) -> dict:
+    """Store a book in the reference library.
+
+    Args:
+        title: Book title (required).
+        author: Book author.
+        isbn: ISBN identifier.
+        year: Publication year.
+        topics: List of topic tags.
+        summary: Brief summary of the book.
+
+    Returns:
+        dict with book_id and success status.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Insert book
+        cur.execute("""
+            INSERT INTO claude.books (
+                book_id, title, author, isbn, year, topics, summary, created_at, updated_at
+            ) VALUES (
+                gen_random_uuid(), %s, %s, %s, %s, %s, %s, NOW(), NOW()
+            )
+            RETURNING book_id::text
+        """, (title, author, isbn, year, topics or [], summary))
+
+        result = cur.fetchone()
+        conn.commit()
+
+        return {
+            "success": True,
+            "book_id": result['book_id'],
+            "title": title,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to store book: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def store_book_reference(
+    book_title: str,
+    concept: str,
+    chapter: str = "",
+    page_range: str = "",
+    description: str = "",
+    quote: str = "",
+    tags: list[str] | None = None,
+) -> dict:
+    """Store a reference to a concept, quote, or insight from a book.
+
+    Generates semantic embedding for the concept+description for later retrieval.
+
+    Args:
+        book_title: Title of the book (case-insensitive lookup).
+        concept: The concept or idea being referenced.
+        chapter: Chapter name or number.
+        page_range: Page range (e.g., "45-47", "102").
+        description: Explanation or context for the concept.
+        quote: Direct quote from the book.
+        tags: List of tags for categorization.
+
+    Returns:
+        dict with ref_id, has_embedding, and success status.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Lookup book_id by title (case-insensitive)
+        cur.execute("""
+            SELECT book_id::text FROM claude.books
+            WHERE title ILIKE %s
+            LIMIT 1
+        """, (book_title,))
+
+        book_result = cur.fetchone()
+        if not book_result:
+            return {
+                "success": False,
+                "error": f"Book not found: '{book_title}'. Use store_book first.",
+            }
+
+        book_id = book_result['book_id']
+
+        # 2. Generate embedding for concept + description
+        embedding = None
+        has_embedding = False
+        try:
+            embedding_text = f"{concept}: {description}" if description else concept
+            embedding = generate_embedding(embedding_text)
+            has_embedding = embedding is not None
+        except Exception as embed_err:
+            print(f"Warning: Embedding generation failed for book reference: {embed_err}", file=sys.stderr)
+
+        # 3. Insert reference
+        cur.execute("""
+            INSERT INTO claude.book_references (
+                ref_id, book_id, chapter, page_range, concept, description, quote, tags, embedding, created_at
+            ) VALUES (
+                gen_random_uuid(), %s::uuid, %s, %s, %s, %s, %s, %s, %s::vector, NOW()
+            )
+            RETURNING ref_id::text
+        """, (book_id, chapter, page_range, concept, description, quote, tags or [], embedding))
+
+        result = cur.fetchone()
+        conn.commit()
+
+        return {
+            "success": True,
+            "ref_id": result['ref_id'],
+            "book_id": book_id,
+            "has_embedding": has_embedding,
+            "concept": concept,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to store book reference: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def recall_book_reference(
+    query: str,
+    book_title: str = "",
+    tags: list[str] | None = None,
+    limit: int = 5,
+) -> dict:
+    """Search book references using semantic similarity.
+
+    Finds concepts, quotes, and insights from books that match the query.
+
+    Args:
+        query: Natural language search query.
+        book_title: Optional filter by book title (case-insensitive).
+        tags: Optional filter by tags (matches any).
+        limit: Maximum number of results (default 5).
+
+    Returns:
+        dict with list of matching references, ordered by relevance.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Generate query embedding
+        query_embedding = None
+        try:
+            query_embedding = generate_query_embedding(query)
+        except Exception as embed_err:
+            return {
+                "success": False,
+                "error": f"Failed to generate query embedding: {str(embed_err)}",
+            }
+
+        if not query_embedding:
+            return {
+                "success": False,
+                "error": "Query embedding generation returned None",
+            }
+
+        # 2. Build query with optional filters
+        sql = """
+            SELECT
+                br.ref_id::text,
+                br.concept,
+                br.description,
+                br.quote,
+                br.chapter,
+                br.page_range,
+                br.tags,
+                b.book_id::text,
+                b.title,
+                b.author,
+                b.year,
+                1 - (br.embedding <=> %s::vector) as similarity
+            FROM claude.book_references br
+            JOIN claude.books b ON br.book_id = b.book_id
+            WHERE br.embedding IS NOT NULL
+        """
+
+        params = [query_embedding]
+
+        # Add book_title filter
+        if book_title:
+            sql += " AND b.title ILIKE %s"
+            params.append(f"%{book_title}%")
+
+        # Add tags filter (array overlap)
+        if tags:
+            sql += " AND br.tags && %s"
+            params.append(tags)
+
+        # Similarity threshold and ordering
+        sql += """
+            AND (1 - (br.embedding <=> %s::vector)) >= 0.5
+            ORDER BY similarity DESC
+            LIMIT %s
+        """
+        params.append(query_embedding)
+        params.append(limit)
+
+        cur.execute(sql, params)
+        results = cur.fetchall()
+
+        # Format results
+        references = []
+        for row in results:
+            references.append({
+                "ref_id": row['ref_id'],
+                "book": {
+                    "book_id": row['book_id'],
+                    "title": row['title'],
+                    "author": row['author'],
+                    "year": row['year'],
+                },
+                "concept": row['concept'],
+                "description": row['description'],
+                "quote": row['quote'],
+                "chapter": row['chapter'],
+                "page_range": row['page_range'],
+                "tags": row['tags'],
+                "similarity": float(row['similarity']),
+            })
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(references),
+            "references": references,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Failed to recall book references: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+# ============================================================================
+# Phase 4 Tools - Conversation Intelligence
+# ============================================================================
+
+@mcp.tool()
+def extract_insights(
+    session_id: str,
+    project: str = "",
+) -> dict:
+    """Extract knowledge insights from a stored conversation.
+
+    Reads turns from claude.conversations and identifies decisions, requirements,
+    architectural directions, and patterns. Creates knowledge entries automatically.
+
+    Args:
+        session_id: Session ID (UUID) to extract insights from.
+        project: Project name filter (optional).
+
+    Returns:
+        dict with success status, insights_count, and insight_summaries list.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Fetch conversation
+        sql = """
+            SELECT conversation_id, session_id, project_name, turns, turn_count, summary
+            FROM claude.conversations
+            WHERE session_id = %s::uuid
+        """
+        params = [session_id]
+
+        if project:
+            sql += " AND project_name = %s"
+            params.append(project)
+
+        cur.execute(sql, params)
+        row = cur.fetchone()
+
+        if not row:
+            return {
+                "success": False,
+                "error": f"No conversation found for session_id={session_id}",
+            }
+
+        project_name = row['project_name']
+        turns = row['turns']
+
+        if not turns or not isinstance(turns, list):
+            return {
+                "success": False,
+                "error": "Conversation has no turns to analyze",
+            }
+
+        # 2. Extract insights from user turns
+        insights = []
+
+        # Pattern matching for different insight types
+        decision_patterns = [
+            "we should", "let's", "the approach is", "we'll use", "i'll use",
+            "decided to", "going with", "the plan is", "strategy is"
+        ]
+        rule_patterns = [
+            "make sure", "always", "never", "must", "required",
+            "don't", "avoid", "important to", "critical that"
+        ]
+        learning_patterns = [
+            "i learned", "the fix was", "the problem was", "turned out",
+            "discovered that", "realized that", "found that", "issue was"
+        ]
+        pattern_patterns = [
+            "the pattern is", "this works because", "pattern for",
+            "approach works", "solution is to", "technique is"
+        ]
+
+        for i, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+
+            role = turn.get('role', '')
+            content = turn.get('content', '')
+
+            if role != 'user' or not content:
+                continue
+
+            content_lower = content.lower()
+
+            # Check for decision insights
+            for pattern in decision_patterns:
+                if pattern in content_lower:
+                    # Extract context (surrounding turns for better description)
+                    context_parts = [content]
+                    if i + 1 < len(turns) and isinstance(turns[i + 1], dict):
+                        context_parts.append(turns[i + 1].get('content', '')[:300])
+
+                    insights.append({
+                        'type': 'fact',
+                        'title': f"Decision: {content[:80]}...",
+                        'content': content,
+                        'context': '\n\n'.join(context_parts[:2]),
+                        'turn_index': i
+                    })
+                    break
+
+            # Check for rule/preference insights
+            for pattern in rule_patterns:
+                if pattern in content_lower:
+                    insights.append({
+                        'type': 'preference',
+                        'title': f"Rule: {content[:80]}...",
+                        'content': content,
+                        'context': content,
+                        'turn_index': i
+                    })
+                    break
+
+            # Check for learning insights
+            for pattern in learning_patterns:
+                if pattern in content_lower:
+                    insights.append({
+                        'type': 'learned',
+                        'title': f"Learning: {content[:80]}...",
+                        'content': content,
+                        'context': content,
+                        'turn_index': i
+                    })
+                    break
+
+            # Check for pattern insights
+            for pattern in pattern_patterns:
+                if pattern in content_lower:
+                    insights.append({
+                        'type': 'pattern',
+                        'title': f"Pattern: {content[:80]}...",
+                        'content': content,
+                        'context': content,
+                        'turn_index': i
+                    })
+                    break
+
+        if not insights:
+            return {
+                "success": True,
+                "insights_count": 0,
+                "message": "No insights extracted from conversation",
+            }
+
+        # 3. Store insights as knowledge entries
+        created_insights = []
+
+        for insight in insights:
+            # Generate embedding for the insight
+            embedding = None
+            try:
+                embedding_text = f"{insight['title']}\n\n{insight['context']}"
+                embedding = generate_embedding(embedding_text)
+            except Exception as embed_err:
+                print(f"Warning: Embedding generation failed for insight: {embed_err}", file=sys.stderr)
+
+            # Insert into claude.knowledge
+            insert_sql = """
+                INSERT INTO claude.knowledge (
+                    knowledge_id, title, description, knowledge_type,
+                    knowledge_category, source, confidence_level,
+                    applies_to_projects, embedding, created_at
+                ) VALUES (
+                    gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, NOW()
+                )
+                RETURNING knowledge_id::text
+            """
+
+            cur.execute(insert_sql, (
+                insight['title'],
+                insight['context'],
+                insight['type'],
+                project_name,
+                f"conversation:{session_id}",
+                70,  # auto-extracted, lower confidence
+                [project_name],
+                embedding,
+            ))
+
+            result = cur.fetchone()
+            knowledge_id = result['knowledge_id']
+
+            created_insights.append({
+                'knowledge_id': knowledge_id,
+                'title': insight['title'],
+                'type': insight['type'],
+                'turn_index': insight['turn_index'],
+            })
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "insights_count": len(created_insights),
+            "insight_summaries": created_insights,
+        }
+
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        return {
+            "success": False,
+            "error": f"Failed to extract insights: {str(e)}",
+        }
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def search_conversations(
+    query: str,
+    project: str = "",
+    date_range_days: int | None = None,
+    limit: int = 10,
+) -> dict:
+    """Search across stored conversations by keyword.
+
+    Full-text search across conversation turns (JSONB). Returns matching
+    turns with surrounding context (previous and next turn).
+
+    Args:
+        query: Search query (keywords to find in conversation turns).
+        project: Filter by project name (optional).
+        date_range_days: Only search conversations from last N days (optional).
+        limit: Maximum number of matching turns to return (default: 10).
+
+    Returns:
+        dict with success status and matches array containing conversation context.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Build SQL query to search through JSONB turns
+        sql = """
+            SELECT
+                c.conversation_id::text,
+                c.session_id::text,
+                c.project_name,
+                c.summary,
+                c.extracted_at as created_at,
+                c.turn_count,
+                turn_data.idx as turn_index,
+                turn_data.turn->>'role' as role,
+                turn_data.turn->>'content' as content,
+                c.turns
+            FROM claude.conversations c,
+                LATERAL jsonb_array_elements(c.turns) WITH ORDINALITY AS turn_data(turn, idx)
+            WHERE turn_data.turn->>'content' ILIKE %s
+        """
+
+        params = [f"%{query}%"]
+
+        # Add project filter
+        if project:
+            sql += " AND c.project_name = %s"
+            params.append(project)
+
+        # Add date range filter
+        if date_range_days is not None:
+            sql += " AND c.extracted_at > NOW() - INTERVAL %s"
+            params.append(f"{date_range_days} days")
+
+        # Order and limit
+        sql += " ORDER BY c.extracted_at DESC LIMIT %s"
+        params.append(limit)
+
+        cur.execute(sql, params)
+        results = cur.fetchall()
+
+        if not results:
+            return {
+                "success": True,
+                "query": query,
+                "match_count": 0,
+                "matches": [],
+            }
+
+        # Format results with surrounding context
+        matches = []
+        for row in results:
+            turns = row['turns']
+            turn_index = row['turn_index']
+
+            # Get previous and next turns for context
+            prev_turn = None
+            next_turn = None
+
+            if isinstance(turns, list):
+                # JSONB array is 0-indexed, WITH ORDINALITY is 1-indexed
+                actual_index = turn_index - 1
+
+                if actual_index > 0 and actual_index - 1 < len(turns):
+                    prev_turn_data = turns[actual_index - 1]
+                    if isinstance(prev_turn_data, dict):
+                        prev_turn = {
+                            'role': prev_turn_data.get('role', ''),
+                            'content': prev_turn_data.get('content', '')[:300],
+                        }
+
+                if actual_index < len(turns) - 1:
+                    next_turn_data = turns[actual_index + 1]
+                    if isinstance(next_turn_data, dict):
+                        next_turn = {
+                            'role': next_turn_data.get('role', ''),
+                            'content': next_turn_data.get('content', '')[:300],
+                        }
+
+            matches.append({
+                'conversation_id': row['conversation_id'],
+                'session_id': row['session_id'],
+                'project': row['project_name'],
+                'summary': row['summary'],
+                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                'turn_count': row['turn_count'],
+                'matching_turn': {
+                    'turn_index': turn_index,
+                    'role': row['role'],
+                    'content': row['content'],
+                },
+                'prev_turn': prev_turn,
+                'next_turn': next_turn,
+            })
+
+        return {
+            "success": True,
+            "query": query,
+            "match_count": len(matches),
+            "matches": matches,
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to search conversations: {str(e)}",
+        }
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def update_claude_md(
+    project: str,
+    section: str,
+    content: str,
+    mode: Literal["replace", "append"] = "replace",
+) -> dict:
+    """Update a section in CLAUDE.md file.
+
+    Finds CLAUDE.md in the project workspace, parses it by ## headers,
+    and updates the specified section. Optionally updates the profiles table.
+
+    Args:
+        project: Project name.
+        section: Section header name (without ##, e.g., "Problem Statement").
+        content: Content to write to the section.
+        mode: 'replace' to replace section content, 'append' to add to end of section.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get project_path from workspaces
+        cur.execute("""
+            SELECT project_path FROM claude.workspaces WHERE project_name = %s
+        """, (project,))
+        row = cur.fetchone()
+
+        if not row:
+            return {"success": False, "error": f"Project '{project}' not found in workspaces"}
+
+        project_path = row['project_path']
+        claude_md_path = Path(project_path) / "CLAUDE.md"
+
+        if not claude_md_path.exists():
+            return {"success": False, "error": f"CLAUDE.md not found at {claude_md_path}"}
+
+        # Read and parse CLAUDE.md
+        with open(claude_md_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        # Find sections by ## headers
+        sections = {}
+        current_section = None
+        current_lines = []
+
+        for i, line in enumerate(lines):
+            if line.startswith('## '):
+                # Save previous section
+                if current_section:
+                    sections[current_section] = {
+                        'start_idx': sections[current_section]['start_idx'],
+                        'end_idx': i,
+                        'lines': current_lines
+                    }
+                # Start new section
+                current_section = line[3:].strip()
+                sections[current_section] = {'start_idx': i, 'end_idx': None}
+                current_lines = []
+            elif current_section:
+                current_lines.append(line)
+
+        # Save last section
+        if current_section:
+            sections[current_section] = {
+                'start_idx': sections[current_section]['start_idx'],
+                'end_idx': len(lines),
+                'lines': current_lines
+            }
+
+        # Update the target section
+        target_section = section
+        if target_section not in sections:
+            if mode == 'replace':
+                return {"success": False, "error": f"Section '{section}' not found. Available: {', '.join(sections.keys())}"}
+            else:
+                # Append mode: create new section at end
+                new_section_lines = [f"\n## {section}\n\n", content, "\n\n"]
+                lines.extend(new_section_lines)
+                lines_changed = len(new_section_lines)
+        else:
+            # Section exists
+            sect_info = sections[target_section]
+            start_idx = sect_info['start_idx']
+            end_idx = sect_info['end_idx']
+
+            if mode == 'replace':
+                # Replace: keep header, replace content until next header
+                new_section_content = [f"## {target_section}\n\n", content, "\n\n"]
+                lines = lines[:start_idx] + new_section_content + lines[end_idx:]
+                lines_changed = len(new_section_content) - (end_idx - start_idx)
+            else:
+                # Append: add content before next section
+                append_lines = [content, "\n\n"]
+                lines = lines[:end_idx] + append_lines + lines[end_idx:]
+                lines_changed = len(append_lines)
+
+        # Update profiles table if record exists (DB first, then file)
+        cur.execute("""
+            UPDATE claude.profiles
+            SET config = jsonb_set(
+                COALESCE(config, '{}'::jsonb),
+                '{behavior,claude_md_updated}',
+                'true'::jsonb
+            ),
+            updated_at = NOW()
+            WHERE project_id IN (SELECT project_id FROM claude.workspaces WHERE project_name = %s)
+            RETURNING profile_id::text
+        """, (project,))
+        profile_updated = cur.fetchone() is not None
+
+        # Log to audit_log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, entity_code, to_status, changed_by, change_source, metadata)
+            VALUES (
+                'profiles',
+                (SELECT project_id FROM claude.workspaces WHERE project_name = %s),
+                %s,
+                'updated',
+                %s,
+                'update_claude_md',
+                %s::jsonb
+            )
+        """, (
+            project,
+            f"CLAUDE.md:{section}",
+            os.environ.get('CLAUDE_SESSION_ID'),
+            json.dumps({"section": section, "mode": mode, "lines_changed": lines_changed})
+        ))
+
+        conn.commit()
+
+        # Write file AFTER successful DB commit (file can be re-generated if needed)
+        with open(claude_md_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        return {
+            "success": True,
+            "section_name": section,
+            "lines_changed": lines_changed,
+            "file_path": str(claude_md_path),
+            "mode": mode,
+            "profile_updated": profile_updated,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to update CLAUDE.md: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def sync_profile(
+    project: str,
+    direction: Literal["db_to_file", "file_to_db"] = "db_to_file",
+) -> dict:
+    """Sync CLAUDE.md between database (profiles table) and filesystem.
+
+    Args:
+        project: Project name.
+        direction: 'db_to_file' reads profiles.config->behavior and writes to CLAUDE.md.
+                   'file_to_db' reads CLAUDE.md and updates profiles.config.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get project_path
+        cur.execute("""
+            SELECT w.project_path, w.project_id::text
+            FROM claude.workspaces w
+            WHERE w.project_name = %s
+        """, (project,))
+        row = cur.fetchone()
+
+        if not row:
+            return {"success": False, "error": f"Project '{project}' not found"}
+
+        project_path = row['project_path']
+        project_id = row['project_id']
+        claude_md_path = Path(project_path) / "CLAUDE.md"
+
+        if direction == "db_to_file":
+            # Read from profiles.config->behavior
+            cur.execute("""
+                SELECT config->'behavior' as behavior_text
+                FROM claude.profiles
+                WHERE project_id = %s::uuid
+            """, (project_id,))
+            profile_row = cur.fetchone()
+
+            if not profile_row or not profile_row['behavior_text']:
+                return {"success": False, "error": f"No profile behavior text found for project '{project}'"}
+
+            behavior_text = profile_row['behavior_text']
+            if isinstance(behavior_text, str):
+                new_content = behavior_text
+            else:
+                new_content = json.dumps(behavior_text, indent=2)
+
+            # Read existing file to compute diff
+            old_content = ""
+            if claude_md_path.exists():
+                with open(claude_md_path, 'r', encoding='utf-8') as f:
+                    old_content = f.read()
+
+            # Simple diff summary (computed before file write)
+            old_lines = old_content.split('\n')
+            new_lines = new_content.split('\n')
+            diff_summary = f"Lines: {len(old_lines)} → {len(new_lines)} (Δ {len(new_lines) - len(old_lines)})"
+
+        else:  # file_to_db
+            if not claude_md_path.exists():
+                return {"success": False, "error": f"CLAUDE.md not found at {claude_md_path}"}
+
+            # Read from file
+            with open(claude_md_path, 'r', encoding='utf-8') as f:
+                file_content = f.read()
+
+            # Get old content from DB for diff
+            cur.execute("""
+                SELECT config->'behavior' as behavior_text
+                FROM claude.profiles
+                WHERE project_id = %s::uuid
+            """, (project_id,))
+            profile_row = cur.fetchone()
+            old_content = ""
+            if profile_row and profile_row['behavior_text']:
+                if isinstance(profile_row['behavior_text'], str):
+                    old_content = profile_row['behavior_text']
+                else:
+                    old_content = json.dumps(profile_row['behavior_text'], indent=2)
+
+            # Update profiles.config
+            cur.execute("""
+                INSERT INTO claude.profiles (profile_id, project_id, config, updated_at)
+                VALUES (gen_random_uuid(), %s::uuid, jsonb_build_object('behavior', %s), NOW())
+                ON CONFLICT (project_id) DO UPDATE SET
+                    config = jsonb_set(
+                        COALESCE(claude.profiles.config, '{}'::jsonb),
+                        '{behavior}',
+                        to_jsonb(%s)
+                    ),
+                    updated_at = NOW()
+            """, (project_id, file_content, file_content))
+
+            # Simple diff summary
+            old_lines = old_content.split('\n')
+            new_lines = file_content.split('\n')
+            diff_summary = f"Lines: {len(old_lines)} → {len(new_lines)} (Δ {len(new_lines) - len(old_lines)})"
+
+        # Log to audit_log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, to_status, changed_by, change_source, metadata)
+            VALUES (
+                'profiles',
+                %s::uuid,
+                'synced',
+                %s,
+                'sync_profile',
+                %s::jsonb
+            )
+        """, (
+            project_id,
+            os.environ.get('CLAUDE_SESSION_ID'),
+            json.dumps({"direction": direction, "diff_summary": diff_summary})
+        ))
+
+        conn.commit()
+
+        # Write file AFTER successful DB commit (db_to_file direction only)
+        if direction == "db_to_file":
+            with open(claude_md_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+        return {
+            "success": True,
+            "direction": direction,
+            "diff_summary": diff_summary,
+            "file_path": str(claude_md_path),
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to sync profile: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def deploy_project(
+    project: str,
+    components: list[str] | None = None,
+) -> dict:
+    """Deploy project components from database to filesystem.
+
+    Reads component definitions from the database and writes them to the
+    appropriate locations in the project directory. Self-healing config system.
+
+    Args:
+        project: Project name.
+        components: List of components to deploy. Valid: 'settings', 'rules', 'skills',
+                   'instructions', 'claude_md'. If None, deploys all.
+    """
+    valid_components = ['settings', 'rules', 'skills', 'instructions', 'claude_md']
+    components = components or valid_components
+
+    # Validate components
+    invalid = [c for c in components if c not in valid_components]
+    if invalid:
+        return {"success": False, "error": f"Invalid components: {invalid}. Valid: {valid_components}"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get project info
+        cur.execute("""
+            SELECT w.project_path, w.project_id::text, w.project_type, w.startup_config
+            FROM claude.workspaces w
+            WHERE w.project_name = %s
+        """, (project,))
+        row = cur.fetchone()
+
+        if not row:
+            return {"success": False, "error": f"Project '{project}' not found"}
+
+        project_path = Path(row['project_path'])
+        project_id = row['project_id']
+        project_type = row['project_type']
+        startup_config = row['startup_config'] or {}
+
+        deployed = []
+        changes_summary = []
+
+        # Component: settings
+        if 'settings' in components:
+            # Read config_templates + merge with workspace startup_config
+            cur.execute("""
+                SELECT template_config FROM claude.config_templates
+                WHERE template_id = 1  -- hooks-base template
+            """)
+            template_row = cur.fetchone()
+
+            if template_row:
+                base_config = template_row['template_config'] or {}
+                # Merge with startup_config (workspace overrides template)
+                merged_config = {**base_config, **startup_config}
+
+                settings_path = project_path / ".claude" / "settings.local.json"
+                settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+                with open(settings_path, 'w', encoding='utf-8') as f:
+                    json.dump(merged_config, f, indent=2)
+
+                deployed.append('settings')
+                changes_summary.append(f"settings: {len(merged_config)} keys → {settings_path}")
+
+        # Component: rules
+        if 'rules' in components:
+            # Check if table exists
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'claude' AND table_name = 'rules'
+                )
+            """)
+            if cur.fetchone()['exists']:
+                cur.execute("""
+                    SELECT rule_name, rule_content
+                    FROM claude.rules
+                    WHERE project_id = %s::uuid OR project_id IS NULL
+                """, (project_id,))
+                rules = cur.fetchall()
+
+                if rules:
+                    rules_dir = project_path / ".claude" / "rules"
+                    rules_dir.mkdir(parents=True, exist_ok=True)
+
+                    for rule in rules:
+                        rule_file = rules_dir / f"{rule['rule_name']}.md"
+                        with open(rule_file, 'w', encoding='utf-8') as f:
+                            f.write(rule['rule_content'])
+
+                    deployed.append('rules')
+                    changes_summary.append(f"rules: {len(rules)} files → {rules_dir}")
+                else:
+                    changes_summary.append("rules: No rules found for this project")
+            else:
+                changes_summary.append("rules: Table 'claude.rules' does not exist")
+
+        # Component: skills
+        if 'skills' in components:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'claude' AND table_name = 'skill_content'
+                )
+            """)
+            if cur.fetchone()['exists']:
+                cur.execute("""
+                    SELECT skill_name, content
+                    FROM claude.skill_content
+                    WHERE project_id = %s::uuid OR project_id IS NULL
+                """, (project_id,))
+                skills = cur.fetchall()
+
+                if skills:
+                    skills_dir = project_path / ".claude" / "skills"
+                    skills_dir.mkdir(parents=True, exist_ok=True)
+
+                    for skill in skills:
+                        skill_dir = skills_dir / skill['skill_name']
+                        skill_dir.mkdir(parents=True, exist_ok=True)
+                        skill_file = skill_dir / "SKILL.md"
+                        with open(skill_file, 'w', encoding='utf-8') as f:
+                            f.write(skill['content'])
+
+                    deployed.append('skills')
+                    changes_summary.append(f"skills: {len(skills)} skills → {skills_dir}")
+                else:
+                    changes_summary.append("skills: No skills found for this project")
+            else:
+                changes_summary.append("skills: Table 'claude.skill_content' does not exist")
+
+        # Component: instructions
+        if 'instructions' in components:
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'claude' AND table_name = 'instructions'
+                )
+            """)
+            if cur.fetchone()['exists']:
+                cur.execute("""
+                    SELECT instruction_name, content
+                    FROM claude.instructions
+                    WHERE project_id = %s::uuid OR project_id IS NULL
+                """, (project_id,))
+                instructions = cur.fetchall()
+
+                if instructions:
+                    instructions_dir = project_path / ".claude" / "instructions"
+                    instructions_dir.mkdir(parents=True, exist_ok=True)
+
+                    for instr in instructions:
+                        instr_file = instructions_dir / f"{instr['instruction_name']}.instructions.md"
+                        with open(instr_file, 'w', encoding='utf-8') as f:
+                            f.write(instr['content'])
+
+                    deployed.append('instructions')
+                    changes_summary.append(f"instructions: {len(instructions)} files → {instructions_dir}")
+                else:
+                    changes_summary.append("instructions: No instructions found for this project")
+            else:
+                changes_summary.append("instructions: Table 'claude.instructions' does not exist")
+
+        # Component: claude_md
+        if 'claude_md' in components:
+            cur.execute("""
+                SELECT config->'behavior' as behavior_text
+                FROM claude.profiles
+                WHERE project_id = %s::uuid
+            """, (project_id,))
+            profile_row = cur.fetchone()
+
+            if profile_row and profile_row['behavior_text']:
+                behavior_text = profile_row['behavior_text']
+                if not isinstance(behavior_text, str):
+                    behavior_text = json.dumps(behavior_text, indent=2)
+
+                claude_md_path = project_path / "CLAUDE.md"
+                with open(claude_md_path, 'w', encoding='utf-8') as f:
+                    f.write(behavior_text)
+
+                deployed.append('claude_md')
+                changes_summary.append(f"claude_md: {len(behavior_text)} chars → {claude_md_path}")
+            else:
+                changes_summary.append("claude_md: No profile found for this project")
+
+        # Log to audit_log
+        for component in deployed:
+            cur.execute("""
+                INSERT INTO claude.audit_log
+                (entity_type, entity_id, to_status, changed_by, change_source, metadata)
+                VALUES (
+                    'project_deployment',
+                    %s::uuid,
+                    'deployed',
+                    %s,
+                    'deploy_project',
+                    %s::jsonb
+                )
+            """, (
+                project_id,
+                os.environ.get('CLAUDE_SESSION_ID'),
+                json.dumps({"component": component})
+            ))
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "project": project,
+            "deployed_components": deployed,
+            "changes_summary": changes_summary,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to deploy project: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def regenerate_settings(
+    project: str,
+) -> dict:
+    """Regenerate .claude/settings.local.json from database (config_templates + workspace overrides).
+
+    Reads the base template and merges with project-specific overrides, then writes
+    to the project's .claude/settings.local.json file.
+
+    Args:
+        project: Project name.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get workspace info
+        cur.execute("""
+            SELECT w.project_path, w.startup_config, w.project_type
+            FROM claude.workspaces w
+            WHERE w.project_name = %s
+        """, (project,))
+        row = cur.fetchone()
+
+        if not row:
+            return {"success": False, "error": f"Project '{project}' not found in workspaces"}
+
+        project_path = Path(row['project_path'])
+        startup_config = row['startup_config'] or {}
+        project_type = row['project_type']
+
+        # Get base template (template_id=1 = hooks-base)
+        cur.execute("""
+            SELECT template_config FROM claude.config_templates
+            WHERE template_id = 1
+        """)
+        template_row = cur.fetchone()
+
+        if not template_row:
+            return {"success": False, "error": "Base config template (template_id=1) not found"}
+
+        base_config = template_row['template_config'] or {}
+
+        # Merge: workspace overrides base
+        merged_config = {**base_config, **startup_config}
+
+        # Write to .claude/settings.local.json
+        settings_path = project_path / ".claude" / "settings.local.json"
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Read old settings to compute diff
+        old_config = {}
+        if settings_path.exists():
+            with open(settings_path, 'r', encoding='utf-8') as f:
+                old_config = json.load(f)
+
+        # Write new settings
+        with open(settings_path, 'w', encoding='utf-8') as f:
+            json.dump(merged_config, f, indent=2)
+
+        # Compute changes
+        changes = []
+        for key in set(list(old_config.keys()) + list(merged_config.keys())):
+            if key not in old_config:
+                changes.append(f"+ {key}")
+            elif key not in merged_config:
+                changes.append(f"- {key}")
+            elif old_config[key] != merged_config[key]:
+                changes.append(f"~ {key}")
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "project": project,
+            "file_path": str(settings_path),
+            "changes": changes,
+            "total_keys": len(merged_config),
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to regenerate settings: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Import existing tools from server.py for backward compatibility
+# ============================================================================
+
+# Import the old server module to get access to all existing tool implementations
+_old_server_dir = os.path.dirname(os.path.abspath(__file__))
+if _old_server_dir not in sys.path:
+    sys.path.insert(0, _old_server_dir)
+
+# We import the tool implementations (not the MCP app) from the old server
+from server import (  # noqa: E402
+    tool_get_project_context,
+    tool_get_session_resume,
+    tool_get_incomplete_todos,
+    tool_restore_session_todos,
+    tool_create_feedback,
+    tool_create_feature,
+    tool_add_build_task,
+    tool_get_ready_tasks,
+    tool_update_work_status,
+    tool_find_skill,
+    tool_todos_to_build_tasks,
+    tool_store_knowledge,
+    tool_recall_knowledge,
+    tool_link_knowledge,
+    tool_get_related_knowledge,
+    tool_mark_knowledge_applied,
+    tool_store_session_fact,
+    tool_recall_session_fact,
+    tool_list_session_facts,
+    tool_recall_previous_session_facts,
+    tool_store_session_notes,
+    tool_get_session_notes,
+    get_valid_values,
+    validate_value,
+    generate_embedding,
+    generate_query_embedding,
+)
+
+
+# ============================================================================
+# Legacy Tool Wrappers (backward compatibility)
+# ============================================================================
+# These wrap the old async tool implementations as sync FastMCP tools.
+# They maintain the exact same interface so existing callers don't break.
+
+import asyncio
+
+def _run_async(coro):
+    """Run an async function synchronously."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # We're already in an async context - create a new thread
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, coro).result()
+    else:
+        return asyncio.run(coro)
+
+
+@mcp.tool()
+def get_project_context(
+    project_path: str,
+) -> dict:
+    """DEPRECATED: Use start_session() instead.
+
+    Loads project context. start_session() returns everything this does plus todos,
+    work items, and messages in a single optimized call.
+
+    Args:
+        project_path: Project path or name (e.g., 'claude-family' or 'C:/Projects/claude-family').
+    """
+    return _run_async(tool_get_project_context(project_path))
+
+
+@mcp.tool()
+def get_session_resume(
+    project: str,
+) -> dict:
+    """DEPRECATED: Use start_session() instead.
+
+    Gets session resume context. start_session() returns everything this does plus
+    work items in a single optimized call.
+
+    Args:
+        project: Project name (defaults to current directory basename).
+    """
+    return _run_async(tool_get_session_resume(project))
+
+
+@mcp.tool()
+def get_incomplete_todos(
+    project: str,
+) -> dict:
+    """Get all incomplete todos for a project across all sessions.
+
+    Args:
+        project: Project name or path.
+    """
+    return _run_async(tool_get_incomplete_todos(project))
+
+
+@mcp.tool()
+def restore_session_todos(
+    session_id: str,
+) -> dict:
+    """Get todos from a specific past session, formatted for TodoWrite.
+
+    Args:
+        session_id: Session UUID to restore todos from.
+    """
+    return _run_async(tool_restore_session_todos(session_id))
+
+
+@mcp.tool()
+def create_feedback(
+    project: str,
+    feedback_type: Literal["bug", "design", "idea", "question", "change", "improvement"],
+    description: str,
+    title: str = "",
+    priority: Literal["high", "medium", "low"] = "medium",
+) -> dict:
+    """Report a bug, propose a change, or capture an idea.
+
+    Use when you discover a bug, have an improvement idea, or want to propose a change.
+    Auto-validates against column_registry.
+
+    Args:
+        project: Project name or path.
+        feedback_type: bug=something broken, idea=enhancement, change=behavior modification,
+                       question=needs clarification, design=visual/UX issue, improvement=general improvement.
+        description: Detailed description of the feedback.
+        title: Short title (optional, defaults to first 50 chars of description).
+        priority: high, medium (default), or low.
+    """
+    return _run_async(tool_create_feedback(project, feedback_type, description, title or None, priority))
+
+
+@mcp.tool()
+def create_feature(
+    project: str,
+    feature_name: str,
+    description: str,
+    feature_type: Literal["feature", "enhancement", "refactor", "infrastructure", "documentation"] = "feature",
+    priority: Literal[1, 2, 3, 4, 5] = 3,
+    plan_data: dict | None = None,
+) -> dict:
+    """Create a feature for tracking implementation.
+
+    Args:
+        project: Project name or path.
+        feature_name: Feature name.
+        description: Feature description.
+        feature_type: feature, enhancement, refactor, infrastructure, or documentation.
+        priority: 1=critical, 2=high, 3=medium (default), 4=low, 5=minimal.
+        plan_data: Optional structured plan data (requirements, risks, etc.).
+    """
+    return _run_async(tool_create_feature(project, feature_name, description, feature_type, priority, plan_data))
+
+
+@mcp.tool()
+def add_build_task(
+    feature_id: str,
+    task_name: str,
+    task_description: str = "",
+    task_type: Literal["implementation", "testing", "documentation", "deployment", "investigation"] = "implementation",
+    files_affected: list[str] | None = None,
+    blocked_by_task_id: str = "",
+) -> dict:
+    """Add a build task to a feature. Tasks are ordered by step_order.
+
+    Args:
+        feature_id: Feature ID or short_code (e.g., 'F12').
+        task_name: Task name.
+        task_description: Detailed description (optional).
+        task_type: implementation, testing, documentation, deployment, or investigation.
+        files_affected: List of files this task will modify.
+        blocked_by_task_id: Task ID that blocks this one (optional).
+    """
+    return _run_async(tool_add_build_task(
+        feature_id, task_name,
+        task_description or None,
+        task_type,
+        files_affected,
+        blocked_by_task_id or None,
+    ))
+
+
+@mcp.tool()
+def get_ready_tasks(
+    project: str,
+) -> dict:
+    """Get build tasks that are ready to work on (not blocked).
+
+    Args:
+        project: Project name or path.
+    """
+    return _run_async(tool_get_ready_tasks(project))
+
+
+@mcp.tool()
+def update_work_status(
+    item_type: Literal["feedback", "feature", "build_task"],
+    item_id: str,
+    new_status: str,
+) -> dict:
+    """Update status of a feedback, feature, or build_task.
+
+    Routes through WorkflowEngine for state machine enforcement.
+    Use short codes: FB12, F5, BT23.
+
+    Args:
+        item_type: Type of item: feedback, feature, or build_task.
+        item_id: Item ID or short_code (e.g., 'FB12', 'F5', 'BT23').
+        new_status: New status value. Invalid transitions are rejected.
+    """
+    # Map legacy item_type names to entity_type
+    entity_type_map = {
+        'feedback': 'feedback',
+        'feature': 'features',
+        'build_task': 'build_tasks',
+    }
+    entity_type = entity_type_map.get(item_type, item_type)
+
+    return advance_status(
+        item_type=entity_type,
+        item_id=item_id,
+        new_status=new_status,
+    )
+
+
+@mcp.tool()
+def find_skill(
+    task_description: str,
+    limit: int = 5,
+) -> dict:
+    """Search skill_content by task description to find relevant skills/guidelines.
+
+    Args:
+        task_description: Description of what you're trying to do.
+        limit: Max results (default: 5).
+    """
+    return _run_async(tool_find_skill(task_description, limit))
+
+
+@mcp.tool()
+def todos_to_build_tasks(
+    feature_id: str,
+    project: str,
+    include_completed: bool = False,
+) -> dict:
+    """Convert session todos to persistent build_tasks linked to a feature.
+
+    Archives the converted todos after creating build_tasks.
+
+    Args:
+        feature_id: Feature ID or short_code to link tasks to.
+        project: Project name or path.
+        include_completed: Include completed todos (default: false).
+    """
+    return _run_async(tool_todos_to_build_tasks(feature_id, project, include_completed))
+
+
+@mcp.tool()
+def store_knowledge(
+    title: str,
+    description: str,
+    knowledge_type: Literal["learned", "pattern", "gotcha", "preference", "fact", "procedure"] = "learned",
+    knowledge_category: str = "",
+    code_example: str = "",
+    applies_to_projects: list[str] | None = None,
+    applies_to_platforms: list[str] | None = None,
+    confidence_level: int = 80,
+    source: str = "",
+) -> dict:
+    """Store new knowledge with automatic embedding for semantic search.
+
+    Use for learnings, patterns, gotchas, preferences, facts, or procedures.
+
+    Args:
+        title: Short descriptive title.
+        description: Detailed knowledge content.
+        knowledge_type: learned, pattern, gotcha, preference, fact, or procedure.
+        knowledge_category: Category (e.g., 'database', 'react', 'testing').
+        code_example: Optional code example.
+        applies_to_projects: Projects this knowledge applies to (null = all).
+        applies_to_platforms: Platforms (windows, mac, linux).
+        confidence_level: Confidence 0-100 (default: 80).
+        source: Source of knowledge (e.g., 'session', 'documentation').
+    """
+    return _run_async(tool_store_knowledge(
+        title, description, knowledge_type,
+        knowledge_category or None,
+        code_example or None,
+        applies_to_projects,
+        applies_to_platforms,
+        confidence_level,
+        source or None,
+    ))
+
+
+@mcp.tool()
+def recall_knowledge(
+    query: str,
+    limit: int = 5,
+    knowledge_type: str = "",
+    project: str = "",
+    min_similarity: float = 0.5,
+    domain: str = "",
+    source_type: str = "",
+    tags: list[str] | None = None,
+    date_range_days: int | None = None,
+) -> dict:
+    """Semantic search over knowledge entries with structured filters.
+
+    Use to find relevant learnings, patterns, or facts with optional filtering.
+
+    Args:
+        query: Natural language query.
+        limit: Max results (default: 5).
+        knowledge_type: Filter by type (optional).
+        project: Filter by project (optional).
+        min_similarity: Minimum similarity 0-1 (default: 0.5).
+        domain: Filter by knowledge domain (e.g., 'database', 'winforms', 'hooks', 'mcp') (optional).
+        source_type: Filter by source (e.g., 'session', 'vault', 'manual', 'conversation') (optional).
+        tags: Filter by tags array overlap (optional).
+        date_range_days: Filter to knowledge created within N days (optional).
+    """
+    return _run_async(tool_recall_knowledge(
+        query, limit,
+        knowledge_type or None,
+        project or None,
+        min_similarity,
+        domain or None,
+        source_type or None,
+        tags,
+        date_range_days,
+    ))
+
+
+@mcp.tool()
+def link_knowledge(
+    from_knowledge_id: str,
+    to_knowledge_id: str,
+    relation_type: Literal["extends", "contradicts", "supports", "supersedes", "depends_on", "relates_to", "part_of", "caused_by"],
+    strength: float = 1.0,
+    notes: str = "",
+) -> dict:
+    """Create a typed relation between knowledge entries.
+
+    Args:
+        from_knowledge_id: Source knowledge UUID.
+        to_knowledge_id: Target knowledge UUID.
+        relation_type: Type of relation.
+        strength: Relation strength 0-1 (default: 1.0).
+        notes: Optional notes about the relation.
+    """
+    return _run_async(tool_link_knowledge(
+        from_knowledge_id, to_knowledge_id, relation_type,
+        strength, notes or None,
+    ))
+
+
+@mcp.tool()
+def get_related_knowledge(
+    knowledge_id: str,
+    relation_types: list[str] | None = None,
+    include_reverse: bool = True,
+) -> dict:
+    """Get knowledge entries related to a given entry via knowledge_relations.
+
+    Args:
+        knowledge_id: Knowledge UUID to find relations for.
+        relation_types: Filter by relation types (optional).
+        include_reverse: Include incoming relations (default: true).
+    """
+    return _run_async(tool_get_related_knowledge(knowledge_id, relation_types, include_reverse))
+
+
+@mcp.tool()
+def mark_knowledge_applied(
+    knowledge_id: str,
+    success: bool = True,
+) -> dict:
+    """Track when knowledge is applied (success or failure). Updates confidence level.
+
+    Args:
+        knowledge_id: Knowledge UUID that was applied.
+        success: Whether application was successful (default: true).
+    """
+    return _run_async(tool_mark_knowledge_applied(knowledge_id, success))
+
+
+@mcp.tool()
+def store_session_fact(
+    fact_key: str,
+    fact_value: str,
+    fact_type: Literal["credential", "config", "endpoint", "decision", "note", "data", "reference"] = "note",
+    is_sensitive: bool = False,
+    project_name: str = "",
+) -> dict:
+    """Store a fact in your session notepad (survives context compaction).
+
+    Use for: credentials, configs, endpoints, decisions, findings.
+    These facts persist in the database so you don't forget them.
+
+    Args:
+        fact_key: Unique key for the fact (e.g., 'api_endpoint', 'nimbus_creds').
+        fact_value: The fact value to store.
+        fact_type: credential, config, endpoint, decision, note (default), data, or reference.
+        is_sensitive: If true, value won't appear in logs (default: false).
+        project_name: Project name (default: current directory).
+    """
+    return _run_async(tool_store_session_fact(
+        fact_key, fact_value, fact_type, is_sensitive,
+        project_name or None,
+    ))
+
+
+@mcp.tool()
+def recall_session_fact(
+    fact_key: str,
+    project_name: str = "",
+) -> dict:
+    """Recall a specific fact by key. Looks in current session first, falls back to recent.
+
+    Args:
+        fact_key: The key of the fact to recall.
+        project_name: Project name (default: current directory).
+    """
+    return _run_async(tool_recall_session_fact(fact_key, project_name or None))
+
+
+@mcp.tool()
+def list_session_facts(
+    project_name: str = "",
+    include_sensitive: bool = False,
+) -> dict:
+    """List all facts stored in the current session.
+
+    Args:
+        project_name: Project name (default: current directory).
+        include_sensitive: Include sensitive fact values (default: false).
+    """
+    return _run_async(tool_list_session_facts(project_name or None, include_sensitive))
+
+
+@mcp.tool()
+def recall_previous_session_facts(
+    project_name: str = "",
+    n_sessions: int = 3,
+    fact_types: list[str] | None = None,
+) -> dict:
+    """Recall facts from previous sessions (after context compaction).
+
+    Use when resuming work or after compaction to recover important info.
+
+    Args:
+        project_name: Project name (default: current directory).
+        n_sessions: Number of previous sessions to check (default: 3).
+        fact_types: Filter by fact types (optional).
+    """
+    return _run_async(tool_recall_previous_session_facts(project_name or None, n_sessions, fact_types))
+
+
+@mcp.tool()
+def store_session_notes(
+    content: str,
+    section: Literal["general", "decisions", "progress", "blockers", "findings"] = "general",
+    append: bool = True,
+) -> dict:
+    """Store structured notes during a session (persists to markdown file).
+
+    Use for: progress tracking, key decisions, architectural notes, important findings.
+
+    Args:
+        content: Note content to store.
+        section: Section header: general, decisions, progress, blockers, or findings.
+        append: If True, append to section. If False, replace section.
+    """
+    return _run_async(tool_store_session_notes(content, section, append))
+
+
+@mcp.tool()
+def get_session_notes(
+    section: str = "",
+) -> dict:
+    """Retrieve session notes for the current project.
+
+    Useful after context compaction to review what was done.
+
+    Args:
+        section: Section to retrieve (optional). If omitted, returns all notes.
+    """
+    return _run_async(tool_get_session_notes(section or None))
+
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")

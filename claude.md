@@ -60,7 +60,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
-- **MCP Servers**: orchestrator, postgres, memory, filesystem, vault-rag
+- **MCP Servers**: orchestrator, postgres, project-tools, python-repl, sequential-thinking
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
@@ -115,10 +115,49 @@ claude-family/
 | An idea | feedback | type='idea' |
 | A bug | feedback | type='bug' |
 | A feature to build | features | link to project |
-| A task to do | build_tasks | link to feature |
+| A task to do | build_tasks | `create_linked_task(feature_code, ...)` |
 | Work right now | TodoWrite | session only |
 
 **Data Gateway**: Before writing, check `claude.column_registry` for valid values.
+
+### Workflow Tools (v3 Application Layer)
+
+Status changes go through the **WorkflowEngine** state machine. Invalid transitions are rejected.
+
+| Tool | Use When |
+|------|----------|
+| `advance_status(type, id, status)` | Move any item through its state machine |
+| `start_work(task_code)` | Start a build task (todo→in_progress + loads plan_data) |
+| `complete_work(task_code)` | Finish a task (in_progress→completed + suggests next task) |
+| `get_work_context(scope)` | Token-budgeted context: current/feature/project |
+| `create_linked_task(feature, name, desc, verification, files)` | Add detailed task to active feature |
+
+### Config Tools (v3)
+
+| Tool | Use When |
+|------|----------|
+| `update_claude_md(project, section, content)` | Update a CLAUDE.md section atomically |
+| `sync_profile(project, direction)` | Sync CLAUDE.md between DB and file |
+| `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
+| `regenerate_settings(project)` | Regenerate settings.local.json from DB |
+
+### Knowledge Tools (v3)
+
+| Tool | Use When |
+|------|----------|
+| `store_book(title, author, ...)` | Add book to reference library |
+| `store_book_reference(book, concept, ...)` | Add concept reference with embedding |
+| `recall_book_reference(query, ...)` | Semantic search over book references |
+| `extract_insights(session_id)` | Extract knowledge from past conversations |
+| `search_conversations(query, ...)` | Full-text search across stored conversations |
+| `extract_conversation(session_id)` | Parse JSONL conversation log |
+
+**State Machines** (enforced by `claude.workflow_transitions`):
+- **Feedback**: new → triaged → in_progress → resolved
+- **Features**: draft → planned → in_progress → completed (requires all_tasks_done)
+- **Build tasks**: todo → in_progress → completed (triggers feature check)
+
+All transitions logged to `claude.audit_log`.
 
 ---
 
@@ -195,7 +234,7 @@ CAPTURE (Obsidian) ──> EMBED (Voyage AI) ──> SEARCH (RAG) ──> DELIVE
 
 - **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter, Obsidian-compatible
 - **Embeddings**: Voyage AI (voyage-3, 1024 dimensions) → PostgreSQL pgvector
-- **RAG**: `vault-rag` MCP server - Semantic search over vault (85% token reduction)
+- **RAG**: Automatic via `rag_query_hook.py` on UserPromptSubmit (85% token reduction)
 - **Versioning**: File hash tracking - only re-embed changed files
 - **Commands**: `/knowledge-capture`, `/session-end`
 
@@ -207,11 +246,8 @@ CAPTURE (Obsidian) ──> EMBED (Voyage AI) ──> SEARCH (RAG) ──> DELIVE
 - Need patterns or gotchas → Search 30-Patterns/
 - Unsure which vault doc has the answer → Use semantic search
 
-**Tools** (`vault-rag` MCP):
-- `semantic_search(query)` - Find relevant chunks by natural language
-- `get_document(path)` - Retrieve full document
-- `list_vault_documents(folder)` - Browse available docs
-- `vault_stats()` - Check embedding status
+**How it works**: The `rag_query_hook.py` (UserPromptSubmit hook) automatically queries vault embeddings
+on questions/exploration prompts. Results are silently injected into context. Action prompts skip RAG.
 
 **Details**: See `knowledge-vault/Claude Family/RAG Usage Guide.md`
 
@@ -233,11 +269,12 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-02-11 | **v3 Application Layer**: 15 new tools (config ops, knowledge, conversations, books), 3 new tables, 40+ total tools |
+| 2026-02-10 | **v2 Application Layer**: WorkflowEngine state machine, 5 new tools, audit_log, trimmed context injection |
 | 2026-01-03 | **Infrastructure Audit**: Fixed broken session commands, added 10 DB indexes, removed redundant hooks |
-| 2025-12-30 | **RAG System**: vault-rag MCP, Voyage AI embeddings, 85% token reduction |
+| 2025-12-30 | **RAG System**: Voyage AI embeddings, automatic via hook (85% token reduction) |
 | 2025-12-21 | **Skills-First** (ADR-005): Replaced process_router, 8 core skills |
 | 2025-12-21 | **Auto-apply instructions**: 9 instruction files in `~/.claude/instructions/` |
-| 2025-12-20 | Config restructure: Family Rules.md, global CLAUDE.md update |
 
 **Full changelog**: See git log or `docs/INFRASTRUCTURE_AUDIT_REPORT.md`
 
@@ -260,7 +297,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 ---
 
-**Version**: 2.9 (Infrastructure audit fixes, session workflow clarified)
+**Version**: 3.2 (v3 application layer: 15 new tools, config ops, knowledge enhancement, conversation persistence)
 **Created**: 2025-10-21
-**Updated**: 2026-01-03
+**Updated**: 2026-02-11
 **Location**: C:\Projects\claude-family\CLAUDE.md

@@ -1002,9 +1002,13 @@ async def tool_recall_knowledge(
     limit: int = 5,
     knowledge_type: Optional[str] = None,
     project: Optional[str] = None,
-    min_similarity: float = 0.5
+    min_similarity: float = 0.5,
+    domain: Optional[str] = None,
+    source_type: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    date_range_days: Optional[int] = None
 ) -> Dict:
-    """Semantic search over knowledge entries."""
+    """Semantic search over knowledge entries with structured filters."""
     if not VOYAGE_API_KEY:
         return {"error": "VOYAGE_API_KEY not set - cannot perform semantic search"}
 
@@ -1028,6 +1032,24 @@ async def tool_recall_knowledge(
         if project:
             filters.append("AND (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)")
             filter_params.append(project)
+
+        if domain:
+            filters.append("AND knowledge_category ILIKE %s")
+            filter_params.append(f"%{domain}%")
+
+        if source_type:
+            filters.append("AND source ILIKE %s")
+            filter_params.append(f"%{source_type}%")
+
+        if tags and len(tags) > 0:
+            # No dedicated tags column - match against knowledge_category
+            tag_conditions = " OR ".join(["knowledge_category ILIKE %s" for _ in tags])
+            filters.append(f"AND ({tag_conditions})")
+            filter_params.extend([f"%{t}%" for t in tags])
+
+        if date_range_days is not None and date_range_days > 0:
+            filters.append("AND created_at > NOW() - INTERVAL %s")
+            filter_params.append(f"{date_range_days} days")
 
         filter_clause = " ".join(filters)
 

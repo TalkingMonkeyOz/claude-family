@@ -33,11 +33,12 @@ Registry of installed MCPs with project assignments and token costs.
 **Docs**: [[Orchestrator MCP]]
 
 ### project-tools
-**Purpose**: Work tracking, knowledge graph, session facts, todos
-**Tokens**: ~8k
+**Purpose**: Work tracking, knowledge, config ops, conversations, books
+**Tokens**: ~12k
 **Package**: Custom (`mcp-servers/project-tools/`)
 **Scope**: Global (all projects)
-**Key tools**: create_feedback, create_feature, store_knowledge, session facts
+**Key tools**: advance_status, start_work, complete_work, update_claude_md, extract_conversation, store_book, recall_knowledge (40+ total)
+**Note**: v3 (2026-02-11): Added 15 tools across 4 pillars (P0: Conversations, P1: Config, P2: Knowledge, P3: Work Tracking)
 
 ### sequential-thinking
 **Purpose**: Complex multi-step reasoning
@@ -151,7 +152,7 @@ Registry of installed MCPs with project assignments and token costs.
 
 ---
 
-**Version**: 3.0 (Added project-tools, nimbus-knowledge; removed memory, filesystem, vault-rag)
+**Version**: 3.2 (Added project-tools v3 details - 40+ tools)
 **Created**: 2025-12-26
-**Updated**: 2026-02-07
+**Updated**: 2026-02-11
 **Location**: Claude Family/MCP Registry.md

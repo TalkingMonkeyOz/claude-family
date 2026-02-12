@@ -3,7 +3,7 @@ title: MCP Server Management
 category: domain-knowledge
 domain: claude-code
 created: 2025-12-28
-updated: 2025-12-28
+updated: 2026-02-10
 tags:
   - mcp
   - configuration
@@ -170,11 +170,30 @@ WHERE project_name = 'finance-htmx';
 | MCP | Package | Purpose |
 |-----|---------|---------|
 | **postgres** | `postgres-mcp` | Database access, schema introspection |
-| **project-tools** | Custom Python | Work tracking, knowledge, session facts |
+| **project-tools** | Custom Python | Work tracking, knowledge, config ops, conversations, books (40+ tools) |
 | **sequential-thinking** | `@modelcontextprotocol/server-sequential-thinking` | Complex reasoning |
 | **orchestrator** | Custom Python | Agent spawning, messaging |
 | ~~memory~~ | ~~`@modelcontextprotocol/server-memory`~~ | Removed 2026-01 (replaced by project-tools knowledge) |
 | ~~filesystem~~ | ~~`@modelcontextprotocol/server-filesystem`~~ | Removed 2026-01 (Claude has built-in Read/Write/Edit) |
+
+### project-tools v3 Tool Categories
+
+The project-tools MCP evolved from a CRUD wrapper (v1) to a workflow engine (v2) to a comprehensive operations platform (v3).
+
+**Four Pillars** (15 new tools in v3):
+
+| Pillar | Tools | Purpose |
+|--------|-------|---------|
+| **P0: Conversations** | extract_conversation, search_conversations, extract_insights | Extract and search session JSONL logs |
+| **P1: Config Ops** | update_claude_md, sync_profile, deploy_project, regenerate_settings | File+DB atomic config operations |
+| **P2: Knowledge** | store_book, store_book_reference, recall_book_reference + enhanced recall | Structured knowledge with embeddings |
+| **P3: Work Tracking** | Enhanced create_linked_task, start_session, end_session | Richer context, auto-extraction |
+
+**Total**: 40+ tools (27 from v2 + 15 new in v3)
+
+**See**: [[Application Layer v3]] for detailed architecture.
+
+---
 
 ### Tech Stack Specific (Project)
 
@@ -287,7 +306,7 @@ mcp__orchestrator__spawn_agent(
 
 **Global MCPs:**
 - postgres (database queries)
-- memory (knowledge persistence)
+- project-tools (work tracking, knowledge persistence)
 
 **Project MCPs:**
 - Tech stack specific (as above)
@@ -295,7 +314,7 @@ mcp__orchestrator__spawn_agent(
 **Workflow:**
 1. Query database via postgres MCP
 2. Generate code using tech stack MCP (Tailwind/MUI)
-3. Store learned patterns in memory MCP
+3. Store learned patterns via project-tools knowledge functions
 
 ---
 
@@ -483,7 +502,7 @@ INSERT INTO claude.mcp_configs (
 
 ---
 
-**Version**: 1.0
+**Version**: 1.2
 **Created**: 2025-12-28
-**Updated**: 2025-12-28
+**Updated**: 2026-02-11
 **Location**: 20-Domains/MCP Server Management.md

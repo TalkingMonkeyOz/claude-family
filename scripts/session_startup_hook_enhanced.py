@@ -169,10 +169,36 @@ def get_db_connection():
     raise last_error if last_error else Exception("No valid connection - set DATABASE_URI or POSTGRES_CONNECTION_STRING env var, or configure ai-workspace/config.py")
 
 def log_session_start(project_name: str, identity_id: str) -> tuple:
-    """Log session start to database, return (session_id, error_msg)."""
+    """Log session start to database, return (session_id, error_msg).
+
+    Uses ON CONFLICT upsert to prevent duplicate session crashes when the
+    SessionStart hook fires multiple times in quick succession (restart/resume).
+    If a session for this project started within the last 60 seconds, reuses it.
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Check for a very recent session (within 60s) to avoid duplicates
+        cur.execute("""
+            SELECT session_id::text
+            FROM claude.sessions
+            WHERE project_name = %s
+              AND identity_id = %s
+              AND session_start > NOW() - INTERVAL '60 seconds'
+              AND session_end IS NULL
+            ORDER BY session_start DESC
+            LIMIT 1
+        """, (project_name, identity_id))
+        existing = cur.fetchone()
+
+        if existing:
+            session_id = existing['session_id']
+            cur.close()
+            conn.close()
+            return (session_id, None)
+
+        # No recent session - create new one
         cur.execute("""
             INSERT INTO claude.sessions
             (session_id, identity_id, session_start, project_name, session_summary)
