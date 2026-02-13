@@ -11,6 +11,7 @@ $Ocpus = 4
 $MemoryGB = 24
 $BootVolumeSizeGB = 200
 $RetryIntervalSeconds = 60
+$CliTimeoutSeconds = 120
 
 # Generate SSH key pair if not present
 $SshKeyPath = "$env:USERPROFILE\.ssh\oci_arm_key"
@@ -32,7 +33,7 @@ Write-Host "Image:    Ubuntu 24.04 Minimal aarch64" -ForegroundColor White
 Write-Host "Boot:     ${BootVolumeSizeGB}GB" -ForegroundColor White
 Write-Host "AD:       $AvailabilityDomain" -ForegroundColor White
 Write-Host "SSH Key:  $SshKeyPath" -ForegroundColor White
-Write-Host "Retry:    Every ${RetryIntervalSeconds}s" -ForegroundColor White
+Write-Host "Retry:    Every ${RetryIntervalSeconds}s (CLI timeout: ${CliTimeoutSeconds}s)" -ForegroundColor White
 Write-Host "=====================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C to stop." -ForegroundColor Yellow
@@ -54,13 +55,27 @@ try {
         $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
         Write-Host "[$timestamp] Attempt #$attempt ..." -ForegroundColor Cyan -NoNewline
 
-        # Use cmd /c to avoid PowerShell output capture hangs with OCI CLI
-        cmd /c "oci compute instance launch --compartment-id $CompartmentId --availability-domain `"$AvailabilityDomain`" --subnet-id $SubnetId --image-id $ImageId --shape $Shape --shape-config file://$ShapeConfigFile --boot-volume-size-in-gbs $BootVolumeSizeGB --display-name $DisplayName --ssh-authorized-keys-file `"$SshKeyPath.pub`" --assign-public-ip true >$StdoutFile 2>$StderrFile"
+        # Use cmd /c with timeout to avoid hangs from OCI CLI endpoint issues
+        $cliCmd = "oci compute instance launch --compartment-id $CompartmentId --availability-domain `"$AvailabilityDomain`" --subnet-id $SubnetId --image-id $ImageId --shape $Shape --shape-config file://$ShapeConfigFile --boot-volume-size-in-gbs $BootVolumeSizeGB --display-name $DisplayName --ssh-authorized-keys-file `"$SshKeyPath.pub`" --assign-public-ip true"
+
+        # Clear previous output files
+        "" | Set-Content $StdoutFile -NoNewline
+        "" | Set-Content $StderrFile -NoNewline
+
+        $process = Start-Process -FilePath "cmd.exe" -ArgumentList "/c $cliCmd >$StdoutFile 2>$StderrFile" -NoNewWindow -PassThru
+        $exited = $process.WaitForExit($CliTimeoutSeconds * 1000)
+
+        if (-not $exited) {
+            $process | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Host " CLI timed out (${CliTimeoutSeconds}s). Retrying..." -ForegroundColor Yellow
+            Start-Sleep -Seconds $RetryIntervalSeconds
+            continue
+        }
 
         $stdout = if (Test-Path $StdoutFile) { Get-Content $StdoutFile -Raw } else { "" }
         $stderr = if (Test-Path $StderrFile) { Get-Content $StderrFile -Raw } else { "" }
 
-        if ($LASTEXITCODE -eq 0 -and $stdout) {
+        if ($process.ExitCode -eq 0 -and $stdout) {
             Write-Host " LAUNCHED!" -ForegroundColor Green
             Write-Host ""
 
