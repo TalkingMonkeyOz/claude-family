@@ -1,74 +1,65 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Performs session summary, knowledge capture, and cleanup before ending.
-
-**Use this for:** Intentional session endings where you want to capture learnings.
-**Automatic fallback:** If you forget, SessionEnd hook auto-closes with a basic summary.
+Before ending this session, complete ALL steps below in order.
 
 ---
 
-## Step 1: Session Summary
+## Step 1: Review Session Work
 
-Summarize the session work:
+Analyze what was accomplished this session:
 
-1. **What was accomplished** (bullet points)
-2. **Key decisions made** (if any)
-3. **What's next** (for future sessions)
+1. Check git status for uncommitted changes
+2. Review your task list (TaskList) for completed/pending items
+3. Identify key decisions, learnings, and blockers
 
-### Save Session Notes (MCP)
+## Step 2: Generate Summary
 
-Use `mcp__project-tools__store_session_notes` to save:
-- `progress`: What was completed
-- `decisions`: Key decisions made
-- `blockers`: Any blockers encountered
+Write a concise session summary covering:
+- **Completed**: What was accomplished (reference feature/task codes)
+- **Pending**: Unfinished work, blockers
+- **Decisions**: Key choices made and rationale
+- **Next steps**: Clear continuation points for next session
 
-### Update Session Focus
+## Step 3: Save to Database
 
-```sql
-UPDATE claude.session_state
-SET current_focus = 'Brief description of current state',
-    next_steps = '[{"step": "Next action", "priority": 2}]'::jsonb,
-    updated_at = NOW()
-WHERE project_name = '{project_name}';
+Call `mcp__project-tools__end_session` with:
+- `summary`: Your session summary (1-3 sentences)
+- `next_steps`: Array of prioritized next actions
+- `tasks_completed`: Array of completed task descriptions
+- `learnings`: Array of key insights (optional)
+
+This properly closes the session in `claude.sessions` with timestamp and summary.
+
+## Step 4: Capture Knowledge (If Applicable)
+
+If you discovered reusable patterns, solutions, or gotchas:
+
+```
+mcp__project-tools__store_knowledge(
+    title="Pattern Name",
+    description="What was learned",
+    knowledge_type="solution|pattern|gotcha|learned",
+    knowledge_category="relevant-category"
+)
 ```
 
----
+## Step 5: Check for Loose Ends
 
-## Step 2: Store Knowledge (If Applicable)
-
-If you discovered a reusable pattern, gotcha, or solution:
-
-Use `mcp__project-tools__store_knowledge` with:
-- `title`: Clear name
-- `content`: What was learned
-- `knowledge_type`: pattern, gotcha, solution, fact, or procedure
-- `topic`: Relevant topic
-- `confidence`: 1-100
+- [ ] Any uncommitted changes that should be committed?
+- [ ] Any unactioned messages in inbox?
+- [ ] Any session facts worth persisting as knowledge?
 
 ---
 
-## Step 3: Persist Incomplete Work
+## What NOT to Do
 
-Check TaskList for any incomplete tasks. For each unfinished task:
-- If it should persist: Ensure it exists as a Todo (task_sync_hook should handle this automatically)
-- If it's no longer needed: Mark as completed or deleted
-
----
-
-## Step 4: Verification
-
-- [ ] Session notes saved via MCP
-- [ ] Knowledge stored (if applicable)
-- [ ] Incomplete tasks persisted as todos
-- [ ] Session state updated with next steps
+- Do NOT write to `claude_family.*` tables (legacy, deprecated)
+- Do NOT use `mcp__memory__` (removed)
+- Do NOT skip calling `end_session` - without it, the session gets marked "auto-closed"
 
 ---
 
-**Note**: Session close timestamp is set automatically by the SessionEnd hook. No manual SQL needed.
-
----
-
-**Version**: 3.0 (Simplified: MCP tools, removed legacy schema/memory MCP references)
-**Created**: 2025-12-15
-**Updated**: 2026-02-08
+**Version**: 5.0 (Uses mcp__project-tools__end_session instead of legacy SQL)
+**Created**: 2025-10-21
+**Updated**: 2026-02-13
 **Location**: .claude/commands/session-end.md

@@ -1,42 +1,37 @@
-**QUICK SESSION RESUME - Database-Driven Context**
+**QUICK SESSION RESUME - Database-Driven Context with Task Restoration**
 
-Query DATABASE for session context - this is the source of truth, not files.
+Single consolidated call to `start_session()`, then restore outstanding tasks as live TaskCreate entries.
 
 ---
 
 ## Execute These Steps
 
-### Step 1: Get Project Context (MCP)
+### Step 1: Load Context (Single Call)
 
-Use `mcp__project-tools__get_project_context` with the current project name.
+Use `mcp__project-tools__start_session` with the current project name.
 
-This returns: project info, phase, last session summary, active feature count, todo count.
+This returns: project info, session state, todos (with `active_form` and `status`), active features, ready tasks, pending messages.
 
-### Step 2: Get Active Todos (MCP)
-
-Use `mcp__project-tools__get_incomplete_todos` with the current project name.
-
-### Step 3: Check Session State
-
-```sql
-SELECT current_focus, next_steps
-FROM claude.session_state
-WHERE project_name = '{project_name}';
-```
-
-### Step 4: Check Messages (MCP)
-
-Use `mcp__orchestrator__check_inbox` with `project_name` parameter.
-
-### Step 5: Check Git Status
+### Step 2: Git Status
 
 ```bash
 git status --short
 ```
 
----
+### Step 3: Restore Tasks
 
-## Display Format
+For each todo returned by `start_session()` (both `in_progress` and `pending` buckets):
+
+1. Call `TaskCreate` with:
+   - `subject`: the todo's `content`
+   - `activeForm`: the todo's `active_form`
+   - `description`: the todo's `content`
+2. If the todo's `status` was `in_progress`:
+   - Call `TaskUpdate(taskId=<new_id>, status="in_progress")`
+
+The `task_sync_hook` will match these to existing DB todos via duplicate detection (75% similarity) and reuse the existing `todo_id` rather than creating duplicates.
+
+### Step 4: Display Resume Box
 
 ```
 +==================================================================+
@@ -45,15 +40,13 @@ git status --short
 |  Last Session: {date} - {summary}                                |
 |  Focus: {current_focus}                                          |
 +------------------------------------------------------------------+
-|  ACTIVE TODOS ({count}):                                         |
+|  RESTORED TASKS ({count}):                                       |
 |  In Progress:                                                    |
 |    > {in_progress items}                                         |
 |  Pending:                                                        |
-|    [P1] {priority 1 items}                                       |
-|    [P2] {priority 2 items}                                       |
-|    [P3] {priority 3 items}                                       |
+|    [ ] {pending items}                                           |
 +------------------------------------------------------------------+
-|  NEXT STEPS: {from session_state.next_steps, top 3}              |
+|  ACTIVE FEATURES: {feature list with progress}                   |
 +------------------------------------------------------------------+
 |  UNCOMMITTED: {count} files | MESSAGES: {pending count}          |
 +==================================================================+
@@ -63,13 +56,14 @@ git status --short
 
 ## Notes
 
-- **Source of truth**: Database (claude.todos, claude.sessions, claude.session_state)
-- **Auto-injection**: Session context is also auto-injected by RAG hook on keywords like "where was I" or "my todos"
+- **Source of truth**: Database (`claude.todos`, `claude.sessions`)
+- **Why TaskCreate**: Restored tasks appear in the live task panel, not just as display text
+- **Duplicate safety**: `task_sync_hook.py` uses substring + fuzzy matching (75% threshold) to detect existing DB todos and reuse their IDs
 - **Priority icons**: P1 = critical, P2 = important, P3 = normal
 
 ---
 
-**Version**: 3.0 (Simplified: MCP tools instead of raw SQL for todos/context)
+**Version**: 4.0 (Consolidated: start_session() + TaskCreate restoration for live task panel)
 **Created**: 2025-12-26
-**Updated**: 2026-02-08
+**Updated**: 2026-02-13
 **Location**: .claude/commands/session-resume.md
