@@ -4,10 +4,11 @@ Session Startup Hook Script for claude-family-core plugin.
 
 This is called automatically via SessionStart hook.
 - Logs session to PostgreSQL
-- Loads recent session context
-- Checks for pending messages
-- Shows "where we left off" state (todo list, focus, pending actions)
-- Outputs JSON for Claude Code to consume
+- Checks system health (no DB query)
+- Counts outstanding todos (1 query)
+- Outputs lean JSON for Claude Code to consume
+
+Full context loading is deferred to start_session() MCP tool.
 """
 
 import json
@@ -213,36 +214,18 @@ def log_session_start(project_name: str, identity_id: str) -> tuple:
     except Exception as e:
         return (None, str(e))
 
-def get_recent_sessions(project_name: str, limit: int = 3) -> list:
-    """Get recent session summaries for this project."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT session_summary, session_start,
-                   COALESCE(array_to_string(tasks_completed, ', '), '') as tasks
-            FROM claude.sessions
-            WHERE project_name = %s AND session_summary IS NOT NULL
-            ORDER BY session_start DESC
-            LIMIT %s
-        """, (project_name, limit))
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [dict(r) for r in results]
-    except Exception:
-        return []
-
-def check_pending_messages(project_name: str) -> int:
-    """Check for pending messages for this project."""
+def get_outstanding_todo_count(project_name: str) -> int:
+    """Get count of outstanding todos for this project."""
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT COUNT(*) as count
-            FROM claude.messages
-            WHERE status = 'pending'
-              AND (to_project = %s OR (to_session_id IS NULL AND to_project IS NULL))
+            FROM claude.todos t
+            JOIN claude.projects p ON t.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND t.status IN ('pending', 'in_progress')
+              AND NOT t.is_deleted
         """, (project_name,))
         result = cur.fetchone()
         cur.close()
@@ -251,92 +234,8 @@ def check_pending_messages(project_name: str) -> int:
     except Exception:
         return 0
 
-def get_session_state(project_name: str) -> dict:
-    """Get the saved session state (where we left off) for this project."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT
-                current_focus,
-                files_modified,
-                pending_actions,
-                updated_at
-            FROM claude.session_state
-            WHERE project_name = %s
-        """, (project_name,))
-        result = cur.fetchone()
-        cur.close()
-        conn.close()
-        return dict(result) if result else None
-    except Exception:
-        return None
-
-def get_active_todos(project_name: str) -> list:
-    """Get active todos from claude.todos table (DATABASE SOURCE OF TRUTH)."""
-    try:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        # Get project_id first
-        cur.execute("""
-            SELECT project_id::text
-            FROM claude.projects
-            WHERE project_name = %s
-        """, (project_name,))
-        project_result = cur.fetchone()
-        if not project_result:
-            cur.close()
-            conn.close()
-            return []
-
-        project_id = project_result['project_id']
-
-        # Get active todos
-        cur.execute("""
-            SELECT
-                content,
-                status,
-                priority,
-                created_at
-            FROM claude.todos
-            WHERE project_id = %s::uuid
-              AND is_deleted = false
-              AND status IN ('pending', 'in_progress')
-            ORDER BY
-                CASE status
-                    WHEN 'in_progress' THEN 1
-                    WHEN 'pending' THEN 2
-                END,
-                priority ASC,
-                created_at ASC
-            LIMIT 10
-        """, (project_id,))
-        results = cur.fetchall()
-        cur.close()
-        conn.close()
-        return [dict(r) for r in results]
-    except Exception:
-        return []
-
-def format_todo_list(todo_list: list) -> list:
-    """Format todo list items for display."""
-    lines = []
-    if not todo_list:
-        return lines
-
-    for item in todo_list:
-        status = item.get('status', 'pending')
-        content = item.get('content', '')
-        if status == 'completed':
-            lines.append(f"  [x] {content}")
-        elif status == 'in_progress':
-            lines.append(f"  [>] {content} (in progress)")
-        else:
-            lines.append(f"  [ ] {content}")
-    return lines
-
 def main():
-    """Run session startup with full automation."""
+    """Run session startup with lean output."""
 
     result = {
         "additionalContext": "",
@@ -360,7 +259,6 @@ def main():
     context_lines.append(f"=== Claude Family Session Started ===")
     context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     context_lines.append(f"Project: {project_name}")
-    context_lines.append(f"Identity: {identity_name}")
     context_lines.append(f"Health: {health_icon} {health['overall'].upper()}")
 
     if health['issues']:
@@ -371,92 +269,16 @@ def main():
         session_id, error = log_session_start(project_name, identity_id)
         if session_id:
             context_lines.append(f"Session ID: {session_id}")
-            context_lines.append("Session logged to database")
         else:
             context_lines.append(f"Could not log session: {error or 'unknown error'}")
 
-        # === WHERE WE LEFT OFF ===
-        state = get_session_state(project_name)
-        todos = get_active_todos(project_name)
-
-        if state or todos:
+        # Count outstanding todos (single lightweight query)
+        todo_count = get_outstanding_todo_count(project_name)
+        if todo_count > 0:
             context_lines.append("")
-            context_lines.append("=== WHERE WE LEFT OFF ===")
-
-            # Last updated
-            if state and state.get('updated_at'):
-                updated = state['updated_at'].strftime('%Y-%m-%d %H:%M')
-                context_lines.append(f"Last saved: {updated}")
-
-            # Current focus
-            if state and state.get('current_focus'):
-                context_lines.append(f"Focus: {state['current_focus']}")
-
-            # Todo list from DATABASE (claude.todos - SOURCE OF TRUTH)
-            if todos:
-                in_progress = [t for t in todos if t['status'] == 'in_progress']
-                pending = [t for t in todos if t['status'] == 'pending']
-
-                context_lines.append("")
-                context_lines.append(f"Active Todos: {len(todos)} total ({len(in_progress)} in progress, {len(pending)} pending)")
-
-                if in_progress:
-                    context_lines.append("")
-                    context_lines.append("In Progress:")
-                    for t in in_progress:
-                        priority_label = f"[P{t['priority']}]" if t.get('priority') else ""
-                        context_lines.append(f"  [>] {priority_label} {t['content']}")
-
-                if pending[:5]:  # Show top 5 pending
-                    context_lines.append("")
-                    context_lines.append("Pending (top 5):")
-                    for t in pending[:5]:
-                        priority_label = f"[P{t['priority']}]" if t.get('priority') else ""
-                        context_lines.append(f"  [ ] {priority_label} {t['content']}")
-
-                if len(pending) > 5:
-                    context_lines.append(f"  ... and {len(pending) - 5} more pending")
-
-            # Pending actions
-            if state and state.get('pending_actions'):
-                context_lines.append("")
-                context_lines.append("Pending Actions:")
-                for action in state['pending_actions'][:5]:
-                    context_lines.append(f"  - {action}")
-
-            # Files modified
-            if state and state.get('files_modified'):
-                context_lines.append("")
-                context_lines.append(f"Files touched: {len(state['files_modified'])} files")
-                for f in state['files_modified'][:3]:
-                    context_lines.append(f"  - {f}")
-                if len(state['files_modified']) > 3:
-                    context_lines.append(f"  ... and {len(state['files_modified']) - 3} more")
-
-        # Load recent context
-        recent = get_recent_sessions(project_name)
-        if recent:
-            context_lines.append("")
-            context_lines.append("=== Recent Sessions ===")
-            for i, session in enumerate(recent, 1):
-                date = session['session_start'].strftime('%Y-%m-%d') if session.get('session_start') else 'Unknown'
-                summary = session.get('session_summary', '')[:100]
-                context_lines.append(f"{i}. [{date}] {summary}...")
-
-        # Check messages
-        msg_count = check_pending_messages(project_name)
-        if msg_count > 0:
-            context_lines.append("")
-            context_lines.append(f"Pending messages: {msg_count} - use mcp__orchestrator__check_inbox")
+            context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
     else:
         context_lines.append("Database not available (psycopg not installed)")
-        context_lines.append("Manual /session-start required for full context")
-
-    # Check for CLAUDE.md
-    claude_md = os.path.join(cwd, "CLAUDE.md")
-    if os.path.exists(claude_md):
-        context_lines.append("")
-        context_lines.append("CLAUDE.md found - project instructions loaded")
 
     result["additionalContext"] = "\n".join(context_lines)
     result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database."

@@ -426,7 +426,7 @@ def start_session(
             # CTE 2: Todos + features + ready tasks + feedback count (single query)
             cur.execute("""
                 WITH todos AS (
-                    SELECT content, status, priority
+                    SELECT content, active_form, status, priority
                     FROM claude.todos
                     WHERE project_id = %s::uuid
                       AND status IN ('pending', 'in_progress')
@@ -496,7 +496,12 @@ def start_session(
                 todos = {"in_progress": [], "pending": []}
                 for t in todos_raw:
                     bucket = "in_progress" if t['status'] == 'in_progress' else "pending"
-                    todos[bucket].append({"content": t['content'], "priority": t['priority']})
+                    todos[bucket].append({
+                        "content": t['content'],
+                        "active_form": t.get('active_form', ''),
+                        "priority": t['priority'],
+                        "status": t['status']
+                    })
                 result["todos"] = todos
 
                 features_raw = work['features']
