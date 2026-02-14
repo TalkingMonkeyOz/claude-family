@@ -6,12 +6,6 @@
 
 ---
 
-## Coding Standards (Auto-Loaded)
-
-@~/.claude/standards/core/markdown-documentation.md
-
----
-
 ## Problem Statement
 
 Enable coordinated AI-assisted software development across multiple Claude instances with:
@@ -50,9 +44,8 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 ## Current Phase
 
-**Phase**: Implementation (governance system)
-**Focus**: Building the Claude Governance System (Phase A)
-**Plan**: `docs/CLAUDE_GOVERNANCE_SYSTEM_PLAN.md`
+**Phase**: Implementation
+**Focus**: Infrastructure optimization and governance enforcement
 
 ---
 
@@ -280,24 +273,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-## Quick Queries
-
-```sql
--- Check project status
-SELECT * FROM claude.projects WHERE project_name = 'claude-family';
-
--- Recent sessions
-SELECT session_start, summary FROM claude.sessions
-WHERE project_name = 'claude-family' ORDER BY session_start DESC LIMIT 5;
-
--- Valid values for any field
-SELECT valid_values FROM claude.column_registry
-WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
-```
-
----
-
-**Version**: 3.2 (v3 application layer: 15 new tools, config ops, knowledge enhancement, conversation persistence)
+**Version**: 3.3 (Removed duplicate @ reference, SQL examples - use MCP tools instead)
 **Created**: 2025-10-21
 **Updated**: 2026-02-11
 **Location**: C:\Projects\claude-family\CLAUDE.md

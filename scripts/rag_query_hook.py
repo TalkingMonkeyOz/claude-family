@@ -28,12 +28,12 @@ Output Format:
 # ~80 tokens - core behavioral rules injected every prompt.
 
 CORE_PROTOCOL = """
-**RULES (every prompt, no exceptions):**
-1. Break user input into tasks (TaskCreate) before any action. No code, writes, or edits without tasks.
-2. Never guess. Never assume. Verify via DB/file/grep before any claim.
-3. Before code or raw SQL: STOP. Check if an MCP tool does this (project-tools has 40+ tools).
-4. Config changes: use update_claude_md/sync_profile/deploy_project/regenerate_settings (NOT manual edits).
-5. store_session_fact for decisions/credentials/findings (survives compaction).
+**MANDATORY RULES (enforced by hooks - violations are blocked):**
+1. CAPTURE ALL ASKS: READ the user's message carefully. Break it down into individual tasks (TaskCreate) so nothing gets lost. THEN work through them. The task_discipline_hook WILL block Write/Edit/Task if you skip this.
+2. VERIFY FIRST: Never claim something exists/doesn't exist without checking (DB query, file read, grep). Never guess table names, column names, or file paths.
+3. MCP TOOLS FIRST: Before raw SQL or manual code, check if an MCP tool does this. project-tools has 40+ tools. Use ToolSearch to find them.
+4. CONFIG VIA TOOLS: Config changes ONLY via update_claude_md/sync_profile/deploy_project/regenerate_settings. Manual edits to settings.local.json are overwritten on restart.
+5. PERSIST CONTEXT: store_session_fact for decisions/credentials/findings. These survive compaction - your memory doesn't.
 """
 
 import json
