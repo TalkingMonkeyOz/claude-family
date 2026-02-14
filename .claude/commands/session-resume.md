@@ -1,16 +1,21 @@
 **QUICK SESSION RESUME - Database-Driven Context with Task Restoration**
 
-Single consolidated call to `start_session()`, then restore outstanding tasks as live TaskCreate entries.
+One MCP call returns a pre-formatted display box + task list. You display it and restore tasks. That's it.
+
+**Do NOT call `get_project_context`, `get_incomplete_todos`, `execute_sql`, `check_inbox`, or any other tool to fetch session data. Everything comes from `start_session(resume=True)`.**
 
 ---
 
 ## Execute These Steps
 
-### Step 1: Load Context (Single Call)
+### Step 1: Load Context + Display Box (Single Call)
 
-Use `mcp__project-tools__start_session` with the current project name.
+Call `mcp__project-tools__start_session` with `project` = current project name and `resume` = `true`.
 
-This returns: project info, session state, todos (with `active_form` and `status`), active features, ready tasks, pending messages.
+Response contains:
+- `display` - Pre-formatted resume box. Print this verbatim.
+- `restore_tasks` - Array of tasks to restore (each has `content`, `active_form`, `status`, `priority`).
+- `git_check_needed` - If true, run git status in Step 2.
 
 ### Step 2: Git Status
 
@@ -18,52 +23,36 @@ This returns: project info, session state, todos (with `active_form` and `status
 git status --short
 ```
 
+Mention the uncommitted file count when displaying the box.
+
 ### Step 3: Restore Tasks
 
-For each todo returned by `start_session()` (both `in_progress` and `pending` buckets):
+For each item in `restore_tasks`:
 
 1. Call `TaskCreate` with:
-   - `subject`: the todo's `content`
-   - `activeForm`: the todo's `active_form`
-   - `description`: the todo's `content`
-2. If the todo's `status` was `in_progress`:
+   - `subject`: item's `content`
+   - `activeForm`: item's `active_form`
+   - `description`: item's `content`
+2. If item's `status` is `in_progress`:
    - Call `TaskUpdate(taskId=<new_id>, status="in_progress")`
 
 The `task_sync_hook` will match these to existing DB todos via duplicate detection (75% similarity) and reuse the existing `todo_id` rather than creating duplicates.
 
-### Step 4: Display Resume Box
+### Step 4: Display
 
-```
-+==================================================================+
-|  SESSION RESUME - {project_name}                                 |
-+==================================================================+
-|  Last Session: {date} - {summary}                                |
-|  Focus: {current_focus}                                          |
-+------------------------------------------------------------------+
-|  RESTORED TASKS ({count}):                                       |
-|  In Progress:                                                    |
-|    > {in_progress items}                                         |
-|  Pending:                                                        |
-|    [ ] {pending items}                                           |
-+------------------------------------------------------------------+
-|  ACTIVE FEATURES: {feature list with progress}                   |
-+------------------------------------------------------------------+
-|  UNCOMMITTED: {count} files | MESSAGES: {pending count}          |
-+==================================================================+
-```
+Print the `display` string from Step 1. Done.
 
 ---
 
 ## Notes
 
-- **Source of truth**: Database (`claude.todos`, `claude.sessions`)
+- **One call**: `start_session(resume=True)` fetches project info, session state, todos, features, messages - and formats the box server-side
 - **Why TaskCreate**: Restored tasks appear in the live task panel, not just as display text
-- **Duplicate safety**: `task_sync_hook.py` uses substring + fuzzy matching (75% threshold) to detect existing DB todos and reuse their IDs
-- **Priority icons**: P1 = critical, P2 = important, P3 = normal
+- **Duplicate safety**: `task_sync_hook.py` uses substring + fuzzy matching (75% threshold)
 
 ---
 
-**Version**: 4.0 (Consolidated: start_session() + TaskCreate restoration for live task panel)
+**Version**: 5.0 (Server-side formatting: start_session(resume=True) returns pre-built display box)
 **Created**: 2025-12-26
-**Updated**: 2026-02-13
+**Updated**: 2026-02-14
 **Location**: .claude/commands/session-resume.md
