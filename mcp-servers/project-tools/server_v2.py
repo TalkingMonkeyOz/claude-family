@@ -344,9 +344,117 @@ def get_schema(
     return result
 
 
+def _format_resume(data: dict) -> dict:
+    """Build a pre-formatted resume display box from start_session data.
+
+    Returns dict with 'display' (ready to print) and 'restore_tasks' (for TaskCreate).
+    """
+    project = data.get("project_name", "unknown")
+    w = 66  # inner width of box
+
+    # Extract fields
+    last = data.get("last_session", {})
+    last_date = str(last.get("ended", ""))[:10] if last.get("ended") else "N/A"
+    last_summary = last.get("summary", "No previous session") or "No summary"
+    focus = (data.get("previous_state", {}) or {}).get("focus", "None set")
+    todos = data.get("todos", {"in_progress": [], "pending": []})
+    features = data.get("active_features", [])
+    msg_count = data.get("pending_messages", 0)
+    fb_count = data.get("pending_feedback_count", 0)
+
+    # Count uncommitted (placeholder - git status must run client-side)
+    lines = []
+    bar = "+" + "=" * w + "+"
+    div = "+" + "-" * w + "+"
+
+    def row(text: str) -> str:
+        return f"|  {text:{w - 3}}|"
+
+    lines.append(bar)
+    lines.append(row(f"SESSION RESUME - {project}"))
+    lines.append(bar)
+    lines.append(row(f"Last Session: {last_date} - {last_summary[:w - 20]}"))
+    lines.append(row(f"Focus: {focus[:w - 10]}"))
+    lines.append(div)
+
+    # Tasks section
+    in_prog = todos.get("in_progress", [])
+    pending = todos.get("pending", [])
+    stale = todos.get("stale", [])
+    task_count = len(in_prog) + len(pending)
+    lines.append(row(f"RESTORED TASKS ({task_count}):"))
+
+    if in_prog:
+        lines.append(row("In Progress:"))
+        for t in in_prog:
+            lines.append(row(f"  > {t['content'][:w - 8]}"))
+    if pending:
+        lines.append(row("Pending:"))
+        for t in pending:
+            lines.append(row(f"  [ ] {t['content'][:w - 10]}"))
+    if not in_prog and not pending:
+        lines.append(row("  (none)"))
+
+    if stale:
+        lines.append(row(""))
+        lines.append(row(f"STALE ({len(stale)}) - not restored, delete or reactivate:"))
+        for t in stale:
+            age = t.get('age_days', '?')
+            lines.append(row(f"  ~ {t['content'][:w - 16]} ({age}d old)"))
+    lines.append(div)
+
+    # Features section
+    if features:
+        feat_parts = []
+        for f in features[:5]:
+            done = f.get("tasks_done", 0)
+            total = f.get("tasks_total", 0)
+            feat_parts.append(f"{f.get('code', '?')} {f.get('feature_name', '?')} ({done}/{total})")
+        lines.append(row("ACTIVE FEATURES:"))
+        for fp in feat_parts:
+            lines.append(row(f"  {fp[:w - 6]}"))
+        lines.append(div)
+
+    # Footer
+    counts = []
+    if msg_count:
+        counts.append(f"MESSAGES: {msg_count}")
+    if fb_count:
+        counts.append(f"FEEDBACK: {fb_count}")
+    footer = " | ".join(counts) if counts else "No pending items"
+    lines.append(row(f"GIT: run 'git status --short' | {footer}"))
+    lines.append(bar)
+
+    display = "\n".join(lines)
+
+    # Build restore_tasks list for TaskCreate
+    restore_tasks = []
+    for t in in_prog:
+        restore_tasks.append({
+            "content": t["content"],
+            "active_form": t.get("active_form", ""),
+            "status": "in_progress",
+            "priority": t.get("priority", 3),
+        })
+    for t in pending:
+        restore_tasks.append({
+            "content": t["content"],
+            "active_form": t.get("active_form", ""),
+            "status": "pending",
+            "priority": t.get("priority", 3),
+        })
+
+    return {
+        "display": display,
+        "restore_tasks": restore_tasks,
+        "git_check_needed": True,
+    }
+
+
 @mcp.tool()
 def start_session(
     project: str = "",
+    resume: bool = False,
 ) -> dict:
     """Start a session and get ALL context in one call.
 
@@ -357,6 +465,8 @@ def start_session(
 
     Args:
         project: Project name or path. Defaults to current directory basename.
+        resume: If True, returns pre-formatted display box + restore_tasks list
+                for /session-resume. Claude just displays the box and restores tasks.
     """
     project = project or os.path.basename(os.getcwd())
     project_id = get_project_id(project)
@@ -426,7 +536,8 @@ def start_session(
             # CTE 2: Todos + features + ready tasks + feedback count (single query)
             cur.execute("""
                 WITH todos AS (
-                    SELECT content, active_form, status, priority
+                    SELECT content, active_form, status, priority,
+                           EXTRACT(DAY FROM NOW() - COALESCE(updated_at, created_at))::int as age_days
                     FROM claude.todos
                     WHERE project_id = %s::uuid
                       AND status IN ('pending', 'in_progress')
@@ -493,14 +604,21 @@ def start_session(
                 todos_raw = work['todos']
                 if isinstance(todos_raw, str):
                     todos_raw = json.loads(todos_raw)
-                todos = {"in_progress": [], "pending": []}
+                todos = {"in_progress": [], "pending": [], "stale": []}
                 for t in todos_raw:
-                    bucket = "in_progress" if t['status'] == 'in_progress' else "pending"
+                    age_days = t.get('age_days', 0) or 0
+                    if t['status'] == 'in_progress':
+                        bucket = "in_progress"
+                    elif age_days > 7 and t['status'] == 'pending':
+                        bucket = "stale"
+                    else:
+                        bucket = "pending"
                     todos[bucket].append({
                         "content": t['content'],
                         "active_form": t.get('active_form', ''),
                         "priority": t['priority'],
-                        "status": t['status']
+                        "status": t['status'],
+                        "age_days": age_days,
                     })
                 result["todos"] = todos
 
@@ -572,6 +690,9 @@ def start_session(
 
     finally:
         conn.close()
+
+    if resume:
+        return _format_resume(result)
 
     return result
 
@@ -808,7 +929,46 @@ def end_session(
                 results["conversation_extracted"] = False
                 results["conversation_error"] = str(conv_err)
 
-        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved."
+        # 4. Convert learnings to searchable knowledge entries (with embeddings)
+        if learnings and closed_session_id:
+            knowledge_count = 0
+            for learning in learnings[:5]:  # Cap at 5 to limit Voyage AI latency
+                if len(learning) < 20:
+                    continue
+                try:
+                    # Generate embedding for RAG searchability
+                    embedding = None
+                    try:
+                        embedding = generate_embedding(learning)
+                    except Exception:
+                        pass  # Store without embedding if Voyage unavailable
+
+                    cur.execute("""
+                        INSERT INTO claude.knowledge (
+                            knowledge_id, title, description, knowledge_type,
+                            knowledge_category, source, confidence_level,
+                            applies_to_projects, embedding, created_at
+                        ) VALUES (
+                            gen_random_uuid(), %s, %s, 'learned', %s,
+                            %s, 85, %s, %s, NOW()
+                        )
+                    """, (
+                        learning[:100],
+                        learning,
+                        project,
+                        f"session:{closed_session_id}",
+                        [project],
+                        embedding,
+                    ))
+                    knowledge_count += 1
+                except Exception:
+                    pass
+            if knowledge_count:
+                conn.commit()
+            results["knowledge_created"] = knowledge_count
+
+        knowledge_note = f", {results['knowledge_created']} knowledge entries created" if results.get("knowledge_created") else ""
+        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}."
         return results
 
     except Exception as e:
@@ -2470,16 +2630,16 @@ def update_claude_md(
 
 
 @mcp.tool()
-def sync_profile(
+def deploy_claude_md(
     project: str,
-    direction: Literal["db_to_file", "file_to_db"] = "db_to_file",
 ) -> dict:
-    """Sync CLAUDE.md between database (profiles table) and filesystem.
+    """Deploy CLAUDE.md from database to file. One-way: DB is source of truth.
+
+    Reads profiles.config->behavior from the database and writes it to the
+    project's CLAUDE.md file. Use update_claude_md() for section-level edits.
 
     Args:
         project: Project name.
-        direction: 'db_to_file' reads profiles.config->behavior and writes to CLAUDE.md.
-                   'file_to_db' reads CLAUDE.md and updates profiles.config.
     """
     conn = get_db_connection()
     try:
@@ -2500,74 +2660,33 @@ def sync_profile(
         project_id = row['project_id']
         claude_md_path = Path(project_path) / "CLAUDE.md"
 
-        if direction == "db_to_file":
-            # Read from profiles.config->behavior
-            cur.execute("""
-                SELECT config->'behavior' as behavior_text
-                FROM claude.profiles
-                WHERE project_id = %s::uuid
-            """, (project_id,))
-            profile_row = cur.fetchone()
+        # Read from profiles.config->behavior
+        cur.execute("""
+            SELECT config->'behavior' as behavior_text
+            FROM claude.profiles
+            WHERE project_id = %s::uuid
+        """, (project_id,))
+        profile_row = cur.fetchone()
 
-            if not profile_row or not profile_row['behavior_text']:
-                return {"success": False, "error": f"No profile behavior text found for project '{project}'"}
+        if not profile_row or not profile_row['behavior_text']:
+            return {"success": False, "error": f"No profile behavior text found for project '{project}'"}
 
-            behavior_text = profile_row['behavior_text']
-            if isinstance(behavior_text, str):
-                new_content = behavior_text
-            else:
-                new_content = json.dumps(behavior_text, indent=2)
+        behavior_text = profile_row['behavior_text']
+        if isinstance(behavior_text, str):
+            new_content = behavior_text
+        else:
+            new_content = json.dumps(behavior_text, indent=2)
 
-            # Read existing file to compute diff
-            old_content = ""
-            if claude_md_path.exists():
-                with open(claude_md_path, 'r', encoding='utf-8') as f:
-                    old_content = f.read()
-
-            # Simple diff summary (computed before file write)
-            old_lines = old_content.split('\n')
-            new_lines = new_content.split('\n')
-            diff_summary = f"Lines: {len(old_lines)} → {len(new_lines)} (Δ {len(new_lines) - len(old_lines)})"
-
-        else:  # file_to_db
-            if not claude_md_path.exists():
-                return {"success": False, "error": f"CLAUDE.md not found at {claude_md_path}"}
-
-            # Read from file
+        # Read existing file to compute diff
+        old_content = ""
+        if claude_md_path.exists():
             with open(claude_md_path, 'r', encoding='utf-8') as f:
-                file_content = f.read()
+                old_content = f.read()
 
-            # Get old content from DB for diff
-            cur.execute("""
-                SELECT config->'behavior' as behavior_text
-                FROM claude.profiles
-                WHERE project_id = %s::uuid
-            """, (project_id,))
-            profile_row = cur.fetchone()
-            old_content = ""
-            if profile_row and profile_row['behavior_text']:
-                if isinstance(profile_row['behavior_text'], str):
-                    old_content = profile_row['behavior_text']
-                else:
-                    old_content = json.dumps(profile_row['behavior_text'], indent=2)
-
-            # Update profiles.config
-            cur.execute("""
-                INSERT INTO claude.profiles (profile_id, project_id, config, updated_at)
-                VALUES (gen_random_uuid(), %s::uuid, jsonb_build_object('behavior', %s), NOW())
-                ON CONFLICT (project_id) DO UPDATE SET
-                    config = jsonb_set(
-                        COALESCE(claude.profiles.config, '{}'::jsonb),
-                        '{behavior}',
-                        to_jsonb(%s)
-                    ),
-                    updated_at = NOW()
-            """, (project_id, file_content, file_content))
-
-            # Simple diff summary
-            old_lines = old_content.split('\n')
-            new_lines = file_content.split('\n')
-            diff_summary = f"Lines: {len(old_lines)} → {len(new_lines)} (Δ {len(new_lines) - len(old_lines)})"
+        # Simple diff summary
+        old_lines = old_content.split('\n')
+        new_lines = new_content.split('\n')
+        diff_summary = f"Lines: {len(old_lines)} → {len(new_lines)} (Δ {len(new_lines) - len(old_lines)})"
 
         # Log to audit_log
         cur.execute("""
@@ -2576,34 +2695,32 @@ def sync_profile(
             VALUES (
                 'profiles',
                 %s::uuid,
-                'synced',
+                'deployed',
                 %s,
-                'sync_profile',
+                'deploy_claude_md',
                 %s::jsonb
             )
         """, (
             project_id,
             os.environ.get('CLAUDE_SESSION_ID'),
-            json.dumps({"direction": direction, "diff_summary": diff_summary})
+            json.dumps({"diff_summary": diff_summary})
         ))
 
         conn.commit()
 
-        # Write file AFTER successful DB commit (db_to_file direction only)
-        if direction == "db_to_file":
-            with open(claude_md_path, 'w', encoding='utf-8') as f:
-                f.write(new_content)
+        # Write file AFTER successful DB commit
+        with open(claude_md_path, 'w', encoding='utf-8') as f:
+            f.write(new_content)
 
         return {
             "success": True,
-            "direction": direction,
             "diff_summary": diff_summary,
             "file_path": str(claude_md_path),
         }
 
     except Exception as e:
         conn.rollback()
-        return {"success": False, "error": f"Failed to sync profile: {str(e)}"}
+        return {"success": False, "error": f"Failed to deploy CLAUDE.md: {str(e)}"}
     finally:
         conn.close()
 

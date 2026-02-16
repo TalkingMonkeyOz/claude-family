@@ -1,65 +1,70 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Before ending this session, complete ALL steps below in order.
+Before ending this session, complete ALL steps below using MCP tools (no raw SQL).
 
 ---
 
-## Step 1: Review Session Work
+## Step 1: Review Session
 
-Analyze what was accomplished this session:
+Summarize what happened:
+- What was accomplished this session?
+- What tasks were completed?
+- What decisions were made?
+- What's left for next session?
 
-1. Check git status for uncommitted changes
-2. Review your task list (TaskList) for completed/pending items
-3. Identify key decisions, learnings, and blockers
+## Step 2: Capture Knowledge (if applicable)
 
-## Step 2: Generate Summary
-
-Write a concise session summary covering:
-- **Completed**: What was accomplished (reference feature/task codes)
-- **Pending**: Unfinished work, blockers
-- **Decisions**: Key choices made and rationale
-- **Next steps**: Clear continuation points for next session
-
-## Step 3: Save to Database
-
-Call `mcp__project-tools__end_session` with:
-- `summary`: Your session summary (1-3 sentences)
-- `next_steps`: Array of prioritized next actions
-- `tasks_completed`: Array of completed task descriptions
-- `learnings`: Array of key insights (optional)
-
-This properly closes the session in `claude.sessions` with timestamp and summary.
-
-## Step 4: Capture Knowledge (If Applicable)
-
-If you discovered reusable patterns, solutions, or gotchas:
+For each **significant** learning, pattern, or decision discovered this session, call:
 
 ```
-mcp__project-tools__store_knowledge(
-    title="Pattern Name",
-    description="What was learned",
-    knowledge_type="solution|pattern|gotcha|learned",
-    knowledge_category="relevant-category"
+store_knowledge(
+    title="Short descriptive title",
+    description="Detailed explanation of the learning",
+    knowledge_type="learned|pattern|gotcha|preference|fact|procedure",
+    knowledge_category="relevant-domain",
+    source="session"
 )
 ```
 
-## Step 5: Check for Loose Ends
+**Only capture reusable knowledge** - skip session-specific context that won't help future sessions.
 
-- [ ] Any uncommitted changes that should be committed?
-- [ ] Any unactioned messages in inbox?
-- [ ] Any session facts worth persisting as knowledge?
+## Step 3: Close Session
+
+Call `end_session()` with ALL parameters:
+
+```
+end_session(
+    summary="1-2 sentence recap of what was accomplished",
+    next_steps=["First thing to do next session", "Second thing"],
+    tasks_completed=["Task 1 description", "Task 2 description"],
+    learnings=["Key learning 1", "Key learning 2"]
+)
+```
+
+**Note**: Learnings passed here are automatically stored as searchable knowledge entries with embeddings. Keep them specific and reusable (min 20 chars each, max 5).
+
+## Step 4: Report Results
+
+Show the user what was saved:
+- Session closed (session_id)
+- Conversation extracted (turn count)
+- Knowledge entries created (count)
+- Next steps saved
 
 ---
 
 ## What NOT to Do
 
-- Do NOT write to `claude_family.*` tables (legacy, deprecated)
-- Do NOT use `mcp__memory__` (removed)
-- Do NOT skip calling `end_session` - without it, the session gets marked "auto-closed"
+- Do NOT use raw SQL to update sessions or store knowledge
+- Do NOT reference `claude_family.*` schema (use `claude.*` via MCP tools)
+- Do NOT skip knowledge capture if you learned something reusable
+- Do NOT store trivial or session-specific facts as knowledge
 
----
+## Cost of Skipping
 
-**Version**: 5.0 (Uses mcp__project-tools__end_session instead of legacy SQL)
-**Created**: 2025-10-21
-**Updated**: 2026-02-13
-**Location**: .claude/commands/session-end.md
+- Next Claude spends 30 minutes rediscovering your solution
+- Same bug gets solved 3 times by different Claudes
+- Institutional knowledge stays at zero
+- User gets frustrated repeating themselves
+
+**Remember**: Knowledge capture is how the Claude Family learns and grows.

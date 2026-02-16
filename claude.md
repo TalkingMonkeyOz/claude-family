@@ -20,12 +20,12 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 ## CRITICAL: Config Management (READ FIRST)
 
-**Database is source of truth. Config files are GENERATED and self-heal.**
+**Database is source of truth for config.**
 
 | File | Source | Behavior |
 |------|--------|----------|
-| `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | Regenerates on SessionStart |
-| `CLAUDE.md` | `profiles.config->behavior` | Can be synced to/from DB |
+| `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | Generated from DB. Manual edits overwritten by `regenerate_settings()`. |
+| `CLAUDE.md` | `profiles.config->behavior` | Stored in DB. Edit via `update_claude_md()`. Deploy via `deploy_claude_md()`. Manual file edits are OK but won't persist to DB. |
 
 **DO NOT manually edit settings.local.json** - changes will be overwritten.
 
@@ -130,7 +130,7 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | Tool | Use When |
 |------|----------|
 | `update_claude_md(project, section, content)` | Update a CLAUDE.md section atomically |
-| `sync_profile(project, direction)` | Sync CLAUDE.md between DB and file |
+| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way) |
 | `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
 | `regenerate_settings(project)` | Regenerate settings.local.json from DB |
 

@@ -32,7 +32,7 @@ CORE_PROTOCOL = """
 1. CAPTURE ALL ASKS: READ the user's message carefully. Break it down into individual tasks (TaskCreate) so nothing gets lost. THEN work through them. The task_discipline_hook WILL block Write/Edit/Task if you skip this.
 2. VERIFY FIRST: Never claim something exists/doesn't exist without checking (DB query, file read, grep). Never guess table names, column names, or file paths.
 3. MCP TOOLS FIRST: Before raw SQL or manual code, check if an MCP tool does this. project-tools has 40+ tools. Use ToolSearch to find them.
-4. CONFIG VIA TOOLS: Config changes ONLY via update_claude_md/sync_profile/deploy_project/regenerate_settings. Manual edits to settings.local.json are overwritten on restart.
+4. CONFIG VIA TOOLS: Config changes ONLY via update_claude_md/deploy_claude_md/deploy_project/regenerate_settings. Manual edits to settings.local.json are overwritten on restart.
 5. PERSIST CONTEXT: store_session_fact for decisions/credentials/findings. These survive compaction - your memory doesn't.
 """
 

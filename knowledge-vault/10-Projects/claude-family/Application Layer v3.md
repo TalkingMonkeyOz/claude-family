@@ -72,7 +72,7 @@ Session JSONL → extract_conversation → conversations table
 | Tool | Purpose |
 |------|---------|
 | `update_claude_md(section, content)` | Update CLAUDE.md sections (file + profiles table) |
-| `sync_profile(direction)` | Sync CLAUDE.md ↔ profiles table (file_to_db / db_to_file) |
+| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way) |
 | `deploy_project(components)` | Deploy skills/instructions/rules from DB to files |
 | `regenerate_settings()` | Regenerate `.claude/settings.local.json` from DB |
 
@@ -171,7 +171,7 @@ end_session → Extract conversation → conversations table → knowledge entri
 - extract_conversation, search_conversations, extract_insights
 
 **P1 - Config** (4):
-- update_claude_md, sync_profile, deploy_project, regenerate_settings
+- update_claude_md, deploy_claude_md, deploy_project, regenerate_settings
 
 **P2 - Knowledge** (5):
 - store_book, store_book_reference, recall_book_reference

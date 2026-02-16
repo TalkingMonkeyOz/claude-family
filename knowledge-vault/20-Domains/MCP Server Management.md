@@ -185,7 +185,7 @@ The project-tools MCP evolved from a CRUD wrapper (v1) to a workflow engine (v2)
 | Pillar | Tools | Purpose |
 |--------|-------|---------|
 | **P0: Conversations** | extract_conversation, search_conversations, extract_insights | Extract and search session JSONL logs |
-| **P1: Config Ops** | update_claude_md, sync_profile, deploy_project, regenerate_settings | File+DB atomic config operations |
+| **P1: Config Ops** | update_claude_md, deploy_claude_md, deploy_project, regenerate_settings | File+DB atomic config operations |
 | **P2: Knowledge** | store_book, store_book_reference, recall_book_reference + enhanced recall | Structured knowledge with embeddings |
 | **P3: Work Tracking** | Enhanced create_linked_task, start_session, end_session | Richer context, auto-extraction |
 

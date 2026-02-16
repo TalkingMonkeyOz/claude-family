@@ -115,7 +115,7 @@ WHERE template_name = 'hooks-base';
 | Tool | Purpose | Example |
 |------|---------|---------|
 | `update_claude_md(section, content)` | Update CLAUDE.md sections | Update "Architecture Overview" section |
-| `sync_profile(direction)` | Sync file ↔ DB | "file_to_db" or "db_to_file" |
+| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file | One-way: DB is source of truth |
 | `deploy_project(components)` | Deploy from DB to files | ["skills", "instructions", "rules"] |
 | `regenerate_settings()` | Regenerate settings.local.json | Force config refresh |
 
@@ -138,13 +138,10 @@ update_claude_md(
 # Updates: CLAUDE.md file + profiles.config->'behavior'
 ```
 
-**Sync configuration**:
+**Deploy CLAUDE.md from DB**:
 ```python
-# File → Database
-sync_profile(direction="file_to_db")
-
-# Database → File
-sync_profile(direction="db_to_file")
+# Deploy DB content to file (one-way)
+deploy_claude_md(project="claude-family")
 ```
 
 **Deploy components**:

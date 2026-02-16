@@ -56,16 +56,15 @@ Both are loaded together, so **avoid duplication**. If something is in Global, d
 ### Global CLAUDE.md (`~/.claude/CLAUDE.md`)
 
 1. Edit the file directly: `~/.claude/CLAUDE.md`
-2. Sync to database: `sync_profile(project='claude-family', direction='file_to_db')`
+2. To persist to DB: use `update_claude_md(project, section, content)` per section
 3. Global file applies to all projects automatically (no per-project deployment needed)
 4. Changes take effect on next session start
 
 ### Project CLAUDE.md (`{project}/CLAUDE.md`)
 
-1. Edit the file directly in the project root
-2. Sync to database: `sync_profile(project='{project-name}', direction='file_to_db')`
-3. For deploying DB content to file: `sync_profile(project='{project-name}', direction='db_to_file')`
-4. For updating specific sections: `update_claude_md(project, section, content)`
+1. For section edits: `update_claude_md(project, section, content)` (updates DB + file atomically)
+2. For deploying DB content to file: `deploy_claude_md(project='{project-name}')`
+3. Manual file edits are OK but won't persist to DB - use `update_claude_md()` for permanent changes
 
 ### CORE_PROTOCOL (rag_query_hook.py)
 

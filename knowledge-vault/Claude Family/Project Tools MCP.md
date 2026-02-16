@@ -54,7 +54,7 @@ Atomic file + DB operations. No more manual edits that drift.
 | Tool | Purpose |
 |------|---------|
 | `update_claude_md(project, section, content)` | Update CLAUDE.md section (file + profiles table) |
-| `sync_profile(project, direction)` | Sync CLAUDE.md ↔ profiles (`file_to_db` / `db_to_file`) |
+| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way, DB is source of truth) |
 | `deploy_project(project, components)` | Deploy skills/instructions/rules from DB to `.claude/` files |
 | `regenerate_settings(project)` | Regenerate `settings.local.json` from DB templates |
 
