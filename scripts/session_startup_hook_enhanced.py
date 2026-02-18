@@ -214,11 +214,35 @@ def log_session_start(project_name: str, identity_id: str) -> tuple:
     except Exception as e:
         return (None, str(e))
 
-def get_outstanding_todo_count(project_name: str) -> int:
-    """Get count of outstanding todos for this project."""
+def get_outstanding_todo_count(project_name: str) -> tuple:
+    """Get count of outstanding todos, auto-archiving stale pending items.
+
+    Stale = pending items not updated in >7 days. These are zombie todos that
+    would otherwise be restored every session forever.
+
+    Returns:
+        (active_count, archived_count) - active remaining and how many were archived.
+    """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Auto-archive stale pending todos (>7 days old, pending only - not in_progress)
+        cur.execute("""
+            UPDATE claude.todos t
+            SET status = 'archived', updated_at = NOW()
+            FROM claude.projects p
+            WHERE t.project_id = p.project_id
+              AND p.project_name = %s
+              AND t.status = 'pending'
+              AND NOT t.is_deleted
+              AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '7 days'
+            RETURNING t.todo_id
+        """, (project_name,))
+        archived_count = len(cur.fetchall())
+        conn.commit()
+
+        # Count remaining active todos
         cur.execute("""
             SELECT COUNT(*) as count
             FROM claude.todos t
@@ -230,9 +254,25 @@ def get_outstanding_todo_count(project_name: str) -> int:
         result = cur.fetchone()
         cur.close()
         conn.close()
-        return result['count'] if result else 0
+        active_count = result['count'] if result else 0
+        return (active_count, archived_count)
     except Exception:
-        return 0
+        return (0, 0)
+
+def _reset_task_map(project_name: str, session_id: str):
+    """Write a fresh task_map with new session_id and no task entries.
+
+    This prevents the discipline hook from rejecting Write/Edit calls due to
+    a stale task_map left over from a crashed or interrupted session.
+    """
+    import tempfile
+    map_path = os.path.join(tempfile.gettempdir(), f"claude_task_map_{project_name}.json")
+    try:
+        with open(map_path, 'w') as f:
+            json.dump({"_session_id": session_id}, f)
+    except IOError:
+        pass  # Non-critical - discipline hook will just prompt for tasks
+
 
 def main():
     """Run session startup with lean output."""
@@ -272,11 +312,17 @@ def main():
         else:
             context_lines.append(f"Could not log session: {error or 'unknown error'}")
 
-        # Count outstanding todos (single lightweight query)
-        todo_count = get_outstanding_todo_count(project_name)
+        # Count outstanding todos + auto-archive stale ones
+        todo_count, archived_count = get_outstanding_todo_count(project_name)
+        if archived_count > 0:
+            context_lines.append(f"Auto-archived {archived_count} stale pending todo(s) (>7 days old)")
         if todo_count > 0:
             context_lines.append("")
             context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
+
+        # Clean task_map to prevent stale session errors from discipline hook
+        if session_id:
+            _reset_task_map(project_name, session_id)
     else:
         context_lines.append("Database not available (psycopg not installed)")
 

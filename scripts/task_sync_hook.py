@@ -358,11 +358,14 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
             pass
 
 
-def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
+def handle_task_update(tool_input: dict, tool_output: str, project_name: str) -> str:
     """Handle TaskUpdate: update todo status in claude.todos.
 
     If the task is bridged to a build_task, also updates the build_task status
     and checks for feature completion.
+
+    Returns:
+        Optional message about feature completion to surface as additionalContext.
     """
     task_id = tool_input.get('taskId', '')
     new_status = tool_input.get('status', '')
@@ -398,9 +401,11 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
 
         # Update the todo status
         if new_status == 'deleted':
+            # Map 'deleted' to 'archived' - preserves audit trail instead of hard-delete.
+            # TaskUpdate API only supports 'deleted' as discard action, so we remap it.
             cur.execute("""
                 UPDATE claude.todos
-                SET is_deleted = true, deleted_at = NOW(), updated_at = NOW()
+                SET status = 'archived', updated_at = NOW()
                 WHERE todo_id = %s::uuid
             """, (todo_id,))
         elif new_status == 'completed':
@@ -437,16 +442,26 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
 
                 # Check if all tasks for the parent feature are done
                 cur.execute("""
-                    SELECT COUNT(*) FILTER (WHERE status NOT IN ('completed', 'cancelled')) as remaining
-                    FROM claude.build_tasks
-                    WHERE feature_id = (SELECT feature_id FROM claude.build_tasks WHERE task_id = %s::uuid)
+                    SELECT
+                        COUNT(*) FILTER (WHERE bt2.status NOT IN ('completed', 'cancelled')) as remaining,
+                        'F' || f.short_code as feature_code,
+                        f.feature_name
+                    FROM claude.build_tasks bt2
+                    JOIN claude.features f ON bt2.feature_id = f.feature_id
+                    WHERE bt2.feature_id = (SELECT feature_id FROM claude.build_tasks WHERE task_id = %s::uuid)
+                    GROUP BY f.short_code, f.feature_name
                 """, (bt_task_id,))
 
                 row = cur.fetchone()
                 remaining = row['remaining'] if isinstance(row, dict) else row[0]
 
                 if remaining == 0:
-                    logger.info(f"All tasks for feature complete - consider advancing feature status (triggered by {bt_code})")
+                    feature_code = row['feature_code'] if isinstance(row, dict) else row[1]
+                    feature_name = row['feature_name'] if isinstance(row, dict) else row[2]
+                    logger.info(f"All tasks for {feature_code} complete - surfacing to Claude")
+                    conn.commit()
+                    conn.close()
+                    return f"All build tasks for {feature_code} ({feature_name}) are now completed. Consider running: advance_status('feature', '{feature_code}', 'completed')"
 
             elif new_status == 'in_progress':
                 cur.execute("""
@@ -465,6 +480,7 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
 
         conn.commit()
         conn.close()
+        return None
 
     except Exception as e:
         logger.error(f"Failed to sync TaskUpdate: {e}")
@@ -473,6 +489,7 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str):
             conn.close()
         except Exception:
             pass
+        return None
 
 
 def main():
@@ -503,13 +520,17 @@ def main():
     # Pass session_id from hook_input for map file scoping
     hook_session_id = hook_input.get('session_id', '')
 
+    completion_msg = None
     if tool_name == 'TaskCreate':
         handle_task_create(tool_input, tool_output, project_name, hook_session_id)
     elif tool_name == 'TaskUpdate':
-        handle_task_update(tool_input, tool_output, project_name)
+        completion_msg = handle_task_update(tool_input, tool_output, project_name)
 
-    # PostToolUse hooks return empty (no context injection needed)
-    print(json.dumps({}))
+    # Surface feature completion advisory if all build_tasks are done
+    if completion_msg:
+        print(json.dumps({"additionalContext": completion_msg}))
+    else:
+        print(json.dumps({}))
     return 0
 
 

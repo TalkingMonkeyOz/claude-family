@@ -51,8 +51,9 @@ logging.basicConfig(
 logger = logging.getLogger('task_discipline')
 
 # Tools that REQUIRE tasks to exist before use.
-# Only "action" tools that modify state - not research tools (Read, Grep, Glob, Bash).
-GATED_TOOLS = {'Write', 'Edit', 'Task'}
+# Action tools + Bash (most investigation work goes through Bash).
+# Read/Grep/Glob are passive and ungated to allow initial exploration.
+GATED_TOOLS = {'Write', 'Edit', 'Task', 'Bash'}
 
 
 def get_task_map_path(project_name: str) -> Path:

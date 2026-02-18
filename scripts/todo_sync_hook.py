@@ -171,6 +171,10 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
             active_form = todo.get('activeForm', content)
             status = todo.get('status', 'pending')
 
+            # Map 'deleted' to 'archived' - preserves audit trail instead of hard-delete
+            if status == 'deleted':
+                status = 'archived'
+
             # Try to find matching existing todo
             matching_todo = find_matching_todo(content, existing_todos)
 

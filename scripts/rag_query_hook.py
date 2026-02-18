@@ -25,15 +25,18 @@ Output Format:
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
 # This ensures Claude always has the input processing workflow fresh in context.
-# ~80 tokens - core behavioral rules injected every prompt.
+# ~45 tokens - brief imperative protocol injected every prompt.
 
 CORE_PROTOCOL = """
-**MANDATORY RULES (enforced by hooks - violations are blocked):**
-1. CAPTURE ALL ASKS: READ the user's message carefully. Break it down into individual tasks (TaskCreate) so nothing gets lost. THEN work through them. The task_discipline_hook WILL block Write/Edit/Task if you skip this.
-2. VERIFY FIRST: Never claim something exists/doesn't exist without checking (DB query, file read, grep). Never guess table names, column names, or file paths.
-3. MCP TOOLS FIRST: Before raw SQL or manual code, check if an MCP tool does this. project-tools has 40+ tools. Use ToolSearch to find them.
-4. CONFIG VIA TOOLS: Config changes ONLY via update_claude_md/deploy_claude_md/deploy_project/regenerate_settings. Manual edits to settings.local.json are overwritten on restart.
-5. PERSIST CONTEXT: store_session_fact for decisions/credentials/findings. These survive compaction - your memory doesn't.
+STOP. Read the user's message fully. If it contains actionable work:
+1. Break it into tasks (TaskCreate) BEFORE doing anything else. Work through each one.
+2. Verify before claiming - read files, query DB. Never guess.
+3. Check MCP tools first (ToolSearch) - project-tools has 40+ tools.
+4. store_session_fact for decisions, credentials, and findings.
+
+"Actionable work" = ANY request that needs investigation, code changes, debugging, or system commands.
+The ONLY exceptions: pure questions ("what is X?"), short confirmations ("yes", "ok"), slash commands.
+Bash is gated - you MUST create tasks before running shell commands.
 """
 
 import json
