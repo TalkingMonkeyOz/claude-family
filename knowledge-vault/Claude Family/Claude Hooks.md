@@ -2,11 +2,12 @@
 projects:
 - claude-family
 synced: true
-synced_at: '2026-01-08T12:00:00.000000'
+synced_at: '2026-02-18T12:00:00.000000'
 tags:
 - hooks
 - quick-reference
 - claude-family
+- enforcement
 ---
 
 # Claude Hooks
@@ -15,104 +16,113 @@ Enforcement layer for Claude Family governance.
 
 ## Active Hooks
 
-| Order | Event | Script | Purpose | Status |
-|-------|-------|--------|---------|--------|
-| 1 | SessionStart | `session_startup_hook.py` | Log session, load state, check inbox | ✅ Working |
-| 2 | UserPromptSubmit | `rag_query_hook.py` | RAG context + core protocol + periodic reminders | ✅ Active |
-| 3 | PreToolUse (Write/Edit) | `context_injector_hook.py` | Inject coding standards from context_rules | ✅ Working |
-| 3b | PreToolUse (Write/Edit) | `standards_validator.py` | Validate content against standards | ✅ Working |
-| 4 | PostToolUse (TodoWrite) | `todo_sync_hook.py` | Sync todos to database | ✅ Working |
-| 5 | PostToolUse (catch-all) | `mcp_usage_logger.py` | Log MCP tool usage (filters to mcp__ prefix) | ✅ Working |
-| 6 | SubagentStart | `subagent_start_hook.py` | Log agent spawns to agent_sessions | ✅ Working |
-| 7 | PreCompact (manual+auto) | `precompact_hook.py` | Inject active todos, features, session state | ✅ Working |
-| 8 | SessionEnd | `session_end_hook.py` | Auto-close session in database | ✅ Working |
+| Order | Event | Script | Matcher | Purpose |
+|-------|-------|--------|---------|---------|
+| 1 | SessionStart | `session_startup_hook_enhanced.py` | (once) | Log session, load state, auto-archive stale todos, reset task map |
+| 2 | UserPromptSubmit | `rag_query_hook.py` | (all) | CORE_PROTOCOL injection + RAG context + session facts |
+| 3 | PreToolUse | `task_discipline_hook.py` | Write, Edit, Task, Bash | **Block** tool calls if no tasks created this session |
+| 4 | PreToolUse | `context_injector_hook.py` | Write, Edit | Inject coding standards from context_rules |
+| 5 | PreToolUse | `standards_validator.py` | Write, Edit | Validate content against standards |
+| 6 | PostToolUse | `todo_sync_hook.py` | TodoWrite | Sync todos to claude.todos |
+| 7 | PostToolUse | `task_sync_hook.py` | TaskCreate, TaskUpdate | Sync tasks to claude.todos + task map file |
+| 8 | PostToolUse | `mcp_usage_logger.py` | (catch-all) | Log MCP tool usage (filters to mcp__ prefix) |
+| 9 | SubagentStart | `subagent_start_hook.py` | (all) | Log agent spawns to agent_sessions |
+| 10 | PreCompact | `precompact_hook.py` | manual, auto | Inject active todos, features, session state |
+| 11 | SessionEnd | `session_end_hook.py` | (all) | Auto-close session in database |
 
-**Key design**: MCP usage logger uses a catch-all matcher (no matcher = fires for ALL PostToolUse). The script internally filters to `tool_name.startswith('mcp__')`.
+### Infrastructure-Only Hooks (claude-family project)
 
-## New Hook Features (v2.1.0)
+| Event | Script | Matcher | Purpose |
+|-------|--------|---------|---------|
+| PreToolUse | `validate_db_write.py` | mcp__postgres__execute_sql | Validate against column_registry |
+| PreToolUse | `validate_phase.py` | mcp__postgres__execute_sql | Check project phase for task creation |
+| PreToolUse | `validate_parent_links.py` | mcp__postgres__execute_sql | Prevent orphan records |
 
-### PreToolUse: ask + updatedInput Pattern
-Can now modify input AND ask for permission:
-```python
-response = {
-    "hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "ask",
-        "permissionDecisionReason": "Suggested correction...",
-        "updatedInput": { ...modified_tool_input... }
-    }
-}
+## Enforcement Chain
+
+```
+User message
+    ↓
+UserPromptSubmit (rag_query_hook.py)
+    → Injects CORE_PROTOCOL: "Break into tasks BEFORE doing anything"
+    → Advisory only (cannot block)
+    ↓
+Claude tries to use Write/Edit/Task/Bash
+    ↓
+PreToolUse (task_discipline_hook.py)
+    → Checks task map file for current-session tasks
+    → If no tasks: BLOCKS with "Use TaskCreate first"
+    → If tasks exist + session match: ALLOWS
+    ↓
+PreToolUse (context_injector + standards_validator)
+    → Injects standards, validates content
+    ↓
+Tool executes
+    ↓
+PostToolUse (sync hooks)
+    → Persist to database
 ```
 
-### Additional Hook Types
-| Type | Version | Purpose |
-|------|---------|---------|
-| SubagentStart | v2.0.43 | Monitor agent spawning |
-| PermissionRequest | v2.0.45 | Auto-approve safe patterns |
-| Hooks in frontmatter | v2.1.0 | Define hooks in skill/agent files |
-| `once: true` config | v2.1.0 | Run hook only once per session |
-| **`agent_type` in SessionStart** | v2.1.2 | Hook input includes agent type if `--agent` specified |
+**Key distinction**: CORE_PROTOCOL is persuasion (advisory). task_discipline_hook is enforcement (blocking).
 
-### Hooks in Skill Frontmatter
-```yaml
----
-name: my-skill
-hooks:
-  PreToolUse:
-    - matcher: Write
-      command: "python validate.py"
----
-```
+## GATED_TOOLS (What Gets Blocked)
 
-## Git Hooks (Native)
-
-| Hook | Purpose |
-|------|---------|
-| `.git/hooks/pre-commit` | CLAUDE.md max 250 lines |
-
-**Note**: Claude Code does NOT support PreCommit/PostCommit events. Use native Git hooks.
+| Tool | Gated? | Why |
+|------|--------|-----|
+| Write | Yes | File creation must be planned |
+| Edit | Yes | File modification must be planned |
+| Task | Yes | Agent spawning must be planned |
+| Bash | Yes | Shell commands often do investigation work |
+| Read | No | Passive exploration - needed to assess before planning |
+| Grep | No | Passive search |
+| Glob | No | Passive file finding |
+| MCP tools | No | Tool usage logged but not gated |
 
 ## Config Flow
 
 ```
-Database (claude.config_templates)
+Database (claude.config_templates id=1 "hooks-base")
     ↓
-generate_project_settings.py
++ project_type_configs (mcp_servers, skills, instructions)
     ↓
-.claude/settings.local.json
++ workspaces.startup_config (project-specific overrides)
+    ↓
+generate_project_settings.py (deep_merge)
+    ↓
+.claude/settings.local.json (generated, DO NOT edit manually)
 ```
 
-**Source of truth**: `claude.config_templates` table
-**Auto-regenerated**: Every SessionStart (self-healing)
-**Important**: Hooks must be in `settings.local.json`, NOT `hooks.json`!
+**Source of truth**: `claude.config_templates` table (template_id=1)
+**Regenerate**: `python scripts/generate_project_settings.py <project-name>`
+**Merge behavior**: Lists append (not replace), dicts recurse. Empty list overrides are harmless.
+**Important**: Hooks MUST be in `settings.local.json`, NOT `hooks.json`!
+
+## Task Discipline Details
+
+**Script**: `scripts/task_discipline_hook.py`
+**Session scoping**: Uses `_session_id` in task map file (written by `task_sync_hook.py` on TaskCreate)
+**Stale detection**: Compares map's `_session_id` with current session from hook input
+**Fail-open**: Any script error → allow (never blocks workflow due to hook crash)
+**Response format**: Exit 0 + JSON `permissionDecision: "deny"` (NOT exit code 2)
 
 ## Recent Changes
 
+**2026-02-18**:
+- Added `Bash` to GATED_TOOLS (was missing - 90% of investigation bypassed enforcement)
+- Strengthened CORE_PROTOCOL text with explicit "actionable work" definition
+- Fixed claude-family workspace startup_config (had dead empty PreToolUse/UserPromptSubmit overrides)
+- Fixed nimbus-mui: was running completely outdated config without any enforcement hooks
+- DB config_templates updated + all 3 projects regenerated from DB
+
 **2026-02-07**:
-- SessionEnd hook changed from prompt type → command type (`session_end_hook.py`)
-- PreCompact hook enhanced: now queries DB for active todos, features, session state
-- PostToolUse MCP logger changed to catch-all matcher (68 entries → 2)
-- Deleted dead code: `stop_hook_enforcer.py` (merged into rag_query_hook.py)
-- Deleted security risk: `end_current_session.py` (hardcoded credentials)
-- Added `context_injector_hook.py` and `subagent_start_hook.py` to Active Hooks table
-
-**2026-01-09**:
-- Added `agent_type` in SessionStart hook input (v2.1.2)
-- Large bash/tool outputs now saved to disk instead of truncated (v2.1.2)
-
-**2026-01-08**:
-- Updated standards_validator.py with `ask_with_suggestion()` pattern
-- Documented new v2.1.0 hook features (SubagentStart, PermissionRequest, frontmatter hooks)
-
-**2026-01-02**:
-- CRITICAL FIX: Hooks in `settings.local.json`, NOT `hooks.json`
-
-**2025-12-31**:
-- RE-ENABLED UserPromptSubmit hook (rag_query_hook.py)
+- SessionEnd hook: prompt type → command type (`session_end_hook.py`)
+- PreCompact hook: now queries DB for active todos, features, session state
+- PostToolUse MCP logger: 68 individual matchers → catch-all pattern
+- Added `context_injector_hook.py` and `subagent_start_hook.py`
 
 ---
 
-**Version**: 2.0 (Full hook chain audit, SessionEnd/PreCompact rework)
+**Version**: 3.0 (Full rewrite: added task_discipline docs, enforcement chain, GATED_TOOLS)
 **Created**: 2025-12-26
-**Updated**: 2026-02-07
+**Updated**: 2026-02-18
 **Location**: Claude Family/Claude Hooks.md

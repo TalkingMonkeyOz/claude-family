@@ -79,35 +79,16 @@ Executes a shell command/script.
 
 Hooks can be configured in **two places**:
 
-### Option 1: Project File (Immediate)
-**File**: `.claude/hooks.json`
-**Scope**: Project-specific
-**Priority**: Takes precedence over database
+### settings.local.json (Generated from DB)
+**File**: `.claude/settings.local.json`
+**Scope**: Project-specific, auto-generated
+**Source**: `claude.config_templates` + `claude.project_type_configs` + `claude.workspaces.startup_config`
 
-**Pros:**
-- Quick to edit
-- Version controlled (if committed)
-- Project-specific customization
+**IMPORTANT**: Claude Code reads hooks from `settings.local.json`, NOT from `hooks.json`. A separate `hooks.json` file is NOT supported.
 
-**Cons:**
-- Not centrally managed
-- Can get overwritten by config regeneration
+**Best Practice**: Store in database, regenerate files via `generate_project_settings.py`.
 
-### Option 2: Database (Managed)
-**Table**: `claude.workspaces`
-**Column**: `startup_config->'hooks'`
-**Scope**: Centrally managed, deployed to projects
-
-**Pros:**
-- Single source of truth
-- Survives config regeneration
-- Can be shared across projects via project types
-
-**Cons:**
-- Requires database update
-- Less immediate than file edit
-
-**Best Practice**: Store in database, regenerate files via startup script
+See [[Claude Hooks]] for the full enforcement chain and config flow.
 
 ---
 
@@ -359,18 +340,21 @@ Always include `"description"` field explaining hook's purpose.
 
 **Current Hooks** (as of 2025-12-28):
 
-1. ✅ **PreToolUse[Write/Edit]**: Auto-apply coding standards
-2. ✅ **PreToolUse[postgres]**: Database write validation
-3. ✅ **SessionStart**: Log session, load state
-4. ✅ **SessionEnd**: Cleanup, documentation checks
-5. ✅ **PostToolUse[mcp]**: Usage tracking
-6. ❌ **UserPromptSubmit**: REMOVED (too chatty)
+1. ✅ **SessionStart**: Log session, load state, auto-archive stale todos
+2. ✅ **UserPromptSubmit**: CORE_PROTOCOL injection + RAG context (silent, not chatty)
+3. ✅ **PreToolUse[Write/Edit/Task/Bash]**: Task discipline enforcement (blocks if no tasks)
+4. ✅ **PreToolUse[Write/Edit]**: Coding standards injection + validation
+5. ✅ **PreToolUse[postgres]**: Database write validation (claude-family only)
+6. ✅ **PostToolUse**: Todo sync, task sync, MCP usage logging
+7. ✅ **SubagentStart**: Agent spawn logging
+8. ✅ **PreCompact**: Inject active work items before compaction
+9. ✅ **SessionEnd**: Auto-close session in database
 
 **Configuration**: Stored in database, regenerated to file on startup
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2025-12-28
-**Updated**: 2025-12-29 (Corrected: PreCommit is NOT a valid hook type)
+**Updated**: 2026-02-18 (Fixed: hooks in settings.local.json not hooks.json, updated production hooks list)
 **Location**: 20-Domains/Claude Code Hooks.md
