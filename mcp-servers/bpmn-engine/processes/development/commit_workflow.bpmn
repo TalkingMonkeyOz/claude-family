@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/commit-workflow"
+    id="Definitions_CommitWorkflow">
+
+  <bpmn:process id="commit_workflow" name="Commit Workflow: Code to Repository" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_stage</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Stage Changes [CLAUDE] -->
+    <bpmn:userTask id="stage_changes" name="Stage Changes">
+      <bpmn:incoming>flow_start_to_stage</bpmn:incoming>
+      <bpmn:outgoing>flow_stage_to_checks</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Run Pre-commit Checks [CLAUDE] -->
+    <!-- Accepts incoming from stage_changes AND fix_issues (loop) -->
+    <bpmn:userTask id="run_pre_commit_checks" name="Run Pre-commit Checks">
+      <bpmn:incoming>flow_stage_to_checks</bpmn:incoming>
+      <bpmn:incoming>flow_fix_to_checks</bpmn:incoming>
+      <bpmn:outgoing>flow_checks_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Checks Pass? -->
+    <!-- default=flow_checks_fail so no conditionExpression needed on that branch -->
+    <bpmn:exclusiveGateway id="checks_pass_gateway" name="Checks Pass?" default="flow_checks_fail">
+      <bpmn:incoming>flow_checks_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_checks_pass</bpmn:outgoing>
+      <bpmn:outgoing>flow_checks_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Fix Issues [CLAUDE] - checks fail path, loops back to checks -->
+    <bpmn:userTask id="fix_issues" name="Fix Issues">
+      <bpmn:incoming>flow_checks_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_checks</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Code Review [AGENT] - reviewer-sonnet spawned -->
+    <!-- Accepts incoming from checks_pass AND address_review_feedback (loop) -->
+    <bpmn:scriptTask id="code_review" name="Code Review" scriptFormat="python">
+      <bpmn:incoming>flow_checks_pass</bpmn:incoming>
+      <bpmn:incoming>flow_address_feedback_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_result_gateway</bpmn:outgoing>
+      <bpmn:script>agent = "reviewer-sonnet"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Review Result? -->
+    <!-- default=flow_approved so approval is the fallback path -->
+    <bpmn:exclusiveGateway id="review_result_gateway" name="Review Result?" default="flow_approved">
+      <bpmn:incoming>flow_review_to_result_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_changes_requested</bpmn:outgoing>
+      <bpmn:outgoing>flow_approved</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Address Review Feedback [CLAUDE] - changes requested path, loops to review -->
+    <bpmn:userTask id="address_review_feedback" name="Address Review Feedback">
+      <bpmn:incoming>flow_changes_requested</bpmn:incoming>
+      <bpmn:outgoing>flow_address_feedback_to_review</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Write Commit Message [CLAUDE] -->
+    <bpmn:userTask id="write_commit_message" name="Write Commit Message">
+      <bpmn:incoming>flow_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_commit_message_to_create</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Create Commit [CLAUDE] - git commit -->
+    <bpmn:scriptTask id="create_commit" name="Create Commit" scriptFormat="python">
+      <bpmn:incoming>flow_commit_message_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_push_gateway</bpmn:outgoing>
+      <bpmn:script>commit_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Push? -->
+    <!-- default=flow_no_push so no-push is the fallback path -->
+    <bpmn:exclusiveGateway id="push_gateway" name="Push?" default="flow_no_push">
+      <bpmn:incoming>flow_create_to_push_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_push_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_push</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Push to Remote [CLAUDE] - git push -->
+    <bpmn:scriptTask id="push_to_remote" name="Push to Remote" scriptFormat="python">
+      <bpmn:incoming>flow_push_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_push_to_end</bpmn:outgoing>
+      <bpmn:script>pushed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Code Committed (reached via push path) -->
+    <bpmn:endEvent id="end_committed_pushed" name="Code Committed">
+      <bpmn:incoming>flow_push_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Code Committed (reached via no-push path) -->
+    <bpmn:endEvent id="end_committed_local" name="Code Committed">
+      <bpmn:incoming>flow_no_push</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_stage" sourceRef="start_event" targetRef="stage_changes"/>
+    <bpmn:sequenceFlow id="flow_stage_to_checks" sourceRef="stage_changes" targetRef="run_pre_commit_checks"/>
+    <bpmn:sequenceFlow id="flow_checks_to_gateway" sourceRef="run_pre_commit_checks" targetRef="checks_pass_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_checks_pass" sourceRef="checks_pass_gateway" targetRef="code_review">
+      <bpmn:conditionExpression>checks_passed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_checks_fail" sourceRef="checks_pass_gateway" targetRef="fix_issues"/>
+
+    <bpmn:sequenceFlow id="flow_fix_to_checks" sourceRef="fix_issues" targetRef="run_pre_commit_checks"/>
+
+    <bpmn:sequenceFlow id="flow_review_to_result_gateway" sourceRef="code_review" targetRef="review_result_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_changes_requested" sourceRef="review_result_gateway" targetRef="address_review_feedback">
+      <bpmn:conditionExpression>review == "changes_requested"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_approved" sourceRef="review_result_gateway" targetRef="write_commit_message"/>
+
+    <bpmn:sequenceFlow id="flow_address_feedback_to_review" sourceRef="address_review_feedback" targetRef="code_review"/>
+
+    <bpmn:sequenceFlow id="flow_commit_message_to_create" sourceRef="write_commit_message" targetRef="create_commit"/>
+    <bpmn:sequenceFlow id="flow_create_to_push_gateway" sourceRef="create_commit" targetRef="push_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_push_yes" sourceRef="push_gateway" targetRef="push_to_remote">
+      <bpmn:conditionExpression>push_to_remote == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_no_push" sourceRef="push_gateway" targetRef="end_committed_local"/>
+
+    <bpmn:sequenceFlow id="flow_push_to_end" sourceRef="push_to_remote" targetRef="end_committed_pushed"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="commit_workflow">
+
+      <!-- Row 1: main happy path (y=200) -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_stage_changes" bpmnElement="stage_changes">
+        <dc:Bounds x="170" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_run_pre_commit_checks" bpmnElement="run_pre_commit_checks">
+        <dc:Bounds x="330" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_checks_pass_gateway" bpmnElement="checks_pass_gateway" isMarkerVisible="true">
+        <dc:Bounds x="490" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- fix_issues task (below, loops back to run_pre_commit_checks) -->
+      <bpmndi:BPMNShape id="shape_fix_issues" bpmnElement="fix_issues">
+        <dc:Bounds x="490" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_code_review" bpmnElement="code_review">
+        <dc:Bounds x="600" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_review_result_gateway" bpmnElement="review_result_gateway" isMarkerVisible="true">
+        <dc:Bounds x="760" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- address_review_feedback task (below, loops back to code_review) -->
+      <bpmndi:BPMNShape id="shape_address_review_feedback" bpmnElement="address_review_feedback">
+        <dc:Bounds x="760" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_write_commit_message" bpmnElement="write_commit_message">
+        <dc:Bounds x="870" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_commit" bpmnElement="create_commit">
+        <dc:Bounds x="1030" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_push_gateway" bpmnElement="push_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1190" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_push_to_remote" bpmnElement="push_to_remote">
+        <dc:Bounds x="1300" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_committed_pushed" bpmnElement="end_committed_pushed">
+        <dc:Bounds x="1460" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_committed_local (below push_gateway, no-push path) -->
+      <bpmndi:BPMNShape id="shape_end_committed_local" bpmnElement="end_committed_local">
+        <dc:Bounds x="1197" y="340" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges: main happy path -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_stage" bpmnElement="flow_start_to_stage">
+        <di:waypoint x="116" y="218"/>
+        <di:waypoint x="170" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_stage_to_checks" bpmnElement="flow_stage_to_checks">
+        <di:waypoint x="270" y="220"/>
+        <di:waypoint x="330" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_checks_to_gateway" bpmnElement="flow_checks_to_gateway">
+        <di:waypoint x="430" y="220"/>
+        <di:waypoint x="490" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- checks_pass_gateway: pass branch (right) -->
+      <bpmndi:BPMNEdge id="edge_flow_checks_pass" bpmnElement="flow_checks_pass">
+        <di:waypoint x="540" y="218"/>
+        <di:waypoint x="600" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- checks_pass_gateway: fail branch (down) -->
+      <bpmndi:BPMNEdge id="edge_flow_checks_fail" bpmnElement="flow_checks_fail">
+        <di:waypoint x="515" y="243"/>
+        <di:waypoint x="515" y="380"/>
+        <di:waypoint x="490" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fix_issues loop back to run_pre_commit_checks -->
+      <bpmndi:BPMNEdge id="edge_flow_fix_to_checks" bpmnElement="flow_fix_to_checks">
+        <di:waypoint x="490" y="380"/>
+        <di:waypoint x="380" y="380"/>
+        <di:waypoint x="380" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_review_to_result_gateway" bpmnElement="flow_review_to_result_gateway">
+        <di:waypoint x="700" y="220"/>
+        <di:waypoint x="760" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_result_gateway: changes_requested branch (down) -->
+      <bpmndi:BPMNEdge id="edge_flow_changes_requested" bpmnElement="flow_changes_requested">
+        <di:waypoint x="785" y="243"/>
+        <di:waypoint x="785" y="380"/>
+        <di:waypoint x="760" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_result_gateway: approved branch (right) -->
+      <bpmndi:BPMNEdge id="edge_flow_approved" bpmnElement="flow_approved">
+        <di:waypoint x="810" y="218"/>
+        <di:waypoint x="870" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- address_review_feedback loop back to code_review -->
+      <bpmndi:BPMNEdge id="edge_flow_address_feedback_to_review" bpmnElement="flow_address_feedback_to_review">
+        <di:waypoint x="760" y="380"/>
+        <di:waypoint x="650" y="380"/>
+        <di:waypoint x="650" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_commit_message_to_create" bpmnElement="flow_commit_message_to_create">
+        <di:waypoint x="970" y="220"/>
+        <di:waypoint x="1030" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_create_to_push_gateway" bpmnElement="flow_create_to_push_gateway">
+        <di:waypoint x="1130" y="220"/>
+        <di:waypoint x="1190" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- push_gateway: push branch (right) -->
+      <bpmndi:BPMNEdge id="edge_flow_push_yes" bpmnElement="flow_push_yes">
+        <di:waypoint x="1240" y="218"/>
+        <di:waypoint x="1300" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- push_gateway: no-push branch (down to end) -->
+      <bpmndi:BPMNEdge id="edge_flow_no_push" bpmnElement="flow_no_push">
+        <di:waypoint x="1215" y="243"/>
+        <di:waypoint x="1215" y="358"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_push_to_end" bpmnElement="flow_push_to_end">
+        <di:waypoint x="1400" y="220"/>
+        <di:waypoint x="1460" y="218"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

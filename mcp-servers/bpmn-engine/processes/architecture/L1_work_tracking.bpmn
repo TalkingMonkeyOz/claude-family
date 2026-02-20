@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-work-tracking"
+    id="Definitions_L1_WT">
+
+  <!--
+    LEVEL 1: Work Tracking
+    Called by: L0 cap_work_tracking (L0_claude_family.bpmn)
+
+    Models how work items flow through the system:
+      Feature -> planned -> build tasks created -> task execution -> completion
+    State machines enforced by WorkflowEngine (claude.workflow_transitions)
+
+    L2 Connection:
+      execute_task_lifecycle (callActivity) -> task_lifecycle (L2)
+      Located in: processes/lifecycle/task_lifecycle.bpmn
+
+    Actors: [CLAUDE], [DB/WF] (WorkflowEngine), [HOOK] (task_sync)
+  -->
+
+  <bpmn:process id="L1_work_tracking" name="L1: Work Tracking" isExecutable="true">
+
+    <bpmn:startEvent id="wt_start" name="Work Request Received">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Triage: What kind of work? -->
+    <bpmn:userTask id="identify_work" name="[CLAUDE] Identify Work Type">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="work_type_gw" name="Work Type?" default="flow_feedback">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>flow_feature</bpmn:outgoing>
+      <bpmn:outgoing>flow_feedback</bpmn:outgoing>
+      <bpmn:outgoing>flow_adhoc</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Feature path: full lifecycle -->
+    <bpmn:scriptTask id="create_feature" name="[DB/WF] Create Feature (draft)" scriptFormat="python">
+      <bpmn:incoming>flow_feature</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+      <bpmn:script>feature_status = "draft"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="plan_feature" name="[CLAUDE] Plan Feature + Create Tasks">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="advance_planned" name="[DB/WF] Advance to Planned" scriptFormat="python">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+      <bpmn:script>feature_status = "planned"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- L1 -> L2 connection: each task iteration invokes task_lifecycle subprocess -->
+    <bpmn:callActivity id="execute_task_lifecycle" name="[L2] Execute Task (-> task_lifecycle)" calledElement="task_lifecycle">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:incoming>flow_more_tasks</bpmn:incoming>
+      <bpmn:outgoing>f5b</bpmn:outgoing>
+    </bpmn:callActivity>
+
+    <bpmn:userTask id="assess_task_completion" name="[CLAUDE] Assess: All Tasks Done?">
+      <bpmn:incoming>f5b</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="tasks_done_gw" name="All Tasks Done?" default="flow_more_tasks">
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>flow_all_done</bpmn:outgoing>
+      <bpmn:outgoing>flow_more_tasks</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="complete_feature" name="[DB/WF] Complete Feature" scriptFormat="python">
+      <bpmn:incoming>flow_all_done</bpmn:incoming>
+      <bpmn:outgoing>f_feature_end</bpmn:outgoing>
+      <bpmn:script>feature_status = "completed"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Feedback path: bug/idea/change -->
+    <bpmn:scriptTask id="create_feedback" name="[DB/WF] Create Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_feedback</bpmn:incoming>
+      <bpmn:outgoing>f_fb_end</bpmn:outgoing>
+      <bpmn:script>feedback_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Ad-hoc task path: quick todos -->
+    <bpmn:userTask id="create_tasks" name="[CLAUDE] Create Session Tasks (TaskCreate)">
+      <bpmn:incoming>flow_adhoc</bpmn:incoming>
+      <bpmn:outgoing>f_adhoc_sync</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="sync_tasks" name="[HOOK] Sync Tasks to DB (task_sync_hook)" scriptFormat="python">
+      <bpmn:incoming>f_adhoc_sync</bpmn:incoming>
+      <bpmn:outgoing>f_adhoc_end</bpmn:outgoing>
+      <bpmn:script>tasks_synced = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge all paths -->
+    <bpmn:exclusiveGateway id="work_merge" name="Work Complete Merge">
+      <bpmn:incoming>f_feature_end</bpmn:incoming>
+      <bpmn:incoming>f_fb_end</bpmn:incoming>
+      <bpmn:incoming>f_adhoc_end</bpmn:incoming>
+      <bpmn:outgoing>f_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="wt_end" name="Work Tracked">
+      <bpmn:incoming>f_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="wt_start" targetRef="identify_work"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="identify_work" targetRef="work_type_gw"/>
+
+    <bpmn:sequenceFlow id="flow_feature" sourceRef="work_type_gw" targetRef="create_feature">
+      <bpmn:conditionExpression>work_type == "feature"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_feedback" sourceRef="work_type_gw" targetRef="create_feedback"/>
+    <bpmn:sequenceFlow id="flow_adhoc" sourceRef="work_type_gw" targetRef="create_tasks">
+      <bpmn:conditionExpression>work_type == "adhoc"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f3" sourceRef="create_feature" targetRef="plan_feature"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="plan_feature" targetRef="advance_planned"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="advance_planned" targetRef="execute_task_lifecycle"/>
+    <bpmn:sequenceFlow id="f5b" sourceRef="execute_task_lifecycle" targetRef="assess_task_completion"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="assess_task_completion" targetRef="tasks_done_gw"/>
+
+    <bpmn:sequenceFlow id="flow_all_done" sourceRef="tasks_done_gw" targetRef="complete_feature">
+      <bpmn:conditionExpression>all_tasks_done == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_more_tasks" sourceRef="tasks_done_gw" targetRef="execute_task_lifecycle"/>
+
+    <bpmn:sequenceFlow id="f_feature_end" sourceRef="complete_feature" targetRef="work_merge"/>
+    <bpmn:sequenceFlow id="f_fb_end" sourceRef="create_feedback" targetRef="work_merge"/>
+    <bpmn:sequenceFlow id="f_adhoc_sync" sourceRef="create_tasks" targetRef="sync_tasks"/>
+    <bpmn:sequenceFlow id="f_adhoc_end" sourceRef="sync_tasks" targetRef="work_merge"/>
+    <bpmn:sequenceFlow id="f_end" sourceRef="work_merge" targetRef="wt_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

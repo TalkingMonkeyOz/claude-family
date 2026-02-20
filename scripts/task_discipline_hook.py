@@ -8,22 +8,28 @@ Blocks tool calls when no tasks have been created, ensuring Claude plans before 
 Hook Event: PreToolUse
 Matchers: Write, Edit, Task (registered separately per tool)
 
-How it works:
+How it works (3-way cascade - FB108):
 1. Reads task map file written by task_sync_hook.py on TaskCreate
-2. Checks _session_id in map matches current session (prevents stale map from old session)
-3. If current-session tasks exist → allow
-4. If no tasks or stale session → deny with helpful message
+2. Checks _session_id in map matches current session
+3. Decision cascade:
+   a. Tasks exist + session match -> allow (normal case)
+   b. Tasks exist + no session_id -> allow (edge case)
+   c. Tasks exist + session mismatch + map fresh (< 2h) -> allow with warning (continuation)
+   d. No tasks + map recently modified (< 30s) -> allow (race condition)
+   e. Otherwise -> deny
 
 Session scoping:
 - task_sync_hook.py writes _session_id into the map file on every TaskCreate
 - This hook compares map's _session_id with the current session_id from hook_input
-- Stale map files from previous sessions are treated as "no tasks"
+- Session mismatch with fresh map (< 2h) = continuation session (FB108 fix)
+- Truly stale maps (> 2h) from previous sessions are denied
 
 Response pattern: exit code 0 + JSON with permissionDecision: "deny" or "allow"
 (Exit code 2 ignores JSON - only uses stderr as plain text, so we use exit 0)
 
 Author: Claude Family
 Date: 2026-02-09
+Updated: 2026-02-20 (FB108 - continuation session + git root project detection)
 """
 
 import json
@@ -103,6 +109,48 @@ def deny(reason: str):
     sys.exit(0)
 
 
+def map_recently_modified(project_name: str, max_age_seconds: int = 30) -> bool:
+    """Check if the task map file was recently modified.
+
+    Handles the race condition where multiple PostToolUse hooks fire concurrently
+    and the map file is temporarily empty or mid-write. If the file was touched
+    recently, it's likely being written to by concurrent hooks.
+    """
+    import time
+    path = get_task_map_path(project_name)
+    if not path.exists():
+        return False
+    try:
+        mtime = path.stat().st_mtime
+        age = time.time() - mtime
+        return age < max_age_seconds
+    except OSError:
+        return False
+
+
+def _get_project_name(cwd: str) -> str:
+    """Derive project name from git root, falling back to cwd basename.
+
+    Claude Code may pass a subdirectory as cwd (e.g., mcp-servers/bpmn-engine/
+    instead of the project root). Using git root ensures we always get the
+    correct project name for task map lookup.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, timeout=5,
+            cwd=cwd, stdin=subprocess.DEVNULL
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            git_root = result.stdout.strip().replace('/', os.sep)
+            return os.path.basename(git_root)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    # Fallback to cwd basename
+    return os.path.basename(cwd.rstrip('/\\'))
+
+
 def main():
     """Main entry point."""
     try:
@@ -118,9 +166,9 @@ def main():
         allow()
         return
 
-    # Get project name from cwd
+    # Get project name from git root (not raw cwd - cwd may be a subdirectory)
     cwd = hook_input.get('cwd', os.getcwd())
-    project_name = os.path.basename(cwd.rstrip('/\\'))
+    project_name = _get_project_name(cwd)
 
     # Get current session_id for scoping
     current_session_id = hook_input.get('session_id', '')
@@ -132,6 +180,11 @@ def main():
     task_entries = {k: v for k, v in task_map.items() if not k.startswith('_')}
     map_session_id = task_map.get('_session_id', '')
 
+    logger.debug(
+        f"Discipline check: project={project_name}, tasks={len(task_entries)}, "
+        f"map_session={map_session_id[:8] if map_session_id else 'NONE'}"
+    )
+
     # Session scoping: tasks must be from THIS session
     if task_entries and map_session_id == current_session_id:
         logger.debug(f"Tasks exist ({len(task_entries)} tasks, session match) - allowing {tool_name}")
@@ -140,10 +193,26 @@ def main():
         # No session_id available (edge case) - allow if tasks exist
         logger.debug(f"Tasks exist ({len(task_entries)} tasks, no session_id) - allowing {tool_name}")
         allow()
+    elif not task_entries and map_recently_modified(project_name):
+        # Race condition fallback: map is empty but was recently written to.
+        # This happens when multiple PostToolUse hooks fire concurrently (e.g.,
+        # batch TaskCreate) and the map is mid-write. Allow with a warning.
+        logger.warning(f"Map empty but recently modified (race condition) - allowing {tool_name}")
+        allow()
+    elif task_entries and map_recently_modified(project_name, max_age_seconds=7200):
+        # FB108 fix: Session mismatch but map is fresh (< 2 hours).
+        # This happens in continuation sessions where Claude Code assigns a new
+        # session_id after context compaction. The tasks are still valid work items
+        # from the same logical session, so allow with a warning.
+        logger.warning(
+            f"Continuation session detected: map session={map_session_id[:8]}, "
+            f"current={current_session_id[:8]}, allowing {tool_name}"
+        )
+        allow()
     else:
         if task_entries and map_session_id != current_session_id:
             reason = (
-                f"Stale tasks from a previous session. "
+                f"Stale tasks from a previous session (map > 2h old). "
                 f"Use TaskCreate to define your work for THIS session BEFORE using {tool_name}."
             )
         else:

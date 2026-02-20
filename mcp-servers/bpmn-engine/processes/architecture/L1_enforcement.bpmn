@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-enforcement"
+    id="Definitions_L1_EF">
+
+  <!--
+    LEVEL 1: Enforcement
+    Called by: L0 cap_enforcement (L0_claude_family.bpmn)
+
+    Models the hook chain that runs on each tool call:
+      1. Task discipline gate (PreToolUse) - blocks if no tasks
+      2. Context injection (PreToolUse) - inject coding standards
+      3. Standards validation (PreToolUse) - validate content
+      4. Tool execution
+      5. Post-tool sync (PostToolUse) - todo/task sync, MCP logging
+
+    Discipline gate has 3 outcomes (FB108 fix):
+      - allowed: session match, tasks exist
+      - continuation: session mismatch but map fresh (< 2h) - continuation session
+      - blocked: no tasks or truly stale (> 2h)
+
+    Links to L2: hook_chain.bpmn (existing)
+    Actors: [HOOK], [CLAUDE], [DB]
+  -->
+
+  <bpmn:process id="L1_enforcement" name="L1: Enforcement" isExecutable="true">
+
+    <bpmn:startEvent id="ef_start" name="Tool Call Initiated">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- PreToolUse checks -->
+    <bpmn:userTask id="identify_tool" name="[CLAUDE] Identify Tool Being Called">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="gated_check" name="Is Gated Tool?" default="flow_ungated">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>flow_gated</bpmn:outgoing>
+      <bpmn:outgoing>flow_ungated</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Gated path: discipline check with cascading logic -->
+    <bpmn:scriptTask id="discipline_check" name="[HOOK] Task Discipline Gate (Write/Edit/Task/Bash)" scriptFormat="python">
+      <bpmn:incoming>flow_gated</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+      <bpmn:script>discipline_checked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- 3-way gateway: allowed / continuation / blocked (FB108) -->
+    <bpmn:exclusiveGateway id="discipline_gw" name="Discipline Result?" default="flow_allowed">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>flow_allowed</bpmn:outgoing>
+      <bpmn:outgoing>flow_continuation</bpmn:outgoing>
+      <bpmn:outgoing>flow_blocked</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Blocked path: no tasks or truly stale -->
+    <bpmn:scriptTask id="blocked_response" name="[HOOK] Deny: No Tasks or Stale Session" scriptFormat="python">
+      <bpmn:incoming>flow_blocked</bpmn:incoming>
+      <bpmn:outgoing>f_blocked_end</bpmn:outgoing>
+      <bpmn:script>tool_blocked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Continuation path: session mismatch but map fresh (FB108 fix) -->
+    <bpmn:scriptTask id="log_continuation" name="[HOOK] Warn: Continuation Session Detected" scriptFormat="python">
+      <bpmn:incoming>flow_continuation</bpmn:incoming>
+      <bpmn:outgoing>f_cont_merge</bpmn:outgoing>
+      <bpmn:script>continuation_warning = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge continuation into allowed path -->
+    <bpmn:exclusiveGateway id="allowed_merge" name="Allowed Merge">
+      <bpmn:incoming>flow_allowed</bpmn:incoming>
+      <bpmn:incoming>f_cont_merge</bpmn:incoming>
+      <bpmn:outgoing>f_to_inject</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="inject_context" name="[HOOK] Inject Coding Standards" scriptFormat="python">
+      <bpmn:incoming>f_to_inject</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:script>context_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_standards" name="[HOOK] Validate Content Standards" scriptFormat="python">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f_gated_merge</bpmn:outgoing>
+      <bpmn:script>standards_validated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge gated + ungated -->
+    <bpmn:exclusiveGateway id="tool_merge" name="Tool Ready Merge">
+      <bpmn:incoming>f_gated_merge</bpmn:incoming>
+      <bpmn:incoming>flow_ungated</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Tool execution -->
+    <bpmn:userTask id="execute_tool" name="[CLAUDE] Execute Tool Call">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- PostToolUse sync -->
+    <bpmn:scriptTask id="post_sync" name="[HOOK] PostToolUse Sync (todos, tasks, MCP log)" scriptFormat="python">
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>f_sync_end</bpmn:outgoing>
+      <bpmn:script>post_synced = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End events -->
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>f_sync_end</bpmn:incoming>
+      <bpmn:incoming>f_blocked_end</bpmn:incoming>
+      <bpmn:outgoing>f_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="ef_end" name="Enforcement Complete">
+      <bpmn:incoming>f_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="ef_start" targetRef="identify_tool"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="identify_tool" targetRef="gated_check"/>
+
+    <bpmn:sequenceFlow id="flow_gated" sourceRef="gated_check" targetRef="discipline_check">
+      <bpmn:conditionExpression>is_gated == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_ungated" sourceRef="gated_check" targetRef="tool_merge"/>
+
+    <bpmn:sequenceFlow id="f3" sourceRef="discipline_check" targetRef="discipline_gw"/>
+
+    <bpmn:sequenceFlow id="flow_blocked" sourceRef="discipline_gw" targetRef="blocked_response">
+      <bpmn:conditionExpression>discipline_result == "blocked"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_continuation" sourceRef="discipline_gw" targetRef="log_continuation">
+      <bpmn:conditionExpression>discipline_result == "continuation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_allowed" sourceRef="discipline_gw" targetRef="allowed_merge"/>
+
+    <bpmn:sequenceFlow id="f_cont_merge" sourceRef="log_continuation" targetRef="allowed_merge"/>
+    <bpmn:sequenceFlow id="f_to_inject" sourceRef="allowed_merge" targetRef="inject_context"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="inject_context" targetRef="validate_standards"/>
+    <bpmn:sequenceFlow id="f_gated_merge" sourceRef="validate_standards" targetRef="tool_merge"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="tool_merge" targetRef="execute_tool"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="execute_tool" targetRef="post_sync"/>
+    <bpmn:sequenceFlow id="f_sync_end" sourceRef="post_sync" targetRef="end_merge"/>
+    <bpmn:sequenceFlow id="f_blocked_end" sourceRef="blocked_response" targetRef="end_merge"/>
+    <bpmn:sequenceFlow id="f_end" sourceRef="end_merge" targetRef="ef_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

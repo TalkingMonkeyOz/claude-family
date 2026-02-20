@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-agent-orchestration"
+    id="Definitions_L1_AO">
+
+  <!--
+    LEVEL 1: Agent Orchestration
+    Called by: L0 cap_agents (L0_claude_family.bpmn)
+
+    Models the agent spawning and coordination lifecycle:
+      1. Assess complexity (does this need agents?)
+      2. Select agent type (coder, reviewer, tester, etc.)
+      3. Spawn agent (via orchestrator MCP)
+      4. Monitor progress (status updates)
+      5. Collect and integrate results
+
+    Actors: [CLAUDE], [AGENT] (spawned sub-agent), [ORCH] (orchestrator MCP)
+  -->
+
+  <bpmn:process id="L1_agent_orchestration" name="L1: Agent Orchestration" isExecutable="true">
+
+    <bpmn:startEvent id="ao_start" name="Complex Task Identified">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="assess_complexity" name="[CLAUDE] Assess: Agent Needed?">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="need_agent_gw" name="Need Agent?" default="flow_direct">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>flow_spawn</bpmn:outgoing>
+      <bpmn:outgoing>flow_direct</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Direct execution (no agent needed) -->
+    <bpmn:userTask id="execute_direct" name="[CLAUDE] Execute Directly">
+      <bpmn:incoming>flow_direct</bpmn:incoming>
+      <bpmn:outgoing>f_direct_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Agent path -->
+    <bpmn:userTask id="select_agent" name="[CLAUDE] Select Agent Type (coder/reviewer/tester)">
+      <bpmn:incoming>flow_spawn</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="spawn_agent" name="[ORCH] Spawn Agent (workspace, task)" scriptFormat="python">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:script>agent_spawned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="monitor_agent" name="[CLAUDE] Monitor Agent Progress">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="agent_result_gw" name="Agent Result?" default="flow_success">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>flow_success</bpmn:outgoing>
+      <bpmn:outgoing>flow_retry</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="integrate_result" name="[CLAUDE] Integrate Agent Result">
+      <bpmn:incoming>flow_success</bpmn:incoming>
+      <bpmn:outgoing>f_agent_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Merge -->
+    <bpmn:exclusiveGateway id="ao_merge" name="Orchestration Merge">
+      <bpmn:incoming>f_direct_end</bpmn:incoming>
+      <bpmn:incoming>f_agent_end</bpmn:incoming>
+      <bpmn:outgoing>f_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="ao_end" name="Task Complete">
+      <bpmn:incoming>f_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="ao_start" targetRef="assess_complexity"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="assess_complexity" targetRef="need_agent_gw"/>
+
+    <bpmn:sequenceFlow id="flow_spawn" sourceRef="need_agent_gw" targetRef="select_agent">
+      <bpmn:conditionExpression>need_agent == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_direct" sourceRef="need_agent_gw" targetRef="execute_direct"/>
+
+    <bpmn:sequenceFlow id="f3" sourceRef="select_agent" targetRef="spawn_agent"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="spawn_agent" targetRef="monitor_agent"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="monitor_agent" targetRef="agent_result_gw"/>
+
+    <bpmn:sequenceFlow id="flow_success" sourceRef="agent_result_gw" targetRef="integrate_result"/>
+    <bpmn:sequenceFlow id="flow_retry" sourceRef="agent_result_gw" targetRef="select_agent">
+      <bpmn:conditionExpression>agent_result == "retry"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="f_direct_end" sourceRef="execute_direct" targetRef="ao_merge"/>
+    <bpmn:sequenceFlow id="f_agent_end" sourceRef="integrate_result" targetRef="ao_merge"/>
+    <bpmn:sequenceFlow id="f_end" sourceRef="ao_merge" targetRef="ao_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

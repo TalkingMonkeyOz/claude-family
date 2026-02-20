@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-stubs"
+    id="Definitions_L1_stubs">
+
+  <!--
+    Stub L1 processes for L0 call activity resolution.
+    Each will be replaced by a full L1 process as we build them out.
+  -->
+
+  <bpmn:process id="L1_session_management" name="L1: Session Management (stub)" isExecutable="true">
+    <bpmn:startEvent id="sm_start" name="Start"/>
+    <bpmn:userTask id="sm_placeholder" name="Session Management (TODO: expand to L1)"/>
+    <bpmn:endEvent id="sm_end" name="End"/>
+    <bpmn:sequenceFlow id="smf1" sourceRef="sm_start" targetRef="sm_placeholder"/>
+    <bpmn:sequenceFlow id="smf2" sourceRef="sm_placeholder" targetRef="sm_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_work_tracking" name="L1: Work Tracking (stub)" isExecutable="true">
+    <bpmn:startEvent id="wt_start" name="Start"/>
+    <bpmn:userTask id="wt_placeholder" name="Work Tracking (TODO: expand to L1)"/>
+    <bpmn:endEvent id="wt_end" name="End"/>
+    <bpmn:sequenceFlow id="wtf1" sourceRef="wt_start" targetRef="wt_placeholder"/>
+    <bpmn:sequenceFlow id="wtf2" sourceRef="wt_placeholder" targetRef="wt_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_knowledge_management" name="L1: Knowledge Management (stub)" isExecutable="true">
+    <bpmn:startEvent id="km_l1_start" name="Start"/>
+    <bpmn:userTask id="km_l1_placeholder" name="Knowledge Management (TODO: expand to L1)"/>
+    <bpmn:endEvent id="km_l1_end" name="End"/>
+    <bpmn:sequenceFlow id="kmf1" sourceRef="km_l1_start" targetRef="km_l1_placeholder"/>
+    <bpmn:sequenceFlow id="kmf2" sourceRef="km_l1_placeholder" targetRef="km_l1_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_enforcement" name="L1: Enforcement (stub)" isExecutable="true">
+    <bpmn:startEvent id="ef_start" name="Start"/>
+    <bpmn:userTask id="ef_placeholder" name="Enforcement (TODO: expand to L1)"/>
+    <bpmn:endEvent id="ef_end" name="End"/>
+    <bpmn:sequenceFlow id="eff1" sourceRef="ef_start" targetRef="ef_placeholder"/>
+    <bpmn:sequenceFlow id="eff2" sourceRef="ef_placeholder" targetRef="ef_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_agent_orchestration" name="L1: Agent Orchestration (stub)" isExecutable="true">
+    <bpmn:startEvent id="ao_start" name="Start"/>
+    <bpmn:userTask id="ao_placeholder" name="Agent Orchestration (TODO: expand to L1)"/>
+    <bpmn:endEvent id="ao_end" name="End"/>
+    <bpmn:sequenceFlow id="aof1" sourceRef="ao_start" targetRef="ao_placeholder"/>
+    <bpmn:sequenceFlow id="aof2" sourceRef="ao_placeholder" targetRef="ao_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_config_management" name="L1: Configuration Management (stub)" isExecutable="true">
+    <bpmn:startEvent id="cm_start" name="Start"/>
+    <bpmn:userTask id="cm_placeholder" name="Configuration Management (TODO: expand to L1)"/>
+    <bpmn:endEvent id="cm_end" name="End"/>
+    <bpmn:sequenceFlow id="cmf1" sourceRef="cm_start" targetRef="cm_placeholder"/>
+    <bpmn:sequenceFlow id="cmf2" sourceRef="cm_placeholder" targetRef="cm_end"/>
+  </bpmn:process>
+
+</bpmn:definitions>

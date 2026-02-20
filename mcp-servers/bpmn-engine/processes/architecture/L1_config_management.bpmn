@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-config-management"
+    id="Definitions_L1_CM">
+
+  <!--
+    LEVEL 1: Configuration Management
+    Called by: L0 cap_config (L0_claude_family.bpmn)
+
+    Database-driven config lifecycle:
+      1. Config change requested (DB update)
+      2. Generate settings from templates + overrides
+      3. Deploy to filesystem (settings.local.json, CLAUDE.md, etc.)
+      4. Validate deployment
+
+    Key principle: Database is source of truth. Files are generated.
+    Actors: [CLAUDE], [DB], [FS] (Filesystem deployment)
+  -->
+
+  <bpmn:process id="L1_config_management" name="L1: Configuration Management" isExecutable="true">
+
+    <bpmn:startEvent id="cm_start" name="Config Change Needed">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="identify_config" name="[CLAUDE] Identify Config Scope (global/project-type/project)">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="config_scope_gw" name="Config Scope?" default="flow_project">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>flow_global</bpmn:outgoing>
+      <bpmn:outgoing>flow_project</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Global config path -->
+    <bpmn:scriptTask id="update_template" name="[DB] Update config_templates" scriptFormat="python">
+      <bpmn:incoming>flow_global</bpmn:incoming>
+      <bpmn:outgoing>f_global_gen</bpmn:outgoing>
+      <bpmn:script>template_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Project-specific path -->
+    <bpmn:scriptTask id="update_workspace" name="[DB] Update workspaces.startup_config" scriptFormat="python">
+      <bpmn:incoming>flow_project</bpmn:incoming>
+      <bpmn:outgoing>f_project_gen</bpmn:outgoing>
+      <bpmn:script>workspace_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Generate + deploy (common) -->
+    <bpmn:exclusiveGateway id="gen_merge" name="Generate Merge">
+      <bpmn:incoming>f_global_gen</bpmn:incoming>
+      <bpmn:incoming>f_project_gen</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="generate_settings" name="[FS] Generate settings.local.json (merge template + overrides)" scriptFormat="python">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:script>settings_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="deploy_components" name="[FS] Deploy Components (CLAUDE.md, rules, skills)" scriptFormat="python">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+      <bpmn:script>components_deployed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="validate_config" name="[CLAUDE] Validate Deployment">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="cm_end" name="Config Deployed">
+      <bpmn:incoming>f_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="cm_start" targetRef="identify_config"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="identify_config" targetRef="config_scope_gw"/>
+
+    <bpmn:sequenceFlow id="flow_global" sourceRef="config_scope_gw" targetRef="update_template">
+      <bpmn:conditionExpression>config_scope == "global"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_project" sourceRef="config_scope_gw" targetRef="update_workspace"/>
+
+    <bpmn:sequenceFlow id="f_global_gen" sourceRef="update_template" targetRef="gen_merge"/>
+    <bpmn:sequenceFlow id="f_project_gen" sourceRef="update_workspace" targetRef="gen_merge"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="gen_merge" targetRef="generate_settings"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="generate_settings" targetRef="deploy_components"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="deploy_components" targetRef="validate_config"/>
+    <bpmn:sequenceFlow id="f_end" sourceRef="validate_config" targetRef="cm_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

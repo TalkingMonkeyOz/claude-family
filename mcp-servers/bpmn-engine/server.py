@@ -156,19 +156,30 @@ def _find_bpmn_file(process_id: str) -> Optional[Path]:
 # SpiffWorkflow helpers
 # ============================================================================
 
-def _load_workflow(bpmn_path: Path, process_id: str):
+def _load_workflow(bpmn_path: Path, process_id: str, extra_bpmn_files: list = None):
     """
     Parse the BPMN and return an initialised BpmnWorkflow.
     Raises ImportError if SpiffWorkflow is not installed.
     Raises RuntimeError (or parser errors) for malformed BPMN.
+
+    Args:
+        bpmn_path: Path to the primary BPMN file.
+        process_id: The process ID to load as the root spec.
+        extra_bpmn_files: Optional list of additional BPMN file paths whose
+                          processes can be resolved as subprocess specs (e.g.
+                          L1 files when loading an L0 process).
     """
     from SpiffWorkflow.bpmn.parser import BpmnParser  # noqa: PLC0415
     from SpiffWorkflow.bpmn.workflow import BpmnWorkflow  # noqa: PLC0415
 
     parser = BpmnParser()
     parser.add_bpmn_file(str(bpmn_path))
+    if extra_bpmn_files:
+        for f in extra_bpmn_files:
+            parser.add_bpmn_file(str(f))
     spec = parser.get_spec(process_id)
-    workflow = BpmnWorkflow(spec)
+    subspecs = parser.get_subprocess_specs(process_id) if extra_bpmn_files else {}
+    workflow = BpmnWorkflow(spec, subspecs)
     workflow.do_engine_steps()
     return workflow
 
@@ -558,6 +569,246 @@ def get_current_step(
             "current_tasks": current_tasks,
             "is_completed": workflow.is_completed(),
             "data": workflow.data if workflow.is_completed() else {},
+        }
+
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+# ============================================================================
+# Tool 6: get_dependency_tree
+# ============================================================================
+
+
+def _detect_level(process_id: str) -> str:
+    """Return the hierarchy level string for a process_id based on its prefix."""
+    if process_id.startswith("L0_"):
+        return "L0"
+    if process_id.startswith("L1_"):
+        return "L1"
+    return "L2"
+
+
+def _collect_call_activities(process_id: str, called_by: Optional[str], visited: set, flat_list: list) -> None:
+    """
+    Recursively walk callActivity elements starting from process_id.
+
+    Populates flat_list in-place with one entry per discovered process.
+    Uses visited to prevent infinite recursion on cyclic references.
+    """
+    if process_id in visited:
+        return
+    visited.add(process_id)
+
+    bpmn_path = _find_bpmn_file(process_id)
+    if bpmn_path is None:
+        return
+
+    try:
+        root = _parse_xml(bpmn_path)
+    except Exception:
+        return
+
+    # Locate the process element for this process_id
+    target_process = None
+    for process_el in root.iter(f"{BPMN_TAG}process"):
+        if process_el.get("id") == process_id:
+            target_process = process_el
+            break
+
+    if target_process is None:
+        return
+
+    processes_dir = get_processes_dir()
+    try:
+        rel_file = str(bpmn_path.relative_to(processes_dir))
+    except ValueError:
+        rel_file = bpmn_path.name
+
+    level = _detect_level(process_id)
+    entry: dict = {
+        "process_id": process_id,
+        "name": target_process.get("name", process_id),
+        "file": rel_file,
+        "level": level,
+    }
+    if called_by is not None:
+        entry["called_by"] = called_by
+
+    flat_list.append(entry)
+
+    # Find all callActivity children and recurse
+    for child in target_process:
+        if child.tag == f"{BPMN_TAG}callActivity":
+            called_element = child.get("calledElement")
+            if called_element:
+                _collect_call_activities(called_element, process_id, visited, flat_list)
+
+
+@mcp.tool()
+def get_dependency_tree(process_id: str) -> dict:
+    """Build a recursive dependency tree by walking callActivity elements.
+
+    Use when: you want to understand how processes relate to each other
+              across the L0 -> L1 -> L2 hierarchy.
+
+    Returns: {success, root, tree, depth, total_processes}
+      - root: the entry-point process {process_id, name, file, level}
+      - tree: flat list of all dependent processes with called_by links
+      - depth: maximum nesting depth discovered
+      - total_processes: total count including root
+    """
+    try:
+        bpmn_path = _find_bpmn_file(process_id)
+        if bpmn_path is None:
+            return {
+                "success": False,
+                "error": f"Process '{process_id}' not found in {get_processes_dir()}",
+            }
+
+        visited: set = set()
+        flat_list: list = []
+
+        # Walk the full tree starting from the root process
+        _collect_call_activities(process_id, None, visited, flat_list)
+
+        if not flat_list:
+            return {
+                "success": False,
+                "error": f"No process element found for '{process_id}'",
+            }
+
+        # The root is the first entry (no called_by key)
+        root_entry = flat_list[0]
+        root = {k: v for k, v in root_entry.items() if k != "called_by"}
+        tree = flat_list[1:]  # everything after the root
+
+        # Calculate depth: BFS level counting via called_by chain
+        depth_map: dict[str, int] = {process_id: 1}
+        for entry in tree:
+            parent = entry.get("called_by")
+            parent_depth = depth_map.get(parent, 1)
+            depth_map[entry["process_id"]] = parent_depth + 1
+        max_depth = max(depth_map.values()) if depth_map else 1
+
+        return {
+            "success": True,
+            "root": root,
+            "tree": tree,
+            "depth": max_depth,
+            "total_processes": len(flat_list),
+        }
+
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+# ============================================================================
+# Tool 7: search_processes
+# ============================================================================
+
+
+@mcp.tool()
+def search_processes(query: str, actor: Optional[str] = None, level: Optional[str] = None) -> dict:
+    """Search process elements by keyword across all BPMN files.
+
+    Use when: you want to find which processes contain a particular task,
+              actor, or keyword (e.g. "[HOOK]", "discipline", "spawn").
+
+    Args:
+        query:  Case-insensitive substring to match against element names,
+                process names, and condition expressions.
+        actor:  Optional actor filter (e.g. "[HOOK]", "[CLAUDE]", "[DB]").
+                Matched as a case-insensitive substring of element names.
+        level:  Optional hierarchy level filter: "L0", "L1", or "L2".
+                Determined by the process_id prefix convention.
+
+    Returns: {success, query, match_count, matches}
+      - matches: list of {process_id, process_name, file, matching_elements}
+      - matching_elements: [{id, type, name}] that satisfy all filters
+    """
+    try:
+        processes_dir = get_processes_dir()
+        if not processes_dir.exists():
+            return {
+                "success": True,
+                "query": query,
+                "match_count": 0,
+                "matches": [],
+            }
+
+        from lxml import etree  # noqa: PLC0415
+
+        query_lower = query.lower()
+        actor_lower = actor.lower() if actor else None
+        level_filter = level.upper() if level else None
+
+        matches = []
+
+        for bpmn_file in sorted(processes_dir.glob("**/*.bpmn")):
+            try:
+                root = etree.parse(str(bpmn_file)).getroot()
+            except Exception:
+                continue
+
+            rel_path = bpmn_file.relative_to(processes_dir)
+
+            for process_el in root.iter(f"{BPMN_TAG}process"):
+                pid = process_el.get("id", "")
+                pname = process_el.get("name", pid)
+
+                # Apply level filter before scanning elements
+                if level_filter is not None and _detect_level(pid) != level_filter:
+                    continue
+
+                elements, flows = _extract_process_elements(process_el)
+
+                # Build a set of condition strings for flow matching
+                condition_texts = {
+                    f["condition"].lower()
+                    for f in flows
+                    if f.get("condition")
+                }
+
+                matching_elements = []
+                for el in elements:
+                    el_name = el["name"]
+                    el_name_lower = el_name.lower()
+
+                    # Check if the element name matches the query
+                    name_matches_query = query_lower in el_name_lower
+                    # Check if the process name matches the query
+                    process_name_matches = query_lower in pname.lower()
+                    # Check condition expressions
+                    condition_matches = any(query_lower in c for c in condition_texts)
+
+                    # At least one of name/process/condition must match the query
+                    if not (name_matches_query or process_name_matches or condition_matches):
+                        continue
+
+                    # Apply actor filter: actor must appear in the element name
+                    if actor_lower is not None and actor_lower not in el_name_lower:
+                        continue
+
+                    matching_elements.append({
+                        "id": el["id"],
+                        "type": el["type"],
+                        "name": el_name,
+                    })
+
+                if matching_elements:
+                    matches.append({
+                        "process_id": pid,
+                        "process_name": pname,
+                        "file": str(rel_path),
+                        "matching_elements": matching_elements,
+                    })
+
+        return {
+            "success": True,
+            "query": query,
+            "match_count": sum(len(m["matching_elements"]) for m in matches),
+            "matches": matches,
         }
 
     except Exception as exc:

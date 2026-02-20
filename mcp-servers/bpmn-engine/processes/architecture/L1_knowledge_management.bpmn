@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-knowledge-management"
+    id="Definitions_L1_KM">
+
+  <!--
+    LEVEL 1: Knowledge Management
+    Called by: L0 cap_knowledge (L0_claude_family.bpmn)
+
+    Knowledge lifecycle:
+      Capture → Embed → Store → Retrieve (RAG) → Apply → Feedback loop
+
+    Actors: [CLAUDE], [KM] (Knowledge system), [DB], [HOOK] (RAG hook)
+  -->
+
+  <bpmn:process id="L1_knowledge_management" name="L1: Knowledge Management" isExecutable="true">
+
+    <bpmn:startEvent id="km_start" name="Knowledge Event">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="identify_km_action" name="[CLAUDE] Identify Knowledge Action">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="km_action_gw" name="Action Type?" default="flow_retrieve">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>flow_capture</bpmn:outgoing>
+      <bpmn:outgoing>flow_retrieve</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Capture path: store new knowledge -->
+    <bpmn:userTask id="capture_knowledge" name="[CLAUDE] Formulate Knowledge (insight, pattern, fact)">
+      <bpmn:incoming>flow_capture</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="embed_knowledge" name="[KM] Generate Embedding (Voyage AI)" scriptFormat="python">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:script>embedded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_knowledge" name="[DB] Store in Knowledge Base (pgvector)" scriptFormat="python">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f_cap_end</bpmn:outgoing>
+      <bpmn:script>stored = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Retrieve path: search existing knowledge -->
+    <bpmn:scriptTask id="rag_search" name="[HOOK/KM] Semantic Search (RAG query)" scriptFormat="python">
+      <bpmn:incoming>flow_retrieve</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+      <bpmn:script>results_found = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="apply_knowledge" name="[CLAUDE] Apply Retrieved Knowledge">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="mark_applied" name="[DB] Track Application (confidence update)" scriptFormat="python">
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>f_ret_end</bpmn:outgoing>
+      <bpmn:script>application_tracked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge -->
+    <bpmn:exclusiveGateway id="km_merge" name="KM Merge">
+      <bpmn:incoming>f_cap_end</bpmn:incoming>
+      <bpmn:incoming>f_ret_end</bpmn:incoming>
+      <bpmn:outgoing>f_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="km_end" name="Knowledge Managed">
+      <bpmn:incoming>f_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f1" sourceRef="km_start" targetRef="identify_km_action"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="identify_km_action" targetRef="km_action_gw"/>
+
+    <bpmn:sequenceFlow id="flow_capture" sourceRef="km_action_gw" targetRef="capture_knowledge">
+      <bpmn:conditionExpression>km_action == "capture"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_retrieve" sourceRef="km_action_gw" targetRef="rag_search"/>
+
+    <bpmn:sequenceFlow id="f3" sourceRef="capture_knowledge" targetRef="embed_knowledge"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="embed_knowledge" targetRef="store_knowledge"/>
+    <bpmn:sequenceFlow id="f_cap_end" sourceRef="store_knowledge" targetRef="km_merge"/>
+
+    <bpmn:sequenceFlow id="f5" sourceRef="rag_search" targetRef="apply_knowledge"/>
+    <bpmn:sequenceFlow id="f6" sourceRef="apply_knowledge" targetRef="mark_applied"/>
+    <bpmn:sequenceFlow id="f_ret_end" sourceRef="mark_applied" targetRef="km_merge"/>
+
+    <bpmn:sequenceFlow id="f_end" sourceRef="km_merge" targetRef="km_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

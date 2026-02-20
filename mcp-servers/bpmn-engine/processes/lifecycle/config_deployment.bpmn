@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/config-deployment"
+    id="Definitions_ConfigDeployment">
+
+  <bpmn:process id="config_deployment" name="Config Deployment: Database to Filesystem" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_identify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: [CLAUDE] Identify Config Change -->
+    <!-- Operator sets config_scope ("global" or "project") here before completing -->
+    <bpmn:userTask id="identify_config_change" name="Identify Config Change">
+      <bpmn:incoming>flow_start_to_identify</bpmn:incoming>
+      <bpmn:outgoing>flow_identify_to_scope</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Config Scope? -->
+    <!-- default=flow_project so the project branch fires when config_scope != "global" -->
+    <bpmn:exclusiveGateway id="scope_gateway" name="Config Scope?" default="flow_project">
+      <bpmn:incoming>flow_identify_to_scope</bpmn:incoming>
+      <bpmn:outgoing>flow_global</bpmn:outgoing>
+      <bpmn:outgoing>flow_project</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: [DB] Update Global Template -->
+    <bpmn:scriptTask id="update_global_template" name="Update Global Template" scriptFormat="python">
+      <bpmn:incoming>flow_global</bpmn:incoming>
+      <bpmn:outgoing>flow_global_to_merge</bpmn:outgoing>
+      <bpmn:script>db_updated = True
+template_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [DB] Update Workspace Config -->
+    <bpmn:scriptTask id="update_workspace_config" name="Update Workspace Config" scriptFormat="python">
+      <bpmn:incoming>flow_project</bpmn:incoming>
+      <bpmn:outgoing>flow_project_to_merge</bpmn:outgoing>
+      <bpmn:script>db_updated = True
+workspace_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Scope Merge (merges global and project paths) -->
+    <bpmn:exclusiveGateway id="scope_merge" name="Scope Merge">
+      <bpmn:incoming>flow_global_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_project_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_generate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: [TOOL] Generate Settings File -->
+    <!-- Simulates running generate_project_settings.py -->
+    <bpmn:scriptTask id="generate_settings" name="Generate Settings File" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_generate</bpmn:incoming>
+      <bpmn:outgoing>flow_generate_to_deploy</bpmn:outgoing>
+      <bpmn:script>settings_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [TOOL] Deploy Components -->
+    <!-- Simulates deploying CLAUDE.md, rules, skills, instructions -->
+    <bpmn:scriptTask id="deploy_components" name="Deploy Components" scriptFormat="python">
+      <bpmn:incoming>flow_generate_to_deploy</bpmn:incoming>
+      <bpmn:outgoing>flow_deploy_to_validate</bpmn:outgoing>
+      <bpmn:script>components_deployed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: [CLAUDE] Validate Deployment -->
+    <!-- Operator sets validation_result ("valid" or "invalid") here before completing -->
+    <bpmn:userTask id="validate_deployment" name="Validate Deployment">
+      <bpmn:incoming>flow_deploy_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_result</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Validation Result? -->
+    <!-- default=flow_valid so the success branch fires when validation_result != "invalid" -->
+    <bpmn:exclusiveGateway id="validation_gateway" name="Validation Result?" default="flow_valid">
+      <bpmn:incoming>flow_validate_to_result</bpmn:incoming>
+      <bpmn:outgoing>flow_invalid</bpmn:outgoing>
+      <bpmn:outgoing>flow_valid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: [TOOL] Rollback -->
+    <!-- On invalid path: regenerate from DB to restore known-good state -->
+    <bpmn:scriptTask id="rollback" name="Rollback" scriptFormat="python">
+      <bpmn:incoming>flow_invalid</bpmn:incoming>
+      <bpmn:outgoing>flow_rollback_to_end</bpmn:outgoing>
+      <bpmn:script>rollback_executed = True
+settings_generated = False
+components_deployed = False</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Config Deployed (valid path) -->
+    <bpmn:endEvent id="end_deployed" name="Config Deployed">
+      <bpmn:incoming>flow_valid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Rolled Back (invalid path) -->
+    <bpmn:endEvent id="end_rolled_back" name="Config Rolled Back">
+      <bpmn:incoming>flow_rollback_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_identify" sourceRef="start_event" targetRef="identify_config_change"/>
+    <bpmn:sequenceFlow id="flow_identify_to_scope" sourceRef="identify_config_change" targetRef="scope_gateway"/>
+
+    <!-- Global branch: conditioned; project branch: default (no conditionExpression) -->
+    <bpmn:sequenceFlow id="flow_global" sourceRef="scope_gateway" targetRef="update_global_template">
+      <bpmn:conditionExpression>config_scope == "global"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_project" sourceRef="scope_gateway" targetRef="update_workspace_config"/>
+
+    <bpmn:sequenceFlow id="flow_global_to_merge" sourceRef="update_global_template" targetRef="scope_merge"/>
+    <bpmn:sequenceFlow id="flow_project_to_merge" sourceRef="update_workspace_config" targetRef="scope_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_generate" sourceRef="scope_merge" targetRef="generate_settings"/>
+    <bpmn:sequenceFlow id="flow_generate_to_deploy" sourceRef="generate_settings" targetRef="deploy_components"/>
+    <bpmn:sequenceFlow id="flow_deploy_to_validate" sourceRef="deploy_components" targetRef="validate_deployment"/>
+    <bpmn:sequenceFlow id="flow_validate_to_result" sourceRef="validate_deployment" targetRef="validation_gateway"/>
+
+    <!-- Invalid branch: conditioned; valid branch: default (no conditionExpression) -->
+    <bpmn:sequenceFlow id="flow_invalid" sourceRef="validation_gateway" targetRef="rollback">
+      <bpmn:conditionExpression>validation_result == "invalid"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_valid" sourceRef="validation_gateway" targetRef="end_deployed"/>
+
+    <bpmn:sequenceFlow id="flow_rollback_to_end" sourceRef="rollback" targetRef="end_rolled_back"/>
+
+  </bpmn:process>
+
+  <!-- Minimal diagram data so the parser does not fail on position lookups -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="config_deployment">
+
+      <!-- Start -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- identify_config_change -->
+      <bpmndi:BPMNShape id="shape_identify_config_change" bpmnElement="identify_config_change">
+        <dc:Bounds x="170" y="200" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- scope_gateway -->
+      <bpmndi:BPMNShape id="shape_scope_gateway" bpmnElement="scope_gateway" isMarkerVisible="true">
+        <dc:Bounds x="350" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- update_global_template (upper branch, y=100) -->
+      <bpmndi:BPMNShape id="shape_update_global_template" bpmnElement="update_global_template">
+        <dc:Bounds x="460" y="100" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- update_workspace_config (lower branch, y=340) -->
+      <bpmndi:BPMNShape id="shape_update_workspace_config" bpmnElement="update_workspace_config">
+        <dc:Bounds x="460" y="340" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- scope_merge -->
+      <bpmndi:BPMNShape id="shape_scope_merge" bpmnElement="scope_merge" isMarkerVisible="true">
+        <dc:Bounds x="660" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- generate_settings -->
+      <bpmndi:BPMNShape id="shape_generate_settings" bpmnElement="generate_settings">
+        <dc:Bounds x="770" y="200" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- deploy_components -->
+      <bpmndi:BPMNShape id="shape_deploy_components" bpmnElement="deploy_components">
+        <dc:Bounds x="970" y="200" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- validate_deployment -->
+      <bpmndi:BPMNShape id="shape_validate_deployment" bpmnElement="validate_deployment">
+        <dc:Bounds x="1170" y="200" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- validation_gateway -->
+      <bpmndi:BPMNShape id="shape_validation_gateway" bpmnElement="validation_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1370" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- rollback (lower branch, y=370) -->
+      <bpmndi:BPMNShape id="shape_rollback" bpmnElement="rollback">
+        <dc:Bounds x="1350" y="370" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_deployed (valid path) -->
+      <bpmndi:BPMNShape id="shape_end_deployed" bpmnElement="end_deployed">
+        <dc:Bounds x="1480" y="220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_rolled_back (invalid path) -->
+      <bpmndi:BPMNShape id="shape_end_rolled_back" bpmnElement="end_rolled_back">
+        <dc:Bounds x="1510" y="395" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_identify" bpmnElement="flow_start_to_identify">
+        <di:waypoint x="116" y="238"/>
+        <di:waypoint x="170" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_identify_to_scope" bpmnElement="flow_identify_to_scope">
+        <di:waypoint x="290" y="240"/>
+        <di:waypoint x="350" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_global" bpmnElement="flow_global">
+        <di:waypoint x="375" y="213"/>
+        <di:waypoint x="375" y="140"/>
+        <di:waypoint x="460" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_project" bpmnElement="flow_project">
+        <di:waypoint x="375" y="263"/>
+        <di:waypoint x="375" y="380"/>
+        <di:waypoint x="460" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_global_to_merge" bpmnElement="flow_global_to_merge">
+        <di:waypoint x="600" y="140"/>
+        <di:waypoint x="685" y="140"/>
+        <di:waypoint x="685" y="213"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_project_to_merge" bpmnElement="flow_project_to_merge">
+        <di:waypoint x="600" y="380"/>
+        <di:waypoint x="685" y="380"/>
+        <di:waypoint x="685" y="263"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_generate" bpmnElement="flow_merge_to_generate">
+        <di:waypoint x="710" y="238"/>
+        <di:waypoint x="770" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_generate_to_deploy" bpmnElement="flow_generate_to_deploy">
+        <di:waypoint x="910" y="240"/>
+        <di:waypoint x="970" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_deploy_to_validate" bpmnElement="flow_deploy_to_validate">
+        <di:waypoint x="1110" y="240"/>
+        <di:waypoint x="1170" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_validate_to_result" bpmnElement="flow_validate_to_result">
+        <di:waypoint x="1310" y="240"/>
+        <di:waypoint x="1370" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_valid" bpmnElement="flow_valid">
+        <di:waypoint x="1420" y="238"/>
+        <di:waypoint x="1480" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_invalid" bpmnElement="flow_invalid">
+        <di:waypoint x="1395" y="263"/>
+        <di:waypoint x="1395" y="410"/>
+        <di:waypoint x="1350" y="410"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_rollback_to_end" bpmnElement="flow_rollback_to_end">
+        <di:waypoint x="1450" y="410"/>
+        <di:waypoint x="1510" y="413"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

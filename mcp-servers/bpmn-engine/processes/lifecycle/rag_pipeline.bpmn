@@ -1,0 +1,317 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/rag-pipeline"
+    id="Definitions_RagPipeline">
+
+  <bpmn:process id="rag_pipeline" name="RAG Pipeline: Knowledge Embedding and Retrieval" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_trigger</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!--
+      User Task: Trigger Pipeline
+      Operator selects the pipeline mode and pre-seeds all downstream gateway
+      variables (pipeline_mode, changes_found, needs_rag) so every gateway
+      can evaluate without a KeyError at runtime.
+    -->
+    <bpmn:userTask id="trigger_pipeline" name="Trigger Pipeline">
+      <bpmn:incoming>flow_start_to_trigger</bpmn:incoming>
+      <bpmn:outgoing>flow_trigger_to_mode_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Pipeline Mode? -->
+    <bpmn:exclusiveGateway id="pipeline_mode_gateway" name="Pipeline Mode?" default="flow_mode_retrieve">
+      <bpmn:incoming>flow_trigger_to_mode_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_mode_embed</bpmn:outgoing>
+      <bpmn:outgoing>flow_mode_retrieve</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH A: EMBEDDING (batch, offline)                                  -->
+    <!-- ================================================================== -->
+
+    <!-- Script Task: Scan Vault for Changes (hash-based change detection) -->
+    <bpmn:scriptTask id="scan_vault" name="Scan Vault for Changes" scriptFormat="python">
+      <bpmn:incoming>flow_mode_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_scan_to_changes_gateway</bpmn:outgoing>
+      <bpmn:script>vault_scanned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Changes Found? -->
+    <bpmn:exclusiveGateway id="changes_found_gateway" name="Changes Found?" default="flow_no_changes">
+      <bpmn:incoming>flow_scan_to_changes_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_yes_changes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_changes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Generate Embeddings (Voyage AI, voyage-3, 1024 dimensions) -->
+    <bpmn:scriptTask id="generate_embeddings" name="Generate Embeddings (Voyage AI)" scriptFormat="python">
+      <bpmn:incoming>flow_yes_changes</bpmn:incoming>
+      <bpmn:outgoing>flow_generate_to_store</bpmn:outgoing>
+      <bpmn:script>embeddings_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Store in pgvector (INSERT into claude.vault_embeddings) -->
+    <bpmn:scriptTask id="store_in_pgvector" name="Store in pgvector" scriptFormat="python">
+      <bpmn:incoming>flow_generate_to_store</bpmn:incoming>
+      <bpmn:outgoing>flow_store_to_end_updated</bpmn:outgoing>
+      <bpmn:script>embeddings_stored = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Embeddings Updated -->
+    <bpmn:endEvent id="end_embeddings_updated" name="Embeddings Updated">
+      <bpmn:incoming>flow_store_to_end_updated</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: No Changes (skip embedding) -->
+    <bpmn:endEvent id="end_no_changes" name="No Changes">
+      <bpmn:incoming>flow_no_changes</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PATH B: RETRIEVAL (per-prompt, online)                              -->
+    <!-- ================================================================== -->
+
+    <!-- Script Task: Classify Prompt (question/exploration = search, action = skip) -->
+    <bpmn:scriptTask id="classify_prompt" name="Classify Prompt" scriptFormat="python">
+      <bpmn:incoming>flow_mode_retrieve</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_needs_rag_gateway</bpmn:outgoing>
+      <bpmn:script>prompt_classified = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Needs RAG? -->
+    <bpmn:exclusiveGateway id="needs_rag_gateway" name="Needs RAG?" default="flow_skip_rag">
+      <bpmn:incoming>flow_classify_to_needs_rag_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_yes_rag</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_rag</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Query Voyage AI Embeddings (semantic similarity search) -->
+    <bpmn:scriptTask id="query_voyage_embeddings" name="Query Voyage AI Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_yes_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_inject</bpmn:outgoing>
+      <bpmn:script>vault_docs_retrieved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Inject Context (add vault docs to prompt context) -->
+    <bpmn:scriptTask id="inject_context" name="Inject Context" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_end_enriched</bpmn:outgoing>
+      <bpmn:script>context_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Context Enriched -->
+    <bpmn:endEvent id="end_context_enriched" name="Context Enriched">
+      <bpmn:incoming>flow_inject_to_end_enriched</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: RAG Skipped (action prompt, no context injection) -->
+    <bpmn:endEvent id="end_rag_skipped" name="RAG Skipped">
+      <bpmn:incoming>flow_skip_rag</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- Sequence Flows                                                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:sequenceFlow id="flow_start_to_trigger" sourceRef="start_event" targetRef="trigger_pipeline"/>
+    <bpmn:sequenceFlow id="flow_trigger_to_mode_gateway" sourceRef="trigger_pipeline" targetRef="pipeline_mode_gateway"/>
+
+    <!-- Pipeline Mode gateway branches -->
+    <bpmn:sequenceFlow id="flow_mode_embed" sourceRef="pipeline_mode_gateway" targetRef="scan_vault">
+      <bpmn:conditionExpression>pipeline_mode == "embed"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_mode_retrieve" sourceRef="pipeline_mode_gateway" targetRef="classify_prompt"/>
+
+    <!-- Embed path flows -->
+    <bpmn:sequenceFlow id="flow_scan_to_changes_gateway" sourceRef="scan_vault" targetRef="changes_found_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_yes_changes" sourceRef="changes_found_gateway" targetRef="generate_embeddings">
+      <bpmn:conditionExpression>changes_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_changes" sourceRef="changes_found_gateway" targetRef="end_no_changes"/>
+
+    <bpmn:sequenceFlow id="flow_generate_to_store" sourceRef="generate_embeddings" targetRef="store_in_pgvector"/>
+    <bpmn:sequenceFlow id="flow_store_to_end_updated" sourceRef="store_in_pgvector" targetRef="end_embeddings_updated"/>
+
+    <!-- Retrieve path flows -->
+    <bpmn:sequenceFlow id="flow_classify_to_needs_rag_gateway" sourceRef="classify_prompt" targetRef="needs_rag_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_yes_rag" sourceRef="needs_rag_gateway" targetRef="query_voyage_embeddings">
+      <bpmn:conditionExpression>needs_rag == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_rag" sourceRef="needs_rag_gateway" targetRef="end_rag_skipped"/>
+
+    <bpmn:sequenceFlow id="flow_query_to_inject" sourceRef="query_voyage_embeddings" targetRef="inject_context"/>
+    <bpmn:sequenceFlow id="flow_inject_to_end_enriched" sourceRef="inject_context" targetRef="end_context_enriched"/>
+
+  </bpmn:process>
+
+  <!-- Minimal diagram data so the parser does not fail on position lookups -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="rag_pipeline">
+
+      <!-- Start and trigger -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="260" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_trigger_pipeline" bpmnElement="trigger_pipeline">
+        <dc:Bounds x="170" y="240" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Pipeline mode gateway (centre) -->
+      <bpmndi:BPMNShape id="shape_pipeline_mode_gateway" bpmnElement="pipeline_mode_gateway" isMarkerVisible="true">
+        <dc:Bounds x="335" y="253" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- PATH A: EMBEDDING (top row, y=120)                            -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNShape id="shape_scan_vault" bpmnElement="scan_vault">
+        <dc:Bounds x="450" y="100" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_changes_found_gateway" bpmnElement="changes_found_gateway" isMarkerVisible="true">
+        <dc:Bounds x="615" y="113" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_generate_embeddings" bpmnElement="generate_embeddings">
+        <dc:Bounds x="730" y="100" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_store_in_pgvector" bpmnElement="store_in_pgvector">
+        <dc:Bounds x="900" y="100" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_embeddings_updated" bpmnElement="end_embeddings_updated">
+        <dc:Bounds x="1060" y="118" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- No changes end event (above gateway) -->
+      <bpmndi:BPMNShape id="shape_end_no_changes" bpmnElement="end_no_changes">
+        <dc:Bounds x="615" y="40" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- PATH B: RETRIEVAL (bottom row, y=380)                         -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNShape id="shape_classify_prompt" bpmnElement="classify_prompt">
+        <dc:Bounds x="450" y="380" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_needs_rag_gateway" bpmnElement="needs_rag_gateway" isMarkerVisible="true">
+        <dc:Bounds x="615" y="393" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_query_voyage_embeddings" bpmnElement="query_voyage_embeddings">
+        <dc:Bounds x="730" y="380" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_inject_context" bpmnElement="inject_context">
+        <dc:Bounds x="900" y="380" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_context_enriched" bpmnElement="end_context_enriched">
+        <dc:Bounds x="1060" y="398" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- RAG skipped end event (below gateway) -->
+      <bpmndi:BPMNShape id="shape_end_rag_skipped" bpmnElement="end_rag_skipped">
+        <dc:Bounds x="615" y="480" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- Edges                                                          -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNEdge id="edge_flow_start_to_trigger" bpmnElement="flow_start_to_trigger">
+        <di:waypoint x="116" y="278"/>
+        <di:waypoint x="170" y="280"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_trigger_to_mode_gateway" bpmnElement="flow_trigger_to_mode_gateway">
+        <di:waypoint x="270" y="280"/>
+        <di:waypoint x="335" y="278"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Mode gateway to embed path -->
+      <bpmndi:BPMNEdge id="edge_flow_mode_embed" bpmnElement="flow_mode_embed">
+        <di:waypoint x="360" y="253"/>
+        <di:waypoint x="360" y="140"/>
+        <di:waypoint x="450" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Mode gateway to retrieve path -->
+      <bpmndi:BPMNEdge id="edge_flow_mode_retrieve" bpmnElement="flow_mode_retrieve">
+        <di:waypoint x="360" y="303"/>
+        <di:waypoint x="360" y="420"/>
+        <di:waypoint x="450" y="420"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Embed path edges -->
+      <bpmndi:BPMNEdge id="edge_flow_scan_to_changes_gateway" bpmnElement="flow_scan_to_changes_gateway">
+        <di:waypoint x="550" y="140"/>
+        <di:waypoint x="615" y="138"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_yes_changes" bpmnElement="flow_yes_changes">
+        <di:waypoint x="665" y="138"/>
+        <di:waypoint x="730" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_no_changes" bpmnElement="flow_no_changes">
+        <di:waypoint x="640" y="113"/>
+        <di:waypoint x="640" y="76"/>
+        <di:waypoint x="615" y="58"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_generate_to_store" bpmnElement="flow_generate_to_store">
+        <di:waypoint x="830" y="140"/>
+        <di:waypoint x="900" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_store_to_end_updated" bpmnElement="flow_store_to_end_updated">
+        <di:waypoint x="1000" y="140"/>
+        <di:waypoint x="1060" y="136"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Retrieve path edges -->
+      <bpmndi:BPMNEdge id="edge_flow_classify_to_needs_rag_gateway" bpmnElement="flow_classify_to_needs_rag_gateway">
+        <di:waypoint x="550" y="420"/>
+        <di:waypoint x="615" y="418"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_yes_rag" bpmnElement="flow_yes_rag">
+        <di:waypoint x="665" y="418"/>
+        <di:waypoint x="730" y="420"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_skip_rag" bpmnElement="flow_skip_rag">
+        <di:waypoint x="640" y="443"/>
+        <di:waypoint x="640" y="498"/>
+        <di:waypoint x="615" y="498"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_query_to_inject" bpmnElement="flow_query_to_inject">
+        <di:waypoint x="830" y="420"/>
+        <di:waypoint x="900" y="420"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_inject_to_end_enriched" bpmnElement="flow_inject_to_end_enriched">
+        <di:waypoint x="1000" y="420"/>
+        <di:waypoint x="1060" y="416"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
