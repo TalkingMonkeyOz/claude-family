@@ -24,6 +24,16 @@ Processes governing system internals and enforcement mechanisms.
 |-----------|------|-------------|-------|
 | `hook_chain` | Hook Chain | Prompt -> RAG -> discipline gate -> tool execution -> sync | 3 |
 
+### nimbus/
+
+Processes modeling Nimbus AI Platform workflows (client delivery, knowledge, support).
+
+| Process ID | Name | Description | Tests |
+|-----------|------|-------------|-------|
+| `nimbus_delivery` | Nimbus Delivery | Requirements -> config -> deploy -> test -> handover (3 loops) | 4 |
+| `knowledge_ingestion` | Knowledge Ingestion | 3-way source branching (API/OData/unstructured) -> validate -> store | 4 |
+| `support_triage` | Support Triage | AI triage -> duplicate check -> review (approve/modify/escalate) | 4 |
+
 ### development/
 
 Processes for development workflows (planned).
@@ -69,7 +79,7 @@ python -m pytest tests/test_task_lifecycle.py -v  # Single process
 - All variables used in conditions MUST exist in `task.data` before the gateway evaluates
 
 ---
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-02-20
 **Updated**: 2026-02-20
 **Location**: mcp-servers/bpmn-engine/processes/README.md

@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://nimbus-ai/bpmn/support-triage"
+    id="Definitions_SupportTriage">
+
+  <bpmn:process id="support_triage" name="Support Triage" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_receive</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Receive Ticket (Jira webhook or manual) -->
+    <!-- Tests inject: is_duplicate, decision into this task's data -->
+    <bpmn:userTask id="receive_ticket" name="Receive Ticket">
+      <bpmn:incoming>flow_start_to_receive</bpmn:incoming>
+      <bpmn:outgoing>flow_receive_to_extract</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Extract Details -->
+    <bpmn:scriptTask id="extract_details" name="Extract Details" scriptFormat="python">
+      <bpmn:incoming>flow_receive_to_extract</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_check_dup</bpmn:outgoing>
+      <bpmn:script>details_extracted = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Check Duplicates -->
+    <bpmn:scriptTask id="check_duplicates" name="Check Duplicates" scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_check_dup</bpmn:incoming>
+      <bpmn:outgoing>flow_check_dup_to_gateway</bpmn:outgoing>
+      <bpmn:script>duplicates_checked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Is Duplicate? -->
+    <bpmn:exclusiveGateway id="is_duplicate_gateway" name="Is Duplicate?" default="flow_not_duplicate">
+      <bpmn:incoming>flow_check_dup_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_is_duplicate</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_duplicate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Link Duplicate -->
+    <bpmn:scriptTask id="link_duplicate" name="Link Duplicate" scriptFormat="python">
+      <bpmn:incoming>flow_is_duplicate</bpmn:incoming>
+      <bpmn:outgoing>flow_link_dup_to_end</bpmn:outgoing>
+      <bpmn:script>
+linked = True
+status = "duplicate"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Duplicate -->
+    <bpmn:endEvent id="end_duplicate" name="Duplicate">
+      <bpmn:incoming>flow_link_dup_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Script Task: Query Knowledge Engine -->
+    <bpmn:scriptTask id="query_knowledge" name="Query Knowledge" scriptFormat="python">
+      <bpmn:incoming>flow_not_duplicate</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_suggest</bpmn:outgoing>
+      <bpmn:script>knowledge_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: AI Suggest Resolution -->
+    <bpmn:scriptTask id="ai_suggest_resolution" name="AI Suggest Resolution" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_suggest</bpmn:incoming>
+      <bpmn:outgoing>flow_suggest_to_review</bpmn:outgoing>
+      <bpmn:script>suggestion_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Human Review -->
+    <!-- Tests inject: decision ("escalate" | "modify" | default/anything else) -->
+    <bpmn:userTask id="human_review" name="Human Review">
+      <bpmn:incoming>flow_suggest_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_decision</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Review Decision -->
+    <bpmn:exclusiveGateway id="review_decision_gateway" name="Review Decision" default="flow_approve">
+      <bpmn:incoming>flow_review_to_decision</bpmn:incoming>
+      <bpmn:outgoing>flow_escalate</bpmn:outgoing>
+      <bpmn:outgoing>flow_modify</bpmn:outgoing>
+      <bpmn:outgoing>flow_approve</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Escalate Ticket -->
+    <bpmn:scriptTask id="escalate_ticket" name="Escalate Ticket" scriptFormat="python">
+      <bpmn:incoming>flow_escalate</bpmn:incoming>
+      <bpmn:outgoing>flow_escalate_to_end</bpmn:outgoing>
+      <bpmn:script>
+escalated = True
+status = "escalated"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Escalated -->
+    <bpmn:endEvent id="end_escalated" name="Escalated">
+      <bpmn:incoming>flow_escalate_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- User Task: Modify Response -->
+    <bpmn:userTask id="modify_response" name="Modify Response">
+      <bpmn:incoming>flow_modify</bpmn:incoming>
+      <bpmn:outgoing>flow_modify_to_send_modified</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Send Response (after modify path) -->
+    <bpmn:scriptTask id="send_response_modified" name="Send Response (Modified)" scriptFormat="python">
+      <bpmn:incoming>flow_modify_to_send_modified</bpmn:incoming>
+      <bpmn:outgoing>flow_send_modified_to_end</bpmn:outgoing>
+      <bpmn:script>
+response_sent = True
+status = "resolved"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Resolved (after modify) -->
+    <bpmn:endEvent id="end_resolved_modified" name="Resolved (Modified)">
+      <bpmn:incoming>flow_send_modified_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Script Task: Send Response (after approve path) -->
+    <bpmn:scriptTask id="send_response" name="Send Response" scriptFormat="python">
+      <bpmn:incoming>flow_approve</bpmn:incoming>
+      <bpmn:outgoing>flow_send_to_end</bpmn:outgoing>
+      <bpmn:script>
+response_sent = True
+status = "resolved"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Resolved -->
+    <bpmn:endEvent id="end_resolved" name="Resolved">
+      <bpmn:incoming>flow_send_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================= -->
+    <!-- Sequence Flows                                                      -->
+    <!-- ================================================================= -->
+
+    <bpmn:sequenceFlow id="flow_start_to_receive" sourceRef="start_event" targetRef="receive_ticket"/>
+    <bpmn:sequenceFlow id="flow_receive_to_extract" sourceRef="receive_ticket" targetRef="extract_details"/>
+    <bpmn:sequenceFlow id="flow_extract_to_check_dup" sourceRef="extract_details" targetRef="check_duplicates"/>
+    <bpmn:sequenceFlow id="flow_check_dup_to_gateway" sourceRef="check_duplicates" targetRef="is_duplicate_gateway"/>
+
+    <!-- is_duplicate_gateway branches -->
+    <bpmn:sequenceFlow id="flow_is_duplicate" sourceRef="is_duplicate_gateway" targetRef="link_duplicate">
+      <bpmn:conditionExpression>is_duplicate == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_duplicate" sourceRef="is_duplicate_gateway" targetRef="query_knowledge"/>
+
+    <!-- Duplicate path to end -->
+    <bpmn:sequenceFlow id="flow_link_dup_to_end" sourceRef="link_duplicate" targetRef="end_duplicate"/>
+
+    <!-- Main path: query → suggest → review -->
+    <bpmn:sequenceFlow id="flow_query_to_suggest" sourceRef="query_knowledge" targetRef="ai_suggest_resolution"/>
+    <bpmn:sequenceFlow id="flow_suggest_to_review" sourceRef="ai_suggest_resolution" targetRef="human_review"/>
+    <bpmn:sequenceFlow id="flow_review_to_decision" sourceRef="human_review" targetRef="review_decision_gateway"/>
+
+    <!-- review_decision_gateway branches -->
+    <bpmn:sequenceFlow id="flow_escalate" sourceRef="review_decision_gateway" targetRef="escalate_ticket">
+      <bpmn:conditionExpression>decision == "escalate"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_modify" sourceRef="review_decision_gateway" targetRef="modify_response">
+      <bpmn:conditionExpression>decision == "modify"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_approve" sourceRef="review_decision_gateway" targetRef="send_response"/>
+
+    <!-- Escalate path to end -->
+    <bpmn:sequenceFlow id="flow_escalate_to_end" sourceRef="escalate_ticket" targetRef="end_escalated"/>
+
+    <!-- Modify path -->
+    <bpmn:sequenceFlow id="flow_modify_to_send_modified" sourceRef="modify_response" targetRef="send_response_modified"/>
+    <bpmn:sequenceFlow id="flow_send_modified_to_end" sourceRef="send_response_modified" targetRef="end_resolved_modified"/>
+
+    <!-- Approve path -->
+    <bpmn:sequenceFlow id="flow_send_to_end" sourceRef="send_response" targetRef="end_resolved"/>
+
+  </bpmn:process>
+
+  <!-- ===================================================================== -->
+  <!-- Diagram Layout                                                          -->
+  <!--   Row 1 (y=200): main happy path left-to-right                         -->
+  <!--   Row 2 (y=380): duplicate branch (below gateway)                      -->
+  <!--   Row 3 (y=380): escalate branch (below review_decision_gateway)       -->
+  <!--   Row 4 (y=500): modify branch (further below)                         -->
+  <!-- ===================================================================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="support_triage">
+
+      <!-- ── Main row (y=200) ── -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="100" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_receive_ticket" bpmnElement="receive_ticket">
+        <dc:Bounds x="196" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_extract_details" bpmnElement="extract_details">
+        <dc:Bounds x="356" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_check_duplicates" bpmnElement="check_duplicates">
+        <dc:Bounds x="516" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_is_duplicate_gateway" bpmnElement="is_duplicate_gateway" isMarkerVisible="true">
+        <dc:Bounds x="676" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_query_knowledge" bpmnElement="query_knowledge">
+        <dc:Bounds x="786" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_ai_suggest_resolution" bpmnElement="ai_suggest_resolution">
+        <dc:Bounds x="946" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_human_review" bpmnElement="human_review">
+        <dc:Bounds x="1106" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_review_decision_gateway" bpmnElement="review_decision_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1266" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_send_response" bpmnElement="send_response">
+        <dc:Bounds x="1376" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_resolved" bpmnElement="end_resolved">
+        <dc:Bounds x="1536" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ── Duplicate branch (y=360, below is_duplicate_gateway) ── -->
+      <bpmndi:BPMNShape id="shape_link_duplicate" bpmnElement="link_duplicate">
+        <dc:Bounds x="651" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_duplicate" bpmnElement="end_duplicate">
+        <dc:Bounds x="811" y="382" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ── Escalate branch (y=360, below review_decision_gateway) ── -->
+      <bpmndi:BPMNShape id="shape_escalate_ticket" bpmnElement="escalate_ticket">
+        <dc:Bounds x="1241" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_escalated" bpmnElement="end_escalated">
+        <dc:Bounds x="1401" y="382" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ── Modify branch (y=500, further below review_decision_gateway) ── -->
+      <bpmndi:BPMNShape id="shape_modify_response" bpmnElement="modify_response">
+        <dc:Bounds x="1241" y="500" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_send_response_modified" bpmnElement="send_response_modified">
+        <dc:Bounds x="1401" y="500" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_resolved_modified" bpmnElement="end_resolved_modified">
+        <dc:Bounds x="1561" y="522" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ── Edges ── -->
+
+      <!-- Main path -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_receive" bpmnElement="flow_start_to_receive">
+        <di:waypoint x="136" y="218"/>
+        <di:waypoint x="196" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_receive_to_extract" bpmnElement="flow_receive_to_extract">
+        <di:waypoint x="296" y="220"/>
+        <di:waypoint x="356" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_extract_to_check_dup" bpmnElement="flow_extract_to_check_dup">
+        <di:waypoint x="456" y="220"/>
+        <di:waypoint x="516" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_check_dup_to_gateway" bpmnElement="flow_check_dup_to_gateway">
+        <di:waypoint x="616" y="220"/>
+        <di:waypoint x="676" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- is_duplicate_gateway → link_duplicate (down) -->
+      <bpmndi:BPMNEdge id="edge_flow_is_duplicate" bpmnElement="flow_is_duplicate">
+        <di:waypoint x="701" y="243"/>
+        <di:waypoint x="701" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- is_duplicate_gateway → query_knowledge (right, default) -->
+      <bpmndi:BPMNEdge id="edge_flow_not_duplicate" bpmnElement="flow_not_duplicate">
+        <di:waypoint x="726" y="218"/>
+        <di:waypoint x="786" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- link_duplicate → end_duplicate -->
+      <bpmndi:BPMNEdge id="edge_flow_link_dup_to_end" bpmnElement="flow_link_dup_to_end">
+        <di:waypoint x="751" y="400"/>
+        <di:waypoint x="811" y="400"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- query_knowledge → ai_suggest_resolution -->
+      <bpmndi:BPMNEdge id="edge_flow_query_to_suggest" bpmnElement="flow_query_to_suggest">
+        <di:waypoint x="886" y="220"/>
+        <di:waypoint x="946" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- ai_suggest_resolution → human_review -->
+      <bpmndi:BPMNEdge id="edge_flow_suggest_to_review" bpmnElement="flow_suggest_to_review">
+        <di:waypoint x="1046" y="220"/>
+        <di:waypoint x="1106" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- human_review → review_decision_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_review_to_decision" bpmnElement="flow_review_to_decision">
+        <di:waypoint x="1206" y="220"/>
+        <di:waypoint x="1266" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_decision_gateway → send_response (right, default/approve) -->
+      <bpmndi:BPMNEdge id="edge_flow_approve" bpmnElement="flow_approve">
+        <di:waypoint x="1316" y="218"/>
+        <di:waypoint x="1376" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_decision_gateway → escalate_ticket (down) -->
+      <bpmndi:BPMNEdge id="edge_flow_escalate" bpmnElement="flow_escalate">
+        <di:waypoint x="1291" y="243"/>
+        <di:waypoint x="1291" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_decision_gateway → modify_response (further down) -->
+      <bpmndi:BPMNEdge id="edge_flow_modify" bpmnElement="flow_modify">
+        <di:waypoint x="1291" y="243"/>
+        <di:waypoint x="1291" y="500"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- escalate_ticket → end_escalated -->
+      <bpmndi:BPMNEdge id="edge_flow_escalate_to_end" bpmnElement="flow_escalate_to_end">
+        <di:waypoint x="1341" y="400"/>
+        <di:waypoint x="1401" y="400"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- modify_response → send_response_modified -->
+      <bpmndi:BPMNEdge id="edge_flow_modify_to_send_modified" bpmnElement="flow_modify_to_send_modified">
+        <di:waypoint x="1341" y="540"/>
+        <di:waypoint x="1401" y="540"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- send_response_modified → end_resolved_modified -->
+      <bpmndi:BPMNEdge id="edge_flow_send_modified_to_end" bpmnElement="flow_send_modified_to_end">
+        <di:waypoint x="1501" y="540"/>
+        <di:waypoint x="1561" y="540"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- send_response → end_resolved -->
+      <bpmndi:BPMNEdge id="edge_flow_send_to_end" bpmnElement="flow_send_to_end">
+        <di:waypoint x="1476" y="220"/>
+        <di:waypoint x="1536" y="218"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

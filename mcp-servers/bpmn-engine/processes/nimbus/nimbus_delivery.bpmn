@@ -1,0 +1,430 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://nimbus-ai/bpmn/nimbus-delivery"
+    id="Definitions_NimbusDelivery">
+
+  <bpmn:process id="nimbus_delivery" name="Nimbus Client Delivery" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_onboard</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Onboard Client -->
+    <bpmn:userTask id="onboard_client" name="Onboard Client">
+      <bpmn:incoming>flow_start_to_onboard</bpmn:incoming>
+      <bpmn:outgoing>flow_onboard_to_setup</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Setup Environment -->
+    <bpmn:scriptTask id="setup_environment" name="Setup Environment" scriptFormat="python">
+      <bpmn:incoming>flow_onboard_to_setup</bpmn:incoming>
+      <bpmn:outgoing>flow_setup_to_ingest</bpmn:outgoing>
+      <bpmn:script>environment_ready = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Ingest Knowledge -->
+    <bpmn:userTask id="ingest_knowledge" name="Ingest Knowledge">
+      <bpmn:incoming>flow_setup_to_ingest</bpmn:incoming>
+      <bpmn:outgoing>flow_ingest_to_knowledge_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Knowledge Ready -->
+    <bpmn:scriptTask id="knowledge_ready" name="Knowledge Ready" scriptFormat="python">
+      <bpmn:incoming>flow_ingest_to_knowledge_ready</bpmn:incoming>
+      <bpmn:outgoing>flow_knowledge_ready_to_gather</bpmn:outgoing>
+      <bpmn:script>knowledge_ingested = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Gather Requirements -->
+    <bpmn:userTask id="gather_requirements" name="Gather Requirements">
+      <bpmn:incoming>flow_knowledge_ready_to_gather</bpmn:incoming>
+      <bpmn:incoming>flow_fill_gaps_to_gather</bpmn:incoming>
+      <bpmn:outgoing>flow_gather_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Validate Requirements -->
+    <bpmn:userTask id="validate_requirements" name="Validate Requirements">
+      <bpmn:incoming>flow_gather_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_req_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Requirements Complete? -->
+    <bpmn:exclusiveGateway id="requirements_complete_gateway" name="Requirements Complete?" default="flow_gaps_found">
+      <bpmn:incoming>flow_validate_to_req_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_requirements_valid</bpmn:outgoing>
+      <bpmn:outgoing>flow_gaps_found</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Fill Gaps -->
+    <bpmn:userTask id="fill_gaps" name="Fill Gaps">
+      <bpmn:incoming>flow_gaps_found</bpmn:incoming>
+      <bpmn:outgoing>flow_fill_gaps_to_gather</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Generate Config -->
+    <bpmn:userTask id="generate_config" name="Generate Config">
+      <bpmn:incoming>flow_requirements_valid</bpmn:incoming>
+      <bpmn:incoming>flow_revise_to_generate</bpmn:incoming>
+      <bpmn:outgoing>flow_generate_to_review</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Review Config -->
+    <bpmn:userTask id="review_config" name="Review Config">
+      <bpmn:incoming>flow_generate_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_config_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Config Approved? -->
+    <bpmn:exclusiveGateway id="config_approved_gateway" name="Config Approved?" default="flow_config_approved">
+      <bpmn:incoming>flow_review_to_config_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_revise_to_generate</bpmn:outgoing>
+      <bpmn:outgoing>flow_config_approved</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Deploy UAT -->
+    <bpmn:scriptTask id="deploy_uat" name="Deploy UAT" scriptFormat="python">
+      <bpmn:incoming>flow_config_approved</bpmn:incoming>
+      <bpmn:incoming>flow_fix_config_to_deploy_uat</bpmn:incoming>
+      <bpmn:outgoing>flow_deploy_uat_to_run_tests</bpmn:outgoing>
+      <bpmn:script>deployed_to_uat = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Run Tests -->
+    <bpmn:userTask id="run_tests" name="Run Tests">
+      <bpmn:incoming>flow_deploy_uat_to_run_tests</bpmn:incoming>
+      <bpmn:outgoing>flow_run_tests_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Tests Pass? -->
+    <bpmn:exclusiveGateway id="tests_pass_gateway" name="Tests Pass?" default="flow_tests_fail">
+      <bpmn:incoming>flow_run_tests_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_tests_passed</bpmn:outgoing>
+      <bpmn:outgoing>flow_tests_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Fix Config (after test failure) -->
+    <bpmn:userTask id="fix_config" name="Fix Config">
+      <bpmn:incoming>flow_tests_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_config_to_deploy_uat</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Deploy Production -->
+    <bpmn:scriptTask id="deploy_production" name="Deploy Production" scriptFormat="python">
+      <bpmn:incoming>flow_tests_passed</bpmn:incoming>
+      <bpmn:outgoing>flow_deploy_prod_to_gen_docs</bpmn:outgoing>
+      <bpmn:script>deployed_to_prod = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Generate Docs -->
+    <bpmn:scriptTask id="generate_docs" name="Generate Docs" scriptFormat="python">
+      <bpmn:incoming>flow_deploy_prod_to_gen_docs</bpmn:incoming>
+      <bpmn:outgoing>flow_gen_docs_to_handoff</bpmn:outgoing>
+      <bpmn:script>docs_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Handoff Client -->
+    <bpmn:userTask id="handoff_client" name="Handoff Client">
+      <bpmn:incoming>flow_gen_docs_to_handoff</bpmn:incoming>
+      <bpmn:outgoing>flow_handoff_to_set_delivered</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Set Delivered -->
+    <bpmn:scriptTask id="set_delivered" name="Set Delivered" scriptFormat="python">
+      <bpmn:incoming>flow_handoff_to_set_delivered</bpmn:incoming>
+      <bpmn:outgoing>flow_set_delivered_to_end</bpmn:outgoing>
+      <bpmn:script>status = "delivered"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Delivered -->
+    <bpmn:endEvent id="end_delivered" name="Client Delivered">
+      <bpmn:incoming>flow_set_delivered_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_onboard" sourceRef="start_event" targetRef="onboard_client"/>
+    <bpmn:sequenceFlow id="flow_onboard_to_setup" sourceRef="onboard_client" targetRef="setup_environment"/>
+    <bpmn:sequenceFlow id="flow_setup_to_ingest" sourceRef="setup_environment" targetRef="ingest_knowledge"/>
+    <bpmn:sequenceFlow id="flow_ingest_to_knowledge_ready" sourceRef="ingest_knowledge" targetRef="knowledge_ready"/>
+    <bpmn:sequenceFlow id="flow_knowledge_ready_to_gather" sourceRef="knowledge_ready" targetRef="gather_requirements"/>
+    <bpmn:sequenceFlow id="flow_gather_to_validate" sourceRef="gather_requirements" targetRef="validate_requirements"/>
+    <bpmn:sequenceFlow id="flow_validate_to_req_gateway" sourceRef="validate_requirements" targetRef="requirements_complete_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_requirements_valid" sourceRef="requirements_complete_gateway" targetRef="generate_config">
+      <bpmn:conditionExpression>requirements_valid == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_gaps_found" sourceRef="requirements_complete_gateway" targetRef="fill_gaps"/>
+
+    <bpmn:sequenceFlow id="flow_fill_gaps_to_gather" sourceRef="fill_gaps" targetRef="gather_requirements"/>
+
+    <bpmn:sequenceFlow id="flow_generate_to_review" sourceRef="generate_config" targetRef="review_config"/>
+    <bpmn:sequenceFlow id="flow_review_to_config_gateway" sourceRef="review_config" targetRef="config_approved_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_revise_to_generate" sourceRef="config_approved_gateway" targetRef="generate_config">
+      <bpmn:conditionExpression>config_action == "revise"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_config_approved" sourceRef="config_approved_gateway" targetRef="deploy_uat"/>
+
+    <bpmn:sequenceFlow id="flow_deploy_uat_to_run_tests" sourceRef="deploy_uat" targetRef="run_tests"/>
+    <bpmn:sequenceFlow id="flow_run_tests_to_gateway" sourceRef="run_tests" targetRef="tests_pass_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_tests_passed" sourceRef="tests_pass_gateway" targetRef="deploy_production">
+      <bpmn:conditionExpression>tests_passed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_tests_fail" sourceRef="tests_pass_gateway" targetRef="fix_config"/>
+    <bpmn:sequenceFlow id="flow_fix_config_to_deploy_uat" sourceRef="fix_config" targetRef="deploy_uat"/>
+
+    <bpmn:sequenceFlow id="flow_deploy_prod_to_gen_docs" sourceRef="deploy_production" targetRef="generate_docs"/>
+    <bpmn:sequenceFlow id="flow_gen_docs_to_handoff" sourceRef="generate_docs" targetRef="handoff_client"/>
+    <bpmn:sequenceFlow id="flow_handoff_to_set_delivered" sourceRef="handoff_client" targetRef="set_delivered"/>
+    <bpmn:sequenceFlow id="flow_set_delivered_to_end" sourceRef="set_delivered" targetRef="end_delivered"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout: main path at y=220, loop-back detours above/below -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="nimbus_delivery">
+
+      <!-- Row 1: start → onboard → setup → ingest → knowledge_ready → gather → validate (y=220) -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="202" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_onboard_client" bpmnElement="onboard_client">
+        <dc:Bounds x="170" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_setup_environment" bpmnElement="setup_environment">
+        <dc:Bounds x="330" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_ingest_knowledge" bpmnElement="ingest_knowledge">
+        <dc:Bounds x="490" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_knowledge_ready" bpmnElement="knowledge_ready">
+        <dc:Bounds x="650" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_gather_requirements" bpmnElement="gather_requirements">
+        <dc:Bounds x="810" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_validate_requirements" bpmnElement="validate_requirements">
+        <dc:Bounds x="970" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Requirements Complete Gateway -->
+      <bpmndi:BPMNShape id="shape_requirements_complete_gateway" bpmnElement="requirements_complete_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1130" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Fill Gaps task (below main path, loops back to gather_requirements) -->
+      <bpmndi:BPMNShape id="shape_fill_gaps" bpmnElement="fill_gaps">
+        <dc:Bounds x="1130" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Generate Config task -->
+      <bpmndi:BPMNShape id="shape_generate_config" bpmnElement="generate_config">
+        <dc:Bounds x="1250" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Review Config task -->
+      <bpmndi:BPMNShape id="shape_review_config" bpmnElement="review_config">
+        <dc:Bounds x="1410" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Config Approved Gateway -->
+      <bpmndi:BPMNShape id="shape_config_approved_gateway" bpmnElement="config_approved_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1570" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Deploy UAT script task -->
+      <bpmndi:BPMNShape id="shape_deploy_uat" bpmnElement="deploy_uat">
+        <dc:Bounds x="1690" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Run Tests user task -->
+      <bpmndi:BPMNShape id="shape_run_tests" bpmnElement="run_tests">
+        <dc:Bounds x="1850" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Tests Pass Gateway -->
+      <bpmndi:BPMNShape id="shape_tests_pass_gateway" bpmnElement="tests_pass_gateway" isMarkerVisible="true">
+        <dc:Bounds x="2010" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Fix Config task (below, loops back to deploy_uat) -->
+      <bpmndi:BPMNShape id="shape_fix_config" bpmnElement="fix_config">
+        <dc:Bounds x="2010" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Deploy Production script task -->
+      <bpmndi:BPMNShape id="shape_deploy_production" bpmnElement="deploy_production">
+        <dc:Bounds x="2130" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Generate Docs script task -->
+      <bpmndi:BPMNShape id="shape_generate_docs" bpmnElement="generate_docs">
+        <dc:Bounds x="2290" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Handoff Client user task -->
+      <bpmndi:BPMNShape id="shape_handoff_client" bpmnElement="handoff_client">
+        <dc:Bounds x="2450" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Set Delivered script task -->
+      <bpmndi:BPMNShape id="shape_set_delivered" bpmnElement="set_delivered">
+        <dc:Bounds x="2610" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- End Event: Delivered -->
+      <bpmndi:BPMNShape id="shape_end_delivered" bpmnElement="end_delivered">
+        <dc:Bounds x="2770" y="202" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Config revision loop: review_config → config_approved_gateway → generate_config (above main path) -->
+      <!-- (No separate shape needed; flows handle the loop-back) -->
+
+      <!-- Edges: main happy path -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_onboard" bpmnElement="flow_start_to_onboard">
+        <di:waypoint x="116" y="220"/>
+        <di:waypoint x="170" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_onboard_to_setup" bpmnElement="flow_onboard_to_setup">
+        <di:waypoint x="270" y="220"/>
+        <di:waypoint x="330" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_setup_to_ingest" bpmnElement="flow_setup_to_ingest">
+        <di:waypoint x="430" y="220"/>
+        <di:waypoint x="490" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_ingest_to_knowledge_ready" bpmnElement="flow_ingest_to_knowledge_ready">
+        <di:waypoint x="590" y="220"/>
+        <di:waypoint x="650" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_knowledge_ready_to_gather" bpmnElement="flow_knowledge_ready_to_gather">
+        <di:waypoint x="750" y="220"/>
+        <di:waypoint x="810" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_gather_to_validate" bpmnElement="flow_gather_to_validate">
+        <di:waypoint x="910" y="220"/>
+        <di:waypoint x="970" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_validate_to_req_gateway" bpmnElement="flow_validate_to_req_gateway">
+        <di:waypoint x="1070" y="220"/>
+        <di:waypoint x="1130" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- requirements_complete_gateway: valid → generate_config -->
+      <bpmndi:BPMNEdge id="edge_flow_requirements_valid" bpmnElement="flow_requirements_valid">
+        <di:waypoint x="1180" y="220"/>
+        <di:waypoint x="1250" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- requirements_complete_gateway: default → fill_gaps (below) -->
+      <bpmndi:BPMNEdge id="edge_flow_gaps_found" bpmnElement="flow_gaps_found">
+        <di:waypoint x="1155" y="245"/>
+        <di:waypoint x="1155" y="380"/>
+        <di:waypoint x="1130" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fill_gaps → gather_requirements (loop back, arc below) -->
+      <bpmndi:BPMNEdge id="edge_flow_fill_gaps_to_gather" bpmnElement="flow_fill_gaps_to_gather">
+        <di:waypoint x="1130" y="380"/>
+        <di:waypoint x="860" y="480"/>
+        <di:waypoint x="860" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_generate_to_review" bpmnElement="flow_generate_to_review">
+        <di:waypoint x="1350" y="220"/>
+        <di:waypoint x="1410" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_review_to_config_gateway" bpmnElement="flow_review_to_config_gateway">
+        <di:waypoint x="1510" y="220"/>
+        <di:waypoint x="1570" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- config_approved_gateway: revise → generate_config (loop back, arc above) -->
+      <bpmndi:BPMNEdge id="edge_flow_revise_to_generate" bpmnElement="flow_revise_to_generate">
+        <di:waypoint x="1595" y="195"/>
+        <di:waypoint x="1595" y="100"/>
+        <di:waypoint x="1300" y="100"/>
+        <di:waypoint x="1300" y="180"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- config_approved_gateway: default → deploy_uat -->
+      <bpmndi:BPMNEdge id="edge_flow_config_approved" bpmnElement="flow_config_approved">
+        <di:waypoint x="1620" y="220"/>
+        <di:waypoint x="1690" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_deploy_uat_to_run_tests" bpmnElement="flow_deploy_uat_to_run_tests">
+        <di:waypoint x="1790" y="220"/>
+        <di:waypoint x="1850" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_run_tests_to_gateway" bpmnElement="flow_run_tests_to_gateway">
+        <di:waypoint x="1950" y="220"/>
+        <di:waypoint x="2010" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- tests_pass_gateway: tests_passed → deploy_production -->
+      <bpmndi:BPMNEdge id="edge_flow_tests_passed" bpmnElement="flow_tests_passed">
+        <di:waypoint x="2060" y="220"/>
+        <di:waypoint x="2130" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- tests_pass_gateway: default → fix_config (below) -->
+      <bpmndi:BPMNEdge id="edge_flow_tests_fail" bpmnElement="flow_tests_fail">
+        <di:waypoint x="2035" y="245"/>
+        <di:waypoint x="2035" y="380"/>
+        <di:waypoint x="2010" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fix_config → deploy_uat (loop back, arc below) -->
+      <bpmndi:BPMNEdge id="edge_flow_fix_config_to_deploy_uat" bpmnElement="flow_fix_config_to_deploy_uat">
+        <di:waypoint x="2010" y="380"/>
+        <di:waypoint x="1740" y="480"/>
+        <di:waypoint x="1740" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_deploy_prod_to_gen_docs" bpmnElement="flow_deploy_prod_to_gen_docs">
+        <di:waypoint x="2230" y="220"/>
+        <di:waypoint x="2290" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_gen_docs_to_handoff" bpmnElement="flow_gen_docs_to_handoff">
+        <di:waypoint x="2390" y="220"/>
+        <di:waypoint x="2450" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_handoff_to_set_delivered" bpmnElement="flow_handoff_to_set_delivered">
+        <di:waypoint x="2550" y="220"/>
+        <di:waypoint x="2610" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_set_delivered_to_end" bpmnElement="flow_set_delivered_to_end">
+        <di:waypoint x="2710" y="220"/>
+        <di:waypoint x="2770" y="220"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

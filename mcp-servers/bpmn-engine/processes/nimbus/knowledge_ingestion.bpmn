@@ -1,0 +1,345 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://nimbus-ai/bpmn/knowledge-ingestion"
+    id="Definitions_KnowledgeIngestion">
+
+  <bpmn:process id="knowledge_ingestion" name="Knowledge Ingestion Pipeline" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_receive</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Receive Source -->
+    <bpmn:userTask id="receive_source" name="Receive Source">
+      <bpmn:incoming>flow_start_to_receive</bpmn:incoming>
+      <bpmn:outgoing>flow_receive_to_detect</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Detect Source Type -->
+    <bpmn:scriptTask id="detect_source_type" name="Detect Source Type" scriptFormat="python">
+      <bpmn:incoming>flow_receive_to_detect</bpmn:incoming>
+      <bpmn:outgoing>flow_detect_to_gateway</bpmn:outgoing>
+      <bpmn:script>source_detected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Source Type -->
+    <bpmn:exclusiveGateway id="source_type_gateway" name="Source Type?" default="flow_unstructured">
+      <bpmn:incoming>flow_detect_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_api_spec</bpmn:outgoing>
+      <bpmn:outgoing>flow_odata</bpmn:outgoing>
+      <bpmn:outgoing>flow_unstructured</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Parse API Spec -->
+    <bpmn:scriptTask id="parse_api_spec" name="Parse API Spec" scriptFormat="python">
+      <bpmn:incoming>flow_api_spec</bpmn:incoming>
+      <bpmn:outgoing>flow_api_spec_to_merge</bpmn:outgoing>
+      <bpmn:script>parsed = True; content_type = "api_spec"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Parse OData Schema -->
+    <bpmn:scriptTask id="parse_odata_schema" name="Parse OData Schema" scriptFormat="python">
+      <bpmn:incoming>flow_odata</bpmn:incoming>
+      <bpmn:outgoing>flow_odata_to_merge</bpmn:outgoing>
+      <bpmn:script>parsed = True; content_type = "odata"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Parse Unstructured -->
+    <bpmn:scriptTask id="parse_unstructured" name="Parse Unstructured" scriptFormat="python">
+      <bpmn:incoming>flow_unstructured</bpmn:incoming>
+      <bpmn:outgoing>flow_unstructured_to_merge</bpmn:outgoing>
+      <bpmn:script>parsed = True; content_type = "unstructured"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Parse Merge (converging) -->
+    <bpmn:exclusiveGateway id="parse_merge" name="Parse Merge">
+      <bpmn:incoming>flow_api_spec_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_odata_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_unstructured_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_validate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Validate Content -->
+    <bpmn:userTask id="validate_content" name="Validate Content">
+      <bpmn:incoming>flow_merge_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Validation Result -->
+    <bpmn:exclusiveGateway id="validation_gateway" name="Validation Result?" default="flow_valid">
+      <bpmn:incoming>flow_validate_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_rejected</bpmn:outgoing>
+      <bpmn:outgoing>flow_valid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Flag for Review (rejected path) -->
+    <bpmn:scriptTask id="flag_for_review" name="Flag for Review" scriptFormat="python">
+      <bpmn:incoming>flow_rejected</bpmn:incoming>
+      <bpmn:outgoing>flow_flag_to_end_flagged</bpmn:outgoing>
+      <bpmn:script>flagged = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Generate Embeddings -->
+    <bpmn:scriptTask id="generate_embeddings" name="Generate Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_valid</bpmn:incoming>
+      <bpmn:outgoing>flow_embeddings_to_index</bpmn:outgoing>
+      <bpmn:script>embedded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Index Knowledge -->
+    <bpmn:scriptTask id="index_knowledge" name="Index Knowledge" scriptFormat="python">
+      <bpmn:incoming>flow_embeddings_to_index</bpmn:incoming>
+      <bpmn:outgoing>flow_index_to_notify</bpmn:outgoing>
+      <bpmn:script>indexed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Notify Available -->
+    <bpmn:scriptTask id="notify_available" name="Notify Available" scriptFormat="python">
+      <bpmn:incoming>flow_index_to_notify</bpmn:incoming>
+      <bpmn:outgoing>flow_notify_to_end_ingested</bpmn:outgoing>
+      <bpmn:script>available = True; status = "ingested"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Knowledge Ingested -->
+    <bpmn:endEvent id="end_ingested" name="Knowledge Ingested">
+      <bpmn:incoming>flow_notify_to_end_ingested</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Flagged for Review -->
+    <bpmn:endEvent id="end_flagged" name="Flagged for Review">
+      <bpmn:incoming>flow_flag_to_end_flagged</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_receive" sourceRef="start_event" targetRef="receive_source"/>
+    <bpmn:sequenceFlow id="flow_receive_to_detect" sourceRef="receive_source" targetRef="detect_source_type"/>
+    <bpmn:sequenceFlow id="flow_detect_to_gateway" sourceRef="detect_source_type" targetRef="source_type_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_api_spec" sourceRef="source_type_gateway" targetRef="parse_api_spec">
+      <bpmn:conditionExpression>source_type == "api_spec"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_odata" sourceRef="source_type_gateway" targetRef="parse_odata_schema">
+      <bpmn:conditionExpression>source_type == "odata"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_unstructured" sourceRef="source_type_gateway" targetRef="parse_unstructured"/>
+
+    <bpmn:sequenceFlow id="flow_api_spec_to_merge" sourceRef="parse_api_spec" targetRef="parse_merge"/>
+    <bpmn:sequenceFlow id="flow_odata_to_merge" sourceRef="parse_odata_schema" targetRef="parse_merge"/>
+    <bpmn:sequenceFlow id="flow_unstructured_to_merge" sourceRef="parse_unstructured" targetRef="parse_merge"/>
+
+    <bpmn:sequenceFlow id="flow_merge_to_validate" sourceRef="parse_merge" targetRef="validate_content"/>
+    <bpmn:sequenceFlow id="flow_validate_to_gateway" sourceRef="validate_content" targetRef="validation_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_rejected" sourceRef="validation_gateway" targetRef="flag_for_review">
+      <bpmn:conditionExpression>validation == "rejected"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_valid" sourceRef="validation_gateway" targetRef="generate_embeddings"/>
+
+    <bpmn:sequenceFlow id="flow_embeddings_to_index" sourceRef="generate_embeddings" targetRef="index_knowledge"/>
+    <bpmn:sequenceFlow id="flow_index_to_notify" sourceRef="index_knowledge" targetRef="notify_available"/>
+    <bpmn:sequenceFlow id="flow_notify_to_end_ingested" sourceRef="notify_available" targetRef="end_ingested"/>
+    <bpmn:sequenceFlow id="flow_flag_to_end_flagged" sourceRef="flag_for_review" targetRef="end_flagged"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="knowledge_ingestion">
+
+      <!-- Start event -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="218" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- receive_source user task -->
+      <bpmndi:BPMNShape id="shape_receive_source" bpmnElement="receive_source">
+        <dc:Bounds x="170" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- detect_source_type script task -->
+      <bpmndi:BPMNShape id="shape_detect_source_type" bpmnElement="detect_source_type">
+        <dc:Bounds x="330" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- source_type_gateway (splitting) -->
+      <bpmndi:BPMNShape id="shape_source_type_gateway" bpmnElement="source_type_gateway" isMarkerVisible="true">
+        <dc:Bounds x="490" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- parse_api_spec script task (upper branch) -->
+      <bpmndi:BPMNShape id="shape_parse_api_spec" bpmnElement="parse_api_spec">
+        <dc:Bounds x="600" y="80" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- parse_odata_schema script task (middle branch) -->
+      <bpmndi:BPMNShape id="shape_parse_odata_schema" bpmnElement="parse_odata_schema">
+        <dc:Bounds x="600" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- parse_unstructured script task (lower branch) -->
+      <bpmndi:BPMNShape id="shape_parse_unstructured" bpmnElement="parse_unstructured">
+        <dc:Bounds x="600" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- parse_merge gateway (converging) -->
+      <bpmndi:BPMNShape id="shape_parse_merge" bpmnElement="parse_merge" isMarkerVisible="true">
+        <dc:Bounds x="760" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- validate_content user task -->
+      <bpmndi:BPMNShape id="shape_validate_content" bpmnElement="validate_content">
+        <dc:Bounds x="870" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- validation_gateway -->
+      <bpmndi:BPMNShape id="shape_validation_gateway" bpmnElement="validation_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1030" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- flag_for_review script task (rejected path, below) -->
+      <bpmndi:BPMNShape id="shape_flag_for_review" bpmnElement="flag_for_review">
+        <dc:Bounds x="1030" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- generate_embeddings script task -->
+      <bpmndi:BPMNShape id="shape_generate_embeddings" bpmnElement="generate_embeddings">
+        <dc:Bounds x="1140" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- index_knowledge script task -->
+      <bpmndi:BPMNShape id="shape_index_knowledge" bpmnElement="index_knowledge">
+        <dc:Bounds x="1300" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- notify_available script task -->
+      <bpmndi:BPMNShape id="shape_notify_available" bpmnElement="notify_available">
+        <dc:Bounds x="1460" y="196" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_ingested event -->
+      <bpmndi:BPMNShape id="shape_end_ingested" bpmnElement="end_ingested">
+        <dc:Bounds x="1620" y="218" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_flagged event -->
+      <bpmndi:BPMNShape id="shape_end_flagged" bpmnElement="end_flagged">
+        <dc:Bounds x="1190" y="378" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_receive" bpmnElement="flow_start_to_receive">
+        <di:waypoint x="116" y="236"/>
+        <di:waypoint x="170" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_receive_to_detect" bpmnElement="flow_receive_to_detect">
+        <di:waypoint x="270" y="236"/>
+        <di:waypoint x="330" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_detect_to_gateway" bpmnElement="flow_detect_to_gateway">
+        <di:waypoint x="430" y="236"/>
+        <di:waypoint x="490" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- source_type_gateway → parse_api_spec (upper) -->
+      <bpmndi:BPMNEdge id="edge_flow_api_spec" bpmnElement="flow_api_spec">
+        <di:waypoint x="515" y="211"/>
+        <di:waypoint x="515" y="120"/>
+        <di:waypoint x="600" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- source_type_gateway → parse_odata_schema (middle/straight) -->
+      <bpmndi:BPMNEdge id="edge_flow_odata" bpmnElement="flow_odata">
+        <di:waypoint x="540" y="236"/>
+        <di:waypoint x="600" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- source_type_gateway → parse_unstructured (lower) -->
+      <bpmndi:BPMNEdge id="edge_flow_unstructured" bpmnElement="flow_unstructured">
+        <di:waypoint x="515" y="261"/>
+        <di:waypoint x="515" y="380"/>
+        <di:waypoint x="600" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- parse_api_spec → parse_merge (upper to merge) -->
+      <bpmndi:BPMNEdge id="edge_flow_api_spec_to_merge" bpmnElement="flow_api_spec_to_merge">
+        <di:waypoint x="700" y="120"/>
+        <di:waypoint x="785" y="120"/>
+        <di:waypoint x="785" y="211"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- parse_odata_schema → parse_merge (middle/straight) -->
+      <bpmndi:BPMNEdge id="edge_flow_odata_to_merge" bpmnElement="flow_odata_to_merge">
+        <di:waypoint x="700" y="236"/>
+        <di:waypoint x="760" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- parse_unstructured → parse_merge (lower to merge) -->
+      <bpmndi:BPMNEdge id="edge_flow_unstructured_to_merge" bpmnElement="flow_unstructured_to_merge">
+        <di:waypoint x="700" y="380"/>
+        <di:waypoint x="785" y="380"/>
+        <di:waypoint x="785" y="261"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- parse_merge → validate_content -->
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_validate" bpmnElement="flow_merge_to_validate">
+        <di:waypoint x="810" y="236"/>
+        <di:waypoint x="870" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- validate_content → validation_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_validate_to_gateway" bpmnElement="flow_validate_to_gateway">
+        <di:waypoint x="970" y="236"/>
+        <di:waypoint x="1030" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- validation_gateway → flag_for_review (rejected, downward) -->
+      <bpmndi:BPMNEdge id="edge_flow_rejected" bpmnElement="flow_rejected">
+        <di:waypoint x="1055" y="261"/>
+        <di:waypoint x="1055" y="400"/>
+        <di:waypoint x="1030" y="400"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- validation_gateway → generate_embeddings (valid, forward) -->
+      <bpmndi:BPMNEdge id="edge_flow_valid" bpmnElement="flow_valid">
+        <di:waypoint x="1080" y="236"/>
+        <di:waypoint x="1140" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- flag_for_review → end_flagged -->
+      <bpmndi:BPMNEdge id="edge_flow_flag_to_end_flagged" bpmnElement="flow_flag_to_end_flagged">
+        <di:waypoint x="1130" y="400"/>
+        <di:waypoint x="1190" y="396"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- generate_embeddings → index_knowledge -->
+      <bpmndi:BPMNEdge id="edge_flow_embeddings_to_index" bpmnElement="flow_embeddings_to_index">
+        <di:waypoint x="1240" y="236"/>
+        <di:waypoint x="1300" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- index_knowledge → notify_available -->
+      <bpmndi:BPMNEdge id="edge_flow_index_to_notify" bpmnElement="flow_index_to_notify">
+        <di:waypoint x="1400" y="236"/>
+        <di:waypoint x="1460" y="236"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- notify_available → end_ingested -->
+      <bpmndi:BPMNEdge id="edge_flow_notify_to_end_ingested" bpmnElement="flow_notify_to_end_ingested">
+        <di:waypoint x="1560" y="236"/>
+        <di:waypoint x="1620" y="236"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
