@@ -3,17 +3,18 @@
 Generate MCP Config - Database-Driven .mcp.json Generator
 
 Reads MCP server configuration from PostgreSQL database and generates .mcp.json
-with automatic Windows npx wrapper applied.
+with automatic resolution of npx packages to direct node paths.
 
 Architecture:
     Database (Source of Truth: workspaces.startup_config.mcp_configs)
         ↓
-    generate_mcp_config.py
+    generate_mcp_config.py (resolves npx → direct node paths)
         ↓
     .mcp.json (Generated, self-healing)
 
 Features:
-    - Auto-wraps npx commands with cmd /c on Windows
+    - Resolves npx packages to direct node paths (eliminates cmd.exe shim overhead)
+    - Falls back to cmd /c npx wrapper if package not globally installed
     - Preserves env vars and other config
     - Logs all operations to ~/.claude/hooks.log
 
@@ -30,8 +31,9 @@ import os
 import sys
 import logging
 import platform
+import subprocess
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from copy import deepcopy
 
 # Setup logging
@@ -116,46 +118,157 @@ def get_mcp_configs(conn, project_name: str) -> Optional[Dict]:
         return None
 
 
-def apply_windows_wrapper(server_name: str, server_config: Dict) -> Dict:
-    """Apply Windows cmd /c wrapper for npx commands.
+def _find_global_npm_entry_point(package_name: str) -> Optional[str]:
+    """Find the entry point of a globally installed npm package.
 
-    On Windows, npx needs to be wrapped with cmd /c to work properly
-    in stdio MCP servers.
+    Checks the global npm node_modules directory for the package and resolves
+    its main/bin entry point.
+
+    Args:
+        package_name: npm package name (e.g., '@mui/mcp', 'ag-mcp')
+
+    Returns:
+        Absolute path to the entry point .js file, or None if not found
+    """
+    # Get global npm prefix
+    npm_prefix = os.environ.get('APPDATA', '')
+    if not npm_prefix:
+        return None
+
+    global_modules = Path(npm_prefix) / "npm" / "node_modules"
+    pkg_dir = global_modules / package_name.replace('/', os.sep)
+
+    if not pkg_dir.exists():
+        return None
+
+    # Read package.json to find entry point
+    pkg_json = pkg_dir / "package.json"
+    if not pkg_json.exists():
+        return None
+
+    try:
+        with open(pkg_json, 'r', encoding='utf-8') as f:
+            pkg_data = json.load(f)
+
+        # Check bin first (for CLI tools), then main
+        bin_entry = pkg_data.get('bin', {})
+        if isinstance(bin_entry, str):
+            entry = bin_entry
+        elif isinstance(bin_entry, dict):
+            # Use first bin entry
+            entry = next(iter(bin_entry.values()), None)
+        else:
+            entry = None
+
+        if not entry:
+            entry = pkg_data.get('main')
+
+        if entry:
+            full_path = pkg_dir / entry
+            if full_path.exists():
+                return str(full_path.resolve())
+
+    except Exception as e:
+        logger.debug(f"Failed to read package.json for {package_name}: {e}")
+
+    return None
+
+
+def _get_node_path() -> str:
+    """Get the path to the node executable."""
+    if platform.system() == 'Windows':
+        # Check common locations
+        for candidate in [
+            Path(os.environ.get('ProgramFiles', '')) / "nodejs" / "node.exe",
+            Path(os.environ.get('LOCALAPPDATA', '')) / "fnm_multishells" / "node.exe",
+        ]:
+            if candidate.exists():
+                return str(candidate)
+    return "node"  # Fall back to PATH lookup
+
+
+def resolve_server_command(server_name: str, server_config: Dict) -> Dict:
+    """Resolve npx commands to direct node paths where possible.
+
+    For npx-based MCP servers, checks if the npm package is globally installed.
+    If so, replaces the npx command with a direct node invocation, eliminating
+    the cmd.exe shim overhead (2 extra processes per server on Windows).
+
+    Falls back to cmd /c npx wrapper if the package is not globally installed.
 
     Args:
         server_name: Name of the MCP server (for logging)
         server_config: Server configuration dict
 
     Returns:
-        Modified server config with Windows wrapper if needed
+        Modified server config with resolved command
     """
-    if platform.system() != 'Windows':
-        return server_config
-
     command = server_config.get('command', '')
+    args = server_config.get('args', [])
 
-    # If already wrapped with cmd, return as-is
-    if command == 'cmd':
+    # Normalize: if already cmd-wrapped npx, extract the package info
+    is_cmd_wrapped_npx = (command == 'cmd' and len(args) >= 3
+                          and args[0] == '/c' and args[1] == 'npx')
+    is_raw_npx = command == 'npx'
+
+    if not is_raw_npx and not is_cmd_wrapped_npx:
         return server_config
 
-    # If command is npx, wrap it
-    if command == 'npx':
-        old_args = server_config.get('args', [])
+    # Extract package name and extra args from the npx args
+    if is_cmd_wrapped_npx:
+        npx_args = args[2:]  # Skip /c, npx
+    else:
+        npx_args = list(args)
 
-        # Check if -y is already in args
-        has_dash_y = '-y' in old_args
+    # Filter out -y flag and find the package name
+    extra_args = []
+    package_name = None
+    for arg in npx_args:
+        if arg == '-y':
+            continue
+        elif package_name is None and not arg.startswith('-'):
+            package_name = arg
+        else:
+            extra_args.append(arg)
 
+    if not package_name:
+        logger.warning(f"Could not determine package name for {server_name}")
+        return server_config
+
+    # Strip @version suffix for lookup (e.g., @mui/mcp@latest → @mui/mcp)
+    lookup_name = package_name.split('@latest')[0]
+    # Handle scoped packages: @scope/pkg@version
+    if lookup_name.startswith('@') and '@' in lookup_name[1:]:
+        # e.g., @playwright/mcp@0.1.0 → @playwright/mcp
+        parts = lookup_name[1:].split('@', 1)
+        lookup_name = '@' + parts[0]
+
+    # Try to resolve to a globally installed package
+    entry_point = _find_global_npm_entry_point(lookup_name)
+
+    if entry_point:
+        node_path = _get_node_path()
+        result = {
+            'type': server_config.get('type', 'stdio'),
+            'command': node_path,
+            'args': [entry_point] + extra_args
+        }
+        if 'env' in server_config:
+            result['env'] = server_config['env']
+        logger.info(f"Resolved {server_name}: npx {package_name} → node {entry_point}")
+        return result
+
+    # Fallback: wrap with cmd /c npx on Windows
+    if platform.system() == 'Windows' and is_raw_npx:
+        has_dash_y = '-y' in args
         result = {
             'type': server_config.get('type', 'stdio'),
             'command': 'cmd',
-            'args': ['/c', 'npx'] + (['-y'] if not has_dash_y else []) + old_args
+            'args': ['/c', 'npx'] + (['-y'] if not has_dash_y else []) + args
         }
-
-        # Preserve env if present
         if 'env' in server_config:
             result['env'] = server_config['env']
-
-        logger.info(f"Applied Windows wrapper to {server_name}: npx -> cmd /c npx")
+        logger.info(f"Fallback wrapper for {server_name}: npx → cmd /c npx (not globally installed)")
         return result
 
     return server_config
@@ -207,8 +320,8 @@ def generate_mcp_json(project_name: str, project_path: str) -> Optional[Dict]:
                 logger.info(f"Skipping disabled server: {server_name}")
                 continue
 
-            # Apply Windows wrapper if needed
-            processed_config = apply_windows_wrapper(server_name, deepcopy(server_config))
+            # Resolve npx to direct node paths where possible
+            processed_config = resolve_server_command(server_name, deepcopy(server_config))
 
             # Ensure type is set
             if 'type' not in processed_config:

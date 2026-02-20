@@ -43,7 +43,7 @@ Registry of installed MCPs with project assignments and token costs.
 ### sequential-thinking
 **Purpose**: Complex multi-step reasoning
 **Tokens**: ~2k
-**Package**: `@modelcontextprotocol/server-sequential-thinking`
+**Package**: `@modelcontextprotocol/server-sequential-thinking` (globally installed, direct node path)
 **Scope**: Global (all projects)
 
 ### python-repl
@@ -65,8 +65,14 @@ Registry of installed MCPs with project assignments and token costs.
 ### mui
 **Purpose**: MUI X component documentation
 **Tokens**: ~2k
-**Package**: `@mui/mcp@latest`
-**Scope**: Project (nimbus-import, ATO-Tax-Agent, claude-family via enabledMcpjsonServers)
+**Package**: `@mui/mcp` (globally installed, direct node path)
+**Scope**: Project (nimbus-import, ATO-Tax-Agent, claude-family, claude-manager-mui, nimbus-mui)
+
+### playwright
+**Purpose**: Browser automation and testing via Playwright
+**Tokens**: ~3k
+**Package**: `@playwright/mcp` (globally installed, direct node path)
+**Scope**: Project (claude-family, claude-manager-mui)
 
 ## Removed MCPs
 
@@ -101,23 +107,25 @@ Registry of installed MCPs with project assignments and token costs.
 
 ## Quick Install (npx package)
 
-**Windows**:
-```json
-{
-  "mcp-name": {
-    "type": "stdio",
-    "command": "cmd",
-    "args": ["/c", "npx", "-y", "@package/name@latest"]
-  }
-}
+**Step 1**: Install globally (eliminates cmd.exe shim overhead):
+```bash
+npm install -g @package/name
 ```
 
-**Enable in settings**:
-```json
-{
-  "mcp_servers": ["postgres", "orchestrator", "new-mcp"]
-}
+**Step 2**: Add to database (use simple npx format - generator resolves to direct node):
+```sql
+UPDATE claude.workspaces
+SET startup_config = jsonb_set(startup_config, '{mcp_configs,mcp-name}',
+  '{"type": "stdio", "command": "npx", "args": ["-y", "@package/name"]}'::jsonb)
+WHERE project_name = 'your-project';
 ```
+
+**Step 3**: Regenerate:
+```bash
+python scripts/generate_mcp_config.py your-project
+```
+
+Generator automatically resolves `npx` to `node.exe <entry_point>` if globally installed.
 
 **Full guide**: [[Add MCP Server SOP]]
 
@@ -137,7 +145,7 @@ Registry of installed MCPs with project assignments and token costs.
 
 - [ ] Token cost <6k?
 - [ ] No built-in alternative?
-- [ ] Windows `cmd /c` wrapper?
+- [ ] Globally installed? (`npm install -g`)
 - [ ] Tested locally?
 
 ---
@@ -152,7 +160,7 @@ Registry of installed MCPs with project assignments and token costs.
 
 ---
 
-**Version**: 3.2 (Added project-tools v3 details - 40+ tools)
+**Version**: 4.0 (npx resolved to direct node paths, added playwright entry, updated install flow)
 **Created**: 2025-12-26
-**Updated**: 2026-02-11
+**Updated**: 2026-02-20
 **Location**: Claude Family/MCP Registry.md

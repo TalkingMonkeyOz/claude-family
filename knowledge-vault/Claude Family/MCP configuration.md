@@ -44,7 +44,7 @@ Database (Source of Truth)
 - Database `mcp_configs` is the source of truth
 - `.mcp.json` is auto-generated on every launch
 - Manual edits to `.mcp.json` are overwritten
-- Windows `cmd /c` wrapper auto-applied to npx commands
+- npx commands resolved to direct `node.exe` paths (eliminates cmd.exe shim overhead)
 
 ---
 
@@ -70,7 +70,7 @@ SET startup_config = startup_config || '{
 WHERE project_name = 'your-project';
 ```
 
-**Note**: Use simple `npx` command - Windows wrapper is applied automatically!
+**Note**: Use simple `npx` command in DB - the generator resolves to direct `node` paths automatically!
 
 Then regenerate or restart via launcher:
 ```bash
@@ -124,7 +124,7 @@ Edit `~/.claude.json` directly (manual file edit - not database-driven).
 
 ## Generated File Structure
 
-The generator creates `.mcp.json` with:
+The generator creates `.mcp.json` with direct node paths (no cmd.exe shims):
 
 ```json
 {
@@ -134,8 +134,8 @@ The generator creates `.mcp.json` with:
   "mcpServers": {
     "server-name": {
       "type": "stdio",
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "package-name"]
+      "command": "C:\\Program Files\\nodejs\\node.exe",
+      "args": ["C:\\Users\\johnd\\AppData\\Roaming\\npm\\node_modules\\@pkg\\name\\dist\\index.js"]
     }
   }
 }
@@ -143,21 +143,31 @@ The generator creates `.mcp.json` with:
 
 ---
 
-## Windows npx Wrapper (Automatic)
+## npx Resolution (Automatic)
 
-On Windows, the generator auto-applies `cmd /c` wrapper for npx commands:
+The generator resolves npx commands to direct `node.exe` paths, eliminating cmd.exe shim overhead:
 
 **You write in database**:
 ```json
 { "command": "npx", "args": ["-y", "@mui/mcp"] }
 ```
 
-**Generated .mcp.json**:
+**Generated .mcp.json** (if globally installed):
 ```json
-{ "command": "cmd", "args": ["/c", "npx", "-y", "@mui/mcp"] }
+{ "command": "C:\\Program Files\\nodejs\\node.exe", "args": ["C:\\...\\@mui\\mcp\\dist\\stdio.cjs.js"] }
 ```
 
-**Why?** Without wrapper, closing dev servers (Vite, webpack) kills MCP servers.
+**Fallback** (if NOT globally installed): wraps with `cmd /c npx` as before.
+
+**How it works**:
+1. Checks `%APPDATA%/npm/node_modules/<package>/package.json` for entry point
+2. If found, uses `node.exe <entry_point>` directly (0 extra processes)
+3. If not found, falls back to `cmd /c npx` wrapper (2 extra cmd.exe processes)
+
+**Prerequisites**: Install npx packages globally first:
+```bash
+npm install -g @mui/mcp @modelcontextprotocol/server-sequential-thinking @playwright/mcp ag-mcp
+```
 
 Non-npx commands (uv, python, node) are left unchanged.
 
@@ -189,7 +199,7 @@ python C:\Projects\claude-family\scripts\generate_mcp_config.py PROJECT_NAME
 | MCP not in .mcp.json | Check database has `mcp_configs` AND server is in `enabledMcpjsonServers` |
 | .mcp.json edits lost | Expected - file is generated from database. Update database instead |
 | MCP loads but fails | Check command/args are correct in database |
-| npx fails on Windows | Generator should auto-wrap. Check logs: `~/.claude/hooks.log` |
+| npx falls back to cmd /c | Package not globally installed. Run `npm install -g <package>` and regenerate |
 | No .mcp.json generated | Check `startup_config->'mcp_configs'` exists in workspaces |
 
 **Debug**:
@@ -210,11 +220,11 @@ psql -c "SELECT startup_config->'mcp_configs' FROM claude.workspaces WHERE proje
 
 - [[Add MCP Server SOP]] - Step-by-step procedure
 - [[Config Management SOP]] - Full config system
-- [[MCP Windows npx Wrapper Pattern]] - Why wrapper is needed
+- [[MCP Windows npx Wrapper Pattern]] - Legacy pattern (replaced by direct node resolution)
 
 ---
 
-**Version**: 4.0 (Database-driven .mcp.json generation)
+**Version**: 5.0 (npx resolved to direct node paths - eliminates cmd.exe shim overhead)
 **Created**: 2025-12-26
-**Updated**: 2026-01-26
+**Updated**: 2026-02-20
 **Location**: Claude Family/MCP configuration.md
