@@ -41,7 +41,7 @@ mcp = FastMCP(
 # Configuration
 # ============================================================================
 
-_SERVER_DIR = Path(__file__).parent
+_SERVER_DIR = Path(__file__).resolve().parent
 
 def get_processes_dir() -> Path:
     """Return the processes directory, honouring the env-var override."""
@@ -813,6 +813,265 @@ def search_processes(query: str, actor: Optional[str] = None, level: Optional[st
 
     except Exception as exc:
         return {"success": False, "error": str(exc)}
+
+
+# ============================================================================
+# Tool 8: check_alignment
+# ============================================================================
+
+# Known mappings: BPMN element name → code artifact
+# These are manually curated to establish ground truth for validation.
+_ARTIFACT_REGISTRY: dict[str, dict] = {
+    # hook_chain.bpmn elements → actual hook scripts
+    "rag_query": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "hook_event": "UserPromptSubmit",
+    },
+    "check_discipline": {
+        "type": "hook_script",
+        "file": "scripts/task_discipline_hook.py",
+        "hook_event": "PreToolUse",
+    },
+    "inject_context": {
+        "type": "hook_script",
+        "file": "scripts/context_injector_hook.py",
+        "hook_event": "PreToolUse",
+    },
+    "post_tool_sync": {
+        "type": "hook_script",
+        "file": "scripts/todo_sync_hook.py",
+        "hook_event": "PostToolUse",
+        "also": ["scripts/task_sync_hook.py", "scripts/mcp_usage_logger.py"],
+    },
+    "mark_blocked": {
+        "type": "hook_output",
+        "description": "task_discipline_hook returns permissionDecision=deny",
+    },
+    # session_lifecycle.bpmn elements → hook scripts
+    "session_start": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "hook_event": "SessionStart",
+    },
+    "load_state": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "description": "Loads prior state during session startup",
+    },
+    "save_checkpoint": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "hook_event": "PreCompact",
+    },
+    "close_session": {
+        "type": "hook_script",
+        "file": "scripts/session_end_hook.py",
+        "hook_event": "SessionEnd",
+    },
+    # session_continuation.bpmn elements
+    "precompact_inject": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "hook_event": "PreCompact",
+    },
+    # task_lifecycle.bpmn elements → MCP tools + hooks
+    "create_task": {
+        "type": "mcp_tool",
+        "tool": "TaskCreate",
+        "description": "Claude Code built-in TaskCreate tool",
+    },
+    "sync_to_db": {
+        "type": "hook_script",
+        "file": "scripts/task_sync_hook.py",
+        "hook_event": "PostToolUse(TaskCreate)",
+    },
+    "work_on_task": {
+        "type": "mcp_tool",
+        "tool": "start_work / complete_work",
+        "description": "project-tools MCP workflow tools",
+    },
+    # feature_workflow.bpmn elements → MCP tools
+    "create_feature": {
+        "type": "mcp_tool",
+        "tool": "create_feature",
+        "description": "project-tools MCP tool",
+    },
+    "plan_feature": {
+        "type": "mcp_tool",
+        "tool": "advance_status(features, F*, planned)",
+        "description": "WorkflowEngine state transition",
+    },
+    "run_tests": {
+        "type": "command",
+        "command": "pytest",
+        "description": "Manual test execution",
+    },
+    "review_code": {
+        "type": "agent",
+        "agent": "reviewer-sonnet",
+        "description": "Spawned via orchestrator.spawn_agent",
+    },
+}
+
+
+def _check_artifact_exists(artifact: dict, project_root: Path) -> dict:
+    """Check if a code artifact actually exists on disk."""
+    result = {"exists": False, "details": ""}
+
+    if artifact["type"] == "hook_script":
+        filepath = project_root / artifact["file"]
+        result["exists"] = filepath.exists()
+        result["details"] = f"File: {artifact['file']}"
+        if "hook_event" in artifact:
+            result["details"] += f" (event: {artifact['hook_event']})"
+        if "also" in artifact:
+            also_exist = all((project_root / f).exists() for f in artifact["also"])
+            result["details"] += f" + {len(artifact['also'])} related scripts (all exist: {also_exist})"
+
+    elif artifact["type"] == "mcp_tool":
+        result["exists"] = True  # MCP tools are assumed present if configured
+        result["details"] = f"MCP: {artifact.get('tool', 'unknown')}"
+
+    elif artifact["type"] == "hook_output":
+        result["exists"] = True  # Hook outputs are implicit
+        result["details"] = artifact.get("description", "implicit")
+
+    elif artifact["type"] == "command":
+        result["exists"] = True  # External commands are assumed available
+        result["details"] = f"Command: {artifact.get('command', 'unknown')}"
+
+    elif artifact["type"] == "agent":
+        result["exists"] = True  # Agents are assumed available
+        result["details"] = f"Agent: {artifact.get('agent', 'unknown')}"
+
+    return result
+
+
+@mcp.tool()
+def check_alignment(process_id: str) -> dict:
+    """Check alignment between a BPMN process model and actual code artifacts.
+
+    Parses the BPMN process, extracts all tasks (user/script/service), and
+    checks each against a registry of known code artifacts (hook scripts,
+    MCP tools, DB operations). Reports which elements are mapped, unmapped,
+    or have missing artifacts.
+
+    Use when: you want to verify that a BPMN model accurately reflects
+    the actual implementation, or to find gaps between model and reality.
+
+    Returns: {process_id, total_elements, mapped, unmapped, missing_artifacts,
+              coverage_pct, alignment_report}
+    """
+    try:
+        bpmn_path = _find_bpmn_file(process_id)
+        if bpmn_path is None:
+            return {
+                "success": False,
+                "error": f"Process '{process_id}' not found in {get_processes_dir()}",
+            }
+
+        root = _parse_xml(bpmn_path)
+
+        target_process = None
+        for process_el in root.iter(f"{BPMN_TAG}process"):
+            if process_el.get("id") == process_id:
+                target_process = process_el
+                break
+
+        if target_process is None:
+            return {
+                "success": False,
+                "error": f"Process '{process_id}' not found inside {bpmn_path.name}",
+            }
+
+        elements, _ = _extract_process_elements(target_process)
+
+        # Filter to actionable elements (tasks), skip events and gateways
+        actionable_types = {"userTask", "scriptTask", "serviceTask", "task", "callActivity"}
+        tasks = [e for e in elements if e["type"] in actionable_types]
+
+        # Determine project root (2 levels up from server.py)
+        project_root = _SERVER_DIR.parent.parent
+
+        mapped = []
+        unmapped = []
+        missing_artifacts = []
+
+        for task in tasks:
+            task_id = task["id"]
+            task_name = task["name"]
+
+            if task_id in _ARTIFACT_REGISTRY:
+                artifact = _ARTIFACT_REGISTRY[task_id]
+                check_result = _check_artifact_exists(artifact, project_root)
+
+                entry = {
+                    "element_id": task_id,
+                    "element_name": task_name,
+                    "element_type": task["type"],
+                    "artifact_type": artifact["type"],
+                    "artifact_details": check_result["details"],
+                    "artifact_exists": check_result["exists"],
+                }
+                mapped.append(entry)
+
+                if not check_result["exists"]:
+                    missing_artifacts.append(entry)
+            else:
+                unmapped.append({
+                    "element_id": task_id,
+                    "element_name": task_name,
+                    "element_type": task["type"],
+                    "suggestion": _suggest_artifact(task_name),
+                })
+
+        total = len(tasks)
+        mapped_count = len(mapped)
+        coverage_pct = round((mapped_count / total * 100), 1) if total > 0 else 0.0
+
+        return {
+            "success": True,
+            "process_id": process_id,
+            "file": bpmn_path.name,
+            "total_elements": total,
+            "mapped_count": mapped_count,
+            "unmapped_count": len(unmapped),
+            "missing_artifact_count": len(missing_artifacts),
+            "coverage_pct": coverage_pct,
+            "mapped": mapped,
+            "unmapped": unmapped,
+            "missing_artifacts": missing_artifacts,
+        }
+
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def _suggest_artifact(task_name: str) -> str:
+    """Suggest what code artifact a BPMN task might map to based on its name."""
+    name_lower = task_name.lower()
+
+    if "[hook]" in name_lower:
+        return "Likely a hook script in scripts/"
+    if "[tool]" in name_lower:
+        return "Likely an MCP tool call"
+    if "[db]" in name_lower:
+        return "Likely a database operation"
+    if "[claude]" in name_lower:
+        return "Claude decision/action - no specific code artifact"
+    if "[km]" in name_lower:
+        return "Knowledge management operation (RAG/vault)"
+
+    # Check for common patterns
+    if any(kw in name_lower for kw in ("check", "validate", "verify")):
+        return "Validation logic - check hooks or MCP tools"
+    if any(kw in name_lower for kw in ("save", "store", "persist", "write")):
+        return "Persistence operation - check DB or file write"
+    if any(kw in name_lower for kw in ("spawn", "delegate", "agent")):
+        return "Agent orchestration - check orchestrator MCP"
+
+    return "No suggestion - add to _ARTIFACT_REGISTRY"
 
 
 # ============================================================================

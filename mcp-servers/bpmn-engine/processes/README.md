@@ -15,6 +15,7 @@ Processes governing how work items move through their states.
 | `task_lifecycle` | Task Lifecycle | Create task -> discipline gate -> work/block loop -> completion | 3 |
 | `session_lifecycle` | Session Lifecycle | Session start -> load state -> work loop (compact/continue/end) | 4 |
 | `feature_workflow` | Feature Workflow | Draft -> plan -> implement (simple/complex) -> test -> review -> complete | 4 |
+| `session_continuation` | Session Continuation | Compaction -> checkpoint -> session-id gateway -> context-loss gateway -> recover or resume | 3 |
 
 ### infrastructure/
 
@@ -79,7 +80,7 @@ python -m pytest tests/test_task_lifecycle.py -v  # Single process
 - All variables used in conditions MUST exist in `task.data` before the gateway evaluates
 
 ---
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-02-20
 **Updated**: 2026-02-20
 **Location**: mcp-servers/bpmn-engine/processes/README.md

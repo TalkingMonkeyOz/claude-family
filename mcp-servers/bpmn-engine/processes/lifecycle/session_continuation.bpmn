@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/session-continuation"
+    id="Definitions_SessionContinuation">
+
+  <bpmn:process id="session_continuation" name="Session Continuation" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_initiate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: [CLAUDE] Initiate Compaction -->
+    <!-- Seeds ALL gateway variables: session_id_changed and critical_context_lost -->
+    <bpmn:userTask id="initiate_compaction" name="Initiate Compaction">
+      <bpmn:incoming>flow_start_to_initiate</bpmn:incoming>
+      <bpmn:outgoing>flow_initiate_to_precompact</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: [HOOK] Pre-Compact Inject -->
+    <bpmn:scriptTask id="precompact_inject" name="Pre-Compact Inject" scriptFormat="python">
+      <bpmn:incoming>flow_initiate_to_precompact</bpmn:incoming>
+      <bpmn:outgoing>flow_precompact_to_checkpoint</bpmn:outgoing>
+      <bpmn:script>work_items_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [DB] Save Checkpoint -->
+    <bpmn:scriptTask id="save_checkpoint" name="Save Checkpoint" scriptFormat="python">
+      <bpmn:incoming>flow_precompact_to_checkpoint</bpmn:incoming>
+      <bpmn:outgoing>flow_checkpoint_to_compacted</bpmn:outgoing>
+      <bpmn:script>checkpoint_saved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [HOOK] Context Compacted -->
+    <bpmn:scriptTask id="context_compacted" name="Context Compacted" scriptFormat="python">
+      <bpmn:incoming>flow_checkpoint_to_compacted</bpmn:incoming>
+      <bpmn:outgoing>flow_compacted_to_session_gateway</bpmn:outgoing>
+      <bpmn:script>context_compacted = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Session ID Changed? -->
+    <!-- default=flow_same_session fires when session_id_changed is False -->
+    <bpmn:exclusiveGateway id="session_id_gateway" name="Session ID Changed?" default="flow_same_session">
+      <bpmn:incoming>flow_compacted_to_session_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_new_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_same_session</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: [HOOK] Log Continuation Warning -->
+    <bpmn:scriptTask id="log_continuation_warning" name="Log Continuation Warning" scriptFormat="python">
+      <bpmn:incoming>flow_new_session</bpmn:incoming>
+      <bpmn:outgoing>flow_warning_to_reload</bpmn:outgoing>
+      <bpmn:script>continuation_logged = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [DB] Reload Session Facts -->
+    <bpmn:scriptTask id="reload_session_facts" name="Reload Session Facts" scriptFormat="python">
+      <bpmn:incoming>flow_warning_to_reload</bpmn:incoming>
+      <bpmn:outgoing>flow_reload_to_verify</bpmn:outgoing>
+      <bpmn:script>facts_reloaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: [DB] Verify Task Map -->
+    <bpmn:scriptTask id="verify_task_map" name="Verify Task Map" scriptFormat="python">
+      <bpmn:incoming>flow_reload_to_verify</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_to_merge</bpmn:outgoing>
+      <bpmn:script>task_map_valid = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Continuation Merge -->
+    <!-- Merges new-session path and same-session path -->
+    <bpmn:exclusiveGateway id="continuation_merge" name="Continuation Merge">
+      <bpmn:incoming>flow_verify_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_same_session</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_context_gateway</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Exclusive Gateway: Critical Context Lost? -->
+    <!-- default=flow_context_ok fires when critical_context_lost is False -->
+    <bpmn:exclusiveGateway id="context_loss_gateway" name="Critical Context Lost?" default="flow_context_ok">
+      <bpmn:incoming>flow_merge_to_context_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_context_lost</bpmn:outgoing>
+      <bpmn:outgoing>flow_context_ok</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: [CLAUDE] Manual Recovery -->
+    <bpmn:userTask id="manual_recovery" name="Manual Recovery">
+      <bpmn:incoming>flow_context_lost</bpmn:incoming>
+      <bpmn:outgoing>flow_recovery_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: [CLAUDE] Resume Work -->
+    <bpmn:userTask id="resume_work" name="Resume Work">
+      <bpmn:incoming>flow_context_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_resume_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- End Event: Context Recovered -->
+    <bpmn:endEvent id="end_recovered" name="Context Recovered">
+      <bpmn:incoming>flow_recovery_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Work Resumed -->
+    <bpmn:endEvent id="end_resumed" name="Work Resumed">
+      <bpmn:incoming>flow_resume_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_initiate" sourceRef="start_event" targetRef="initiate_compaction"/>
+    <bpmn:sequenceFlow id="flow_initiate_to_precompact" sourceRef="initiate_compaction" targetRef="precompact_inject"/>
+    <bpmn:sequenceFlow id="flow_precompact_to_checkpoint" sourceRef="precompact_inject" targetRef="save_checkpoint"/>
+    <bpmn:sequenceFlow id="flow_checkpoint_to_compacted" sourceRef="save_checkpoint" targetRef="context_compacted"/>
+    <bpmn:sequenceFlow id="flow_compacted_to_session_gateway" sourceRef="context_compacted" targetRef="session_id_gateway"/>
+
+    <!-- New session branch: conditioned; same session: default (no conditionExpression) -->
+    <bpmn:sequenceFlow id="flow_new_session" sourceRef="session_id_gateway" targetRef="log_continuation_warning">
+      <bpmn:conditionExpression>session_id_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_same_session" sourceRef="session_id_gateway" targetRef="continuation_merge"/>
+
+    <bpmn:sequenceFlow id="flow_warning_to_reload" sourceRef="log_continuation_warning" targetRef="reload_session_facts"/>
+    <bpmn:sequenceFlow id="flow_reload_to_verify" sourceRef="reload_session_facts" targetRef="verify_task_map"/>
+    <bpmn:sequenceFlow id="flow_verify_to_merge" sourceRef="verify_task_map" targetRef="continuation_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_context_gateway" sourceRef="continuation_merge" targetRef="context_loss_gateway"/>
+
+    <!-- Context lost branch: conditioned; context ok: default (no conditionExpression) -->
+    <bpmn:sequenceFlow id="flow_context_lost" sourceRef="context_loss_gateway" targetRef="manual_recovery">
+      <bpmn:conditionExpression>critical_context_lost == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_context_ok" sourceRef="context_loss_gateway" targetRef="resume_work"/>
+
+    <bpmn:sequenceFlow id="flow_recovery_to_end" sourceRef="manual_recovery" targetRef="end_recovered"/>
+    <bpmn:sequenceFlow id="flow_resume_to_end" sourceRef="resume_work" targetRef="end_resumed"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <!-- Main flow: y=220 left-to-right -->
+  <!-- New-session branch: y=420 (below main row) -->
+  <!-- Context-lost branch: y=420 (below main row, right side) -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="session_continuation">
+
+      <!-- Start Event -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="220" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- initiate_compaction (user task, main row) -->
+      <bpmndi:BPMNShape id="shape_initiate_compaction" bpmnElement="initiate_compaction">
+        <dc:Bounds x="170" y="200" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- precompact_inject (script task, main row) -->
+      <bpmndi:BPMNShape id="shape_precompact_inject" bpmnElement="precompact_inject">
+        <dc:Bounds x="360" y="200" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- save_checkpoint (script task, main row) -->
+      <bpmndi:BPMNShape id="shape_save_checkpoint" bpmnElement="save_checkpoint">
+        <dc:Bounds x="550" y="200" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- context_compacted (script task, main row) -->
+      <bpmndi:BPMNShape id="shape_context_compacted" bpmnElement="context_compacted">
+        <dc:Bounds x="740" y="200" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- session_id_gateway (main row) -->
+      <bpmndi:BPMNShape id="shape_session_id_gateway" bpmnElement="session_id_gateway" isMarkerVisible="true">
+        <dc:Bounds x="940" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- log_continuation_warning (lower branch, y=400) -->
+      <bpmndi:BPMNShape id="shape_log_continuation_warning" bpmnElement="log_continuation_warning">
+        <dc:Bounds x="920" y="400" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- reload_session_facts (lower branch, y=400) -->
+      <bpmndi:BPMNShape id="shape_reload_session_facts" bpmnElement="reload_session_facts">
+        <dc:Bounds x="1110" y="400" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- verify_task_map (lower branch, y=400) -->
+      <bpmndi:BPMNShape id="shape_verify_task_map" bpmnElement="verify_task_map">
+        <dc:Bounds x="1300" y="400" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- continuation_merge gateway (main row) -->
+      <bpmndi:BPMNShape id="shape_continuation_merge" bpmnElement="continuation_merge" isMarkerVisible="true">
+        <dc:Bounds x="1490" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- context_loss_gateway (main row) -->
+      <bpmndi:BPMNShape id="shape_context_loss_gateway" bpmnElement="context_loss_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1610" y="213" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- manual_recovery (lower branch, y=400) -->
+      <bpmndi:BPMNShape id="shape_manual_recovery" bpmnElement="manual_recovery">
+        <dc:Bounds x="1590" y="400" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- resume_work (main row, right) -->
+      <bpmndi:BPMNShape id="shape_resume_work" bpmnElement="resume_work">
+        <dc:Bounds x="1730" y="200" width="130" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_recovered (lower branch) -->
+      <bpmndi:BPMNShape id="shape_end_recovered" bpmnElement="end_recovered">
+        <dc:Bounds x="1784" y="422" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_resumed (main row) -->
+      <bpmndi:BPMNShape id="shape_end_resumed" bpmnElement="end_resumed">
+        <dc:Bounds x="1930" y="222" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges: main spine -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_initiate" bpmnElement="flow_start_to_initiate">
+        <di:waypoint x="116" y="238"/>
+        <di:waypoint x="170" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_initiate_to_precompact" bpmnElement="flow_initiate_to_precompact">
+        <di:waypoint x="300" y="240"/>
+        <di:waypoint x="360" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_precompact_to_checkpoint" bpmnElement="flow_precompact_to_checkpoint">
+        <di:waypoint x="490" y="240"/>
+        <di:waypoint x="550" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_checkpoint_to_compacted" bpmnElement="flow_checkpoint_to_compacted">
+        <di:waypoint x="680" y="240"/>
+        <di:waypoint x="740" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_compacted_to_session_gateway" bpmnElement="flow_compacted_to_session_gateway">
+        <di:waypoint x="870" y="240"/>
+        <di:waypoint x="940" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- session_id_gateway to log_continuation_warning (down branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_new_session" bpmnElement="flow_new_session">
+        <di:waypoint x="965" y="263"/>
+        <di:waypoint x="965" y="440"/>
+        <di:waypoint x="920" y="440"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- session_id_gateway to continuation_merge (same session / default, right) -->
+      <bpmndi:BPMNEdge id="edge_flow_same_session" bpmnElement="flow_same_session">
+        <di:waypoint x="990" y="238"/>
+        <di:waypoint x="1515" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- new-session branch steps -->
+      <bpmndi:BPMNEdge id="edge_flow_warning_to_reload" bpmnElement="flow_warning_to_reload">
+        <di:waypoint x="1050" y="440"/>
+        <di:waypoint x="1110" y="440"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_reload_to_verify" bpmnElement="flow_reload_to_verify">
+        <di:waypoint x="1240" y="440"/>
+        <di:waypoint x="1300" y="440"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- verify_task_map to continuation_merge (up to main row) -->
+      <bpmndi:BPMNEdge id="edge_flow_verify_to_merge" bpmnElement="flow_verify_to_merge">
+        <di:waypoint x="1430" y="440"/>
+        <di:waypoint x="1515" y="440"/>
+        <di:waypoint x="1515" y="263"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- continuation_merge to context_loss_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_context_gateway" bpmnElement="flow_merge_to_context_gateway">
+        <di:waypoint x="1540" y="238"/>
+        <di:waypoint x="1610" y="238"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- context_loss_gateway to manual_recovery (down branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_context_lost" bpmnElement="flow_context_lost">
+        <di:waypoint x="1635" y="263"/>
+        <di:waypoint x="1635" y="440"/>
+        <di:waypoint x="1590" y="440"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- context_loss_gateway to resume_work (default, right) -->
+      <bpmndi:BPMNEdge id="edge_flow_context_ok" bpmnElement="flow_context_ok">
+        <di:waypoint x="1660" y="238"/>
+        <di:waypoint x="1730" y="240"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- manual_recovery to end_recovered -->
+      <bpmndi:BPMNEdge id="edge_flow_recovery_to_end" bpmnElement="flow_recovery_to_end">
+        <di:waypoint x="1720" y="440"/>
+        <di:waypoint x="1784" y="440"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- resume_work to end_resumed -->
+      <bpmndi:BPMNEdge id="edge_flow_resume_to_end" bpmnElement="flow_resume_to_end">
+        <di:waypoint x="1860" y="240"/>
+        <di:waypoint x="1930" y="240"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

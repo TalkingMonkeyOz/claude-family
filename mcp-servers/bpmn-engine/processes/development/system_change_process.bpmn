@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/system-change-process"
+    id="Definitions_SystemChangeProcess">
+
+  <!--
+    System Change Process: BPMN-First Enforcement
+
+    This is the META-PROCESS that governs how Claude modifies its own systems
+    (hooks, workflows, config, state machines, MCP servers).
+
+    The rule: Model first, implement second, validate after.
+
+    Actors:
+      [CLAUDE] = Claude AI instance (decisions, implementation)
+      [TOOL]   = bpmn-engine MCP tools (search, validate)
+      [DB]     = Database operations
+
+    Trigger: Any time Claude needs to modify hook scripts, workflow code,
+             config management, state machines, or MCP server logic.
+  -->
+
+  <bpmn:process id="system_change_process" name="System Change Process: BPMN-First Enforcement" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="System Change Requested">
+      <bpmn:outgoing>f_start</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Phase 1: Identify and Query -->
+    <bpmn:userTask id="identify_change" name="[CLAUDE] Identify What System Is Changing">
+      <bpmn:incoming>f_start</bpmn:incoming>
+      <bpmn:outgoing>f_identify_to_search</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="search_existing_model" name="[TOOL] Search Existing BPMN Models" scriptFormat="python">
+      <bpmn:incoming>f_identify_to_search</bpmn:incoming>
+      <bpmn:outgoing>f_search_to_review</bpmn:outgoing>
+      <bpmn:script>existing_models_searched = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="review_search_results" name="[CLAUDE] Review Search Results">
+      <bpmn:incoming>f_search_to_review</bpmn:incoming>
+      <bpmn:outgoing>f_review_to_modeled_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Phase 2: Is it already modeled? -->
+    <bpmn:exclusiveGateway id="modeled_gateway" name="Is System Already Modeled?" default="flow_not_modeled">
+      <bpmn:incoming>f_review_to_modeled_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_already_modeled</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_modeled</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Path A: Already modeled - update existing model -->
+    <bpmn:userTask id="analyze_model_gap" name="[CLAUDE] Analyze Gap Between Model and Needed Change">
+      <bpmn:incoming>flow_already_modeled</bpmn:incoming>
+      <bpmn:outgoing>f_gap_to_update</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="update_bpmn_model" name="[CLAUDE] Update BPMN Model">
+      <bpmn:incoming>f_gap_to_update</bpmn:incoming>
+      <bpmn:incoming>flow_tests_fail</bpmn:incoming>
+      <bpmn:outgoing>f_update_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Path B: Not modeled - create new model -->
+    <bpmn:userTask id="create_bpmn_model" name="[CLAUDE] Create New BPMN Model">
+      <bpmn:incoming>flow_not_modeled</bpmn:incoming>
+      <bpmn:outgoing>f_create_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Merge model paths -->
+    <bpmn:exclusiveGateway id="model_merge" name="Model Ready">
+      <bpmn:incoming>f_update_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_create_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_merge_to_test</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Phase 3: Test the model -->
+    <bpmn:userTask id="write_model_tests" name="[CLAUDE] Write/Update Model Tests">
+      <bpmn:incoming>f_merge_to_test</bpmn:incoming>
+      <bpmn:outgoing>f_test_to_run</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="run_model_tests" name="[TOOL] Run Model Tests (pytest)" scriptFormat="python">
+      <bpmn:incoming>f_test_to_run</bpmn:incoming>
+      <bpmn:outgoing>f_run_to_test_gw</bpmn:outgoing>
+      <bpmn:script>model_tests_run = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="model_test_gateway" name="Model Tests Pass?" default="flow_tests_pass">
+      <bpmn:incoming>f_run_to_test_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_tests_fail</bpmn:outgoing>
+      <bpmn:outgoing>flow_tests_pass</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Phase 4: Implement code changes -->
+    <bpmn:userTask id="implement_code" name="[CLAUDE] Implement Code Changes">
+      <bpmn:incoming>flow_tests_pass</bpmn:incoming>
+      <bpmn:outgoing>f_impl_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Phase 5: Validate model matches reality -->
+    <bpmn:scriptTask id="validate_alignment" name="[TOOL] Validate BPMN-vs-Reality Alignment" scriptFormat="python">
+      <bpmn:incoming>f_impl_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_fix_to_validate</bpmn:incoming>
+      <bpmn:outgoing>f_validate_to_align_gw</bpmn:outgoing>
+      <bpmn:script>validation_run = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="alignment_gateway" name="Model Matches Code?" default="flow_aligned">
+      <bpmn:incoming>f_validate_to_align_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_misaligned</bpmn:outgoing>
+      <bpmn:outgoing>flow_aligned</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Misaligned: fix the model or code -->
+    <bpmn:userTask id="fix_alignment" name="[CLAUDE] Fix Model/Code Alignment">
+      <bpmn:incoming>flow_misaligned</bpmn:incoming>
+      <bpmn:outgoing>f_fix_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Phase 6: Commit together -->
+    <bpmn:userTask id="commit_together" name="[CLAUDE] Commit Model + Code Together">
+      <bpmn:incoming>flow_aligned</bpmn:incoming>
+      <bpmn:outgoing>f_commit_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="end_complete" name="System Change Complete">
+      <bpmn:incoming>f_commit_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="f_start" sourceRef="start" targetRef="identify_change"/>
+    <bpmn:sequenceFlow id="f_identify_to_search" sourceRef="identify_change" targetRef="search_existing_model"/>
+    <bpmn:sequenceFlow id="f_search_to_review" sourceRef="search_existing_model" targetRef="review_search_results"/>
+    <bpmn:sequenceFlow id="f_review_to_modeled_gw" sourceRef="review_search_results" targetRef="modeled_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_already_modeled" sourceRef="modeled_gateway" targetRef="analyze_model_gap">
+      <bpmn:conditionExpression>is_modeled == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_modeled" sourceRef="modeled_gateway" targetRef="create_bpmn_model"/>
+
+    <bpmn:sequenceFlow id="f_gap_to_update" sourceRef="analyze_model_gap" targetRef="update_bpmn_model"/>
+    <bpmn:sequenceFlow id="f_update_to_merge" sourceRef="update_bpmn_model" targetRef="model_merge"/>
+    <bpmn:sequenceFlow id="f_create_to_merge" sourceRef="create_bpmn_model" targetRef="model_merge"/>
+
+    <bpmn:sequenceFlow id="f_merge_to_test" sourceRef="model_merge" targetRef="write_model_tests"/>
+    <bpmn:sequenceFlow id="f_test_to_run" sourceRef="write_model_tests" targetRef="run_model_tests"/>
+    <bpmn:sequenceFlow id="f_run_to_test_gw" sourceRef="run_model_tests" targetRef="model_test_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_tests_fail" sourceRef="model_test_gateway" targetRef="update_bpmn_model">
+      <bpmn:conditionExpression>model_tests_passed == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_tests_pass" sourceRef="model_test_gateway" targetRef="implement_code"/>
+
+    <bpmn:sequenceFlow id="f_impl_to_validate" sourceRef="implement_code" targetRef="validate_alignment"/>
+    <bpmn:sequenceFlow id="f_validate_to_align_gw" sourceRef="validate_alignment" targetRef="alignment_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_misaligned" sourceRef="alignment_gateway" targetRef="fix_alignment">
+      <bpmn:conditionExpression>alignment_valid == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_aligned" sourceRef="alignment_gateway" targetRef="commit_together"/>
+
+    <bpmn:sequenceFlow id="f_fix_to_validate" sourceRef="fix_alignment" targetRef="validate_alignment"/>
+    <bpmn:sequenceFlow id="f_commit_to_end" sourceRef="commit_together" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

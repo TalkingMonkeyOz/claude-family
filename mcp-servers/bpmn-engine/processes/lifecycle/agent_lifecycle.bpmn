@@ -1,0 +1,320 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/agent-lifecycle"
+    id="Definitions_AgentLifecycle">
+
+  <bpmn:process id="agent_lifecycle" name="Agent Lifecycle" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_assess</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Assess Task [CLAUDE] -->
+    <!-- Sets: delegation ("direct" or "delegate"), needs_review (True/False) -->
+    <bpmn:userTask id="assess_task" name="[CLAUDE] Assess Task">
+      <bpmn:incoming>flow_start_to_assess</bpmn:incoming>
+      <bpmn:outgoing>flow_assess_to_delegation</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Delegation Decision -->
+    <bpmn:exclusiveGateway id="delegation_gateway" name="Delegate?" default="flow_direct">
+      <bpmn:incoming>flow_assess_to_delegation</bpmn:incoming>
+      <bpmn:outgoing>flow_delegate</bpmn:outgoing>
+      <bpmn:outgoing>flow_direct</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Spawn Agent [TOOL] -->
+    <!-- Two incoming: flow_delegate (initial) and flow_retry (loop-back from adjust_and_retry) -->
+    <bpmn:scriptTask id="spawn_agent" name="[TOOL] Spawn Agent" scriptFormat="python">
+      <bpmn:incoming>flow_delegate</bpmn:incoming>
+      <bpmn:incoming>flow_retry</bpmn:incoming>
+      <bpmn:outgoing>flow_spawn_to_monitor</bpmn:outgoing>
+      <bpmn:script>agent_spawned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Monitor Agent [TOOL] -->
+    <!-- Sets: agent_result ("success" or "failure") -->
+    <bpmn:userTask id="monitor_agent" name="[TOOL] Monitor Agent">
+      <bpmn:incoming>flow_spawn_to_monitor</bpmn:incoming>
+      <bpmn:outgoing>flow_monitor_to_result</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Agent Result -->
+    <bpmn:exclusiveGateway id="agent_result_gateway" name="Agent Result?" default="flow_agent_success">
+      <bpmn:incoming>flow_monitor_to_result</bpmn:incoming>
+      <bpmn:outgoing>flow_agent_failure</bpmn:outgoing>
+      <bpmn:outgoing>flow_agent_success</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Adjust and Retry [CLAUDE] -->
+    <bpmn:userTask id="adjust_and_retry" name="[CLAUDE] Adjust and Retry">
+      <bpmn:incoming>flow_agent_failure</bpmn:incoming>
+      <bpmn:outgoing>flow_retry</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Collect Results [TOOL] -->
+    <bpmn:scriptTask id="collect_results" name="[TOOL] Collect Results" scriptFormat="python">
+      <bpmn:incoming>flow_agent_success</bpmn:incoming>
+      <bpmn:outgoing>flow_collect_to_merge</bpmn:outgoing>
+      <bpmn:script>results_collected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Execute Directly [CLAUDE] -->
+    <bpmn:userTask id="execute_directly" name="[CLAUDE] Execute Directly">
+      <bpmn:incoming>flow_direct</bpmn:incoming>
+      <bpmn:outgoing>flow_execute_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Direct Merge (converging) -->
+    <!-- Receives flow from execute_directly and collect_results -->
+    <bpmn:exclusiveGateway id="direct_merge" name="Direct Merge">
+      <bpmn:incoming>flow_execute_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_collect_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_review</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Exclusive Gateway: Review Gate -->
+    <bpmn:exclusiveGateway id="review_gateway" name="Needs Review?" default="flow_skip_review">
+      <bpmn:incoming>flow_merge_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_needs_review</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_review</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Spawn Reviewer [TOOL] -->
+    <bpmn:scriptTask id="spawn_reviewer" name="[TOOL] Spawn Reviewer" scriptFormat="python">
+      <bpmn:incoming>flow_needs_review</bpmn:incoming>
+      <bpmn:outgoing>flow_reviewer_to_process</bpmn:outgoing>
+      <bpmn:script>review_spawned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Process Review [CLAUDE] -->
+    <bpmn:userTask id="process_review" name="[CLAUDE] Process Review">
+      <bpmn:incoming>flow_reviewer_to_process</bpmn:incoming>
+      <bpmn:outgoing>flow_process_to_end_reviewed</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- End Event: Complete (no review) -->
+    <bpmn:endEvent id="end_complete" name="Complete">
+      <bpmn:incoming>flow_skip_review</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Complete with Review -->
+    <bpmn:endEvent id="end_reviewed" name="Complete with Review">
+      <bpmn:incoming>flow_process_to_end_reviewed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_assess" sourceRef="start_event" targetRef="assess_task"/>
+    <bpmn:sequenceFlow id="flow_assess_to_delegation" sourceRef="assess_task" targetRef="delegation_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_delegate" sourceRef="delegation_gateway" targetRef="spawn_agent">
+      <bpmn:conditionExpression>delegation == "delegate"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_direct" sourceRef="delegation_gateway" targetRef="execute_directly"/>
+
+    <bpmn:sequenceFlow id="flow_spawn_to_monitor" sourceRef="spawn_agent" targetRef="monitor_agent"/>
+    <bpmn:sequenceFlow id="flow_monitor_to_result" sourceRef="monitor_agent" targetRef="agent_result_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_agent_failure" sourceRef="agent_result_gateway" targetRef="adjust_and_retry">
+      <bpmn:conditionExpression>agent_result == "failure"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_agent_success" sourceRef="agent_result_gateway" targetRef="collect_results"/>
+
+    <bpmn:sequenceFlow id="flow_retry" sourceRef="adjust_and_retry" targetRef="spawn_agent"/>
+
+    <bpmn:sequenceFlow id="flow_collect_to_merge" sourceRef="collect_results" targetRef="direct_merge"/>
+    <bpmn:sequenceFlow id="flow_execute_to_merge" sourceRef="execute_directly" targetRef="direct_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_review" sourceRef="direct_merge" targetRef="review_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_needs_review" sourceRef="review_gateway" targetRef="spawn_reviewer">
+      <bpmn:conditionExpression>needs_review == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_skip_review" sourceRef="review_gateway" targetRef="end_complete"/>
+
+    <bpmn:sequenceFlow id="flow_reviewer_to_process" sourceRef="spawn_reviewer" targetRef="process_review"/>
+    <bpmn:sequenceFlow id="flow_process_to_end_reviewed" sourceRef="process_review" targetRef="end_reviewed"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="agent_lifecycle">
+
+      <!-- Row 1: main flow (y=220) -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="202" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_assess_task" bpmnElement="assess_task">
+        <dc:Bounds x="170" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_delegation_gateway" bpmnElement="delegation_gateway" isMarkerVisible="true">
+        <dc:Bounds x="350" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- delegate branch (y=100 - above main row) -->
+      <bpmndi:BPMNShape id="shape_spawn_agent" bpmnElement="spawn_agent">
+        <dc:Bounds x="460" y="80" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_monitor_agent" bpmnElement="monitor_agent">
+        <dc:Bounds x="640" y="80" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_agent_result_gateway" bpmnElement="agent_result_gateway" isMarkerVisible="true">
+        <dc:Bounds x="820" y="95" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- adjust_and_retry (y=20 - loops back up to spawn_agent) -->
+      <bpmndi:BPMNShape id="shape_adjust_and_retry" bpmnElement="adjust_and_retry">
+        <dc:Bounds x="820" y="0" width="120" height="60"/>
+      </bpmndi:BPMNShape>
+
+      <!-- collect_results (y=80, continuing the success path) -->
+      <bpmndi:BPMNShape id="shape_collect_results" bpmnElement="collect_results">
+        <dc:Bounds x="930" y="80" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- direct branch (y=340 - below main row) -->
+      <bpmndi:BPMNShape id="shape_execute_directly" bpmnElement="execute_directly">
+        <dc:Bounds x="460" y="320" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- direct_merge gateway (back on main row y=195) -->
+      <bpmndi:BPMNShape id="shape_direct_merge" bpmnElement="direct_merge" isMarkerVisible="true">
+        <dc:Bounds x="1110" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- review_gateway -->
+      <bpmndi:BPMNShape id="shape_review_gateway" bpmnElement="review_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1220" y="195" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- review branch (y=340 - below main row) -->
+      <bpmndi:BPMNShape id="shape_spawn_reviewer" bpmnElement="spawn_reviewer">
+        <dc:Bounds x="1330" y="320" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_process_review" bpmnElement="process_review">
+        <dc:Bounds x="1510" y="320" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end events -->
+      <bpmndi:BPMNShape id="shape_end_complete" bpmnElement="end_complete">
+        <dc:Bounds x="1330" y="202" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_reviewed" bpmnElement="end_reviewed">
+        <dc:Bounds x="1690" y="338" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_assess" bpmnElement="flow_start_to_assess">
+        <di:waypoint x="116" y="220"/>
+        <di:waypoint x="170" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_assess_to_delegation" bpmnElement="flow_assess_to_delegation">
+        <di:waypoint x="290" y="220"/>
+        <di:waypoint x="350" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- delegation_gateway -> spawn_agent (up/delegate branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_delegate" bpmnElement="flow_delegate">
+        <di:waypoint x="375" y="195"/>
+        <di:waypoint x="375" y="120"/>
+        <di:waypoint x="460" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- delegation_gateway -> execute_directly (down/direct branch default) -->
+      <bpmndi:BPMNEdge id="edge_flow_direct" bpmnElement="flow_direct">
+        <di:waypoint x="375" y="245"/>
+        <di:waypoint x="375" y="360"/>
+        <di:waypoint x="460" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_spawn_to_monitor" bpmnElement="flow_spawn_to_monitor">
+        <di:waypoint x="580" y="120"/>
+        <di:waypoint x="640" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_monitor_to_result" bpmnElement="flow_monitor_to_result">
+        <di:waypoint x="760" y="120"/>
+        <di:waypoint x="820" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- agent_result_gateway -> adjust_and_retry (up/failure branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_agent_failure" bpmnElement="flow_agent_failure">
+        <di:waypoint x="845" y="95"/>
+        <di:waypoint x="845" y="60"/>
+        <di:waypoint x="820" y="60"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- agent_result_gateway -> collect_results (right/success branch default) -->
+      <bpmndi:BPMNEdge id="edge_flow_agent_success" bpmnElement="flow_agent_success">
+        <di:waypoint x="870" y="120"/>
+        <di:waypoint x="930" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- adjust_and_retry -> spawn_agent (loop back) -->
+      <bpmndi:BPMNEdge id="edge_flow_retry" bpmnElement="flow_retry">
+        <di:waypoint x="820" y="30"/>
+        <di:waypoint x="520" y="30"/>
+        <di:waypoint x="520" y="80"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- collect_results -> direct_merge -->
+      <bpmndi:BPMNEdge id="edge_flow_collect_to_merge" bpmnElement="flow_collect_to_merge">
+        <di:waypoint x="1050" y="120"/>
+        <di:waypoint x="1135" y="120"/>
+        <di:waypoint x="1135" y="195"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- execute_directly -> direct_merge -->
+      <bpmndi:BPMNEdge id="edge_flow_execute_to_merge" bpmnElement="flow_execute_to_merge">
+        <di:waypoint x="580" y="360"/>
+        <di:waypoint x="1135" y="360"/>
+        <di:waypoint x="1135" y="245"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_review" bpmnElement="flow_merge_to_review">
+        <di:waypoint x="1160" y="220"/>
+        <di:waypoint x="1220" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_gateway -> end_complete (skip review / default) -->
+      <bpmndi:BPMNEdge id="edge_flow_skip_review" bpmnElement="flow_skip_review">
+        <di:waypoint x="1270" y="220"/>
+        <di:waypoint x="1330" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_gateway -> spawn_reviewer (needs review branch down) -->
+      <bpmndi:BPMNEdge id="edge_flow_needs_review" bpmnElement="flow_needs_review">
+        <di:waypoint x="1245" y="245"/>
+        <di:waypoint x="1245" y="360"/>
+        <di:waypoint x="1330" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_reviewer_to_process" bpmnElement="flow_reviewer_to_process">
+        <di:waypoint x="1450" y="360"/>
+        <di:waypoint x="1510" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_process_to_end_reviewed" bpmnElement="flow_process_to_end_reviewed">
+        <di:waypoint x="1630" y="360"/>
+        <di:waypoint x="1690" y="356"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

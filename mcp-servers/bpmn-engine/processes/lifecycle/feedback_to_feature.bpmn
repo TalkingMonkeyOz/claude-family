@@ -1,0 +1,338 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/feedback-to-feature"
+    id="Definitions_FeedbackToFeature">
+
+  <bpmn:process id="feedback_to_feature" name="Feedback to Feature" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_triage</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Triage Feedback [CLAUDE] -->
+    <!-- Tests inject: triage_action into this task's data.
+         ALL variables referenced by any gateway condition branch must be present
+         here because SpiffWorkflow evaluates ALL conditions (not short-circuit).
+         Required key: triage_action ("create_feature" | "fix_directly" | "wont_fix" | "duplicate") -->
+    <bpmn:userTask id="triage_feedback" name="Triage Feedback">
+      <bpmn:incoming>flow_start_to_triage</bpmn:incoming>
+      <bpmn:outgoing>flow_triage_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Triage Action
+         default=flow_create_feature (no condition on that flow) -->
+    <bpmn:exclusiveGateway id="triage_action_gateway" name="Triage Action?" default="flow_create_feature">
+      <bpmn:incoming>flow_triage_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_duplicate</bpmn:outgoing>
+      <bpmn:outgoing>flow_wont_fix</bpmn:outgoing>
+      <bpmn:outgoing>flow_fix_directly</bpmn:outgoing>
+      <bpmn:outgoing>flow_create_feature</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================ -->
+    <!-- Branch: duplicate                                                  -->
+    <!-- ================================================================ -->
+
+    <!-- Script Task: Mark Duplicate [DB] -->
+    <bpmn:scriptTask id="mark_duplicate" name="Mark Duplicate" scriptFormat="python">
+      <bpmn:incoming>flow_duplicate</bpmn:incoming>
+      <bpmn:outgoing>flow_mark_dup_to_end</bpmn:outgoing>
+      <bpmn:script>
+feedback_status = "duplicate"
+duplicate_marked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Duplicate -->
+    <bpmn:endEvent id="end_duplicate" name="Duplicate">
+      <bpmn:incoming>flow_mark_dup_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Branch: wont_fix                                                   -->
+    <!-- ================================================================ -->
+
+    <!-- Script Task: Mark Won't Fix [DB] -->
+    <bpmn:scriptTask id="mark_wont_fix" name="Mark Won't Fix" scriptFormat="python">
+      <bpmn:incoming>flow_wont_fix</bpmn:incoming>
+      <bpmn:outgoing>flow_mark_wont_fix_to_end</bpmn:outgoing>
+      <bpmn:script>
+feedback_status = "wont_fix"
+wont_fix_marked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Won't Fix -->
+    <bpmn:endEvent id="end_wont_fix" name="Won't Fix">
+      <bpmn:incoming>flow_mark_wont_fix_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Branch: fix_directly                                               -->
+    <!-- ================================================================ -->
+
+    <!-- User Task: Implement Fix [CLAUDE] -->
+    <bpmn:userTask id="implement_fix" name="Implement Fix">
+      <bpmn:incoming>flow_fix_directly</bpmn:incoming>
+      <bpmn:outgoing>flow_implement_to_mark_resolved</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Mark Resolved [DB] -->
+    <bpmn:scriptTask id="mark_resolved" name="Mark Resolved" scriptFormat="python">
+      <bpmn:incoming>flow_implement_to_mark_resolved</bpmn:incoming>
+      <bpmn:outgoing>flow_mark_resolved_to_end</bpmn:outgoing>
+      <bpmn:script>
+feedback_status = "resolved"
+fix_applied = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Resolved -->
+    <bpmn:endEvent id="end_resolved" name="Resolved">
+      <bpmn:incoming>flow_mark_resolved_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Branch: create_feature (DEFAULT - no condition on flow)           -->
+    <!-- ================================================================ -->
+
+    <!-- User Task: Plan Feature [CLAUDE] -->
+    <bpmn:userTask id="plan_feature" name="Plan Feature">
+      <bpmn:incoming>flow_create_feature</bpmn:incoming>
+      <bpmn:outgoing>flow_plan_to_create_record</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Create Feature Record [DB] -->
+    <bpmn:scriptTask id="create_feature_record" name="Create Feature Record" scriptFormat="python">
+      <bpmn:incoming>flow_plan_to_create_record</bpmn:incoming>
+      <bpmn:outgoing>flow_create_record_to_tasks</bpmn:outgoing>
+      <bpmn:script>feature_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Create Build Tasks [DB] -->
+    <bpmn:scriptTask id="create_build_tasks" name="Create Build Tasks" scriptFormat="python">
+      <bpmn:incoming>flow_create_record_to_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_create_tasks_to_link</bpmn:outgoing>
+      <bpmn:script>tasks_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Link Feedback [DB] -->
+    <bpmn:scriptTask id="link_feedback" name="Link Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_create_tasks_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_link_to_end</bpmn:outgoing>
+      <bpmn:script>
+feedback_linked = True
+feedback_status = "in_progress"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Feature Created -->
+    <bpmn:endEvent id="end_feature_created" name="Feature Created">
+      <bpmn:incoming>flow_link_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Sequence Flows                                                     -->
+    <!-- ================================================================ -->
+
+    <bpmn:sequenceFlow id="flow_start_to_triage" sourceRef="start_event" targetRef="triage_feedback"/>
+    <bpmn:sequenceFlow id="flow_triage_to_gateway" sourceRef="triage_feedback" targetRef="triage_action_gateway"/>
+
+    <!-- triage_action_gateway branches -->
+    <bpmn:sequenceFlow id="flow_duplicate" sourceRef="triage_action_gateway" targetRef="mark_duplicate">
+      <bpmn:conditionExpression>triage_action == "duplicate"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_wont_fix" sourceRef="triage_action_gateway" targetRef="mark_wont_fix">
+      <bpmn:conditionExpression>triage_action == "wont_fix"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_fix_directly" sourceRef="triage_action_gateway" targetRef="implement_fix">
+      <bpmn:conditionExpression>triage_action == "fix_directly"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <!-- Default flow: NO conditionExpression element -->
+    <bpmn:sequenceFlow id="flow_create_feature" sourceRef="triage_action_gateway" targetRef="plan_feature"/>
+
+    <!-- Duplicate branch -->
+    <bpmn:sequenceFlow id="flow_mark_dup_to_end" sourceRef="mark_duplicate" targetRef="end_duplicate"/>
+
+    <!-- Won't Fix branch -->
+    <bpmn:sequenceFlow id="flow_mark_wont_fix_to_end" sourceRef="mark_wont_fix" targetRef="end_wont_fix"/>
+
+    <!-- Fix Directly branch -->
+    <bpmn:sequenceFlow id="flow_implement_to_mark_resolved" sourceRef="implement_fix" targetRef="mark_resolved"/>
+    <bpmn:sequenceFlow id="flow_mark_resolved_to_end" sourceRef="mark_resolved" targetRef="end_resolved"/>
+
+    <!-- Create Feature branch (default) -->
+    <bpmn:sequenceFlow id="flow_plan_to_create_record" sourceRef="plan_feature" targetRef="create_feature_record"/>
+    <bpmn:sequenceFlow id="flow_create_record_to_tasks" sourceRef="create_feature_record" targetRef="create_build_tasks"/>
+    <bpmn:sequenceFlow id="flow_create_tasks_to_link" sourceRef="create_build_tasks" targetRef="link_feedback"/>
+    <bpmn:sequenceFlow id="flow_link_to_end" sourceRef="link_feedback" targetRef="end_feature_created"/>
+
+  </bpmn:process>
+
+  <!-- ===================================================================== -->
+  <!-- Diagram Layout                                                          -->
+  <!--   Row 1 (y=200): start -> triage_feedback -> gateway (then right)     -->
+  <!--   Row 1 cont:    plan_feature -> create_feature_record ->              -->
+  <!--                  create_build_tasks -> link_feedback -> end_created    -->
+  <!--   Row 2 (y=380): duplicate branch (below gateway, left)               -->
+  <!--   Row 3 (y=500): wont_fix branch (below gateway, further left)        -->
+  <!--   Row 4 (y=380): fix_directly branch (below gateway, right side)      -->
+  <!-- ===================================================================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="feedback_to_feature">
+
+      <!-- Main row (y=200) -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="100" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_triage_feedback" bpmnElement="triage_feedback">
+        <dc:Bounds x="196" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_triage_action_gateway" bpmnElement="triage_action_gateway" isMarkerVisible="true">
+        <dc:Bounds x="356" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Default (create_feature) path continues right -->
+      <bpmndi:BPMNShape id="shape_plan_feature" bpmnElement="plan_feature">
+        <dc:Bounds x="466" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_feature_record" bpmnElement="create_feature_record">
+        <dc:Bounds x="626" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_build_tasks" bpmnElement="create_build_tasks">
+        <dc:Bounds x="786" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_link_feedback" bpmnElement="link_feedback">
+        <dc:Bounds x="946" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_feature_created" bpmnElement="end_feature_created">
+        <dc:Bounds x="1106" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Duplicate branch (y=360, below-left of gateway) -->
+      <bpmndi:BPMNShape id="shape_mark_duplicate" bpmnElement="mark_duplicate">
+        <dc:Bounds x="196" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_duplicate" bpmnElement="end_duplicate">
+        <dc:Bounds x="356" y="382" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Won't Fix branch (y=500, below-left of gateway) -->
+      <bpmndi:BPMNShape id="shape_mark_wont_fix" bpmnElement="mark_wont_fix">
+        <dc:Bounds x="196" y="500" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_wont_fix" bpmnElement="end_wont_fix">
+        <dc:Bounds x="356" y="522" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Fix Directly branch (y=380, below-right of gateway) -->
+      <bpmndi:BPMNShape id="shape_implement_fix" bpmnElement="implement_fix">
+        <dc:Bounds x="466" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_mark_resolved" bpmnElement="mark_resolved">
+        <dc:Bounds x="626" y="360" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_resolved" bpmnElement="end_resolved">
+        <dc:Bounds x="786" y="382" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges: main path -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_triage" bpmnElement="flow_start_to_triage">
+        <di:waypoint x="136" y="218"/>
+        <di:waypoint x="196" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_triage_to_gateway" bpmnElement="flow_triage_to_gateway">
+        <di:waypoint x="296" y="220"/>
+        <di:waypoint x="356" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- gateway -> plan_feature (default, right) -->
+      <bpmndi:BPMNEdge id="edge_flow_create_feature" bpmnElement="flow_create_feature">
+        <di:waypoint x="406" y="218"/>
+        <di:waypoint x="466" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_plan_to_create_record" bpmnElement="flow_plan_to_create_record">
+        <di:waypoint x="566" y="220"/>
+        <di:waypoint x="626" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_create_record_to_tasks" bpmnElement="flow_create_record_to_tasks">
+        <di:waypoint x="726" y="220"/>
+        <di:waypoint x="786" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_create_tasks_to_link" bpmnElement="flow_create_tasks_to_link">
+        <di:waypoint x="886" y="220"/>
+        <di:waypoint x="946" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_link_to_end" bpmnElement="flow_link_to_end">
+        <di:waypoint x="1046" y="220"/>
+        <di:waypoint x="1106" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- gateway -> mark_duplicate (down-left) -->
+      <bpmndi:BPMNEdge id="edge_flow_duplicate" bpmnElement="flow_duplicate">
+        <di:waypoint x="381" y="243"/>
+        <di:waypoint x="381" y="300"/>
+        <di:waypoint x="246" y="300"/>
+        <di:waypoint x="246" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_mark_dup_to_end" bpmnElement="flow_mark_dup_to_end">
+        <di:waypoint x="296" y="400"/>
+        <di:waypoint x="356" y="400"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- gateway -> mark_wont_fix (further down-left) -->
+      <bpmndi:BPMNEdge id="edge_flow_wont_fix" bpmnElement="flow_wont_fix">
+        <di:waypoint x="381" y="243"/>
+        <di:waypoint x="381" y="440"/>
+        <di:waypoint x="246" y="440"/>
+        <di:waypoint x="246" y="500"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_mark_wont_fix_to_end" bpmnElement="flow_mark_wont_fix_to_end">
+        <di:waypoint x="296" y="540"/>
+        <di:waypoint x="356" y="540"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- gateway -> implement_fix (down-right) -->
+      <bpmndi:BPMNEdge id="edge_flow_fix_directly" bpmnElement="flow_fix_directly">
+        <di:waypoint x="381" y="243"/>
+        <di:waypoint x="381" y="400"/>
+        <di:waypoint x="516" y="400"/>
+        <di:waypoint x="516" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_implement_to_mark_resolved" bpmnElement="flow_implement_to_mark_resolved">
+        <di:waypoint x="566" y="400"/>
+        <di:waypoint x="626" y="400"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_mark_resolved_to_end" bpmnElement="flow_mark_resolved_to_end">
+        <di:waypoint x="726" y="400"/>
+        <di:waypoint x="786" y="400"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

@@ -45,6 +45,7 @@ description: BPMN-first process design using the bpmn-engine MCP server. Use whe
 | `get_current_step(process_id, completed, data)` | Simulate execution to find current step |
 | `get_dependency_tree(process_id)` | Show L0->L1->L2 call hierarchy |
 | `search_processes(query, actor, level)` | Search by keyword, actor tag, or level |
+| `check_alignment(process_id)` | Compare BPMN model against actual code artifacts |
 
 ---
 
@@ -150,11 +151,36 @@ def test_happy_path(self):
 
 ---
 
+## System Change Process (MANDATORY)
+
+When modifying hook scripts, workflows, config management, or MCP servers:
+
+1. **Search** existing BPMN models (`search_processes`, `list_processes`)
+2. **Model first** - update or create BPMN before writing code
+3. **Test model** - pytest the BPMN process
+4. **Implement** - write the actual code
+5. **Commit together** - BPMN + code in same commit
+
+See: `.claude/rules/system-change-process.md` and `processes/development/system_change_process.bpmn`
+
+## Process Failure Capture
+
+When you encounter a process failure (hook error, state machine violation, unexpected behavior):
+
+1. File feedback: `create_feedback(type='bug', description='...')`
+2. Search if the failing system is modeled in BPMN
+3. Model the fix in BPMN first, then implement
+4. Store the finding as knowledge: `store_knowledge(type='gotcha')`
+
+This creates a self-improving loop: failures drive model improvements.
+
+---
+
 ## Current Process Inventory
 
 **Architecture (L0/L1)**: claude_process (L0), session_management, work_tracking, knowledge_management, enforcement, agent_orchestration, config_management
-**Lifecycle (L2)**: session_lifecycle, task_lifecycle, feature_workflow, config_deployment, rag_pipeline
-**Development**: commit_workflow
+**Lifecycle (L2)**: session_lifecycle, task_lifecycle, feature_workflow, config_deployment, rag_pipeline, feedback_to_feature, agent_lifecycle, session_continuation
+**Development**: commit_workflow, system_change_process
 **Infrastructure**: hook_chain
 **Nimbus**: nimbus_delivery, support_triage, knowledge_ingestion
 
@@ -166,10 +192,11 @@ Use `list_processes` for the live inventory.
 
 - Feature F111: BPMN Process Architecture Framework (L0/L1/L2 hierarchy)
 - Feature F112: BPMN Engine MCP - Full Integration
+- Feature F113: BPMN Process Coverage + Self-Enforcement
 - `mcp-servers/bpmn-engine/` - Server source code
 - `mcp-servers/bpmn-engine/processes/` - All BPMN files
 - `mcp-servers/bpmn-engine/tests/` - All test files
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
