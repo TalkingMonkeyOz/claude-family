@@ -1,2 +1,4 @@
 SpiffWorkflow>=3.1.0
 pytest>=7.0.0
+mcp>=1.0.0
+lxml>=4.0.0
