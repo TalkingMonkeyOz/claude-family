@@ -35,7 +35,11 @@
       <bpmn:script>
 # Extract session_id and project_name from hook input
 # project_name = os.path.basename(cwd)
-has_session_id = has_session_id if has_session_id is not None else True
+try:
+    if has_session_id is None:
+        has_session_id = True
+except NameError:
+    has_session_id = True
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -43,7 +47,11 @@ has_session_id = has_session_id if has_session_id is not None else True
       <bpmn:incoming>flow_parse_to_db</bpmn:incoming>
       <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
       <bpmn:script>
-db_available = db_available if db_available is not None else True
+try:
+    if db_available is None:
+        db_available = True
+except NameError:
+    db_available = True
       </bpmn:script>
     </bpmn:scriptTask>
 

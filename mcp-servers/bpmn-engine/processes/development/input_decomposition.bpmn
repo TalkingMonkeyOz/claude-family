@@ -39,8 +39,14 @@
       <bpmn:script>
 # STOP! Read the user's message fully before acting.
 # Do not start coding/editing at first mention of a problem.
-has_directives = has_directives if has_directives is not None else True
-directive_count = directive_count if directive_count is not None else 0
+try:
+    has_directives = has_directives
+except NameError:
+    has_directives = True
+try:
+    directive_count = directive_count
+except NameError:
+    directive_count = 0
       </bpmn:script>
     </bpmn:scriptTask>
 

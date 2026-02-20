@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  targetNamespace="http://claude.family/bpmn"
+                  id="Definitions_context_budget">
+
+  <bpmn:process id="context_budget_management" name="Context Budget Management: Prevent Context Exhaustion" isExecutable="true">
+
+    <!-- START -->
+    <bpmn:startEvent id="start" name="Task Batch Received">
+      <bpmn:outgoing>flow_start_to_estimate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ESTIMATE CONTEXT COST -->
+    <bpmn:scriptTask id="estimate_context_cost" name="[CLAUDE] Estimate Context Cost">
+      <bpmn:documentation>Count files to read/write, estimate line counts, check batch size.
+Heavy indicators: BPMN XML (300+ lines each), large file generation, multiple Read+Write cycles.
+Sets: estimated_tokens, batch_size, is_heavy_content.</bpmn:documentation>
+      <bpmn:incoming>flow_start_to_estimate</bpmn:incoming>
+      <bpmn:outgoing>flow_estimate_to_budget_gw</bpmn:outgoing>
+      <bpmn:script>
+# Estimate context cost based on task characteristics
+estimated_tokens = batch_size * tokens_per_task
+within_budget = estimated_tokens &lt; budget_threshold
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- WITHIN BUDGET? -->
+    <bpmn:exclusiveGateway id="budget_gw" name="Within Budget?" default="flow_over_budget">
+      <bpmn:incoming>flow_estimate_to_budget_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_within_budget</bpmn:outgoing>
+      <bpmn:outgoing>flow_over_budget</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- DIRECT EXECUTION PATH -->
+    <bpmn:scriptTask id="execute_directly" name="[CLAUDE] Execute Tasks Directly">
+      <bpmn:documentation>Small batch, within context budget. Execute all tasks in current context.</bpmn:documentation>
+      <bpmn:incoming>flow_within_budget</bpmn:incoming>
+      <bpmn:outgoing>flow_direct_to_end</bpmn:outgoing>
+      <bpmn:script>
+execution_strategy = "direct"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- CHOOSE DELEGATION STRATEGY -->
+    <bpmn:scriptTask id="choose_strategy" name="[CLAUDE] Choose Delegation Strategy">
+      <bpmn:documentation>Over budget. Choose strategy based on batch characteristics:
+- delegate_all: entire batch is heavy, spawn agents for everything
+- split_and_delegate: do some directly, delegate the rest
+Sets: strategy (delegate_all or split_and_delegate)</bpmn:documentation>
+      <bpmn:incoming>flow_over_budget</bpmn:incoming>
+      <bpmn:outgoing>flow_strategy_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# If everything is heavy, delegate all. Otherwise split.
+if all_tasks_heavy:
+    strategy = "delegate_all"
+else:
+    strategy = "split_and_delegate"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STRATEGY GATEWAY -->
+    <bpmn:exclusiveGateway id="strategy_gw" name="Delegation Strategy?" default="flow_split">
+      <bpmn:incoming>flow_strategy_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_delegate_all</bpmn:outgoing>
+      <bpmn:outgoing>flow_split</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- DELEGATE ALL PATH -->
+    <bpmn:scriptTask id="spawn_agents" name="[CLAUDE] Spawn Agent(s) for Heavy Work">
+      <bpmn:documentation>Spawn tester-haiku, coder-haiku, or coder-sonnet agents in parallel.
+Each agent gets its own context window. Results collected after completion.</bpmn:documentation>
+      <bpmn:incoming>flow_delegate_all</bpmn:incoming>
+      <bpmn:outgoing>flow_agents_to_collect</bpmn:outgoing>
+      <bpmn:script>
+agents_spawned = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- SPLIT AND DO FIRST CHUNK -->
+    <bpmn:scriptTask id="split_and_execute_chunk" name="[CLAUDE] Split Batch, Execute First Chunk">
+      <bpmn:documentation>Execute the small/simple tasks directly. Save state before delegating heavy ones.</bpmn:documentation>
+      <bpmn:incoming>flow_split</bpmn:incoming>
+      <bpmn:outgoing>flow_chunk_to_checkpoint</bpmn:outgoing>
+      <bpmn:script>
+chunk_executed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- CHECKPOINT STATE -->
+    <bpmn:scriptTask id="checkpoint_state" name="[MCP] Save Checkpoint">
+      <bpmn:documentation>Save progress via store_session_fact and save_checkpoint before delegating.
+Ensures state survives if context runs out during agent collection.</bpmn:documentation>
+      <bpmn:incoming>flow_chunk_to_checkpoint</bpmn:incoming>
+      <bpmn:outgoing>flow_checkpoint_to_delegate</bpmn:outgoing>
+      <bpmn:script>
+checkpoint_saved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- DELEGATE REMAINING -->
+    <bpmn:scriptTask id="delegate_remainder" name="[CLAUDE] Delegate Remaining to Agents">
+      <bpmn:documentation>Spawn agents for the heavy tasks that weren't executed directly.</bpmn:documentation>
+      <bpmn:incoming>flow_checkpoint_to_delegate</bpmn:incoming>
+      <bpmn:outgoing>flow_delegate_to_collect</bpmn:outgoing>
+      <bpmn:script>
+remainder_delegated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- COLLECT AND VERIFY -->
+    <bpmn:scriptTask id="collect_results" name="[CLAUDE] Collect and Verify Agent Results">
+      <bpmn:documentation>Wait for agent completion, verify outputs (run tests, check files).
+If verification fails, flag for manual review.</bpmn:documentation>
+      <bpmn:incoming>flow_agents_to_collect</bpmn:incoming>
+      <bpmn:incoming>flow_delegate_to_collect</bpmn:incoming>
+      <bpmn:outgoing>flow_collect_to_end</bpmn:outgoing>
+      <bpmn:script>
+results_collected = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- END -->
+    <bpmn:endEvent id="end_complete" name="Batch Complete">
+      <bpmn:incoming>flow_direct_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_collect_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_to_estimate" sourceRef="start" targetRef="estimate_context_cost" />
+    <bpmn:sequenceFlow id="flow_estimate_to_budget_gw" sourceRef="estimate_context_cost" targetRef="budget_gw" />
+    <bpmn:sequenceFlow id="flow_within_budget" sourceRef="budget_gw" targetRef="execute_directly">
+      <bpmn:conditionExpression>within_budget == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_over_budget" sourceRef="budget_gw" targetRef="choose_strategy" />
+    <bpmn:sequenceFlow id="flow_direct_to_end" sourceRef="execute_directly" targetRef="end_complete" />
+    <bpmn:sequenceFlow id="flow_strategy_to_gw" sourceRef="choose_strategy" targetRef="strategy_gw" />
+    <bpmn:sequenceFlow id="flow_delegate_all" sourceRef="strategy_gw" targetRef="spawn_agents">
+      <bpmn:conditionExpression>strategy == "delegate_all"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_split" sourceRef="strategy_gw" targetRef="split_and_execute_chunk" />
+    <bpmn:sequenceFlow id="flow_agents_to_collect" sourceRef="spawn_agents" targetRef="collect_results" />
+    <bpmn:sequenceFlow id="flow_chunk_to_checkpoint" sourceRef="split_and_execute_chunk" targetRef="checkpoint_state" />
+    <bpmn:sequenceFlow id="flow_checkpoint_to_delegate" sourceRef="checkpoint_state" targetRef="delegate_remainder" />
+    <bpmn:sequenceFlow id="flow_delegate_to_collect" sourceRef="delegate_remainder" targetRef="collect_results" />
+    <bpmn:sequenceFlow id="flow_collect_to_end" sourceRef="collect_results" targetRef="end_complete" />
+
+  </bpmn:process>
+</bpmn:definitions>

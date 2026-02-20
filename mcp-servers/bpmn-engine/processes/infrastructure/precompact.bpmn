@@ -36,7 +36,11 @@
       <bpmn:outgoing>flow_project_to_db</bpmn:outgoing>
       <bpmn:script>
 # project_name = os.path.basename(os.getcwd())
-project_name = project_name if project_name is not None else "unknown"
+try:
+    if project_name is None:
+        project_name = "unknown"
+except NameError:
+    project_name = "unknown"
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -44,7 +48,11 @@ project_name = project_name if project_name is not None else "unknown"
       <bpmn:incoming>flow_project_to_db</bpmn:incoming>
       <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
       <bpmn:script>
-db_available = db_available if db_available is not None else True
+try:
+    if db_available is None:
+        db_available = True
+except NameError:
+    db_available = True
       </bpmn:script>
     </bpmn:scriptTask>
 
