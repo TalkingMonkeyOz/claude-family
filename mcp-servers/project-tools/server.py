@@ -1492,7 +1492,7 @@ async def tool_recall_previous_session_facts(
 
         # Build query with optional type filter
         type_filter = ""
-        params = [project_name, tuple(session_ids)]
+        params = [project_name, [str(sid) for sid in session_ids]]
         if fact_types:
             type_filter = "AND fact_type = ANY(%s)"
             params.append(fact_types)
@@ -1508,7 +1508,7 @@ async def tool_recall_previous_session_facts(
                 session_id::text
             FROM claude.session_facts
             WHERE project_name = %s
-              AND session_id IN %s
+              AND session_id = ANY(%s::uuid[])
               {type_filter}
             ORDER BY created_at DESC
         """, params)

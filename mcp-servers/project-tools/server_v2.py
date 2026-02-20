@@ -4046,6 +4046,144 @@ def search_bpmn_processes(
 
 
 # ============================================================================
+# Promote Feedback to Feature
+# ============================================================================
+
+@mcp.tool()
+def promote_feedback(
+    feedback_id: str,
+    feature_name: str = "",
+    feature_type: str = "feature",
+    priority: int = 3,
+    plan_data: dict = None,
+) -> dict:
+    """Promote a feedback item to a tracked feature.
+
+    Follows the feedback_to_feature BPMN process:
+    1. Looks up the feedback item
+    2. Creates a feature from it (with optional name override)
+    3. Advances the feedback to 'triaged' status
+    4. Returns the new feature code for further work
+
+    Use when: A feedback item (bug, idea, improvement) needs to become
+    a tracked feature with build tasks. This bridges the gap between
+    ad-hoc feedback capture and structured feature development.
+    Returns: {success, feature_code, feature_id, feedback_code,
+              feedback_title, feature_name, from_status, to_status}.
+
+    Args:
+        feedback_id: Feedback short code (e.g., 'FB42') or UUID.
+        feature_name: Override feature name (defaults to feedback title).
+        feature_type: feature, enhancement, refactor, infrastructure, or documentation.
+        priority: 1=critical, 2=high, 3=medium, 4=low, 5=minimal.
+        plan_data: Optional structured plan data for the feature.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Resolve feedback by short_code or UUID
+        if feedback_id.upper().startswith("FB"):
+            try:
+                code_num = int(feedback_id[2:])
+            except ValueError:
+                return {"success": False, "error": f"Invalid feedback code: {feedback_id}"}
+            cur.execute("""
+                SELECT feedback_id::text, title, description, feedback_type, priority, status,
+                       project_id::text, short_code
+                FROM claude.feedback
+                WHERE short_code = %s
+            """, (code_num,))
+        else:
+            cur.execute("""
+                SELECT feedback_id::text, title, description, feedback_type, priority, status,
+                       project_id::text, short_code
+                FROM claude.feedback
+                WHERE feedback_id = %s::uuid
+            """, (feedback_id,))
+
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Feedback not found: {feedback_id}"}
+
+        fb_id = row['feedback_id']
+        fb_title = row['title'] or row['description'][:80]
+        fb_desc = row['description']
+        fb_status = row['status']
+        fb_project_id = row['project_id']
+        fb_short_code = row['short_code']
+        fb_code = f"FB{fb_short_code}"
+
+        # Determine feature name
+        f_name = feature_name or fb_title
+
+        # Validate feature_type
+        valid_types = get_valid_values('features', 'feature_type')
+        if valid_types and feature_type not in valid_types:
+            return {"success": False, "error": f"Invalid feature_type: {feature_type}. Valid: {valid_types}"}
+
+        # Create feature
+        plan_json = json.dumps(plan_data) if plan_data else None
+        cur.execute("""
+            INSERT INTO claude.features
+            (project_id, feature_name, description, feature_type, priority, status, plan_data)
+            VALUES (%s::uuid, %s, %s, %s, %s, 'draft', %s::jsonb)
+            RETURNING feature_id::text, short_code
+        """, (
+            fb_project_id,
+            f_name,
+            f"Promoted from {fb_code}: {fb_desc}",
+            feature_type,
+            priority,
+            plan_json,
+        ))
+
+        feat_row = cur.fetchone()
+        feature_id = feat_row['feature_id']
+        feature_code = f"F{feat_row['short_code']}"
+
+        # Advance feedback status to triaged (if currently new)
+        new_fb_status = fb_status
+        if fb_status == 'new':
+            cur.execute("""
+                UPDATE claude.feedback SET status = 'triaged', updated_at = NOW()
+                WHERE feedback_id = %s::uuid
+            """, (fb_id,))
+            new_fb_status = 'triaged'
+
+            # Log transition
+            cur.execute("""
+                INSERT INTO claude.audit_log
+                (entity_type, entity_id, entity_code, from_status, to_status,
+                 changed_by, change_source, metadata)
+                VALUES ('feedback', %s::uuid, %s, %s, 'triaged', %s, 'promote_feedback', %s::jsonb)
+            """, (
+                fb_id, fb_code, fb_status,
+                os.environ.get('CLAUDE_SESSION_ID'),
+                json.dumps({"promoted_to": feature_code, "feature_id": feature_id}),
+            ))
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "feature_code": feature_code,
+            "feature_id": feature_id,
+            "feedback_code": fb_code,
+            "feedback_title": fb_title,
+            "feature_name": f_name,
+            "from_status": fb_status,
+            "to_status": new_fb_status,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to promote feedback: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
