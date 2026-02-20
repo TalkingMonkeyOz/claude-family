@@ -435,6 +435,11 @@ def main():
 
     except Exception as e:
         logger.error(f"Validator failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("standards_validator", str(e), "scripts/standards_validator.py")
+        except Exception:
+            pass
         # On unexpected error, allow operation (don't break workflow)
         allow_operation()
 

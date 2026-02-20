@@ -152,26 +152,37 @@ def main():
     """Main entry point for SessionEnd hook."""
     logger.info("SessionEnd hook invoked - auto-saving session state")
 
-    # Read hook input
     try:
-        raw_input = sys.stdin.read()
-        hook_input = json.loads(raw_input) if raw_input.strip() else {}
-    except json.JSONDecodeError:
-        hook_input = {}
+        # Read hook input
+        try:
+            raw_input = sys.stdin.read()
+            hook_input = json.loads(raw_input) if raw_input.strip() else {}
+        except json.JSONDecodeError:
+            hook_input = {}
 
-    # Get session info
-    session_id = hook_input.get('session_id')
-    cwd = hook_input.get('cwd', os.getcwd())
-    project_name = os.path.basename(cwd.rstrip('/\\'))
+        # Get session info
+        session_id = hook_input.get('session_id')
+        cwd = hook_input.get('cwd', os.getcwd())
+        project_name = os.path.basename(cwd.rstrip('/\\'))
 
-    # Auto-save session state
-    auto_save_session(session_id, project_name)
+        # Auto-save session state
+        auto_save_session(session_id, project_name)
 
-    # Return reminder to run /session-end for full summary
-    print(json.dumps({
-        "systemMessage": "Session auto-saved. For detailed summary + knowledge capture, run /session-end before closing."
-    }))
-    return 0
+        # Return reminder to run /session-end for full summary
+        print(json.dumps({
+            "systemMessage": "Session auto-saved. For detailed summary + knowledge capture, run /session-end before closing."
+        }))
+        return 0
+
+    except Exception as e:
+        logger.error(f"SessionEnd hook failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("session_end_hook", str(e), "scripts/session_end_hook.py")
+        except Exception:
+            pass
+        print(json.dumps({}))
+        return 1
 
 
 if __name__ == "__main__":

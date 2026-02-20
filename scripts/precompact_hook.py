@@ -214,19 +214,30 @@ def main():
     logger.info("PreCompact hook invoked")
 
     try:
-        hook_input = json.load(sys.stdin)
-    except json.JSONDecodeError:
-        hook_input = {}
+        try:
+            hook_input = json.load(sys.stdin)
+        except json.JSONDecodeError:
+            hook_input = {}
 
-    refresh_message = build_refresh_message(hook_input)
+        refresh_message = build_refresh_message(hook_input)
 
-    response = {
-        "systemMessage": f"<claude-context-refresh>\n{refresh_message}\n</claude-context-refresh>"
-    }
+        response = {
+            "systemMessage": f"<claude-context-refresh>\n{refresh_message}\n</claude-context-refresh>"
+        }
 
-    print(json.dumps(response))
-    logger.info("PreCompact hook completed - session state injected")
-    return 0
+        print(json.dumps(response))
+        logger.info("PreCompact hook completed - session state injected")
+        return 0
+
+    except Exception as e:
+        logger.error(f"PreCompact hook failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("precompact_hook", str(e), "scripts/precompact_hook.py")
+        except Exception:
+            pass
+        print(json.dumps({"systemMessage": "Context compaction occurred. Re-read CLAUDE.md and check work items."}))
+        return 0
 
 
 if __name__ == "__main__":

@@ -117,19 +117,53 @@ def load_task_map(project_name: str) -> dict:
 
 
 def save_task_map(project_name: str, task_map: dict, session_id: str = None):
-    """Save task_number → todo_id mapping to temp file.
+    """Save task_number → todo_id mapping to temp file with file locking.
+
+    Uses atomic load-modify-save with file locking to prevent race conditions
+    when multiple PostToolUse hooks fire concurrently (e.g., batch TaskCreate).
 
     Includes _session_id for session scoping - the discipline hook checks this
     to ensure tasks were created in the CURRENT session, not a stale previous one.
     """
+    import msvcrt  # Windows file locking
+
     if session_id:
         task_map['_session_id'] = session_id
     path = get_task_map_path(project_name)
+    lock_path = path.with_suffix('.lock')
     try:
-        with open(path, 'w') as f:
-            json.dump(task_map, f)
-    except IOError as e:
-        logger.error(f"Failed to save task map: {e}")
+        # Use a lock file to serialize concurrent writes
+        with open(lock_path, 'w') as lock_file:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                # Re-read the map under lock to get latest state (prevents overwrite race)
+                current_map = {}
+                if path.exists():
+                    try:
+                        with open(path, 'r') as f:
+                            current_map = json.load(f)
+                            if not isinstance(current_map, dict):
+                                current_map = {}
+                    except (json.JSONDecodeError, IOError):
+                        current_map = {}
+
+                # Merge our new entries into the current map
+                for k, v in task_map.items():
+                    current_map[k] = v
+
+                # Write the merged map
+                with open(path, 'w') as f:
+                    json.dump(current_map, f)
+            finally:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    except (IOError, OSError) as e:
+        # Lock acquisition failed (another process holds it) - fall back to direct write
+        logger.warning(f"Lock failed, falling back to direct write: {e}")
+        try:
+            with open(path, 'w') as f:
+                json.dump(task_map, f)
+        except IOError as e2:
+            logger.error(f"Failed to save task map: {e2}")
 
 
 def get_current_session_id(project_name: str, conn) -> str:
@@ -495,43 +529,54 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str) ->
 def main():
     """Main entry point for the hook."""
     try:
-        raw_input = sys.stdin.read()
-        hook_input = json.loads(raw_input) if raw_input.strip() else {}
-    except json.JSONDecodeError:
-        hook_input = {}
+        try:
+            raw_input = sys.stdin.read()
+            hook_input = json.loads(raw_input) if raw_input.strip() else {}
+        except json.JSONDecodeError:
+            hook_input = {}
 
-    tool_name = hook_input.get('tool_name', '')
-    tool_input = hook_input.get('tool_input', {})
-    # Field is 'tool_response' (NOT 'tool_output' - that doesn't exist)
-    tool_output = hook_input.get('tool_response', '')
-    # Ensure string for regex matching
-    if not isinstance(tool_output, str):
-        tool_output = json.dumps(tool_output) if tool_output else ''
+        tool_name = hook_input.get('tool_name', '')
+        tool_input = hook_input.get('tool_input', {})
+        # Field is 'tool_response' (NOT 'tool_output' - that doesn't exist)
+        tool_output = hook_input.get('tool_response', '')
+        # Ensure string for regex matching
+        if not isinstance(tool_output, str):
+            tool_output = json.dumps(tool_output) if tool_output else ''
 
-    # Only handle TaskCreate and TaskUpdate
-    if tool_name not in ('TaskCreate', 'TaskUpdate'):
-        print(json.dumps({}))
+        # Only handle TaskCreate and TaskUpdate
+        if tool_name not in ('TaskCreate', 'TaskUpdate'):
+            print(json.dumps({}))
+            return 0
+
+        # Get project name from cwd
+        cwd = hook_input.get('cwd', os.getcwd())
+        project_name = os.path.basename(cwd.rstrip('/\\'))
+
+        # Pass session_id from hook_input for map file scoping
+        hook_session_id = hook_input.get('session_id', '')
+
+        completion_msg = None
+        if tool_name == 'TaskCreate':
+            handle_task_create(tool_input, tool_output, project_name, hook_session_id)
+        elif tool_name == 'TaskUpdate':
+            completion_msg = handle_task_update(tool_input, tool_output, project_name)
+
+        # Surface feature completion advisory if all build_tasks are done
+        if completion_msg:
+            print(json.dumps({"additionalContext": completion_msg}))
+        else:
+            print(json.dumps({}))
         return 0
 
-    # Get project name from cwd
-    cwd = hook_input.get('cwd', os.getcwd())
-    project_name = os.path.basename(cwd.rstrip('/\\'))
-
-    # Pass session_id from hook_input for map file scoping
-    hook_session_id = hook_input.get('session_id', '')
-
-    completion_msg = None
-    if tool_name == 'TaskCreate':
-        handle_task_create(tool_input, tool_output, project_name, hook_session_id)
-    elif tool_name == 'TaskUpdate':
-        completion_msg = handle_task_update(tool_input, tool_output, project_name)
-
-    # Surface feature completion advisory if all build_tasks are done
-    if completion_msg:
-        print(json.dumps({"additionalContext": completion_msg}))
-    else:
+    except Exception as e:
+        logger.error(f"Task sync hook failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("task_sync_hook", str(e), "scripts/task_sync_hook.py")
+        except Exception:
+            pass
         print(json.dumps({}))
-    return 0
+        return 1
 
 
 if __name__ == "__main__":

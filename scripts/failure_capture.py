@@ -148,8 +148,8 @@ def capture_failure(
                         )
                         cur.execute("""
                             INSERT INTO claude.feedback
-                                (project_id, feedback_type, title, description, priority, status)
-                            VALUES (%s::uuid, 'bug', %s, %s, 'medium', 'new')
+                                (feedback_id, project_id, feedback_type, title, description, priority, status, created_at)
+                            VALUES (gen_random_uuid(), %s::uuid, 'bug', %s, %s, 'medium', 'new', NOW())
                             RETURNING feedback_id::text, 'FB' || short_code as code
                         """, (project_id, title, description))
 

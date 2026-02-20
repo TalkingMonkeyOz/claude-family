@@ -105,7 +105,58 @@ generate_project_settings.py (deep_merge)
 **Fail-open**: Any script error → allow (never blocks workflow due to hook crash)
 **Response format**: Exit 0 + JSON `permissionDecision: "deny"` (NOT exit code 2)
 
+### 4-Way Decision Cascade (FB108 + FB109)
+
+```
+1. Tasks exist + session match → ALLOW (normal case)
+2. Tasks exist + no session_id → ALLOW (edge case)
+3. Empty map but recently modified (< 30s) → ALLOW (race condition)
+4. Tasks exist + session mismatch + map fresh (< 2h) → ALLOW (continuation session - FB108)
+5. DB fallback: query build_tasks for active tasks → ALLOW (covers MCP create_linked_task - FB109)
+6. Otherwise → DENY
+```
+
+**FB108 fix**: Continuation sessions get new session_id after compaction, but tasks from prior segment are still valid if map is fresh (< 2h).
+**FB109 fix**: MCP `create_linked_task` writes to DB only (not task_map file). DB fallback query catches this on the deny path only (no perf impact on normal flow).
+
+## Failure Capture System (2026-02-20)
+
+All hooks with fail-open catch blocks now call `capture_failure()` from `scripts/failure_capture.py`:
+
+**Integrated hooks** (8 total): task_discipline, rag_query, context_injector, todo_sync, task_sync, precompact, session_end, standards_validator
+
+**How it works**:
+1. Hook crashes → fail-open catch block calls `capture_failure(system_name, error, source_file)`
+2. Failure logged to `~/.claude/process_failures.jsonl` (survives if DB is down)
+3. Auto-filed as feedback in `claude.feedback` (type=bug, title="Auto: {hook} failure")
+4. Deduplication: won't re-file if identical open feedback exists
+5. `rag_query_hook.py` surfaces pending failures via `get_pending_failures()` → injected into context
+6. Claude sees failures on next prompt and can invoke the system-change-process to fix
+
+**Self-improvement loop**: Failure → Auto-feedback → Claude sees it → BPMN model update → Code fix → Commit
+
+## BPMN Process Coverage
+
+Hooks and workflows are modeled in BPMN (SpiffWorkflow). See `mcp-servers/bpmn-engine/processes/`.
+
+| BPMN Process | Level | What It Models |
+|-------------|-------|----------------|
+| `hook_chain.bpmn` | L2 | Full hook execution chain (text/tool paths) |
+| `session_lifecycle.bpmn` | L2 | Fresh/resumed session + compact flow |
+| `task_lifecycle.bpmn` | L2 | Task create → discipline gate → sync → complete |
+| `session_continuation.bpmn` | L2 | Context compaction + session recovery |
+| `rag_pipeline.bpmn` | L2 | Embedding + retrieval + self-learning |
+
+**Alignment tool**: `check_alignment(process_id)` MCP tool compares BPMN models against actual code artifacts.
+
 ## Recent Changes
+
+**2026-02-20**:
+- FB108 resolved: Continuation session handling in discipline hook
+- FB109 resolved: DB fallback for MCP-created build_tasks
+- Failure capture system: auto-file failures as feedback, surface in context
+- All 8 hooks integrated with failure_capture.py
+- BPMN process coverage: 15 L2 processes, alignment validation tool
 
 **2026-02-18**:
 - Added `Bash` to GATED_TOOLS (was missing - 90% of investigation bypassed enforcement)
@@ -122,7 +173,7 @@ generate_project_settings.py (deep_merge)
 
 ---
 
-**Version**: 3.0 (Full rewrite: added task_discipline docs, enforcement chain, GATED_TOOLS)
+**Version**: 4.0 (Added FB108/FB109 decision cascade, failure capture system, BPMN coverage)
 **Created**: 2025-12-26
-**Updated**: 2026-02-18
+**Updated**: 2026-02-20
 **Location**: Claude Family/Claude Hooks.md
