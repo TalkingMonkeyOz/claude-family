@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  targetNamespace="http://claude.family/bpmn"
+                  id="Definitions_db_cleanup">
+
+  <bpmn:process id="database_cleanup" name="Database Cleanup: Verify and Drop Empty Tables" isExecutable="true">
+
+    <!--
+      One-time cleanup process to remove empty/unused tables from claude.* schema.
+      Safety-first: verify empty, check FK dependencies, drop in correct order.
+
+      Trigger: Manual - run when audit identifies empty tables
+      Input: table_list (list of table names to drop)
+
+      Key behaviors:
+        - Verify EVERY table is empty before dropping (no trusting stale audit data)
+        - Check FK dependencies between tables in the drop list
+        - Check FK dependencies from tables NOT in the drop list (blocker)
+        - Use CASCADE only for inter-drop-list FKs, never for external FKs
+        - Drop in dependency order (leaf tables first)
+        - Log all drops to audit_log
+        - Abort if any table has data (safety)
+
+      Implementation: Manual SQL execution via postgres MCP
+    -->
+
+    <bpmn:startEvent id="start" name="Cleanup Requested">
+      <bpmn:outgoing>flow_start_to_input</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- STEP 1: LOAD TABLE LIST -->
+    <bpmn:scriptTask id="load_table_list" name="[DB] Load Table List from Audit" scriptFormat="python">
+      <bpmn:documentation>Load the list of tables identified for dropping.
+Source: session_fact 'db_audit_drop_list' or manual input.
+Each table must be in claude.* schema.</bpmn:documentation>
+      <bpmn:incoming>flow_start_to_input</bpmn:incoming>
+      <bpmn:outgoing>flow_input_to_verify</bpmn:outgoing>
+      <bpmn:script>
+try:
+    if table_list is None:
+        table_list = []
+except NameError:
+    table_list = []
+table_count = len(table_list)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STEP 2: VERIFY ALL EMPTY -->
+    <bpmn:scriptTask id="verify_empty" name="[DB] Verify All Tables Are Empty" scriptFormat="python">
+      <bpmn:documentation>For EACH table in the list, run COUNT(*).
+Do NOT trust the audit data - it may be stale (pg_stat_user_tables
+showed 81 empty but 18 actually had data).
+Any table with rows > 0 is removed from the drop list and flagged.</bpmn:documentation>
+      <bpmn:incoming>flow_input_to_verify</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_to_check</bpmn:outgoing>
+      <bpmn:script>
+try:
+    if non_empty_tables is None:
+        non_empty_tables = []
+except NameError:
+    non_empty_tables = []
+try:
+    if verified_empty is None:
+        verified_empty = []
+except NameError:
+    verified_empty = table_list[:]
+all_verified_empty = len(non_empty_tables) == 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- GATEWAY: ANY NON-EMPTY? -->
+    <bpmn:exclusiveGateway id="empty_gw" name="All Empty?" default="flow_has_nonempty">
+      <bpmn:incoming>flow_verify_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_all_empty</bpmn:outgoing>
+      <bpmn:outgoing>flow_has_nonempty</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- NON-EMPTY PATH: Remove from list and warn -->
+    <bpmn:scriptTask id="filter_nonempty" name="[CLAUDE] Filter Out Non-Empty Tables" scriptFormat="python">
+      <bpmn:documentation>Remove non-empty tables from drop list.
+Log warning for each non-empty table found.
+Continue with remaining empty tables only.</bpmn:documentation>
+      <bpmn:incoming>flow_has_nonempty</bpmn:incoming>
+      <bpmn:outgoing>flow_filter_to_fk</bpmn:outgoing>
+      <bpmn:script>
+# Remove non-empty tables from the drop list
+verified_empty = [t for t in table_list if t not in non_empty_tables]
+tables_filtered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STEP 3: CHECK FK DEPENDENCIES -->
+    <bpmn:scriptTask id="check_fk_deps" name="[DB] Check FK Dependencies" scriptFormat="python">
+      <bpmn:documentation>Query pg_catalog for foreign key constraints:
+1. Internal FKs: between tables in the drop list (safe - drop together)
+2. External FKs: from tables NOT in the drop list TO tables in the drop list (BLOCKER)
+
+External FKs mean some active table depends on a table we want to drop.
+These tables must be removed from the drop list.
+
+Query: information_schema.table_constraints + key_column_usage + constraint_column_usage</bpmn:documentation>
+      <bpmn:incoming>flow_all_empty</bpmn:incoming>
+      <bpmn:incoming>flow_filter_to_fk</bpmn:incoming>
+      <bpmn:outgoing>flow_fk_to_check</bpmn:outgoing>
+      <bpmn:script>
+try:
+    if external_fk_blockers is None:
+        external_fk_blockers = []
+except NameError:
+    external_fk_blockers = []
+try:
+    if internal_fks is None:
+        internal_fks = []
+except NameError:
+    internal_fks = []
+has_blockers = len(external_fk_blockers) > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- GATEWAY: EXTERNAL FK BLOCKERS? -->
+    <bpmn:exclusiveGateway id="fk_gw" name="External FK Blockers?" default="flow_no_blockers">
+      <bpmn:incoming>flow_fk_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_blockers</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_blockers</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- BLOCKER PATH: Remove blocked tables -->
+    <bpmn:scriptTask id="remove_blocked" name="[CLAUDE] Remove FK-Blocked Tables" scriptFormat="python">
+      <bpmn:documentation>Remove tables that have external FK dependencies.
+These cannot be dropped without breaking active tables.
+Log which tables are blocked and by what constraint.</bpmn:documentation>
+      <bpmn:incoming>flow_has_blockers</bpmn:incoming>
+      <bpmn:outgoing>flow_remove_to_order</bpmn:outgoing>
+      <bpmn:script>
+verified_empty = [t for t in verified_empty if t not in external_fk_blockers]
+blockers_removed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STEP 4: ORDER FOR DROP -->
+    <bpmn:scriptTask id="order_drops" name="[CLAUDE] Order Tables for Drop" scriptFormat="python">
+      <bpmn:documentation>Order tables so that referencing tables are dropped before referenced tables.
+Use internal FK list to build dependency graph.
+Leaf tables (no outgoing FKs) are dropped first.
+Use CASCADE for remaining internal FKs as safety net.</bpmn:documentation>
+      <bpmn:incoming>flow_no_blockers</bpmn:incoming>
+      <bpmn:incoming>flow_remove_to_order</bpmn:incoming>
+      <bpmn:outgoing>flow_order_to_drop</bpmn:outgoing>
+      <bpmn:script>
+try:
+    if drop_order is None:
+        drop_order = verified_empty
+except NameError:
+    drop_order = verified_empty
+drops_ordered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STEP 5: EXECUTE DROPS -->
+    <bpmn:scriptTask id="execute_drops" name="[DB] Execute DROP TABLE Statements" scriptFormat="python">
+      <bpmn:documentation>For each table in drop_order:
+  DROP TABLE IF EXISTS claude.{table} CASCADE;
+Log each drop to claude.audit_log.
+Use IF EXISTS for safety (table might already be gone).
+CASCADE handles any remaining internal FKs.</bpmn:documentation>
+      <bpmn:incoming>flow_order_to_drop</bpmn:incoming>
+      <bpmn:outgoing>flow_drop_to_verify</bpmn:outgoing>
+      <bpmn:script>
+tables_dropped = len(drop_order)
+drops_executed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- STEP 6: VERIFY -->
+    <bpmn:scriptTask id="verify_drops" name="[DB] Verify Schema is Clean" scriptFormat="python">
+      <bpmn:documentation>Query pg_tables to confirm dropped tables no longer exist.
+Count remaining tables in claude.* schema.
+Report: dropped count, remaining count, any failures.</bpmn:documentation>
+      <bpmn:incoming>flow_drop_to_verify</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_to_end</bpmn:outgoing>
+      <bpmn:script>
+try:
+    if remaining_tables is None:
+        remaining_tables = 0
+except NameError:
+    remaining_tables = 0
+cleanup_verified = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_complete" name="Cleanup Complete">
+      <bpmn:incoming>flow_verify_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_to_input" sourceRef="start" targetRef="load_table_list"/>
+    <bpmn:sequenceFlow id="flow_input_to_verify" sourceRef="load_table_list" targetRef="verify_empty"/>
+    <bpmn:sequenceFlow id="flow_verify_to_check" sourceRef="verify_empty" targetRef="empty_gw"/>
+    <bpmn:sequenceFlow id="flow_all_empty" sourceRef="empty_gw" targetRef="check_fk_deps">
+      <bpmn:conditionExpression>all_verified_empty == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_has_nonempty" sourceRef="empty_gw" targetRef="filter_nonempty"/>
+    <bpmn:sequenceFlow id="flow_filter_to_fk" sourceRef="filter_nonempty" targetRef="check_fk_deps"/>
+    <bpmn:sequenceFlow id="flow_fk_to_check" sourceRef="check_fk_deps" targetRef="fk_gw"/>
+    <bpmn:sequenceFlow id="flow_has_blockers" sourceRef="fk_gw" targetRef="remove_blocked">
+      <bpmn:conditionExpression>has_blockers == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_blockers" sourceRef="fk_gw" targetRef="order_drops"/>
+    <bpmn:sequenceFlow id="flow_remove_to_order" sourceRef="remove_blocked" targetRef="order_drops"/>
+    <bpmn:sequenceFlow id="flow_order_to_drop" sourceRef="order_drops" targetRef="execute_drops"/>
+    <bpmn:sequenceFlow id="flow_drop_to_verify" sourceRef="execute_drops" targetRef="verify_drops"/>
+    <bpmn:sequenceFlow id="flow_verify_to_end" sourceRef="verify_drops" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="database_cleanup">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
