@@ -131,13 +131,16 @@ def _find_bpmn_file(process_id: str) -> Optional[Path]:
     if not processes_dir.exists():
         return None
 
-    # Fast path: conventional filename
+    # Fast path: conventional filename (check root and subdirectories)
     candidate = processes_dir / f"{process_id}.bpmn"
     if candidate.exists():
         return candidate
+    # Check subdirectories
+    for sub_candidate in processes_dir.glob(f"**/{process_id}.bpmn"):
+        return sub_candidate
 
     # Slow path: scan all BPMN files for a matching process id
-    for bpmn_file in processes_dir.glob("*.bpmn"):
+    for bpmn_file in processes_dir.glob("**/*.bpmn"):
         try:
             root = _parse_xml(bpmn_file)
             for process_el in root.iter(f"{BPMN_TAG}process"):
@@ -194,18 +197,22 @@ def list_processes() -> dict:
         from lxml import etree  # noqa: PLC0415
 
         results = []
-        for bpmn_file in sorted(processes_dir.glob("*.bpmn")):
+        for bpmn_file in sorted(processes_dir.glob("**/*.bpmn")):
             try:
                 root = etree.parse(str(bpmn_file)).getroot()
                 for process_el in root.iter(f"{BPMN_TAG}process"):
+                    # Include relative path from processes dir for subdirectory support
+                    rel_path = bpmn_file.relative_to(processes_dir)
                     results.append({
-                        "file": bpmn_file.name,
+                        "file": str(rel_path),
                         "process_id": process_el.get("id", bpmn_file.stem),
                         "name": process_el.get("name", bpmn_file.stem),
+                        "category": rel_path.parent.name if rel_path.parent.name != "." else "root",
                     })
             except Exception as parse_err:
+                rel_path = bpmn_file.relative_to(processes_dir)
                 results.append({
-                    "file": bpmn_file.name,
+                    "file": str(rel_path),
                     "process_id": None,
                     "name": None,
                     "parse_error": str(parse_err),

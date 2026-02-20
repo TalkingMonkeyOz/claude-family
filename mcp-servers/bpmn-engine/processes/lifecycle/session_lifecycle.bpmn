@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/session-lifecycle"
+    id="Definitions_SessionLifecycle">
+
+  <bpmn:process id="session_lifecycle" name="Session Lifecycle" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_session_start</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Script Task: Session Start -->
+    <bpmn:scriptTask id="session_start" name="Session Start" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_session_start</bpmn:incoming>
+      <bpmn:outgoing>flow_session_start_to_load_state</bpmn:outgoing>
+      <bpmn:script>session_started = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Load State (user/test injects prior_state and state_loaded) -->
+    <bpmn:userTask id="load_state" name="Load State">
+      <bpmn:incoming>flow_session_start_to_load_state</bpmn:incoming>
+      <bpmn:outgoing>flow_load_state_to_prior_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Has Prior State? -->
+    <bpmn:exclusiveGateway id="has_prior_state_gateway" name="Has Prior State?" default="flow_fresh_start">
+      <bpmn:incoming>flow_load_state_to_prior_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_restore_context</bpmn:outgoing>
+      <bpmn:outgoing>flow_fresh_start</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Restore Context -->
+    <bpmn:userTask id="restore_context" name="Restore Context">
+      <bpmn:incoming>flow_restore_context</bpmn:incoming>
+      <bpmn:outgoing>flow_restore_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Fresh Start -->
+    <bpmn:scriptTask id="fresh_start" name="Fresh Start" scriptFormat="python">
+      <bpmn:incoming>flow_fresh_start</bpmn:incoming>
+      <bpmn:outgoing>flow_fresh_to_merge</bpmn:outgoing>
+      <bpmn:script>context = "fresh"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Work Merge (converging) -->
+    <bpmn:exclusiveGateway id="work_merge_gateway" name="Work Merge">
+      <bpmn:incoming>flow_restore_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_fresh_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_do_work</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Do Work -->
+    <bpmn:userTask id="do_work" name="Do Work">
+      <bpmn:incoming>flow_merge_to_do_work</bpmn:incoming>
+      <bpmn:incoming>flow_checkpoint_to_do_work</bpmn:incoming>
+      <bpmn:incoming>flow_continue_work</bpmn:incoming>
+      <bpmn:outgoing>flow_do_work_to_action_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Work Action -->
+    <bpmn:exclusiveGateway id="work_action_gateway" name="Work Action" default="flow_continue_work">
+      <bpmn:incoming>flow_do_work_to_action_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_end_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_compact</bpmn:outgoing>
+      <bpmn:outgoing>flow_continue_work</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Save Summary -->
+    <bpmn:scriptTask id="save_summary" name="Save Summary" scriptFormat="python">
+      <bpmn:incoming>flow_end_session</bpmn:incoming>
+      <bpmn:outgoing>flow_save_summary_to_close</bpmn:outgoing>
+      <bpmn:script>summary_saved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Close Session -->
+    <bpmn:scriptTask id="close_session" name="Close Session" scriptFormat="python">
+      <bpmn:incoming>flow_save_summary_to_close</bpmn:incoming>
+      <bpmn:outgoing>flow_close_to_end_normal</bpmn:outgoing>
+      <bpmn:script>session_closed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Save Checkpoint -->
+    <bpmn:scriptTask id="save_checkpoint" name="Save Checkpoint" scriptFormat="python">
+      <bpmn:incoming>flow_compact</bpmn:incoming>
+      <bpmn:outgoing>flow_checkpoint_to_do_work</bpmn:outgoing>
+      <bpmn:script>checkpoint_saved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Session Closed -->
+    <bpmn:endEvent id="end_normal" name="Session Closed">
+      <bpmn:incoming>flow_close_to_end_normal</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_session_start" sourceRef="start_event" targetRef="session_start"/>
+    <bpmn:sequenceFlow id="flow_session_start_to_load_state" sourceRef="session_start" targetRef="load_state"/>
+    <bpmn:sequenceFlow id="flow_load_state_to_prior_gateway" sourceRef="load_state" targetRef="has_prior_state_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_restore_context" sourceRef="has_prior_state_gateway" targetRef="restore_context">
+      <bpmn:conditionExpression>prior_state == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_fresh_start" sourceRef="has_prior_state_gateway" targetRef="fresh_start"/>
+
+    <bpmn:sequenceFlow id="flow_restore_to_merge" sourceRef="restore_context" targetRef="work_merge_gateway"/>
+    <bpmn:sequenceFlow id="flow_fresh_to_merge" sourceRef="fresh_start" targetRef="work_merge_gateway"/>
+    <bpmn:sequenceFlow id="flow_merge_to_do_work" sourceRef="work_merge_gateway" targetRef="do_work"/>
+    <bpmn:sequenceFlow id="flow_do_work_to_action_gateway" sourceRef="do_work" targetRef="work_action_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_end_session" sourceRef="work_action_gateway" targetRef="save_summary">
+      <bpmn:conditionExpression>action == "end_session"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_compact" sourceRef="work_action_gateway" targetRef="save_checkpoint">
+      <bpmn:conditionExpression>action == "compact"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_continue_work" sourceRef="work_action_gateway" targetRef="do_work"/>
+
+    <bpmn:sequenceFlow id="flow_save_summary_to_close" sourceRef="save_summary" targetRef="close_session"/>
+    <bpmn:sequenceFlow id="flow_close_to_end_normal" sourceRef="close_session" targetRef="end_normal"/>
+    <bpmn:sequenceFlow id="flow_checkpoint_to_do_work" sourceRef="save_checkpoint" targetRef="do_work"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="session_lifecycle">
+
+      <!-- Row 1 (y=200): main flow left-to-right -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="100" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_session_start" bpmnElement="session_start">
+        <dc:Bounds x="200" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_load_state" bpmnElement="load_state">
+        <dc:Bounds x="360" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_has_prior_state_gateway" bpmnElement="has_prior_state_gateway" isMarkerVisible="true">
+        <dc:Bounds x="520" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- restore_context branch (y=120 - above main row) -->
+      <bpmndi:BPMNShape id="shape_restore_context" bpmnElement="restore_context">
+        <dc:Bounds x="630" y="100" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- fresh_start branch (y=320 - below main row) -->
+      <bpmndi:BPMNShape id="shape_fresh_start" bpmnElement="fresh_start">
+        <dc:Bounds x="630" y="320" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_work_merge_gateway" bpmnElement="work_merge_gateway" isMarkerVisible="true">
+        <dc:Bounds x="800" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_do_work" bpmnElement="do_work">
+        <dc:Bounds x="920" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_work_action_gateway" bpmnElement="work_action_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1090" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_session branch: save_summary and close_session (y=180 - continuing right) -->
+      <bpmndi:BPMNShape id="shape_save_summary" bpmnElement="save_summary">
+        <dc:Bounds x="1210" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_close_session" bpmnElement="close_session">
+        <dc:Bounds x="1370" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_normal" bpmnElement="end_normal">
+        <dc:Bounds x="1534" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- save_checkpoint (compact branch, y=340 - below main row) -->
+      <bpmndi:BPMNShape id="shape_save_checkpoint" bpmnElement="save_checkpoint">
+        <dc:Bounds x="1090" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_session_start" bpmnElement="flow_start_to_session_start">
+        <di:waypoint x="136" y="218"/>
+        <di:waypoint x="200" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_session_start_to_load_state" bpmnElement="flow_session_start_to_load_state">
+        <di:waypoint x="300" y="220"/>
+        <di:waypoint x="360" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_load_state_to_prior_gateway" bpmnElement="flow_load_state_to_prior_gateway">
+        <di:waypoint x="460" y="220"/>
+        <di:waypoint x="520" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- has_prior_state_gateway → restore_context (up branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_restore_context" bpmnElement="flow_restore_context">
+        <di:waypoint x="545" y="193"/>
+        <di:waypoint x="545" y="140"/>
+        <di:waypoint x="630" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- has_prior_state_gateway → fresh_start (down branch / default) -->
+      <bpmndi:BPMNEdge id="edge_flow_fresh_start" bpmnElement="flow_fresh_start">
+        <di:waypoint x="545" y="243"/>
+        <di:waypoint x="545" y="360"/>
+        <di:waypoint x="630" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- restore_context → work_merge_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_restore_to_merge" bpmnElement="flow_restore_to_merge">
+        <di:waypoint x="730" y="140"/>
+        <di:waypoint x="825" y="140"/>
+        <di:waypoint x="825" y="193"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fresh_start → work_merge_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_fresh_to_merge" bpmnElement="flow_fresh_to_merge">
+        <di:waypoint x="730" y="360"/>
+        <di:waypoint x="825" y="360"/>
+        <di:waypoint x="825" y="243"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- work_merge_gateway → do_work -->
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_do_work" bpmnElement="flow_merge_to_do_work">
+        <di:waypoint x="850" y="218"/>
+        <di:waypoint x="920" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- do_work → work_action_gateway -->
+      <bpmndi:BPMNEdge id="edge_flow_do_work_to_action_gateway" bpmnElement="flow_do_work_to_action_gateway">
+        <di:waypoint x="1020" y="220"/>
+        <di:waypoint x="1090" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- work_action_gateway → save_summary (end_session branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_end_session" bpmnElement="flow_end_session">
+        <di:waypoint x="1140" y="218"/>
+        <di:waypoint x="1210" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- work_action_gateway → save_checkpoint (compact branch) -->
+      <bpmndi:BPMNEdge id="edge_flow_compact" bpmnElement="flow_compact">
+        <di:waypoint x="1115" y="243"/>
+        <di:waypoint x="1115" y="380"/>
+        <di:waypoint x="1090" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- work_action_gateway → do_work (continue_work / default loop back) -->
+      <bpmndi:BPMNEdge id="edge_flow_continue_work" bpmnElement="flow_continue_work">
+        <di:waypoint x="1115" y="193"/>
+        <di:waypoint x="1115" y="100"/>
+        <di:waypoint x="970" y="100"/>
+        <di:waypoint x="970" y="180"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- save_summary → close_session -->
+      <bpmndi:BPMNEdge id="edge_flow_save_summary_to_close" bpmnElement="flow_save_summary_to_close">
+        <di:waypoint x="1310" y="220"/>
+        <di:waypoint x="1370" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- close_session → end_normal -->
+      <bpmndi:BPMNEdge id="edge_flow_close_to_end_normal" bpmnElement="flow_close_to_end_normal">
+        <di:waypoint x="1470" y="220"/>
+        <di:waypoint x="1534" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- save_checkpoint → do_work (compact loop back) -->
+      <bpmndi:BPMNEdge id="edge_flow_checkpoint_to_do_work" bpmnElement="flow_checkpoint_to_do_work">
+        <di:waypoint x="1090" y="380"/>
+        <di:waypoint x="970" y="380"/>
+        <di:waypoint x="970" y="260"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

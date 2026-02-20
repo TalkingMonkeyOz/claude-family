@@ -22,7 +22,7 @@ from SpiffWorkflow.util.task import TaskState
 
 # Absolute path to the BPMN file
 BPMN_FILE = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "processes", "task_lifecycle.bpmn")
+    os.path.join(os.path.dirname(__file__), "..", "processes", "lifecycle", "task_lifecycle.bpmn")
 )
 PROCESS_ID = "task_lifecycle"
 

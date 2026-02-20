@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/feature-workflow"
+    id="Definitions_FeatureWorkflow">
+
+  <bpmn:process id="feature_workflow" name="Feature Workflow" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_create</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Create Feature -->
+    <bpmn:userTask id="create_feature" name="Create Feature">
+      <bpmn:incoming>flow_start_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_set_draft</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Set Draft -->
+    <bpmn:scriptTask id="set_draft" name="Set Draft" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_set_draft</bpmn:incoming>
+      <bpmn:outgoing>flow_set_draft_to_plan</bpmn:outgoing>
+      <bpmn:script>status = "draft"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Plan Feature -->
+    <bpmn:userTask id="plan_feature" name="Plan Feature">
+      <bpmn:incoming>flow_set_draft_to_plan</bpmn:incoming>
+      <bpmn:outgoing>flow_plan_to_set_planned</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Set Planned -->
+    <bpmn:scriptTask id="set_planned" name="Set Planned" scriptFormat="python">
+      <bpmn:incoming>flow_plan_to_set_planned</bpmn:incoming>
+      <bpmn:outgoing>flow_set_planned_to_complexity</bpmn:outgoing>
+      <bpmn:script>status = "planned"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Complexity Check -->
+    <bpmn:exclusiveGateway id="complexity_gateway" name="High Complexity?" default="flow_simple">
+      <bpmn:incoming>flow_set_planned_to_complexity</bpmn:incoming>
+      <bpmn:outgoing>flow_high_complexity</bpmn:outgoing>
+      <bpmn:outgoing>flow_simple</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Spawn Agents (high complexity path) -->
+    <bpmn:userTask id="spawn_agents" name="Spawn Agents">
+      <bpmn:incoming>flow_high_complexity</bpmn:incoming>
+      <bpmn:outgoing>flow_spawn_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Implement Directly (simple path) -->
+    <bpmn:userTask id="implement_directly" name="Implement Directly">
+      <bpmn:incoming>flow_simple</bpmn:incoming>
+      <bpmn:outgoing>flow_implement_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Implementation Merge -->
+    <bpmn:exclusiveGateway id="implementation_merge" name="Implementation Merge">
+      <bpmn:incoming>flow_spawn_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_implement_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_run_tests</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Run Tests -->
+    <bpmn:userTask id="run_tests" name="Run Tests">
+      <bpmn:incoming>flow_merge_to_run_tests</bpmn:incoming>
+      <bpmn:incoming>flow_fix_to_run_tests</bpmn:incoming>
+      <bpmn:incoming>flow_fix_review_to_run_tests</bpmn:incoming>
+      <bpmn:outgoing>flow_run_tests_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Tests Pass? -->
+    <bpmn:exclusiveGateway id="tests_pass_gateway" name="Tests Pass?" default="flow_tests_fail">
+      <bpmn:incoming>flow_run_tests_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_tests_pass</bpmn:outgoing>
+      <bpmn:outgoing>flow_tests_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Fix Issues (from test failure) -->
+    <bpmn:userTask id="fix_issues" name="Fix Issues">
+      <bpmn:incoming>flow_tests_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_run_tests</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User Task: Review Code -->
+    <bpmn:userTask id="review_code" name="Review Code">
+      <bpmn:incoming>flow_tests_pass</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_result_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Review Result -->
+    <bpmn:exclusiveGateway id="review_result_gateway" name="Review Result?" default="flow_approved">
+      <bpmn:incoming>flow_review_to_result_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_changes_requested</bpmn:outgoing>
+      <bpmn:outgoing>flow_approved</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Fix Issues Review (from review changes requested) -->
+    <bpmn:userTask id="fix_issues_review" name="Fix Issues (Review)">
+      <bpmn:incoming>flow_changes_requested</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_review_to_run_tests</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Set Completed -->
+    <bpmn:scriptTask id="set_completed" name="Set Completed" scriptFormat="python">
+      <bpmn:incoming>flow_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_set_completed_to_end</bpmn:outgoing>
+      <bpmn:script>status = "completed"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Feature Completed -->
+    <bpmn:endEvent id="end_completed" name="Feature Completed">
+      <bpmn:incoming>flow_set_completed_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_create" sourceRef="start_event" targetRef="create_feature"/>
+    <bpmn:sequenceFlow id="flow_create_to_set_draft" sourceRef="create_feature" targetRef="set_draft"/>
+    <bpmn:sequenceFlow id="flow_set_draft_to_plan" sourceRef="set_draft" targetRef="plan_feature"/>
+    <bpmn:sequenceFlow id="flow_plan_to_set_planned" sourceRef="plan_feature" targetRef="set_planned"/>
+    <bpmn:sequenceFlow id="flow_set_planned_to_complexity" sourceRef="set_planned" targetRef="complexity_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_high_complexity" sourceRef="complexity_gateway" targetRef="spawn_agents">
+      <bpmn:conditionExpression>complexity == "high"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_simple" sourceRef="complexity_gateway" targetRef="implement_directly"/>
+
+    <bpmn:sequenceFlow id="flow_spawn_to_merge" sourceRef="spawn_agents" targetRef="implementation_merge"/>
+    <bpmn:sequenceFlow id="flow_implement_to_merge" sourceRef="implement_directly" targetRef="implementation_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_run_tests" sourceRef="implementation_merge" targetRef="run_tests"/>
+
+    <bpmn:sequenceFlow id="flow_run_tests_to_gateway" sourceRef="run_tests" targetRef="tests_pass_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_tests_pass" sourceRef="tests_pass_gateway" targetRef="review_code">
+      <bpmn:conditionExpression>tests_passed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_tests_fail" sourceRef="tests_pass_gateway" targetRef="fix_issues"/>
+
+    <bpmn:sequenceFlow id="flow_fix_to_run_tests" sourceRef="fix_issues" targetRef="run_tests"/>
+
+    <bpmn:sequenceFlow id="flow_review_to_result_gateway" sourceRef="review_code" targetRef="review_result_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_changes_requested" sourceRef="review_result_gateway" targetRef="fix_issues_review">
+      <bpmn:conditionExpression>review == "changes_requested"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_approved" sourceRef="review_result_gateway" targetRef="set_completed"/>
+
+    <bpmn:sequenceFlow id="flow_fix_review_to_run_tests" sourceRef="fix_issues_review" targetRef="run_tests"/>
+    <bpmn:sequenceFlow id="flow_set_completed_to_end" sourceRef="set_completed" targetRef="end_completed"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="feature_workflow">
+
+      <!-- Row 1: main happy path (y=200) -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_feature" bpmnElement="create_feature">
+        <dc:Bounds x="170" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_set_draft" bpmnElement="set_draft">
+        <dc:Bounds x="330" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_plan_feature" bpmnElement="plan_feature">
+        <dc:Bounds x="490" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_set_planned" bpmnElement="set_planned">
+        <dc:Bounds x="650" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_complexity_gateway" bpmnElement="complexity_gateway" isMarkerVisible="true">
+        <dc:Bounds x="810" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Row 1 upper: spawn_agents (y=100) -->
+      <bpmndi:BPMNShape id="shape_spawn_agents" bpmnElement="spawn_agents">
+        <dc:Bounds x="920" y="100" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Row 1 lower: implement_directly (y=300) -->
+      <bpmndi:BPMNShape id="shape_implement_directly" bpmnElement="implement_directly">
+        <dc:Bounds x="920" y="300" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- implementation_merge gateway -->
+      <bpmndi:BPMNShape id="shape_implementation_merge" bpmnElement="implementation_merge" isMarkerVisible="true">
+        <dc:Bounds x="1085" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- run_tests task -->
+      <bpmndi:BPMNShape id="shape_run_tests" bpmnElement="run_tests">
+        <dc:Bounds x="1195" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- tests_pass_gateway -->
+      <bpmndi:BPMNShape id="shape_tests_pass_gateway" bpmnElement="tests_pass_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1355" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- fix_issues task (below, loops back to run_tests) -->
+      <bpmndi:BPMNShape id="shape_fix_issues" bpmnElement="fix_issues">
+        <dc:Bounds x="1355" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- review_code task -->
+      <bpmndi:BPMNShape id="shape_review_code" bpmnElement="review_code">
+        <dc:Bounds x="1465" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- review_result_gateway -->
+      <bpmndi:BPMNShape id="shape_review_result_gateway" bpmnElement="review_result_gateway" isMarkerVisible="true">
+        <dc:Bounds x="1625" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- fix_issues_review task (below, loops back to run_tests) -->
+      <bpmndi:BPMNShape id="shape_fix_issues_review" bpmnElement="fix_issues_review">
+        <dc:Bounds x="1625" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- set_completed task -->
+      <bpmndi:BPMNShape id="shape_set_completed" bpmnElement="set_completed">
+        <dc:Bounds x="1735" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- end_completed event -->
+      <bpmndi:BPMNShape id="shape_end_completed" bpmnElement="end_completed">
+        <dc:Bounds x="1895" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Edges: main happy path -->
+      <bpmndi:BPMNEdge id="edge_flow_start_to_create" bpmnElement="flow_start_to_create">
+        <di:waypoint x="116" y="218"/>
+        <di:waypoint x="170" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_create_to_set_draft" bpmnElement="flow_create_to_set_draft">
+        <di:waypoint x="270" y="220"/>
+        <di:waypoint x="330" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_set_draft_to_plan" bpmnElement="flow_set_draft_to_plan">
+        <di:waypoint x="430" y="220"/>
+        <di:waypoint x="490" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_plan_to_set_planned" bpmnElement="flow_plan_to_set_planned">
+        <di:waypoint x="590" y="220"/>
+        <di:waypoint x="650" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_set_planned_to_complexity" bpmnElement="flow_set_planned_to_complexity">
+        <di:waypoint x="750" y="220"/>
+        <di:waypoint x="810" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- complexity gateway branches -->
+      <bpmndi:BPMNEdge id="edge_flow_high_complexity" bpmnElement="flow_high_complexity">
+        <di:waypoint x="835" y="193"/>
+        <di:waypoint x="835" y="140"/>
+        <di:waypoint x="920" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_simple" bpmnElement="flow_simple">
+        <di:waypoint x="835" y="243"/>
+        <di:waypoint x="835" y="340"/>
+        <di:waypoint x="920" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- spawn_agents and implement_directly to merge -->
+      <bpmndi:BPMNEdge id="edge_flow_spawn_to_merge" bpmnElement="flow_spawn_to_merge">
+        <di:waypoint x="1020" y="140"/>
+        <di:waypoint x="1110" y="140"/>
+        <di:waypoint x="1110" y="193"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_implement_to_merge" bpmnElement="flow_implement_to_merge">
+        <di:waypoint x="1020" y="340"/>
+        <di:waypoint x="1110" y="340"/>
+        <di:waypoint x="1110" y="243"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_merge_to_run_tests" bpmnElement="flow_merge_to_run_tests">
+        <di:waypoint x="1135" y="218"/>
+        <di:waypoint x="1195" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_run_tests_to_gateway" bpmnElement="flow_run_tests_to_gateway">
+        <di:waypoint x="1295" y="220"/>
+        <di:waypoint x="1355" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- tests_pass_gateway branches -->
+      <bpmndi:BPMNEdge id="edge_flow_tests_pass" bpmnElement="flow_tests_pass">
+        <di:waypoint x="1405" y="218"/>
+        <di:waypoint x="1465" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_tests_fail" bpmnElement="flow_tests_fail">
+        <di:waypoint x="1380" y="243"/>
+        <di:waypoint x="1380" y="380"/>
+        <di:waypoint x="1355" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fix_issues loop back to run_tests -->
+      <bpmndi:BPMNEdge id="edge_flow_fix_to_run_tests" bpmnElement="flow_fix_to_run_tests">
+        <di:waypoint x="1355" y="380"/>
+        <di:waypoint x="1245" y="380"/>
+        <di:waypoint x="1245" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_review_to_result_gateway" bpmnElement="flow_review_to_result_gateway">
+        <di:waypoint x="1565" y="220"/>
+        <di:waypoint x="1625" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- review_result_gateway branches -->
+      <bpmndi:BPMNEdge id="edge_flow_changes_requested" bpmnElement="flow_changes_requested">
+        <di:waypoint x="1650" y="243"/>
+        <di:waypoint x="1650" y="380"/>
+        <di:waypoint x="1625" y="380"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_approved" bpmnElement="flow_approved">
+        <di:waypoint x="1675" y="218"/>
+        <di:waypoint x="1735" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- fix_issues_review loop back to run_tests -->
+      <bpmndi:BPMNEdge id="edge_flow_fix_review_to_run_tests" bpmnElement="flow_fix_review_to_run_tests">
+        <di:waypoint x="1625" y="380"/>
+        <di:waypoint x="1245" y="480"/>
+        <di:waypoint x="1245" y="260"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_set_completed_to_end" bpmnElement="flow_set_completed_to_end">
+        <di:waypoint x="1835" y="220"/>
+        <di:waypoint x="1895" y="218"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
