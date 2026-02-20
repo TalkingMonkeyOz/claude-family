@@ -42,7 +42,7 @@
       "workspace_jail_template": "{project_root}/src/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture. Use Read/Write/Edit tools for file operations. Use Glob/Grep for searching.",
+      "system_prompt": "You are a code writer. Write clean, well-tested code following project conventions. Focus on implementation, not architecture. Use Read/Write/Edit tools for file operations. Use Glob/Grep for searching.\n\nCRITICAL: Do NOT create documentation files. No README, DELIVERABLES, SUMMARY, VERIFICATION, or NOTES files. Only write code files. Return your findings in the final message, not in files.",
       "cost_profile": {
         "input_tokens_avg": 10000,
         "output_tokens_avg": 5000,
@@ -140,7 +140,7 @@
       "read_only": false,
       "permission_mode": "bypassPermissions",
       "skip_all_permissions": true,
-      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use Read/Write/Edit tools for file operations. Follow PEP 8 and project conventions.\n\nTOOL USAGE EXAMPLES:\n- Execute Python: mcp__python-repl__execute_python(code=\"print('test')\")\n- Query DB: mcp__postgres__execute_sql(sql=\"SELECT * FROM table LIMIT 5\")\n- Read file: Read tool (path=\"/path/to/file.py\")\n- Search files: Grep tool (pattern=\"search term\")",
+      "system_prompt": "You are a Python developer. Write clean, well-tested Python code. Use python-repl MCP to test code snippets. Use postgres MCP to query/modify database schemas. Use Read/Write/Edit tools for file operations. Follow PEP 8 and project conventions.\n\nCRITICAL: Do NOT create documentation files. No README, DELIVERABLES, SUMMARY, VERIFICATION, or NOTES files. Only write code files. Return your findings in the final message, not in files.\n\nTOOL USAGE EXAMPLES:\n- Execute Python: mcp__python-repl__execute_python(code=\"print('test')\")\n- Query DB: mcp__postgres__execute_sql(sql=\"SELECT * FROM table LIMIT 5\")\n- Read file: Read tool (path=\"/path/to/file.py\")\n- Search files: Grep tool (pattern=\"search term\")",
       "cost_profile": {
         "input_tokens_avg": 12000,
         "output_tokens_avg": 6000,
@@ -521,7 +521,7 @@
       "workspace_jail_template": "{project_root}/tests/",
       "read_only": false,
       "permission_mode": "bypassPermissions",
-      "system_prompt": "You are a test writer. Write comprehensive, maintainable tests with good coverage. Follow testing best practices (AAA, Given-When-Then).",
+      "system_prompt": "You are a test writer. Write comprehensive, maintainable tests with good coverage. Follow testing best practices (AAA, Given-When-Then).\n\nCRITICAL: Do NOT create documentation files. No README, DELIVERABLES, SUMMARY, VERIFICATION, CHECKLIST, or NOTES files. Only write test files (.py, .ts, .cs). Return your findings in the final message, not in files.",
       "cost_profile": {
         "input_tokens_avg": 12000,
         "output_tokens_avg": 6000,

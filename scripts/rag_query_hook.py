@@ -31,8 +31,9 @@ CORE_PROTOCOL = """
 STOP! Read the user's message fully.
 1. DECOMPOSE: Extract EVERY directive from the user's message. Each distinct ask = one task (TaskCreate). Include thinking/design tasks, not just code tasks. Then work through them in order.
 2. PRESERVE: store_session_fact("user_intent", <what user wants in their words>) when direction changes. This survives compaction.
-3. Verify before claiming - read files, query DB. Never guess.
-4. Check MCP tools first - project-tools has 40+ tools.
+3. BUDGET: Before executing, classify tasks (heavy: BPMN/large files/multi-file, medium: single edit/test, light: query/status). If 3+ heavy tasks, DELEGATE to agents. save_checkpoint() after each completed task.
+4. Verify before claiming - read files, query DB. Never guess.
+5. Check MCP tools first - project-tools has 40+ tools.
 """
 
 import json
@@ -57,6 +58,7 @@ REMINDER_INTERVALS = {
     "vault_refresh": 25,     # Every 25 interactions - refresh vault understanding
     "git_check": 10,         # Every 10 interactions - check uncommitted changes
     "tool_awareness": 8,     # Every 8 interactions - remind about MCP tools
+    "budget_check": 12,      # Every 12 interactions - context budget awareness
 }
 
 # State file for tracking interaction count
@@ -130,6 +132,17 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
   - **Processing Excel/CSV?** → `python-repl` (keep data in REPL, not context)
   - **Learned something useful?** → `project-tools.store_knowledge` (persists for future)""")
             state["last_tool_awareness"] = count
+
+    if count > 0 and count % REMINDER_INTERVALS["budget_check"] == 0:
+        if count != state.get("last_budget_check", 0):
+            reminders.append("""**CONTEXT BUDGET CHECK** (interaction #{count}):
+  - Heavy tasks (BPMN, large files, multi-file refactor): ~800 tokens each
+  - Medium tasks (single edit, test writing): ~400 tokens each
+  - Light tasks (query, status, git): ~100 tokens each
+  - **3+ heavy tasks remaining?** DELEGATE to agents (spawn_agent)
+  - **Run save_checkpoint()** after each completed task to preserve progress
+  - **Over budget?** Stop, save state, let next session continue""".format(count=count))
+            state["last_budget_check"] = count
 
     if reminders:
         return "\n## Periodic Reminders (Interaction #{})\n{}".format(
