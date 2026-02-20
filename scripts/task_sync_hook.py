@@ -347,7 +347,14 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
         if existing:
             # Reuse existing todo instead of creating duplicate
             todo_id = existing['todo_id']
-            logger.info(f"TaskCreate linked to existing todo: task #{task_number} → {todo_id[:8]}...")
+            # Increment restore_count to track zombie tasks (FB130)
+            cur = conn.cursor()
+            cur.execute("""
+                UPDATE claude.todos
+                SET restore_count = COALESCE(restore_count, 0) + 1
+                WHERE todo_id = %s::uuid
+            """, (todo_id,))
+            logger.info(f"TaskCreate linked to existing todo: task #{task_number} → {todo_id[:8]}... (restore_count incremented)")
         else:
             # Insert new todo
             cur = conn.cursor()

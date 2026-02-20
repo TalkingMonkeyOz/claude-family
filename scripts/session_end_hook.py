@@ -117,12 +117,12 @@ def demote_in_progress_todos(project_name: str, conn):
             try:
                 cur.execute("""
                     INSERT INTO claude.audit_log
-                    (entity_type, entity_id, from_status, to_status, changed_by, change_reason)
+                    (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
                     VALUES ('todo_demotion', %s, 'in_progress', 'pending', 'session_end_hook',
-                            %s)
+                            'session_end_hook', %s::jsonb)
                 """, (
                     project_name,
-                    f"Auto-demoted {demoted_count} todo(s) on session exit"
+                    json.dumps({"reason": f"Auto-demoted {demoted_count} todo(s) on session exit"})
                 ))
             except Exception as audit_err:
                 logger.warning(f"Failed to write audit log for todo demotion: {audit_err}")

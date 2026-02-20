@@ -536,11 +536,40 @@ def start_session(
             }
 
         if project_id:
+            # Startup demotion: demote orphaned in_progress todos from closed sessions.
+            # Safety net for when SessionEnd hook fails or session crashes (FB129).
+            cur.execute("""
+                UPDATE claude.todos
+                SET status = 'pending', updated_at = NOW()
+                WHERE project_id = %s::uuid
+                  AND status = 'in_progress'
+                  AND NOT is_deleted
+                  AND created_session_id IS NOT NULL
+                  AND created_session_id IN (
+                      SELECT session_id FROM claude.sessions WHERE session_end IS NOT NULL
+                  )
+            """, (project_id,))
+            demoted = cur.rowcount
+
+            # Auto-archive zombie todos restored 4+ times without completion (FB130).
+            cur.execute("""
+                UPDATE claude.todos
+                SET status = 'archived', updated_at = NOW()
+                WHERE project_id = %s::uuid
+                  AND status IN ('pending', 'in_progress')
+                  AND NOT is_deleted
+                  AND COALESCE(restore_count, 0) >= 4
+            """, (project_id,))
+            archived_zombies = cur.rowcount
+
+            if demoted > 0 or archived_zombies > 0:
+                conn.commit()
+
             # CTE 2: Todos + features + ready tasks + feedback count (single query)
             cur.execute("""
                 WITH todos AS (
                     SELECT content, active_form, status, priority,
-                           EXTRACT(DAY FROM NOW() - COALESCE(updated_at, created_at))::int as age_days
+                           EXTRACT(DAY FROM NOW() - created_at)::int as age_days
                     FROM claude.todos
                     WHERE project_id = %s::uuid
                       AND status IN ('pending', 'in_progress')
@@ -4179,6 +4208,144 @@ def promote_feedback(
     except Exception as e:
         conn.rollback()
         return {"success": False, "error": f"Failed to promote feedback: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def resolve_feedback(
+    feedback_id: str,
+    resolution_note: str = "",
+) -> dict:
+    """Resolve a feedback item in one call, auto-advancing through intermediate states.
+
+    Convenience tool that handles multi-step state transitions automatically.
+    Each transition is individually logged to audit_log via WorkflowEngine.
+    Supports feedback at any status: new, triaged, or in_progress.
+
+    Use when: A feedback item has been fixed and you want to mark it resolved.
+    Avoids the need for multiple advance_status calls (new→in_progress→resolved).
+    Returns: {success, feedback_code, from_status, to_status, transitions_made,
+              path: [list of statuses traversed]}.
+
+    Args:
+        feedback_id: Feedback short code (e.g., 'FB42') or UUID.
+        resolution_note: Optional note about the resolution.
+    """
+    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    conn = get_db_connection()
+    try:
+        engine = WorkflowEngine(conn)
+
+        # Resolve the short code to get current status
+        cur = conn.cursor()
+        if feedback_id.upper().startswith("FB"):
+            try:
+                code_num = int(feedback_id[2:])
+            except ValueError:
+                return {"success": False, "error": f"Invalid feedback code: {feedback_id}"}
+            cur.execute("""
+                SELECT feedback_id::text, status, short_code, title
+                FROM claude.feedback
+                WHERE short_code = %s
+            """, (code_num,))
+        else:
+            cur.execute("""
+                SELECT feedback_id::text, status, short_code, title
+                FROM claude.feedback
+                WHERE feedback_id = %s::uuid
+            """, (feedback_id,))
+
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Feedback not found: {feedback_id}"}
+
+        current_status = row['status']
+        fb_code = f"FB{row['short_code']}"
+        original_status = current_status
+        path = [current_status]
+
+        # Already resolved
+        if current_status == 'resolved':
+            return {
+                "success": True,
+                "feedback_code": fb_code,
+                "from_status": current_status,
+                "to_status": "resolved",
+                "transitions_made": 0,
+                "path": path,
+                "message": "Already resolved",
+            }
+
+        # Terminal states that can't reach resolved
+        if current_status in ('wont_fix', 'duplicate'):
+            return {
+                "success": False,
+                "feedback_code": fb_code,
+                "error": f"Cannot resolve from '{current_status}' - item is already closed.",
+            }
+
+        # Define the path to resolved from each status
+        transitions_needed = {
+            'new': ['in_progress', 'resolved'],
+            'triaged': ['in_progress', 'resolved'],
+            'in_progress': ['resolved'],
+        }
+
+        steps = transitions_needed.get(current_status)
+        if not steps:
+            return {
+                "success": False,
+                "feedback_code": fb_code,
+                "error": f"Unexpected status '{current_status}' - cannot auto-resolve.",
+            }
+
+        # Execute each transition through the WorkflowEngine
+        transitions_made = 0
+        for next_status in steps:
+            result = engine.execute_transition(
+                entity_type='feedback',
+                item_id=feedback_id,
+                new_status=next_status,
+                changed_by=session_id,
+                change_source='resolve_feedback',
+            )
+            if not result.get('success'):
+                return {
+                    "success": False,
+                    "feedback_code": fb_code,
+                    "from_status": original_status,
+                    "failed_at": f"{current_status}→{next_status}",
+                    "transitions_completed": transitions_made,
+                    "path": path,
+                    "error": result.get('error', 'Transition failed'),
+                }
+            current_status = next_status
+            path.append(next_status)
+            transitions_made += 1
+
+        # Add resolution note if provided
+        if resolution_note:
+            cur.execute("""
+                UPDATE claude.feedback
+                SET description = description || E'\n\n**Resolution:** ' || %s,
+                    updated_at = NOW()
+                WHERE short_code = %s
+            """, (resolution_note, row['short_code']))
+            conn.commit()
+
+        return {
+            "success": True,
+            "feedback_code": fb_code,
+            "title": row['title'],
+            "from_status": original_status,
+            "to_status": "resolved",
+            "transitions_made": transitions_made,
+            "path": path,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Failed to resolve feedback: {str(e)}"}
     finally:
         conn.close()
 
