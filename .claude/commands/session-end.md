@@ -1,70 +1,103 @@
 **MANDATORY END-OF-SESSION CHECKLIST**
 
-Before ending this session, complete ALL steps below using MCP tools (no raw SQL).
+Before ending this session, complete ALL of the following:
 
 ---
 
-## Step 1: Review Session
+## 🚨 MCP USAGE CHECKLIST 🚨
 
-Summarize what happened:
-- What was accomplished this session?
-- What tasks were completed?
-- What decisions were made?
-- What's left for next session?
+### ✅ Session Logging (postgres MCP)
 
-## Step 2: Capture Knowledge (if applicable)
+```sql
+-- 1. Get your latest session ID
+SELECT id FROM claude_family.session_history
+WHERE identity_id = 5
+ORDER BY session_start DESC LIMIT 1;
 
-For each **significant** learning, pattern, or decision discovered this session, call:
-
-```
-store_knowledge(
-    title="Short descriptive title",
-    description="Detailed explanation of the learning",
-    knowledge_type="learned|pattern|gotcha|preference|fact|procedure",
-    knowledge_category="relevant-domain",
-    source="session"
-)
-```
-
-**Only capture reusable knowledge** - skip session-specific context that won't help future sessions.
-
-## Step 3: Close Session
-
-Call `end_session()` with ALL parameters:
-
-```
-end_session(
-    summary="1-2 sentence recap of what was accomplished",
-    next_steps=["First thing to do next session", "Second thing"],
-    tasks_completed=["Task 1 description", "Task 2 description"],
-    learnings=["Key learning 1", "Key learning 2"]
-)
+-- 2. Update session with summary
+UPDATE claude_family.session_history
+SET
+    session_end = NOW(),
+    summary = 'What was accomplished',
+    files_modified = ARRAY['file1.cs', 'file2.cs'],
+    outcome = 'success',
+    tokens_used = <estimated_tokens>
+WHERE id = <session_id>;
 ```
 
-**Note**: Learnings passed here are automatically stored as searchable knowledge entries with embeddings. Keep them specific and reusable (min 20 chars each, max 5).
+### ✅ Store Reusable Knowledge (postgres MCP)
 
-## Step 4: Report Results
+**If you discovered a reusable pattern:**
 
-Show the user what was saved:
-- Session closed (session_id)
-- Conversation extracted (turn count)
-- Knowledge entries created (count)
-- Next steps saved
+```sql
+INSERT INTO claude_family.universal_knowledge
+(pattern_name, description, applies_to, example_code, gotchas, created_by_identity_id)
+VALUES (
+    'Pattern Name',
+    'Clear description',
+    'When to use this',
+    'Code example',
+    'Things to watch out for',
+    5
+);
+```
+
+**If project-specific:**
+
+```sql
+INSERT INTO nimbus_context.patterns (pattern_type, solution, context)
+VALUES ('bug-fix', 'Solution details', 'When this applies');
+```
+
+### ✅ Store in Memory Graph (memory MCP)
+
+```
+mcp__memory__create_entities(entities=[{
+    "name": "Session Summary",
+    "entityType": "Session",
+    "observations": [
+        "Completed: X",
+        "Key decision: Y",
+        "Files modified: Z",
+        "Pattern discovered: P"
+    ]
+}])
+```
+
+**If you solved a problem:**
+
+```
+mcp__memory__create_relations(relations=[{
+    "from": "Problem Name",
+    "relationType": "solved-by",
+    "to": "Solution Pattern"
+}])
+```
 
 ---
 
-## What NOT to Do
+## Verification Questions
 
-- Do NOT use raw SQL to update sessions or store knowledge
-- Do NOT reference `claude_family.*` schema (use `claude.*` via MCP tools)
-- Do NOT skip knowledge capture if you learned something reusable
-- Do NOT store trivial or session-specific facts as knowledge
+Ask yourself:
 
-## Cost of Skipping
+- [ ] Did I log session start to postgres?
+- [ ] Did I query for existing knowledge before proposing solutions?
+- [ ] Did I use tree-sitter for code analysis (if applicable)?
+- [ ] Did I store learnings in memory graph?
+- [ ] Did I update session log with summary?
+- [ ] Did I store reusable patterns in postgres?
+
+**IF ANY ANSWER IS NO → DO IT NOW BEFORE ENDING SESSION**
+
+---
+
+## Cost of Skipping MCPs
 
 - Next Claude spends 30 minutes rediscovering your solution
 - Same bug gets solved 3 times by different Claudes
 - Institutional knowledge stays at zero
 - User gets frustrated repeating themselves
 
-**Remember**: Knowledge capture is how the Claude Family learns and grows.
+---
+
+**Remember**: MCP usage is NOT optional. It's how the Claude Family learns and grows.

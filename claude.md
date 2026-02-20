@@ -53,7 +53,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
-- **MCP Servers**: orchestrator, postgres, project-tools, python-repl, sequential-thinking
+- **MCP Servers**: orchestrator, postgres, project-tools, python-repl, sequential-thinking, bpmn-engine
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
@@ -201,6 +201,7 @@ Core skills available:
 | messaging | Inter-Claude communication |
 | agentic-orchestration | Agent spawning, parallel work |
 | testing-patterns | Test writing and execution |
+| bpmn-modeling | BPMN-first process design, query/model/test workflows |
 
 **Usage**: When a skill applies, use the `Skill` tool to invoke it.
 
