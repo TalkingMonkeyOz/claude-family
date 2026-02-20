@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/input-decomposition"
+    id="Definitions_ID">
+
+  <bpmn:process id="input_decomposition" name="Input Decomposition: User Message to Tasks" isExecutable="true">
+
+    <!--
+      Models how Claude should process user messages before acting.
+      Enforced via CORE_PROTOCOL injection (rag_query_hook.py) and
+      task_discipline_hook.py (blocks actions without tasks).
+
+      Trigger: Every UserPromptSubmit (via CORE_PROTOCOL injection)
+      Input: user_message (the prompt text)
+
+      Key behaviors:
+        - Read the FULL message before doing anything
+        - Extract EVERY directive (code tasks, design tasks, thinking tasks, constraints)
+        - Create one TaskCreate per directive
+        - Store user_intent session fact when direction changes
+        - Only then proceed with implementation
+
+      Common failure mode: Creating only code tasks, missing thinking/design/meta tasks.
+      Example: "fix X, also think about Y, and model first" = 3 tasks, not 1.
+
+      Implementation: CORE_PROTOCOL in rag_query_hook.py + task_discipline_hook.py
+    -->
+
+    <bpmn:startEvent id="start" name="User Message Received">
+      <bpmn:outgoing>flow_start_read</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="read_full_message" name="[CLAUDE] Read Full Message" scriptFormat="python">
+      <bpmn:incoming>flow_start_read</bpmn:incoming>
+      <bpmn:outgoing>flow_read_to_check</bpmn:outgoing>
+      <bpmn:script>
+# STOP! Read the user's message fully before acting.
+# Do not start coding/editing at first mention of a problem.
+has_directives = has_directives if has_directives is not None else True
+directive_count = directive_count if directive_count is not None else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_directives_gw" name="Has Actionable Directives?" default="flow_simple">
+      <bpmn:incoming>flow_read_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_complex</bpmn:outgoing>
+      <bpmn:outgoing>flow_simple</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Simple path: single question or trivial request -->
+    <bpmn:scriptTask id="respond_directly" name="[CLAUDE] Respond Directly" scriptFormat="python">
+      <bpmn:incoming>flow_simple</bpmn:incoming>
+      <bpmn:outgoing>flow_simple_end</bpmn:outgoing>
+      <bpmn:script>
+# Single question, greeting, or trivial request - no task needed
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_simple" name="Direct Response">
+      <bpmn:incoming>flow_simple_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Complex path: multi-part request -->
+    <bpmn:scriptTask id="extract_directives" name="[CLAUDE] Extract All Directives" scriptFormat="python">
+      <bpmn:incoming>flow_complex</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_classify</bpmn:outgoing>
+      <bpmn:script>
+# Parse user message into discrete directives:
+# - Code tasks ("fix X", "add Y", "implement Z")
+# - Design tasks ("think about X", "consider Y")
+# - Meta tasks ("model first", "review before commit")
+# - Constraints ("make sure to X", "don't Y")
+# COMMON MISS: Only extracting code tasks, ignoring thinking/design tasks
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="classify_directives" name="[CLAUDE] Classify Each Directive" scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_intent</bpmn:outgoing>
+      <bpmn:script>
+# For each directive:
+# - Is it a task? (has a verb: fix, add, think, model, check)
+# - Is it a constraint? (ordering: "first", "before", "after")
+# - Is it a preference? (style/approach guidance)
+# Tasks get TaskCreate. Constraints become task dependencies.
+# Preferences get stored as session facts.
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_user_intent" name="[MCP] Store User Intent" scriptFormat="python">
+      <bpmn:incoming>flow_classify_to_intent</bpmn:incoming>
+      <bpmn:outgoing>flow_intent_to_create</bpmn:outgoing>
+      <bpmn:script>
+# store_session_fact("user_intent", user's goals in their words)
+# This survives compaction via precompact hook injection
+intent_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_tasks" name="[CLAUDE] Create Tasks for Each Directive" scriptFormat="python">
+      <bpmn:incoming>flow_intent_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_work</bpmn:outgoing>
+      <bpmn:script>
+# TaskCreate for each directive identified:
+# - subject: imperative verb form
+# - activeForm: present continuous
+# - description: what needs to be done + acceptance criteria
+# Include design/thinking tasks, not just code tasks!
+tasks_created = directive_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="work_through_tasks" name="[CLAUDE] Work Through Tasks In Order" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_work</bpmn:incoming>
+      <bpmn:outgoing>flow_work_end</bpmn:outgoing>
+      <bpmn:script>
+# Execute tasks sequentially, respecting constraints:
+# - Mark in_progress before starting
+# - Mark completed when done
+# - Verify before claiming completion
+decomposition_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_decomposed" name="All Tasks Completed">
+      <bpmn:incoming>flow_work_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_read" sourceRef="start" targetRef="read_full_message"/>
+    <bpmn:sequenceFlow id="flow_read_to_check" sourceRef="read_full_message" targetRef="has_directives_gw"/>
+    <bpmn:sequenceFlow id="flow_complex" sourceRef="has_directives_gw" targetRef="extract_directives">
+      <bpmn:conditionExpression>has_directives == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_simple" sourceRef="has_directives_gw" targetRef="respond_directly"/>
+    <bpmn:sequenceFlow id="flow_simple_end" sourceRef="respond_directly" targetRef="end_simple"/>
+    <bpmn:sequenceFlow id="flow_extract_to_classify" sourceRef="extract_directives" targetRef="classify_directives"/>
+    <bpmn:sequenceFlow id="flow_classify_to_intent" sourceRef="classify_directives" targetRef="store_user_intent"/>
+    <bpmn:sequenceFlow id="flow_intent_to_create" sourceRef="store_user_intent" targetRef="create_tasks"/>
+    <bpmn:sequenceFlow id="flow_create_to_work" sourceRef="create_tasks" targetRef="work_through_tasks"/>
+    <bpmn:sequenceFlow id="flow_work_end" sourceRef="work_through_tasks" targetRef="end_decomposed"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="input_decomposition">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

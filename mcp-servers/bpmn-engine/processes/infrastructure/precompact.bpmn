@@ -10,15 +10,18 @@
 
     <!--
       PreCompact hook that preserves critical session state before context compaction.
-      Injects a systemMessage with active work items so Claude retains awareness.
+      Injects a systemMessage with active work items AND narrative context so Claude
+      retains both situational awareness and understanding of user intent.
 
       Trigger: PreCompact event (manual /compact or auto-compact)
       Output: systemMessage injected into post-compact context
 
       Key behaviors:
         - Queries active todos, session_state, active features from DB
-        - Builds refresh message with preserved state
-        - Includes post-compaction checklist (re-read CLAUDE.md, etc.)
+        - Queries session facts (decisions, references, user_intent) from DB
+        - Reads session notes from markdown file
+        - Builds refresh message with preserved state + narrative
+        - Includes post-compaction checklist (recall user_intent, re-read CLAUDE.md)
         - Fail-open: returns minimal message if DB unavailable
 
       Implementation: scripts/precompact_hook.py
@@ -62,7 +65,7 @@ state_injected = False
 
     <bpmn:scriptTask id="query_session_state" name="[DB] Query Active Work Items" scriptFormat="python">
       <bpmn:incoming>flow_db_ok</bpmn:incoming>
-      <bpmn:outgoing>flow_query_to_build</bpmn:outgoing>
+      <bpmn:outgoing>flow_query_to_facts</bpmn:outgoing>
       <bpmn:script>
 # Query active todos (in_progress first, then pending, limit 10)
 # Query session_state (current_focus, next_steps)
@@ -71,15 +74,39 @@ state_queried = True
       </bpmn:script>
     </bpmn:scriptTask>
 
+    <bpmn:scriptTask id="query_session_facts" name="[DB] Query Session Facts" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_facts</bpmn:incoming>
+      <bpmn:outgoing>flow_facts_to_notes</bpmn:outgoing>
+      <bpmn:script>
+# Query session_facts WHERE fact_type IN (decision, reference, note)
+# Preserves narrative context: user_intent, decisions, key findings
+# Truncates values to 200 chars each, max 5 facts
+facts_queried = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="read_session_notes" name="[FILE] Read Session Notes" scriptFormat="python">
+      <bpmn:incoming>flow_facts_to_notes</bpmn:incoming>
+      <bpmn:outgoing>flow_notes_to_build</bpmn:outgoing>
+      <bpmn:script>
+# Read ~/.claude/session_notes.md if exists
+# Truncate to 500 chars to avoid bloating context
+# Contains progress, decisions, blockers, findings sections
+notes_read = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
     <bpmn:scriptTask id="build_message" name="[TOOL] Build Refresh Message" scriptFormat="python">
-      <bpmn:incoming>flow_query_to_build</bpmn:incoming>
+      <bpmn:incoming>flow_notes_to_build</bpmn:incoming>
       <bpmn:outgoing>flow_build_to_end</bpmn:outgoing>
       <bpmn:script>
 # Compose systemMessage with:
 # - ACTIVE TODOS (preserved)
 # - CURRENT FOCUS and NEXT STEPS
 # - ACTIVE FEATURES
-# - POST-COMPACTION CHECKLIST
+# - SESSION CONTEXT (decisions, user_intent)
+# - SESSION NOTES (progress, findings)
+# - POST-COMPACTION CHECKLIST (recall user_intent, re-read CLAUDE.md)
 state_injected = True
       </bpmn:script>
     </bpmn:scriptTask>
@@ -98,7 +125,9 @@ state_injected = True
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="fallback_message"/>
     <bpmn:sequenceFlow id="flow_fallback_to_end" sourceRef="fallback_message" targetRef="end_injected"/>
-    <bpmn:sequenceFlow id="flow_query_to_build" sourceRef="query_session_state" targetRef="build_message"/>
+    <bpmn:sequenceFlow id="flow_query_to_facts" sourceRef="query_session_state" targetRef="query_session_facts"/>
+    <bpmn:sequenceFlow id="flow_facts_to_notes" sourceRef="query_session_facts" targetRef="read_session_notes"/>
+    <bpmn:sequenceFlow id="flow_notes_to_build" sourceRef="read_session_notes" targetRef="build_message"/>
     <bpmn:sequenceFlow id="flow_build_to_end" sourceRef="build_message" targetRef="end_injected"/>
 
   </bpmn:process>

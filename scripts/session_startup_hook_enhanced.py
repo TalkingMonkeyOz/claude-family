@@ -227,16 +227,21 @@ def get_outstanding_todo_count(project_name: str) -> tuple:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Auto-archive stale pending todos (>7 days old, pending only - not in_progress)
+        # Auto-archive stale todos (per task_lifecycle BPMN check_staleness step):
+        #   - pending > 7 days → archived
+        #   - in_progress > 3 days → archived (safety net, session_end_hook should have demoted these)
         cur.execute("""
             UPDATE claude.todos t
             SET status = 'archived', updated_at = NOW()
             FROM claude.projects p
             WHERE t.project_id = p.project_id
               AND p.project_name = %s
-              AND t.status = 'pending'
               AND NOT t.is_deleted
-              AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '7 days'
+              AND (
+                  (t.status = 'pending' AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '7 days')
+                  OR
+                  (t.status = 'in_progress' AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '3 days')
+              )
             RETURNING t.todo_id
         """, (project_name,))
         archived_count = len(cur.fetchall())
@@ -315,7 +320,7 @@ def main():
         # Count outstanding todos + auto-archive stale ones
         todo_count, archived_count = get_outstanding_todo_count(project_name)
         if archived_count > 0:
-            context_lines.append(f"Auto-archived {archived_count} stale pending todo(s) (>7 days old)")
+            context_lines.append(f"Auto-archived {archived_count} stale todo(s) (pending >7d or in_progress >3d)")
         if todo_count > 0:
             context_lines.append("")
             context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")

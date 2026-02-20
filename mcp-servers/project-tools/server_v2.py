@@ -610,10 +610,12 @@ def start_session(
                 todos = {"in_progress": [], "pending": [], "stale": []}
                 for t in todos_raw:
                     age_days = t.get('age_days', 0) or 0
-                    if t['status'] == 'in_progress':
+                    if t['status'] == 'in_progress' and age_days > 3:
+                        bucket = "stale"  # in_progress > 3 days = stale
+                    elif t['status'] == 'in_progress':
                         bucket = "in_progress"
                     elif age_days > 7 and t['status'] == 'pending':
-                        bucket = "stale"
+                        bucket = "stale"  # pending > 7 days = stale
                     else:
                         bucket = "pending"
                     todos[bucket].append({
@@ -3679,6 +3681,368 @@ def get_session_notes(
         section: Section to retrieve (optional). If omitted, returns all notes.
     """
     return _run_async(tool_get_session_notes(section or None))
+
+
+# ============================================================================
+# BPMN Process Registry Tools
+# ============================================================================
+# Hybrid storage: BPMN files in git (source of truth) + DB registry for
+# cross-project search and discovery. See bpmn_sync.bpmn for the process model.
+
+import hashlib
+from xml.etree import ElementTree as ET
+
+_BPMN_NS = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
+
+# Map process_id prefixes/paths to level and category
+_LEVEL_CATEGORY_MAP = {
+    "L0_": ("L0", "architecture"),
+    "L1_": ("L1", "architecture"),
+    "processes/architecture/": ("L0", "architecture"),
+    "processes/lifecycle/": ("L2", "lifecycle"),
+    "processes/development/": ("L2", "development"),
+    "processes/infrastructure/": ("L2", "infrastructure"),
+    "processes/nimbus/": ("L2", "nimbus"),
+}
+
+
+def _infer_level_category(process_id: str, file_path: str) -> tuple[str, str]:
+    """Infer level and category from process_id and file path."""
+    for prefix, (level, category) in _LEVEL_CATEGORY_MAP.items():
+        if process_id.startswith(prefix) or prefix in file_path.replace("\\", "/"):
+            return level, category
+    return "L2", "unknown"
+
+
+def _parse_bpmn_file(file_path: str) -> dict | None:
+    """Parse a BPMN file and extract process metadata, elements, and flows."""
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        # Find the first executable process
+        process = root.find(".//bpmn:process[@isExecutable='true']", _BPMN_NS)
+        if process is None:
+            # Try without isExecutable filter
+            process = root.find(".//bpmn:process", _BPMN_NS)
+        if process is None:
+            return None
+
+        process_id = process.get("id", "")
+        process_name = process.get("name", process_id)
+
+        # Extract elements (tasks, events, gateways)
+        elements = []
+        element_types = [
+            "startEvent", "endEvent", "userTask", "scriptTask", "serviceTask",
+            "exclusiveGateway", "parallelGateway", "callActivity",
+        ]
+        for etype in element_types:
+            for elem in process.findall(f"bpmn:{etype}", _BPMN_NS):
+                elements.append({
+                    "id": elem.get("id", ""),
+                    "type": etype,
+                    "name": elem.get("name", ""),
+                })
+
+        # Extract flows
+        flows = []
+        for flow in process.findall("bpmn:sequenceFlow", _BPMN_NS):
+            cond_elem = flow.find("bpmn:conditionExpression", _BPMN_NS)
+            flows.append({
+                "id": flow.get("id", ""),
+                "from": flow.get("sourceRef", ""),
+                "to": flow.get("targetRef", ""),
+                "condition": cond_elem.text if cond_elem is not None else None,
+            })
+
+        # Extract description from first comment in process
+        description = ""
+        # Look for XML comments inside the process (they become tail/text in ET)
+        # Actually, ET strips comments. Use process_name + element summary instead.
+        element_names = [e["name"] for e in elements if e["name"]]
+        description = f"{process_name}: {', '.join(element_names[:10])}"
+
+        level, category = _infer_level_category(process_id, file_path)
+
+        return {
+            "process_id": process_id,
+            "process_name": process_name,
+            "level": level,
+            "category": category,
+            "description": description,
+            "elements": elements,
+            "flows": flows,
+        }
+    except Exception:
+        return None
+
+
+@mcp.tool()
+def sync_bpmn_processes(
+    project: str = "",
+    processes_dir: str = "",
+) -> dict:
+    """Sync BPMN files from a project directory into the database registry.
+
+    Discovers .bpmn files, parses them, and upserts into claude.bpmn_processes
+    with Voyage AI embeddings for semantic search. Uses file hash for incremental
+    sync (unchanged files are skipped).
+
+    Use when: After creating or modifying BPMN process files. Keeps the DB
+    registry in sync with the git source of truth.
+    Returns: {success, project, synced_count, skipped_count, parse_errors,
+              file_count, details: [{process_id, action}]}.
+
+    Args:
+        project: Project name (default: current directory).
+        processes_dir: Override path to processes directory. If empty, auto-discovers.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    # Discover processes directory
+    if not processes_dir:
+        # Check common locations
+        candidates = [
+            os.path.join(os.getcwd(), "mcp-servers", "bpmn-engine", "processes"),
+            os.path.join(os.getcwd(), "processes"),
+        ]
+        for cand in candidates:
+            if os.path.isdir(cand):
+                processes_dir = cand
+                break
+
+    if not processes_dir or not os.path.isdir(processes_dir):
+        return {"success": True, "project": project, "synced_count": 0,
+                "skipped_count": 0, "parse_errors": 0, "file_count": 0,
+                "message": "No processes directory found"}
+
+    # Glob for .bpmn files
+    bpmn_files = glob.glob(os.path.join(processes_dir, "**", "*.bpmn"), recursive=True)
+    if not bpmn_files:
+        return {"success": True, "project": project, "synced_count": 0,
+                "skipped_count": 0, "parse_errors": 0, "file_count": 0,
+                "message": "No .bpmn files found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Load existing hashes for incremental sync
+        cur.execute(
+            "SELECT process_id, file_hash FROM claude.bpmn_processes WHERE project_name = %s",
+            (project,),
+        )
+        existing_hashes = {row["process_id"]: row["file_hash"] for row in cur.fetchall()}
+
+        synced_count = 0
+        skipped_count = 0
+        parse_errors = 0
+        details = []
+
+        for file_path in bpmn_files:
+            # Compute file hash
+            with open(file_path, "rb") as f:
+                file_hash = hashlib.sha256(f.read()).hexdigest()
+
+            # Parse BPMN
+            parsed = _parse_bpmn_file(file_path)
+            if parsed is None:
+                parse_errors += 1
+                details.append({"file": os.path.basename(file_path), "action": "parse_error"})
+                continue
+
+            pid = parsed["process_id"]
+
+            # Check if unchanged
+            if existing_hashes.get(pid) == file_hash:
+                skipped_count += 1
+                details.append({"process_id": pid, "action": "skipped"})
+                continue
+
+            # Generate embedding
+            embed_text = f"{parsed['process_name']} {parsed['description']}"
+            embedding = generate_embedding(embed_text)
+
+            # Relative file path for portability
+            rel_path = os.path.relpath(file_path, os.getcwd()).replace("\\", "/")
+
+            # Upsert
+            cur.execute("""
+                INSERT INTO claude.bpmn_processes
+                    (process_id, project_name, file_path, process_name, level, category,
+                     description, elements, flows, file_hash, embedding, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                ON CONFLICT (process_id) DO UPDATE SET
+                    project_name = EXCLUDED.project_name,
+                    file_path = EXCLUDED.file_path,
+                    process_name = EXCLUDED.process_name,
+                    level = EXCLUDED.level,
+                    category = EXCLUDED.category,
+                    description = EXCLUDED.description,
+                    elements = EXCLUDED.elements,
+                    flows = EXCLUDED.flows,
+                    file_hash = EXCLUDED.file_hash,
+                    embedding = EXCLUDED.embedding,
+                    updated_at = NOW()
+            """, (
+                pid, project, rel_path, parsed["process_name"],
+                parsed["level"], parsed["category"], parsed["description"],
+                json.dumps(parsed["elements"]), json.dumps(parsed["flows"]),
+                file_hash,
+                str(embedding) if embedding else None,
+            ))
+
+            action = "updated" if pid in existing_hashes else "created"
+            synced_count += 1
+            details.append({"process_id": pid, "action": action})
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "project": project,
+            "synced_count": synced_count,
+            "skipped_count": skipped_count,
+            "parse_errors": parse_errors,
+            "file_count": len(bpmn_files),
+            "details": details,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Sync failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def search_bpmn_processes(
+    query: str,
+    project: str = "",
+    level: str = "",
+    category: str = "",
+    limit: int = 10,
+) -> dict:
+    """Search BPMN processes using semantic similarity or filters.
+
+    Uses Voyage AI embeddings for semantic search across all registered
+    BPMN processes. Can filter by project, level (L0/L1/L2), and category.
+
+    Use when: Looking for a process that handles a specific workflow,
+    understanding how processes relate, or finding processes by keyword.
+    Returns: {success, query, result_count, processes: [{process_id,
+              process_name, level, category, project_name, file_path,
+              description, element_count, similarity}]}.
+
+    Args:
+        query: Natural language search query.
+        project: Filter by project name (optional).
+        level: Filter by level: L0, L1, or L2 (optional).
+        category: Filter by category (optional).
+        limit: Maximum results (default: 10).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Generate query embedding
+        query_embedding = generate_query_embedding(query)
+
+        if query_embedding:
+            # Semantic search with optional filters
+            where_clauses = []
+            params = [str(query_embedding)]
+
+            if project:
+                where_clauses.append("project_name = %s")
+                params.append(project)
+            if level:
+                where_clauses.append("level = %s")
+                params.append(level)
+            if category:
+                where_clauses.append("category = %s")
+                params.append(category)
+
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
+
+            params.append(limit)
+
+            cur.execute(f"""
+                SELECT process_id, process_name, level, category, project_name,
+                       file_path, description, elements, flows,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM claude.bpmn_processes
+                {where_sql}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """, (*params, str(query_embedding), limit))
+        else:
+            # Fallback: keyword search on process_name + description
+            where_clauses = ["(process_name ILIKE %s OR description ILIKE %s)"]
+            params = [f"%{query}%", f"%{query}%"]
+
+            if project:
+                where_clauses.append("project_name = %s")
+                params.append(project)
+            if level:
+                where_clauses.append("level = %s")
+                params.append(level)
+            if category:
+                where_clauses.append("category = %s")
+                params.append(category)
+
+            params.append(limit)
+
+            cur.execute(f"""
+                SELECT process_id, process_name, level, category, project_name,
+                       file_path, description, elements, flows,
+                       0.5 AS similarity
+                FROM claude.bpmn_processes
+                WHERE {" AND ".join(where_clauses)}
+                ORDER BY process_name
+                LIMIT %s
+            """, params)
+
+        rows = cur.fetchall()
+        cur.close()
+
+        processes = []
+        for row in rows:
+            elements = row.get("elements") or []
+            if isinstance(elements, str):
+                elements = json.loads(elements)
+            flows = row.get("flows") or []
+            if isinstance(flows, str):
+                flows = json.loads(flows)
+
+            processes.append({
+                "process_id": row["process_id"],
+                "process_name": row["process_name"],
+                "level": row["level"],
+                "category": row["category"],
+                "project_name": row["project_name"],
+                "file_path": row["file_path"],
+                "description": row["description"],
+                "element_count": len(elements),
+                "flow_count": len(flows),
+                "similarity": round(float(row.get("similarity", 0)), 4),
+            })
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(processes),
+            "processes": processes,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"Search failed: {str(e)}"}
+    finally:
+        conn.close()
 
 
 # ============================================================================

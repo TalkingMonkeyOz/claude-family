@@ -1,26 +1,31 @@
 """
-Tests for the Task Lifecycle BPMN process.
+Tests for the Task Lifecycle BPMN process (v2 - with session boundaries).
 
-Uses SpiffWorkflow 3.x API directly against the task_lifecycle.bpmn definition.
-No external database required - all assertions are on task.data values.
+Tests all 7 logic paths through the task lifecycle:
+  1. Happy path: Create → Work(complete) → Completed
+  2. Discipline block: Create(no tasks) → Blocked
+  3. Block + resolve: Work(block) → Resolve → Work(complete) → Completed
+  4. Session end + fresh + resume: Work(session_end) → NotStale → Resume → Complete
+  5. Session end + stale: Work(session_end) → Stale → Archived
+  6. Session end + abandon: Work(session_end) → NotStale → Abandon → Archived
+  7. Multiple session interrupts: session_end → resume → session_end → resume → complete
 
 Key API notes (SpiffWorkflow 3.1.x):
   - BpmnParser.add_bpmn_file(path) + parser.get_spec(process_id)
   - BpmnWorkflow(spec) creates the workflow instance
-  - workflow.do_engine_steps() advances through non-manual tasks (scripts, gateways)
+  - workflow.do_engine_steps() advances through non-manual tasks
   - User tasks: workflow.get_tasks(state=TaskState.READY, manual=True)
-  - task.data is a dict; set values before task.run() to influence downstream conditions
-  - workflow.data is populated from the last completed task's data on workflow completion
+  - task.data is a dict; set values before task.run()
   - Gateway conditions are Python expressions eval'd against task.data
 """
 
 import os
+import pytest
 
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow
 from SpiffWorkflow.bpmn.parser import BpmnParser
 from SpiffWorkflow.util.task import TaskState
 
-# Absolute path to the BPMN file
 BPMN_FILE = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "processes", "lifecycle", "task_lifecycle.bpmn")
 )
@@ -31,36 +36,33 @@ PROCESS_ID = "task_lifecycle"
 # Helpers
 # ---------------------------------------------------------------------------
 
-
 def load_workflow() -> BpmnWorkflow:
-    """Parse the BPMN and return a fresh, initialised workflow instance."""
+    """Parse the BPMN and return a fresh workflow instance."""
     parser = BpmnParser()
     parser.add_bpmn_file(BPMN_FILE)
     spec = parser.get_spec(PROCESS_ID)
     wf = BpmnWorkflow(spec)
-    # Advance past any initial automated steps (e.g. the start event)
     wf.do_engine_steps()
     return wf
 
 
 def get_ready_user_tasks(workflow: BpmnWorkflow) -> list:
-    """Return all READY user tasks (manual=True in SpiffWorkflow terms)."""
+    """Return all READY user tasks."""
     return workflow.get_tasks(state=TaskState.READY, manual=True)
 
 
-def complete_user_task(workflow: BpmnWorkflow, task_name: str, data: dict) -> None:
-    """
-    Find the named READY user task, merge data into it, run it, then call
-    do_engine_steps() so the engine advances through any subsequent automated
-    tasks (script tasks, gateways) until the next user task or end event.
+def ready_task_names(workflow: BpmnWorkflow) -> list:
+    """Return names of all READY user tasks."""
+    return [t.task_spec.name for t in get_ready_user_tasks(workflow)]
 
-    Raises AssertionError if the task is not currently READY.
-    """
+
+def complete_user_task(workflow: BpmnWorkflow, task_name: str, data: dict) -> None:
+    """Find named READY user task, merge data, run it, advance engine."""
     ready = get_ready_user_tasks(workflow)
     matches = [t for t in ready if t.task_spec.name == task_name]
     assert matches, (
-        f"Expected user task '{task_name}' to be READY. "
-        f"READY user tasks: {[t.task_spec.name for t in ready]}"
+        f"Expected '{task_name}' to be READY. "
+        f"READY tasks: {[t.task_spec.name for t in ready]}"
     )
     task = matches[0]
     task.data.update(data)
@@ -69,137 +71,289 @@ def complete_user_task(workflow: BpmnWorkflow, task_name: str, data: dict) -> No
 
 
 def completed_spec_names(workflow: BpmnWorkflow) -> list:
-    """Return the spec names of all COMPLETED tasks in the workflow."""
+    """Return spec names of all COMPLETED tasks."""
     return [t.task_spec.name for t in workflow.get_tasks(state=TaskState.COMPLETED)]
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Test 1: Happy Path (Create → Work → Complete)
 # ---------------------------------------------------------------------------
 
-
 class TestHappyPath:
-    """
-    Create task → sync → work on it → complete it.
-
-    Flow:
-        start_event → create_task → sync_to_db
-        → has_tasks_gateway [has_tasks=True] → work_on_task
-        → task_action_gateway [default/complete] → mark_completed
-        → end_completed
-    """
+    """Create task → sync → in_progress → work → complete → end."""
 
     def test_happy_path(self):
-        workflow = load_workflow()
+        wf = load_workflow()
 
-        # --- Create Task ---------------------------------------------------
-        # has_tasks=True routes through the "Yes" branch of has_tasks_gateway.
-        # action="complete" routes through the default branch of task_action_gateway.
-        complete_user_task(workflow, "create_task", {"has_tasks": True})
+        # Create task with tasks available
+        complete_user_task(wf, "create_task", {"has_tasks": True})
 
-        # --- Work on Task --------------------------------------------------
-        # Explicitly pass action="complete" so the gateway condition "action == 'block'"
-        # evaluates to False and the default (complete) branch fires.
-        complete_user_task(workflow, "work_on_task", {"action": "complete"})
+        # Work on task, outcome = complete (default)
+        complete_user_task(wf, "work_on_task", {"action": "complete"})
 
-        # --- Assertions ----------------------------------------------------
-        assert workflow.is_completed(), "Workflow should be completed"
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "sync_to_db" in names
+        assert "mark_in_progress" in names
+        assert "mark_completed" in names
+        assert "end_completed" in names
+        assert "end_blocked" not in names
+        assert "end_archived" not in names
 
-        names = completed_spec_names(workflow)
-        assert "sync_to_db" in names, "sync_to_db script must have run"
-        assert "mark_completed" in names, "mark_completed script must have run"
-        assert "end_completed" in names, "end_completed end event must be reached"
-        assert "end_blocked" not in names, "end_blocked must NOT be reached"
+        assert wf.data.get("synced") is True
+        assert wf.data.get("status") == "completed"
 
-        # Script tasks write to task.data; the final end-event task inherits the
-        # full data chain, and workflow._mark_complete() copies it into workflow.data.
-        assert workflow.data.get("synced") is True, (
-            "sync_to_db should have set synced=True in task data"
-        )
-        assert workflow.data.get("status") == "completed", (
-            "mark_completed should have set status='completed'"
-        )
 
+# ---------------------------------------------------------------------------
+# Test 2: Discipline Gate Blocks (no tasks)
+# ---------------------------------------------------------------------------
 
 class TestDisciplineGateBlocks:
-    """
-    has_tasks=False routes through the 'No' branch → Blocked by Discipline Gate.
-
-    Flow:
-        start_event → create_task → sync_to_db
-        → has_tasks_gateway [has_tasks=False, default branch] → mark_gate_blocked
-        → end_blocked
-    """
+    """has_tasks=False → gate blocked → end."""
 
     def test_discipline_gate_blocks(self):
-        workflow = load_workflow()
+        wf = load_workflow()
 
-        # has_tasks=False routes to the default (no-tasks) branch
-        complete_user_task(workflow, "create_task", {"has_tasks": False})
+        complete_user_task(wf, "create_task", {"has_tasks": False})
 
-        assert workflow.is_completed(), "Workflow should be completed"
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "mark_gate_blocked" in names
+        assert "end_blocked" in names
+        assert "work_on_task" not in names
+        assert "end_completed" not in names
 
-        names = completed_spec_names(workflow)
-        assert "mark_gate_blocked" in names, "mark_gate_blocked script must have run"
-        assert "end_blocked" in names, "end_blocked end event must be reached"
-        assert "work_on_task" not in names, "work_on_task must NOT be executed"
-        assert "end_completed" not in names, "end_completed must NOT be reached"
-
-        assert workflow.data.get("gate_blocked") is True, (
-            "mark_gate_blocked should have set gate_blocked=True"
-        )
+        assert wf.data.get("gate_blocked") is True
 
 
-class TestTaskBlockedThenCompleted:
+# ---------------------------------------------------------------------------
+# Test 3: Blocked → Resolve → Complete
+# ---------------------------------------------------------------------------
+
+class TestBlockAndResolve:
+    """Work → block → resolve → work again → complete."""
+
+    def test_block_then_resolve(self):
+        wf = load_workflow()
+
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+
+        # First pass: blocked
+        complete_user_task(wf, "work_on_task", {"action": "block"})
+        assert "resolve_blocker" in ready_task_names(wf)
+
+        # Resolve the blocker
+        complete_user_task(wf, "resolve_blocker", {})
+        assert "work_on_task" in ready_task_names(wf)
+
+        # Second pass: complete
+        complete_user_task(wf, "work_on_task", {"action": "complete"})
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "resolve_blocker" in names
+        assert "mark_completed" in names
+        assert "end_completed" in names
+        assert wf.data.get("status") == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Test 4: Session End → Fresh → Resume → Complete
+# ---------------------------------------------------------------------------
+
+class TestSessionEndResumeComplete:
     """
-    Work on task → hit blocker → resolve blocker → loop back → complete.
+    Work → session ends → demote to pending → not stale → resume → work → complete.
 
-    Flow:
-        start_event → create_task → sync_to_db
-        → has_tasks_gateway [True] → work_on_task
-        → task_action_gateway [action="block"] → resolve_blocker
-        → work_on_task (second pass)
-        → task_action_gateway [action="complete"] → mark_completed
-        → end_completed
+    This is the cross-session lifecycle: a task survives a session boundary
+    and gets picked up in the next session.
     """
 
-    def test_task_blocked_then_completed(self):
-        workflow = load_workflow()
+    def test_session_end_resume_complete(self):
+        wf = load_workflow()
 
-        # --- Create Task ---------------------------------------------------
-        complete_user_task(workflow, "create_task", {"has_tasks": True})
+        complete_user_task(wf, "create_task", {"has_tasks": True})
 
-        # --- First pass: block the task ------------------------------------
-        complete_user_task(workflow, "work_on_task", {"action": "block"})
+        # Working, then session ends
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 1,
+            "staleness_threshold": 3,
+        })
 
-        # Engine should stop at resolve_blocker (a user task)
-        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
-        assert "resolve_blocker" in ready_names, (
-            f"resolve_blocker should be READY after blocking, got: {ready_names}"
-        )
+        # Engine should have run demote_to_pending and check_staleness scripts
+        # age_days=1, threshold=3 → is_stale=False → resume_decision is READY
+        assert "resume_decision" in ready_task_names(wf)
 
-        # --- Resolve the blocker ------------------------------------------
-        complete_user_task(workflow, "resolve_blocker", {})
+        # Claude decides to resume
+        complete_user_task(wf, "resume_decision", {"decision": "resume"})
 
-        # Should loop back to work_on_task
-        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
-        assert "work_on_task" in ready_names, (
-            f"work_on_task should be READY after resolving blocker, got: {ready_names}"
-        )
+        # Should loop back to work_on_task via mark_in_progress
+        assert "work_on_task" in ready_task_names(wf)
 
-        # --- Second pass: complete the task --------------------------------
-        # Explicitly set action="complete" to override the inherited action="block"
-        complete_user_task(workflow, "work_on_task", {"action": "complete"})
+        # Now complete it
+        complete_user_task(wf, "work_on_task", {"action": "complete"})
 
-        # --- Final assertions ----------------------------------------------
-        assert workflow.is_completed(), "Workflow should be completed after second pass"
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "demote_to_pending" in names
+        assert "check_staleness" in names
+        assert "resume_decision" in names
+        assert "mark_completed" in names
+        assert "end_completed" in names
+        assert "end_archived" not in names
 
-        names = completed_spec_names(workflow)
-        assert "resolve_blocker" in names, "resolve_blocker must have been completed"
-        assert "mark_completed" in names, "mark_completed script must have run"
-        assert "end_completed" in names, "end_completed must be reached"
-        assert "end_blocked" not in names, "end_blocked must NOT be reached"
+        # Final status should be completed (set by mark_completed, overriding earlier statuses)
+        assert wf.data.get("status") == "completed"
 
-        assert workflow.data.get("status") == "completed", (
-            "Final status should be 'completed'"
-        )
+
+# ---------------------------------------------------------------------------
+# Test 5: Session End → Stale → Archived
+# ---------------------------------------------------------------------------
+
+class TestSessionEndStaleArchived:
+    """
+    Work → session ends → demote → stale (age > threshold) → archive → end.
+
+    This proves that old tasks get auto-archived instead of restored forever.
+    """
+
+    def test_stale_task_archived(self):
+        wf = load_workflow()
+
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+
+        # Session ends, task is old (age_days=10 > threshold=3)
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 10,
+            "staleness_threshold": 3,
+        })
+
+        # Engine should have run demote + staleness check → is_stale=True → archive
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "demote_to_pending" in names
+        assert "check_staleness" in names
+        assert "archive_task" in names
+        assert "end_archived" in names
+        assert "resume_decision" not in names  # skipped - went straight to archive
+
+        assert wf.data.get("status") == "archived"
+
+
+# ---------------------------------------------------------------------------
+# Test 6: Session End → Fresh → Abandon → Archived
+# ---------------------------------------------------------------------------
+
+class TestSessionEndAbandon:
+    """
+    Work → session ends → not stale → Claude decides to abandon → archive.
+
+    This covers the explicit abandonment path where a task is no longer relevant.
+    """
+
+    def test_abandon_task(self):
+        wf = load_workflow()
+
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+
+        # Session ends, task is fresh
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 1,
+            "staleness_threshold": 3,
+        })
+
+        assert "resume_decision" in ready_task_names(wf)
+
+        # Claude decides to abandon
+        complete_user_task(wf, "resume_decision", {"decision": "abandon"})
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "resume_decision" in names
+        assert "archive_task" in names
+        assert "end_archived" in names
+        assert "end_completed" not in names
+
+        assert wf.data.get("status") == "archived"
+
+
+# ---------------------------------------------------------------------------
+# Test 7: Multiple Session Interruptions
+# ---------------------------------------------------------------------------
+
+class TestMultipleSessionInterrupts:
+    """
+    Work → session_end → resume → work → session_end → resume → complete.
+
+    Proves the loop works across multiple session boundaries.
+    """
+
+    def test_two_session_interrupts_then_complete(self):
+        wf = load_workflow()
+
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+
+        # --- Session 1: start working, session ends ---
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 0,
+            "staleness_threshold": 3,
+        })
+        assert "resume_decision" in ready_task_names(wf)
+        complete_user_task(wf, "resume_decision", {"decision": "resume"})
+
+        # --- Session 2: resume working, session ends again ---
+        assert "work_on_task" in ready_task_names(wf)
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 1,
+            "staleness_threshold": 3,
+        })
+        assert "resume_decision" in ready_task_names(wf)
+        complete_user_task(wf, "resume_decision", {"decision": "resume"})
+
+        # --- Session 3: finally complete ---
+        assert "work_on_task" in ready_task_names(wf)
+        complete_user_task(wf, "work_on_task", {"action": "complete"})
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "end_completed" in names
+        assert wf.data.get("status") == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: Edge case - staleness at exact threshold boundary
+# ---------------------------------------------------------------------------
+
+class TestStalenessEdgeCases:
+    """Boundary conditions for staleness calculation."""
+
+    def test_at_threshold_not_stale(self):
+        """age_days == threshold → is_stale should be False (> not >=)."""
+        wf = load_workflow()
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 3,
+            "staleness_threshold": 3,
+        })
+        # age_days=3, threshold=3 → 3 > 3 is False → not stale
+        assert "resume_decision" in ready_task_names(wf)
+
+    def test_just_over_threshold_is_stale(self):
+        """age_days > threshold → stale → auto-archived."""
+        wf = load_workflow()
+        complete_user_task(wf, "create_task", {"has_tasks": True})
+        complete_user_task(wf, "work_on_task", {
+            "action": "session_end",
+            "age_days": 4,
+            "staleness_threshold": 3,
+        })
+        # age_days=4 > threshold=3 → stale → archive
+        assert wf.is_completed()
+        assert "archive_task" in completed_spec_names(wf)
+        assert wf.data.get("status") == "archived"

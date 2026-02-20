@@ -1,531 +1,467 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions
-    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
-    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
-    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
-    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
-    targetNamespace="http://claude-family/bpmn/L0-capability-map"
-    id="Definitions_L0">
-
-  <!--
-    LEVEL 0: Claude Family Capability Map (Process Landscape)
-
-    This is the top-level view: "What does Claude Family do?"
-    Each capability is a collapsed call activity that links to an L1 process.
-
-    Actors (Participants):
-      - Human: The user (John) who interacts with Claude
-      - Claude: The AI assistant (Claude Code instance)
-      - Database: PostgreSQL ai_company_foundation, schema claude
-      - HookSystem: Pre/Post tool hooks that enforce process
-      - KnowledgeSystem: Vault + RAG embeddings + session facts
-      - AgentPool: Spawned sub-agents (coder, reviewer, tester, etc.)
-
-    Capabilities (Call Activities in Claude's pool):
-      1. Session Management: Start, work loop, compact, end
-      2. Work Tracking: Features -> tasks -> todos, state machines
-      3. Knowledge Management: Capture -> embed -> retrieve via RAG
-      4. Enforcement: Discipline gate, standards, context injection
-      5. Agent Orchestration: Spawn, coordinate, collect results
-      6. Configuration Management: DB -> generate -> deploy files
-  -->
-
-  <!-- ============================================================ -->
-  <!-- COLLABORATION: All actors and their message flows            -->
-  <!-- ============================================================ -->
-
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" id="Definitions_L0" targetNamespace="http://claude-family/bpmn/L0-capability-map" exporter="Camunda Modeler" exporterVersion="5.44.0">
   <bpmn:collaboration id="L0_collaboration">
-
-    <!-- Participants (Pools) -->
-    <bpmn:participant id="pool_human" name="Human (User)" processRef="human_process"/>
-    <bpmn:participant id="pool_claude" name="Claude (AI Assistant)" processRef="claude_process"/>
-    <bpmn:participant id="pool_database" name="Database (PostgreSQL)" processRef="database_process"/>
-    <bpmn:participant id="pool_hooks" name="Hook System" processRef="hooks_process"/>
-    <bpmn:participant id="pool_knowledge" name="Knowledge System" processRef="knowledge_process"/>
-    <bpmn:participant id="pool_agents" name="Agent Pool" processRef="agents_process"/>
-
-    <!-- Message Flows: Human <-> Claude -->
-    <bpmn:messageFlow id="msg_human_prompt" name="User Prompt" sourceRef="pool_human" targetRef="pool_claude"/>
-    <bpmn:messageFlow id="msg_claude_response" name="Response" sourceRef="pool_claude" targetRef="pool_human"/>
-
-    <!-- Message Flows: Claude <-> Database -->
-    <bpmn:messageFlow id="msg_claude_db_write" name="Write (features, tasks, sessions)" sourceRef="pool_claude" targetRef="pool_database"/>
-    <bpmn:messageFlow id="msg_db_claude_read" name="Read (state, context, config)" sourceRef="pool_database" targetRef="pool_claude"/>
-
-    <!-- Message Flows: Claude <-> Hook System -->
-    <bpmn:messageFlow id="msg_claude_hook_trigger" name="Tool Call (triggers hooks)" sourceRef="pool_claude" targetRef="pool_hooks"/>
-    <bpmn:messageFlow id="msg_hook_claude_result" name="Allow/Deny + Context" sourceRef="pool_hooks" targetRef="pool_claude"/>
-
-    <!-- Message Flows: Hook System <-> Database -->
-    <bpmn:messageFlow id="msg_hook_db_sync" name="Sync (todos, tasks, audit)" sourceRef="pool_hooks" targetRef="pool_database"/>
-    <bpmn:messageFlow id="msg_db_hook_read" name="Validate (column_registry)" sourceRef="pool_database" targetRef="pool_hooks"/>
-
-    <!-- Message Flows: Claude <-> Knowledge System -->
-    <bpmn:messageFlow id="msg_claude_km_store" name="Store (knowledge, facts, notes)" sourceRef="pool_claude" targetRef="pool_knowledge"/>
-    <bpmn:messageFlow id="msg_km_claude_retrieve" name="Retrieve (RAG, recall, search)" sourceRef="pool_knowledge" targetRef="pool_claude"/>
-
-    <!-- Message Flows: Claude <-> Agent Pool -->
-    <bpmn:messageFlow id="msg_claude_agent_spawn" name="Spawn (task, workspace)" sourceRef="pool_claude" targetRef="pool_agents"/>
-    <bpmn:messageFlow id="msg_agent_claude_result" name="Result (code, analysis)" sourceRef="pool_agents" targetRef="pool_claude"/>
-
-    <!-- Message Flows: Hook System <-> Knowledge System -->
-    <bpmn:messageFlow id="msg_hook_km_rag" name="RAG Query (per prompt)" sourceRef="pool_hooks" targetRef="pool_knowledge"/>
-    <bpmn:messageFlow id="msg_km_hook_context" name="Vault Context" sourceRef="pool_knowledge" targetRef="pool_hooks"/>
-
+    <bpmn:participant id="pool_human" name="Human (User)" processRef="human_process" />
+    <bpmn:participant id="pool_claude" name="Claude (AI Assistant)" processRef="claude_process" />
+    <bpmn:participant id="pool_database" name="Database (PostgreSQL)" processRef="database_process" />
+    <bpmn:participant id="pool_hooks" name="Hook System" processRef="hooks_process" />
+    <bpmn:participant id="pool_knowledge" name="Knowledge System" processRef="knowledge_process" />
+    <bpmn:participant id="pool_agents" name="Agent Pool" processRef="agents_process" />
+    <bpmn:messageFlow id="msg_human_prompt" name="User Prompt" sourceRef="pool_human" targetRef="pool_claude" />
+    <bpmn:messageFlow id="msg_claude_response" name="Response" sourceRef="pool_claude" targetRef="pool_human" />
+    <bpmn:messageFlow id="msg_claude_db_write" name="Write (features, tasks, sessions)" sourceRef="pool_claude" targetRef="pool_database" />
+    <bpmn:messageFlow id="msg_db_claude_read" name="Read (state, context, config)" sourceRef="pool_database" targetRef="pool_claude" />
+    <bpmn:messageFlow id="msg_claude_hook_trigger" name="Tool Call (triggers hooks)" sourceRef="pool_claude" targetRef="pool_hooks" />
+    <bpmn:messageFlow id="msg_hook_claude_result" name="Allow/Deny + Context" sourceRef="pool_hooks" targetRef="pool_claude" />
+    <bpmn:messageFlow id="msg_hook_db_sync" name="Sync (todos, tasks, audit)" sourceRef="pool_hooks" targetRef="pool_database" />
+    <bpmn:messageFlow id="msg_db_hook_read" name="Validate (column_registry)" sourceRef="pool_database" targetRef="pool_hooks" />
+    <bpmn:messageFlow id="msg_claude_km_store" name="Store (knowledge, facts, notes)" sourceRef="pool_claude" targetRef="pool_knowledge" />
+    <bpmn:messageFlow id="msg_km_claude_retrieve" name="Retrieve (RAG, recall, search)" sourceRef="pool_knowledge" targetRef="pool_claude" />
+    <bpmn:messageFlow id="msg_claude_agent_spawn" name="Spawn (task, workspace)" sourceRef="pool_claude" targetRef="pool_agents" />
+    <bpmn:messageFlow id="msg_agent_claude_result" name="Result (code, analysis)" sourceRef="pool_agents" targetRef="pool_claude" />
+    <bpmn:messageFlow id="msg_hook_km_rag" name="RAG Query (per prompt)" sourceRef="pool_hooks" targetRef="pool_knowledge" />
+    <bpmn:messageFlow id="msg_km_hook_context" name="Vault Context" sourceRef="pool_knowledge" targetRef="pool_hooks" />
   </bpmn:collaboration>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Human (simplified - sends prompts, receives output) -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="human_process" name="Human Process" isExecutable="false">
-    <bpmn:startEvent id="human_start" name="Open Terminal"/>
-    <bpmn:userTask id="human_prompt" name="Send Prompt"/>
-    <bpmn:userTask id="human_review" name="Review Output"/>
-    <bpmn:endEvent id="human_end" name="Close Session"/>
-    <bpmn:sequenceFlow id="hf1" sourceRef="human_start" targetRef="human_prompt"/>
-    <bpmn:sequenceFlow id="hf2" sourceRef="human_prompt" targetRef="human_review"/>
-    <bpmn:sequenceFlow id="hf3" sourceRef="human_review" targetRef="human_end"/>
+    <bpmn:startEvent id="human_start" name="Open Terminal" />
+    <bpmn:userTask id="human_prompt" name="Send Prompt" />
+    <bpmn:userTask id="human_review" name="Review Output" />
+    <bpmn:endEvent id="human_end" name="Close Session" />
+    <bpmn:sequenceFlow id="hf1" sourceRef="human_start" targetRef="human_prompt" />
+    <bpmn:sequenceFlow id="hf2" sourceRef="human_prompt" targetRef="human_review" />
+    <bpmn:sequenceFlow id="hf3" sourceRef="human_review" targetRef="human_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Claude (main - contains capability call activities) -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="claude_process" name="Claude Core Process" isExecutable="true">
-
     <bpmn:startEvent id="claude_start" name="Session Begins">
       <bpmn:outgoing>cf1</bpmn:outgoing>
     </bpmn:startEvent>
-
-    <!-- Capability 1: Session Management -->
     <bpmn:callActivity id="cap_session" name="1. Session Management" calledElement="L1_session_management">
       <bpmn:incoming>cf1</bpmn:incoming>
       <bpmn:outgoing>cf2</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- Capability 2: Work Tracking -->
     <bpmn:callActivity id="cap_work_tracking" name="2. Work Tracking" calledElement="L1_work_tracking">
       <bpmn:incoming>cf2</bpmn:incoming>
       <bpmn:outgoing>cf3</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- Capability 3: Knowledge Management -->
     <bpmn:callActivity id="cap_knowledge" name="3. Knowledge Management" calledElement="L1_knowledge_management">
       <bpmn:incoming>cf3</bpmn:incoming>
       <bpmn:outgoing>cf4</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- Capability 4: Enforcement -->
     <bpmn:callActivity id="cap_enforcement" name="4. Enforcement" calledElement="L1_enforcement">
       <bpmn:incoming>cf4</bpmn:incoming>
       <bpmn:outgoing>cf5</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- Capability 5: Agent Orchestration -->
     <bpmn:callActivity id="cap_agents" name="5. Agent Orchestration" calledElement="L1_agent_orchestration">
       <bpmn:incoming>cf5</bpmn:incoming>
       <bpmn:outgoing>cf6</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- Capability 6: Configuration Management -->
     <bpmn:callActivity id="cap_config" name="6. Configuration Management" calledElement="L1_config_management">
       <bpmn:incoming>cf6</bpmn:incoming>
       <bpmn:outgoing>cf7</bpmn:outgoing>
     </bpmn:callActivity>
-
     <bpmn:endEvent id="claude_end" name="Session Ends">
       <bpmn:incoming>cf7</bpmn:incoming>
     </bpmn:endEvent>
-
-    <bpmn:sequenceFlow id="cf1" sourceRef="claude_start" targetRef="cap_session"/>
-    <bpmn:sequenceFlow id="cf2" sourceRef="cap_session" targetRef="cap_work_tracking"/>
-    <bpmn:sequenceFlow id="cf3" sourceRef="cap_work_tracking" targetRef="cap_knowledge"/>
-    <bpmn:sequenceFlow id="cf4" sourceRef="cap_knowledge" targetRef="cap_enforcement"/>
-    <bpmn:sequenceFlow id="cf5" sourceRef="cap_enforcement" targetRef="cap_agents"/>
-    <bpmn:sequenceFlow id="cf6" sourceRef="cap_agents" targetRef="cap_config"/>
-    <bpmn:sequenceFlow id="cf7" sourceRef="cap_config" targetRef="claude_end"/>
-
+    <bpmn:sequenceFlow id="cf1" sourceRef="claude_start" targetRef="cap_session" />
+    <bpmn:sequenceFlow id="cf2" sourceRef="cap_session" targetRef="cap_work_tracking" />
+    <bpmn:sequenceFlow id="cf3" sourceRef="cap_work_tracking" targetRef="cap_knowledge" />
+    <bpmn:sequenceFlow id="cf4" sourceRef="cap_knowledge" targetRef="cap_enforcement" />
+    <bpmn:sequenceFlow id="cf5" sourceRef="cap_enforcement" targetRef="cap_agents" />
+    <bpmn:sequenceFlow id="cf6" sourceRef="cap_agents" targetRef="cap_config" />
+    <bpmn:sequenceFlow id="cf7" sourceRef="cap_config" targetRef="claude_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Database (receives writes, returns reads)           -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="database_process" name="Database Process" isExecutable="false">
-    <bpmn:startEvent id="db_start"/>
-    <bpmn:serviceTask id="db_store" name="Store Data (60+ tables)"/>
-    <bpmn:serviceTask id="db_retrieve" name="Retrieve Data"/>
-    <bpmn:serviceTask id="db_validate" name="Validate (constraints)"/>
-    <bpmn:endEvent id="db_end"/>
-    <bpmn:sequenceFlow id="df1" sourceRef="db_start" targetRef="db_store"/>
-    <bpmn:sequenceFlow id="df2" sourceRef="db_store" targetRef="db_retrieve"/>
-    <bpmn:sequenceFlow id="df3" sourceRef="db_retrieve" targetRef="db_validate"/>
-    <bpmn:sequenceFlow id="df4" sourceRef="db_validate" targetRef="db_end"/>
+    <bpmn:startEvent id="db_start" />
+    <bpmn:serviceTask id="db_store" name="Store Data (60+ tables)" />
+    <bpmn:serviceTask id="db_retrieve" name="Retrieve Data" />
+    <bpmn:serviceTask id="db_validate" name="Validate (constraints)" />
+    <bpmn:endEvent id="db_end" />
+    <bpmn:sequenceFlow id="df1" sourceRef="db_start" targetRef="db_store" />
+    <bpmn:sequenceFlow id="df2" sourceRef="db_store" targetRef="db_retrieve" />
+    <bpmn:sequenceFlow id="df3" sourceRef="db_retrieve" targetRef="db_validate" />
+    <bpmn:sequenceFlow id="df4" sourceRef="db_validate" targetRef="db_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Hook System (intercepts tool calls)                 -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="hooks_process" name="Hook System Process" isExecutable="false">
-    <bpmn:startEvent id="hook_start"/>
-    <bpmn:serviceTask id="hook_rag" name="RAG Query (UserPromptSubmit)"/>
-    <bpmn:serviceTask id="hook_discipline" name="Task Discipline (PreToolUse)"/>
-    <bpmn:serviceTask id="hook_context" name="Context Injection (PreToolUse)"/>
-    <bpmn:serviceTask id="hook_sync" name="Todo/Task Sync (PostToolUse)"/>
-    <bpmn:endEvent id="hook_end"/>
-    <bpmn:sequenceFlow id="hkf1" sourceRef="hook_start" targetRef="hook_rag"/>
-    <bpmn:sequenceFlow id="hkf2" sourceRef="hook_rag" targetRef="hook_discipline"/>
-    <bpmn:sequenceFlow id="hkf3" sourceRef="hook_discipline" targetRef="hook_context"/>
-    <bpmn:sequenceFlow id="hkf4" sourceRef="hook_context" targetRef="hook_sync"/>
-    <bpmn:sequenceFlow id="hkf5" sourceRef="hook_sync" targetRef="hook_end"/>
+    <bpmn:startEvent id="hook_start" />
+    <bpmn:serviceTask id="hook_rag" name="RAG Query (UserPromptSubmit)" />
+    <bpmn:serviceTask id="hook_discipline" name="Task Discipline (PreToolUse)" />
+    <bpmn:serviceTask id="hook_context" name="Context Injection (PreToolUse)" />
+    <bpmn:serviceTask id="hook_sync" name="Todo/Task Sync (PostToolUse)" />
+    <bpmn:endEvent id="hook_end" />
+    <bpmn:sequenceFlow id="hkf1" sourceRef="hook_start" targetRef="hook_rag" />
+    <bpmn:sequenceFlow id="hkf2" sourceRef="hook_rag" targetRef="hook_discipline" />
+    <bpmn:sequenceFlow id="hkf3" sourceRef="hook_discipline" targetRef="hook_context" />
+    <bpmn:sequenceFlow id="hkf4" sourceRef="hook_context" targetRef="hook_sync" />
+    <bpmn:sequenceFlow id="hkf5" sourceRef="hook_sync" targetRef="hook_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Knowledge System (vault + RAG + embeddings)         -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="knowledge_process" name="Knowledge System Process" isExecutable="false">
-    <bpmn:startEvent id="km_start"/>
-    <bpmn:serviceTask id="km_capture" name="Capture (vault, facts, notes)"/>
-    <bpmn:serviceTask id="km_embed" name="Embed (Voyage AI vectors)"/>
-    <bpmn:serviceTask id="km_search" name="Semantic Search (pgvector)"/>
-    <bpmn:serviceTask id="km_deliver" name="Deliver Context"/>
-    <bpmn:endEvent id="km_end"/>
-    <bpmn:sequenceFlow id="kf1" sourceRef="km_start" targetRef="km_capture"/>
-    <bpmn:sequenceFlow id="kf2" sourceRef="km_capture" targetRef="km_embed"/>
-    <bpmn:sequenceFlow id="kf3" sourceRef="km_embed" targetRef="km_search"/>
-    <bpmn:sequenceFlow id="kf4" sourceRef="km_search" targetRef="km_deliver"/>
-    <bpmn:sequenceFlow id="kf5" sourceRef="km_deliver" targetRef="km_end"/>
+    <bpmn:startEvent id="km_start" />
+    <bpmn:serviceTask id="km_capture" name="Capture (vault, facts, notes)" />
+    <bpmn:serviceTask id="km_embed" name="Embed (Voyage AI vectors)" />
+    <bpmn:serviceTask id="km_search" name="Semantic Search (pgvector)" />
+    <bpmn:serviceTask id="km_deliver" name="Deliver Context" />
+    <bpmn:endEvent id="km_end" />
+    <bpmn:sequenceFlow id="kf1" sourceRef="km_start" targetRef="km_capture" />
+    <bpmn:sequenceFlow id="kf2" sourceRef="km_capture" targetRef="km_embed" />
+    <bpmn:sequenceFlow id="kf3" sourceRef="km_embed" targetRef="km_search" />
+    <bpmn:sequenceFlow id="kf4" sourceRef="km_search" targetRef="km_deliver" />
+    <bpmn:sequenceFlow id="kf5" sourceRef="km_deliver" targetRef="km_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- PROCESS: Agent Pool (receives spawn requests)                -->
-  <!-- ============================================================ -->
-
   <bpmn:process id="agents_process" name="Agent Pool Process" isExecutable="false">
-    <bpmn:startEvent id="agent_start"/>
-    <bpmn:serviceTask id="agent_receive" name="Receive Task"/>
-    <bpmn:serviceTask id="agent_execute" name="Execute (coder/reviewer/tester)"/>
-    <bpmn:serviceTask id="agent_return" name="Return Result"/>
-    <bpmn:endEvent id="agent_end"/>
-    <bpmn:sequenceFlow id="af1" sourceRef="agent_start" targetRef="agent_receive"/>
-    <bpmn:sequenceFlow id="af2" sourceRef="agent_receive" targetRef="agent_execute"/>
-    <bpmn:sequenceFlow id="af3" sourceRef="agent_execute" targetRef="agent_return"/>
-    <bpmn:sequenceFlow id="af4" sourceRef="agent_return" targetRef="agent_end"/>
+    <bpmn:startEvent id="agent_start" />
+    <bpmn:serviceTask id="agent_receive" name="Receive Task" />
+    <bpmn:serviceTask id="agent_execute" name="Execute (coder/reviewer/tester)" />
+    <bpmn:serviceTask id="agent_return" name="Return Result" />
+    <bpmn:endEvent id="agent_end" />
+    <bpmn:sequenceFlow id="af1" sourceRef="agent_start" targetRef="agent_receive" />
+    <bpmn:sequenceFlow id="af2" sourceRef="agent_receive" targetRef="agent_execute" />
+    <bpmn:sequenceFlow id="af3" sourceRef="agent_execute" targetRef="agent_return" />
+    <bpmn:sequenceFlow id="af4" sourceRef="agent_return" targetRef="agent_end" />
   </bpmn:process>
-
-  <!-- ============================================================ -->
-  <!-- DIAGRAM: Visual layout for all pools                         -->
-  <!-- ============================================================ -->
-
   <bpmndi:BPMNDiagram id="BPMNDiagram_L0">
     <bpmndi:BPMNPlane id="BPMNPlane_L0" bpmnElement="L0_collaboration">
-
-      <!-- Pool: Human (top) -->
       <bpmndi:BPMNShape id="shape_pool_human" bpmnElement="pool_human" isHorizontal="true">
-        <dc:Bounds x="100" y="50" width="900" height="120"/>
+        <dc:Bounds x="160" y="50" width="1020" height="120" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_human_start" bpmnElement="human_start">
-        <dc:Bounds x="160" y="92" width="36" height="36"/>
+        <dc:Bounds x="220" y="92" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="202" y="128" width="72" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_human_prompt" bpmnElement="human_prompt">
-        <dc:Bounds x="260" y="80" width="120" height="60"/>
+        <dc:Bounds x="320" y="80" width="120" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_human_review" bpmnElement="human_review">
-        <dc:Bounds x="460" y="80" width="120" height="60"/>
+        <dc:Bounds x="520" y="80" width="120" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_human_end" bpmnElement="human_end">
-        <dc:Bounds x="660" y="92" width="36" height="36"/>
+        <dc:Bounds x="720" y="92" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="703" y="128" width="71" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_hf1" bpmnElement="hf1">
-        <di:waypoint x="196" y="110"/>
-        <di:waypoint x="260" y="110"/>
+        <di:waypoint x="256" y="110" />
+        <di:waypoint x="320" y="110" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_hf2" bpmnElement="hf2">
-        <di:waypoint x="380" y="110"/>
-        <di:waypoint x="460" y="110"/>
+        <di:waypoint x="440" y="110" />
+        <di:waypoint x="520" y="110" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_hf3" bpmnElement="hf3">
-        <di:waypoint x="580" y="110"/>
-        <di:waypoint x="660" y="110"/>
+        <di:waypoint x="640" y="110" />
+        <di:waypoint x="720" y="110" />
       </bpmndi:BPMNEdge>
-
-      <!-- Pool: Claude (main, wide) -->
       <bpmndi:BPMNShape id="shape_pool_claude" bpmnElement="pool_claude" isHorizontal="true">
-        <dc:Bounds x="100" y="210" width="900" height="200"/>
+        <dc:Bounds x="160" y="210" width="1020" height="200" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_claude_start" bpmnElement="claude_start">
-        <dc:Bounds x="140" y="290" width="36" height="36"/>
+        <dc:Bounds x="200" y="290" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="180" y="326" width="77" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_session" bpmnElement="cap_session">
-        <dc:Bounds x="200" y="270" width="100" height="70"/>
+        <dc:Bounds x="260" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_work" bpmnElement="cap_work_tracking">
-        <dc:Bounds x="320" y="270" width="100" height="70"/>
+        <dc:Bounds x="380" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_knowledge" bpmnElement="cap_knowledge">
-        <dc:Bounds x="440" y="270" width="100" height="70"/>
+        <dc:Bounds x="500" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_enforcement" bpmnElement="cap_enforcement">
-        <dc:Bounds x="560" y="270" width="100" height="70"/>
+        <dc:Bounds x="620" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_agents" bpmnElement="cap_agents">
-        <dc:Bounds x="680" y="270" width="100" height="70"/>
+        <dc:Bounds x="740" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_cap_config" bpmnElement="cap_config">
-        <dc:Bounds x="800" y="270" width="100" height="70"/>
+        <dc:Bounds x="860" y="270" width="100" height="70" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_claude_end" bpmnElement="claude_end">
-        <dc:Bounds x="930" y="290" width="36" height="36"/>
+        <dc:Bounds x="990" y="290" width="36" height="36" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="974" y="326" width="68" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_cf1" bpmnElement="cf1">
-        <di:waypoint x="176" y="308"/>
-        <di:waypoint x="200" y="305"/>
+        <di:waypoint x="236" y="308" />
+        <di:waypoint x="260" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf2" bpmnElement="cf2">
-        <di:waypoint x="300" y="305"/>
-        <di:waypoint x="320" y="305"/>
+        <di:waypoint x="360" y="305" />
+        <di:waypoint x="380" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf3" bpmnElement="cf3">
-        <di:waypoint x="420" y="305"/>
-        <di:waypoint x="440" y="305"/>
+        <di:waypoint x="480" y="305" />
+        <di:waypoint x="500" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf4" bpmnElement="cf4">
-        <di:waypoint x="540" y="305"/>
-        <di:waypoint x="560" y="305"/>
+        <di:waypoint x="600" y="305" />
+        <di:waypoint x="620" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf5" bpmnElement="cf5">
-        <di:waypoint x="660" y="305"/>
-        <di:waypoint x="680" y="305"/>
+        <di:waypoint x="720" y="305" />
+        <di:waypoint x="740" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf6" bpmnElement="cf6">
-        <di:waypoint x="780" y="305"/>
-        <di:waypoint x="800" y="305"/>
+        <di:waypoint x="840" y="305" />
+        <di:waypoint x="860" y="305" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_cf7" bpmnElement="cf7">
-        <di:waypoint x="900" y="305"/>
-        <di:waypoint x="930" y="308"/>
+        <di:waypoint x="960" y="305" />
+        <di:waypoint x="990" y="308" />
       </bpmndi:BPMNEdge>
-
-      <!-- Pool: Hook System -->
-      <bpmndi:BPMNShape id="shape_pool_hooks" bpmnElement="pool_hooks" isHorizontal="true">
-        <dc:Bounds x="100" y="450" width="900" height="120"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_start" bpmnElement="hook_start">
-        <dc:Bounds x="160" y="492" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_rag" bpmnElement="hook_rag">
-        <dc:Bounds x="240" y="480" width="130" height="60"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_discipline" bpmnElement="hook_discipline">
-        <dc:Bounds x="400" y="480" width="130" height="60"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_context" bpmnElement="hook_context">
-        <dc:Bounds x="560" y="480" width="130" height="60"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_sync" bpmnElement="hook_sync">
-        <dc:Bounds x="720" y="480" width="130" height="60"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="shape_hook_end" bpmnElement="hook_end">
-        <dc:Bounds x="890" y="492" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNEdge id="edge_hkf1" bpmnElement="hkf1">
-        <di:waypoint x="196" y="510"/>
-        <di:waypoint x="240" y="510"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_hkf2" bpmnElement="hkf2">
-        <di:waypoint x="370" y="510"/>
-        <di:waypoint x="400" y="510"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_hkf3" bpmnElement="hkf3">
-        <di:waypoint x="530" y="510"/>
-        <di:waypoint x="560" y="510"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_hkf4" bpmnElement="hkf4">
-        <di:waypoint x="690" y="510"/>
-        <di:waypoint x="720" y="510"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_hkf5" bpmnElement="hkf5">
-        <di:waypoint x="850" y="510"/>
-        <di:waypoint x="890" y="510"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Pool: Database -->
       <bpmndi:BPMNShape id="shape_pool_database" bpmnElement="pool_database" isHorizontal="true">
-        <dc:Bounds x="100" y="610" width="900" height="120"/>
+        <dc:Bounds x="160" y="610" width="1020" height="120" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_db_start" bpmnElement="db_start">
-        <dc:Bounds x="160" y="652" width="36" height="36"/>
+        <dc:Bounds x="220" y="652" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_db_store" bpmnElement="db_store">
-        <dc:Bounds x="260" y="640" width="150" height="60"/>
+        <dc:Bounds x="320" y="640" width="150" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_db_retrieve" bpmnElement="db_retrieve">
-        <dc:Bounds x="460" y="640" width="130" height="60"/>
+        <dc:Bounds x="520" y="640" width="130" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_db_validate" bpmnElement="db_validate">
-        <dc:Bounds x="640" y="640" width="130" height="60"/>
+        <dc:Bounds x="700" y="640" width="130" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_db_end" bpmnElement="db_end">
-        <dc:Bounds x="830" y="652" width="36" height="36"/>
+        <dc:Bounds x="890" y="652" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_df1" bpmnElement="df1">
-        <di:waypoint x="196" y="670"/>
-        <di:waypoint x="260" y="670"/>
+        <di:waypoint x="256" y="670" />
+        <di:waypoint x="320" y="670" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_df2" bpmnElement="df2">
-        <di:waypoint x="410" y="670"/>
-        <di:waypoint x="460" y="670"/>
+        <di:waypoint x="470" y="670" />
+        <di:waypoint x="520" y="670" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_df3" bpmnElement="df3">
-        <di:waypoint x="590" y="670"/>
-        <di:waypoint x="640" y="670"/>
+        <di:waypoint x="650" y="670" />
+        <di:waypoint x="700" y="670" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_df4" bpmnElement="df4">
-        <di:waypoint x="770" y="670"/>
-        <di:waypoint x="830" y="670"/>
+        <di:waypoint x="830" y="670" />
+        <di:waypoint x="890" y="670" />
       </bpmndi:BPMNEdge>
-
-      <!-- Pool: Knowledge System -->
+      <bpmndi:BPMNShape id="shape_pool_hooks" bpmnElement="pool_hooks" isHorizontal="true">
+        <dc:Bounds x="160" y="450" width="1020" height="120" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_start" bpmnElement="hook_start">
+        <dc:Bounds x="220" y="492" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_rag" bpmnElement="hook_rag">
+        <dc:Bounds x="300" y="480" width="130" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_discipline" bpmnElement="hook_discipline">
+        <dc:Bounds x="460" y="480" width="130" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_context" bpmnElement="hook_context">
+        <dc:Bounds x="620" y="480" width="130" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_sync" bpmnElement="hook_sync">
+        <dc:Bounds x="780" y="480" width="130" height="60" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook_end" bpmnElement="hook_end">
+        <dc:Bounds x="950" y="492" width="36" height="36" />
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="edge_hkf1" bpmnElement="hkf1">
+        <di:waypoint x="256" y="510" />
+        <di:waypoint x="300" y="510" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_hkf2" bpmnElement="hkf2">
+        <di:waypoint x="430" y="510" />
+        <di:waypoint x="460" y="510" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_hkf3" bpmnElement="hkf3">
+        <di:waypoint x="590" y="510" />
+        <di:waypoint x="620" y="510" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_hkf4" bpmnElement="hkf4">
+        <di:waypoint x="750" y="510" />
+        <di:waypoint x="780" y="510" />
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_hkf5" bpmnElement="hkf5">
+        <di:waypoint x="910" y="510" />
+        <di:waypoint x="950" y="510" />
+      </bpmndi:BPMNEdge>
       <bpmndi:BPMNShape id="shape_pool_knowledge" bpmnElement="pool_knowledge" isHorizontal="true">
-        <dc:Bounds x="100" y="770" width="900" height="120"/>
+        <dc:Bounds x="160" y="770" width="1020" height="120" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_start" bpmnElement="km_start">
-        <dc:Bounds x="160" y="812" width="36" height="36"/>
+        <dc:Bounds x="220" y="812" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_capture" bpmnElement="km_capture">
-        <dc:Bounds x="250" y="800" width="140" height="60"/>
+        <dc:Bounds x="310" y="800" width="140" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_embed" bpmnElement="km_embed">
-        <dc:Bounds x="430" y="800" width="140" height="60"/>
+        <dc:Bounds x="490" y="800" width="140" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_search" bpmnElement="km_search">
-        <dc:Bounds x="610" y="800" width="140" height="60"/>
+        <dc:Bounds x="670" y="800" width="140" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_deliver" bpmnElement="km_deliver">
-        <dc:Bounds x="790" y="800" width="110" height="60"/>
+        <dc:Bounds x="850" y="800" width="110" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_km_end" bpmnElement="km_end">
-        <dc:Bounds x="930" y="812" width="36" height="36"/>
+        <dc:Bounds x="990" y="812" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_kf1" bpmnElement="kf1">
-        <di:waypoint x="196" y="830"/>
-        <di:waypoint x="250" y="830"/>
+        <di:waypoint x="256" y="830" />
+        <di:waypoint x="310" y="830" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_kf2" bpmnElement="kf2">
-        <di:waypoint x="390" y="830"/>
-        <di:waypoint x="430" y="830"/>
+        <di:waypoint x="450" y="830" />
+        <di:waypoint x="490" y="830" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_kf3" bpmnElement="kf3">
-        <di:waypoint x="570" y="830"/>
-        <di:waypoint x="610" y="830"/>
+        <di:waypoint x="630" y="830" />
+        <di:waypoint x="670" y="830" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_kf4" bpmnElement="kf4">
-        <di:waypoint x="750" y="830"/>
-        <di:waypoint x="790" y="830"/>
+        <di:waypoint x="810" y="830" />
+        <di:waypoint x="850" y="830" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_kf5" bpmnElement="kf5">
-        <di:waypoint x="900" y="830"/>
-        <di:waypoint x="930" y="830"/>
+        <di:waypoint x="960" y="830" />
+        <di:waypoint x="990" y="830" />
       </bpmndi:BPMNEdge>
-
-      <!-- Pool: Agent Pool -->
       <bpmndi:BPMNShape id="shape_pool_agents" bpmnElement="pool_agents" isHorizontal="true">
-        <dc:Bounds x="100" y="930" width="900" height="120"/>
+        <dc:Bounds x="160" y="930" width="1020" height="120" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_agent_start" bpmnElement="agent_start">
-        <dc:Bounds x="160" y="972" width="36" height="36"/>
+        <dc:Bounds x="220" y="972" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_agent_receive" bpmnElement="agent_receive">
-        <dc:Bounds x="260" y="960" width="120" height="60"/>
+        <dc:Bounds x="320" y="960" width="120" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_agent_execute" bpmnElement="agent_execute">
-        <dc:Bounds x="440" y="960" width="160" height="60"/>
+        <dc:Bounds x="500" y="960" width="160" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_agent_return" bpmnElement="agent_return">
-        <dc:Bounds x="660" y="960" width="120" height="60"/>
+        <dc:Bounds x="720" y="960" width="120" height="60" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_agent_end" bpmnElement="agent_end">
-        <dc:Bounds x="840" y="972" width="36" height="36"/>
+        <dc:Bounds x="900" y="972" width="36" height="36" />
       </bpmndi:BPMNShape>
       <bpmndi:BPMNEdge id="edge_af1" bpmnElement="af1">
-        <di:waypoint x="196" y="990"/>
-        <di:waypoint x="260" y="990"/>
+        <di:waypoint x="256" y="990" />
+        <di:waypoint x="320" y="990" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_af2" bpmnElement="af2">
-        <di:waypoint x="380" y="990"/>
-        <di:waypoint x="440" y="990"/>
+        <di:waypoint x="440" y="990" />
+        <di:waypoint x="500" y="990" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_af3" bpmnElement="af3">
-        <di:waypoint x="600" y="990"/>
-        <di:waypoint x="660" y="990"/>
+        <di:waypoint x="660" y="990" />
+        <di:waypoint x="720" y="990" />
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_af4" bpmnElement="af4">
-        <di:waypoint x="780" y="990"/>
-        <di:waypoint x="840" y="990"/>
+        <di:waypoint x="840" y="990" />
+        <di:waypoint x="900" y="990" />
       </bpmndi:BPMNEdge>
-
-      <!-- Message Flow edges (dashed lines between pools) -->
       <bpmndi:BPMNEdge id="edge_msg_human_prompt" bpmnElement="msg_human_prompt">
-        <di:waypoint x="320" y="140"/>
-        <di:waypoint x="320" y="210"/>
+        <di:waypoint x="380" y="170" />
+        <di:waypoint x="380" y="210" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="364" y="181" width="63" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_claude_response" bpmnElement="msg_claude_response">
-        <di:waypoint x="520" y="210"/>
-        <di:waypoint x="520" y="140"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_msg_claude_hook" bpmnElement="msg_claude_hook_trigger">
-        <di:waypoint x="465" y="410"/>
-        <di:waypoint x="465" y="480"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="edge_msg_hook_claude" bpmnElement="msg_hook_claude_result">
-        <di:waypoint x="625" y="480"/>
-        <di:waypoint x="625" y="410"/>
+        <di:waypoint x="580" y="210" />
+        <di:waypoint x="580" y="170" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="570" y="181" width="50" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_claude_db" bpmnElement="msg_claude_db_write">
-        <di:waypoint x="335" y="410"/>
-        <di:waypoint x="335" y="640"/>
+        <di:waypoint x="395" y="410" />
+        <di:waypoint x="395" y="610" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="371" y="499" width="78" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_db_claude" bpmnElement="msg_db_claude_read">
-        <di:waypoint x="525" y="640"/>
-        <di:waypoint x="525" y="410"/>
+        <di:waypoint x="585" y="610" />
+        <di:waypoint x="585" y="410" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="563" y="499" width="75" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_msg_claude_hook" bpmnElement="msg_claude_hook_trigger">
+        <di:waypoint x="525" y="410" />
+        <di:waypoint x="525" y="450" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="497" y="418" width="86" height="27" />
+        </bpmndi:BPMNLabel>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_msg_hook_claude" bpmnElement="msg_hook_claude_result">
+        <di:waypoint x="685" y="450" />
+        <di:waypoint x="685" y="410" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="668" y="418" width="65" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_hook_db" bpmnElement="msg_hook_db_sync">
-        <di:waypoint x="785" y="540"/>
-        <di:waypoint x="785" y="640"/>
+        <di:waypoint x="845" y="570" />
+        <di:waypoint x="845" y="610" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="829" y="578" width="62" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_db_hook" bpmnElement="msg_db_hook_read">
-        <di:waypoint x="705" y="640"/>
-        <di:waypoint x="705" y="540"/>
+        <di:waypoint x="765" y="610" />
+        <di:waypoint x="765" y="570" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="737" y="578" width="86" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_claude_km" bpmnElement="msg_claude_km_store">
-        <di:waypoint x="490" y="410"/>
-        <di:waypoint x="490" y="800"/>
+        <di:waypoint x="550" y="410" />
+        <di:waypoint x="550" y="770" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="521" y="580" width="89" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_km_claude" bpmnElement="msg_km_claude_retrieve">
-        <di:waypoint x="680" y="800"/>
-        <di:waypoint x="680" y="410"/>
+        <di:waypoint x="740" y="770" />
+        <di:waypoint x="740" y="410" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="718" y="580" width="75" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_claude_agent" bpmnElement="msg_claude_agent_spawn">
-        <di:waypoint x="730" y="410"/>
-        <di:waypoint x="730" y="960"/>
+        <di:waypoint x="790" y="410" />
+        <di:waypoint x="790" y="930" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="773" y="660" width="64" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_agent_claude" bpmnElement="msg_agent_claude_result">
-        <di:waypoint x="720" y="960"/>
-        <di:waypoint x="720" y="410"/>
+        <di:waypoint x="780" y="930" />
+        <di:waypoint x="780" y="410" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="763" y="660" width="65" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_hook_km" bpmnElement="msg_hook_km_rag">
-        <di:waypoint x="305" y="540"/>
-        <di:waypoint x="305" y="800"/>
+        <di:waypoint x="365" y="570" />
+        <di:waypoint x="365" y="770" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="340" y="659" width="81" height="27" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_msg_km_hook" bpmnElement="msg_km_hook_context">
-        <di:waypoint x="320" y="800"/>
-        <di:waypoint x="320" y="540"/>
+        <di:waypoint x="380" y="770" />
+        <di:waypoint x="380" y="570" />
+        <bpmndi:BPMNLabel>
+          <dc:Bounds x="362" y="661" width="66" height="14" />
+        </bpmndi:BPMNLabel>
       </bpmndi:BPMNEdge>
-
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
-
 </bpmn:definitions>
