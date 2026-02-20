@@ -316,9 +316,10 @@ def get_schema(
 ) -> str:
     """Get database schema reference with column constraints inlined.
 
-    Use when you need to understand table structures before writing SQL.
+    Use when: You need to understand table structures before writing SQL.
     Returns column names, types, valid values (from column_registry), and keys.
     Result is cached for the session - safe to call multiple times.
+    Returns: Formatted string (compact) or JSON (full) with table definitions.
 
     Args:
         project: Project name. Defaults to current directory.
@@ -458,10 +459,12 @@ def start_session(
 ) -> dict:
     """Start a session and get ALL context in one call.
 
-    Call this at the beginning of every work session. Returns: project info,
+    Use when: Beginning any work session. Call this first. Returns: project info,
     session state, active todos, work items (features + tasks), pending messages.
-
+    With resume=True, returns pre-formatted display box for /session-resume.
     Use get_schema() separately if you need table structures.
+    Returns: {project_name, project_id, project_context, previous_state,
+              last_session, todos, active_features, pending_messages, ...}.
 
     Args:
         project: Project name or path. Defaults to current directory basename.
@@ -791,8 +794,11 @@ def end_session(
 ) -> dict:
     """End the current session and save state to database.
 
-    Call this when finishing work. Saves summary, next steps, and learnings
-    so the next session can pick up where you left off.
+    Use when: Finishing a work session. Saves summary, next steps, and learnings
+    so the next session can pick up where you left off. Also extracts and stores
+    the conversation for later search/insight extraction.
+    Returns: {session_closed, session_id, state_saved, next_steps_saved,
+              conversation_stored, conversation_id (if stored)}.
 
     Args:
         summary: Brief summary of what was accomplished this session.
@@ -988,8 +994,9 @@ def save_checkpoint(
 ) -> dict:
     """Save a mid-session checkpoint without closing the session.
 
-    Use when you want to persist your current progress (e.g., before a risky
+    Use when: You want to persist current progress (e.g., before a risky
     operation, or periodically during long sessions). Does NOT close the session.
+    Returns: {success, project, focus_saved, timestamp}.
 
     Args:
         focus: What you're currently working on.
@@ -1325,7 +1332,11 @@ def advance_status(
     Validates the transition is allowed, checks any required conditions,
     executes side effects, and logs to audit_log.
 
-    Use short codes: FB12, F5, BT23.
+    Use when: Changing status of any feedback, feature, or build task. Prefer
+    start_work/complete_work for build tasks (they add context loading).
+    Returns: {success, entity_type, entity_id, entity_code, from_status, to_status,
+              side_effects_executed}. On invalid transition: {success: false, error,
+              valid_transitions: [list of allowed next statuses]}.
 
     Args:
         item_type: Entity type: feedback, features, or build_tasks.
@@ -1353,11 +1364,16 @@ def advance_status(
 def start_work(
     task_code: str,
 ) -> dict:
-    """Start working on a build task: transitions todo→in_progress, sets focus, returns plan_data.
+    """Start working on a build task: transitions todo->in_progress, sets focus, returns plan_data.
 
     Shortcut for advance_status('build_tasks', code, 'in_progress') plus
     context loading. Returns the task details and parent feature plan_data
     so you know what to build.
+
+    Use when: Beginning implementation of a build task. Call this instead of
+    advance_status for build tasks - it loads task context automatically.
+    Returns: {success, entity_code, task_context: {task_name, description, type,
+              files_affected, verification, feature_code, feature_name, plan_data}}.
 
     Args:
         task_code: Task short code (e.g., 'BT3') or UUID.
@@ -1434,10 +1450,15 @@ def start_work(
 def complete_work(
     task_code: str,
 ) -> dict:
-    """Complete a build task: transitions in_progress→completed, checks parent feature, returns next task.
+    """Complete a build task: transitions in_progress->completed, checks parent feature, returns next task.
 
     Shortcut for advance_status('build_tasks', code, 'completed') plus
     feature completion check and next-task suggestion.
+
+    Use when: Finishing a build task. Call this instead of advance_status -
+    it checks if all sibling tasks are done and suggests the next ready task.
+    Returns: {success, entity_code, next_task: {next_task_code, next_task_name,
+              next_task_type} or null, message}.
 
     Args:
         task_code: Task short code (e.g., 'BT3') or UUID.
@@ -1504,6 +1525,13 @@ def get_work_context(
     - current (~200 tokens): Active task, its description, files_affected
     - feature (~500 tokens): Current feature, all its tasks with statuses
     - project (~800 tokens): All active features, ready tasks, pending feedback
+
+    Use when: You need to understand what you're working on without loading
+    full session context. Use 'current' mid-task, 'feature' for planning,
+    'project' for orientation. Replaces the old get_session_context RAG hook.
+    Returns: {scope, project, active_task} for current; {scope, project,
+              feature, tasks: []} for feature; {scope, project, features: [],
+              ready_tasks: [], feedback: []} for project.
 
     Args:
         scope: Zoom level: 'current' for active task, 'feature' for parent feature,
@@ -1677,6 +1705,11 @@ def create_linked_task(
     Enforces that tasks must belong to a valid in-progress or planned feature.
     Auto-assigns step_order based on existing tasks.
 
+    Use when: Breaking a feature into implementation steps. Feature must be
+    'planned' or 'in_progress'. Use add_build_task for simpler/less strict tasks.
+    Returns: {success, task_code (e.g. 'BT42'), task_id, feature_code,
+              feature_name, step_order, priority, status: 'todo'}.
+
     REQUIRED DETAIL LEVEL - the tool will reject vague tasks:
     - task_description: Must be >= 100 chars. Include WHAT to build, WHERE in the code,
       HOW it connects to existing code, and EDGE CASES to handle.
@@ -1836,6 +1869,12 @@ def extract_conversation(
     Finds and parses the JSONL conversation log to extract user/assistant turns.
     Skips tool_use blocks, returning only text content for readability.
 
+    Use when: Reviewing what happened in a past session, or feeding conversation
+    data to extract_insights. Dependencies: None, but store result in
+    claude.conversations via end_session for persistence.
+    Returns: {success, session_file, turn_count, turns: [{role, content}],
+              truncated, warning}.
+
     Args:
         session_id: Session ID (UUID or prefix). If omitted, uses most recent JSONL in project.
         project: Project name. Defaults to current directory.
@@ -1875,6 +1914,10 @@ def store_book(
 ) -> dict:
     """Store a book in the reference library.
 
+    Use when: Adding a new book you want to reference later. Call this before
+    store_book_reference to create the parent book record.
+    Returns: {success, book_id, title}.
+
     Args:
         title: Book title (required).
         author: Book author.
@@ -1882,9 +1925,6 @@ def store_book(
         year: Publication year.
         topics: List of topic tags.
         summary: Brief summary of the book.
-
-    Returns:
-        dict with book_id and success status.
     """
     conn = get_db_connection()
     cur = None
@@ -1931,7 +1971,12 @@ def store_book_reference(
 ) -> dict:
     """Store a reference to a concept, quote, or insight from a book.
 
-    Generates semantic embedding for the concept+description for later retrieval.
+    Generates semantic embedding for the concept+description for later retrieval
+    via recall_book_reference.
+
+    Use when: Capturing a specific idea, quote, or pattern from a book. The book
+    must already exist (use store_book first). Embedding is auto-generated.
+    Returns: {success, ref_id, book_id, has_embedding, concept}.
 
     Args:
         book_title: Title of the book (case-insensitive lookup).
@@ -1941,9 +1986,6 @@ def store_book_reference(
         description: Explanation or context for the concept.
         quote: Direct quote from the book.
         tags: List of tags for categorization.
-
-    Returns:
-        dict with ref_id, has_embedding, and success status.
     """
     conn = get_db_connection()
     cur = None
@@ -2017,14 +2059,17 @@ def recall_book_reference(
 
     Finds concepts, quotes, and insights from books that match the query.
 
+    Use when: Looking for ideas or patterns from books you've read. Uses
+    Voyage AI embeddings for semantic search (not keyword matching).
+    Returns: {success, query, result_count, references: [{ref_id, book: {title,
+              author, year}, concept, description, quote, chapter, page_range,
+              tags, similarity}]}.
+
     Args:
         query: Natural language search query.
         book_title: Optional filter by book title (case-insensitive).
         tags: Optional filter by tags (matches any).
         limit: Maximum number of results (default 5).
-
-    Returns:
-        dict with list of matching references, ordered by relevance.
     """
     conn = get_db_connection()
     cur = None
@@ -2140,12 +2185,15 @@ def extract_insights(
     Reads turns from claude.conversations and identifies decisions, requirements,
     architectural directions, and patterns. Creates knowledge entries automatically.
 
+    Use when: Mining a past conversation for reusable knowledge. Conversation must
+    already be stored (via end_session or extract_conversation + manual insert).
+    Pattern-matches user turns for decisions, rules, learnings, and patterns.
+    Returns: {success, insights_count, insight_summaries: [{knowledge_id, title,
+              type, turn_index}]}.
+
     Args:
         session_id: Session ID (UUID) to extract insights from.
         project: Project name filter (optional).
-
-    Returns:
-        dict with success status, insights_count, and insight_summaries list.
     """
     conn = get_db_connection()
     cur = None
@@ -2353,14 +2401,17 @@ def search_conversations(
     Full-text search across conversation turns (JSONB). Returns matching
     turns with surrounding context (previous and next turn).
 
+    Use when: Finding what was discussed in past sessions. Uses ILIKE keyword
+    matching (not semantic search). For semantic search, use recall_knowledge.
+    Returns: {success, query, match_count, matches: [{conversation_id, session_id,
+              project, summary, matching_turn: {turn_index, role, content},
+              prev_turn, next_turn}]}.
+
     Args:
         query: Search query (keywords to find in conversation turns).
         project: Filter by project name (optional).
         date_range_days: Only search conversations from last N days (optional).
         limit: Maximum number of matching turns to return (default: 10).
-
-    Returns:
-        dict with success status and matches array containing conversation context.
     """
     conn = get_db_connection()
     cur = None
@@ -2486,7 +2537,14 @@ def update_claude_md(
     """Update a section in CLAUDE.md file.
 
     Finds CLAUDE.md in the project workspace, parses it by ## headers,
-    and updates the specified section. Optionally updates the profiles table.
+    and updates the specified section. Also updates the profiles table and
+    logs to audit_log.
+
+    Use when: Modifying a specific section of a project's CLAUDE.md (e.g.,
+    updating "Recent Changes" or "Architecture Overview"). For full rewrite
+    from DB, use deploy_claude_md instead.
+    Returns: {success, section_name, lines_changed, file_path, mode,
+              profile_updated}.
 
     Args:
         project: Project name.
@@ -2638,6 +2696,10 @@ def deploy_claude_md(
     Reads profiles.config->behavior from the database and writes it to the
     project's CLAUDE.md file. Use update_claude_md() for section-level edits.
 
+    Use when: Regenerating CLAUDE.md from the database after DB-side changes.
+    This is a full overwrite - file content is replaced entirely from DB.
+    Returns: {success, diff_summary, file_path}.
+
     Args:
         project: Project name.
     """
@@ -2734,6 +2796,11 @@ def deploy_project(
 
     Reads component definitions from the database and writes them to the
     appropriate locations in the project directory. Self-healing config system.
+
+    Use when: Regenerating project config files from DB (e.g., after DB changes
+    or to fix corrupted files). Deploys any combination of: settings, rules,
+    skills, instructions, claude_md. Omit components to deploy all.
+    Returns: {success, project, deployed_components: [], changes_summary: []}.
 
     Args:
         project: Project name.
@@ -2957,8 +3024,13 @@ def regenerate_settings(
 ) -> dict:
     """Regenerate .claude/settings.local.json from database (config_templates + workspace overrides).
 
-    Reads the base template and merges with project-specific overrides, then writes
-    to the project's .claude/settings.local.json file.
+    Reads the base template (template_id=1) and merges with project-specific
+    overrides from workspaces.startup_config, then writes the merged result.
+
+    Use when: Settings file is corrupted, missing, or out of sync with DB.
+    Also call after updating config_templates or workspaces.startup_config.
+    Returns: {success, project, file_path, changes: ['+key', '-key', '~key'],
+              total_keys}.
 
     Args:
         project: Project name.
@@ -3138,6 +3210,10 @@ def get_incomplete_todos(
 ) -> dict:
     """Get all incomplete todos for a project across all sessions.
 
+    Use when: Reviewing outstanding work items across sessions. For current
+    session only, use list_session_facts or get_work_context instead.
+    Returns: {todos: [{todo_id, content, status, priority, session_id, created_at}]}.
+
     Args:
         project: Project name or path.
     """
@@ -3149,6 +3225,10 @@ def restore_session_todos(
     session_id: str,
 ) -> dict:
     """Get todos from a specific past session, formatted for TodoWrite.
+
+    Use when: Restoring work items from a crashed or resumed session. Used
+    internally by /session-resume. Returns data shaped for TodoWrite.
+    Returns: {todos: [{content, status, priority}], session_id}.
 
     Args:
         session_id: Session UUID to restore todos from.
@@ -3166,8 +3246,9 @@ def create_feedback(
 ) -> dict:
     """Report a bug, propose a change, or capture an idea.
 
-    Use when you discover a bug, have an improvement idea, or want to propose a change.
-    Auto-validates against column_registry.
+    Use when: You discover a bug, have an improvement idea, or want to propose
+    a change. Auto-validates against column_registry. Status starts at 'new'.
+    Returns: {success, feedback_id, short_code (e.g. 'FB42'), title, status: 'new'}.
 
     Args:
         project: Project name or path.
@@ -3191,6 +3272,12 @@ def create_feature(
 ) -> dict:
     """Create a feature for tracking implementation.
 
+    Use when: Starting a new piece of work that needs build tasks. Features
+    group related build_tasks. Status starts at 'draft' - advance to 'planned'
+    then 'in_progress'. Attach plan_data for structured specs.
+    Returns: {success, feature_id, short_code (e.g. 'F42'), feature_name,
+              status: 'draft'}.
+
     Args:
         project: Project name or path.
         feature_name: Feature name.
@@ -3212,6 +3299,12 @@ def add_build_task(
     blocked_by_task_id: str = "",
 ) -> dict:
     """Add a build task to a feature. Tasks are ordered by step_order.
+
+    Use when: Adding a task to a feature without strict validation. For
+    enforced quality (>= 100 char description, verification, files), use
+    create_linked_task instead. Status starts at 'todo'.
+    Returns: {success, task_id, short_code (e.g. 'BT42'), task_name,
+              feature_id, step_order}.
 
     Args:
         feature_id: Feature ID or short_code (e.g., 'F12').
@@ -3236,6 +3329,11 @@ def get_ready_tasks(
 ) -> dict:
     """Get build tasks that are ready to work on (not blocked).
 
+    Use when: Looking for the next task to start. Returns tasks with status
+    'todo' whose blockers (if any) are completed.
+    Returns: {tasks: [{task_code, task_name, task_type, feature_code,
+              feature_name, priority, step_order}]}.
+
     Args:
         project: Project name or path.
     """
@@ -3250,8 +3348,11 @@ def update_work_status(
 ) -> dict:
     """Update status of a feedback, feature, or build_task.
 
-    Routes through WorkflowEngine for state machine enforcement.
+    Use when: Changing status (legacy interface). Routes through WorkflowEngine.
+    Prefer advance_status (same behavior, consistent naming).
     Use short codes: FB12, F5, BT23.
+    Returns: Same as advance_status - {success, entity_type, entity_code,
+              from_status, to_status}.
 
     Args:
         item_type: Type of item: feedback, feature, or build_task.
@@ -3280,6 +3381,10 @@ def find_skill(
 ) -> dict:
     """Search skill_content by task description to find relevant skills/guidelines.
 
+    Use when: Looking for a skill or guideline that applies to your current task.
+    Searches skill_content table by keyword similarity.
+    Returns: {skills: [{skill_name, content, similarity}]}.
+
     Args:
         task_description: Description of what you're trying to do.
         limit: Max results (default: 5).
@@ -3295,7 +3400,9 @@ def todos_to_build_tasks(
 ) -> dict:
     """Convert session todos to persistent build_tasks linked to a feature.
 
-    Archives the converted todos after creating build_tasks.
+    Use when: Promoting ad-hoc session todos into tracked build_tasks on a
+    feature. Archives the converted todos after creating build_tasks.
+    Returns: {success, converted_count, feature_code, archived_todos}.
 
     Args:
         feature_id: Feature ID or short_code to link tasks to.
@@ -3319,7 +3426,9 @@ def store_knowledge(
 ) -> dict:
     """Store new knowledge with automatic embedding for semantic search.
 
-    Use for learnings, patterns, gotchas, preferences, facts, or procedures.
+    Use when: Capturing a reusable insight, pattern, or fact. Embedding is
+    auto-generated via Voyage AI for later recall via recall_knowledge.
+    Returns: {success, knowledge_id, title, has_embedding}.
 
     Args:
         title: Short descriptive title.
@@ -3357,7 +3466,10 @@ def recall_knowledge(
 ) -> dict:
     """Semantic search over knowledge entries with structured filters.
 
-    Use to find relevant learnings, patterns, or facts with optional filtering.
+    Use when: Looking for previously stored knowledge (learnings, patterns,
+    gotchas). Uses Voyage AI embeddings for semantic similarity matching.
+    Returns: {results: [{knowledge_id, title, description, knowledge_type,
+              similarity, confidence_level, code_example}]}.
 
     Args:
         query: Natural language query.
@@ -3392,6 +3504,10 @@ def link_knowledge(
 ) -> dict:
     """Create a typed relation between knowledge entries.
 
+    Use when: Connecting related knowledge entries (e.g., a pattern that
+    supersedes an older one, or a gotcha that contradicts a fact).
+    Returns: {success, relation_id, from_id, to_id, relation_type}.
+
     Args:
         from_knowledge_id: Source knowledge UUID.
         to_knowledge_id: Target knowledge UUID.
@@ -3413,6 +3529,11 @@ def get_related_knowledge(
 ) -> dict:
     """Get knowledge entries related to a given entry via knowledge_relations.
 
+    Use when: Exploring the knowledge graph from a specific entry. Finds
+    both outgoing and incoming relations.
+    Returns: {relations: [{relation_id, relation_type, direction,
+              related: {knowledge_id, title, description, type}}]}.
+
     Args:
         knowledge_id: Knowledge UUID to find relations for.
         relation_types: Filter by relation types (optional).
@@ -3427,6 +3548,10 @@ def mark_knowledge_applied(
     success: bool = True,
 ) -> dict:
     """Track when knowledge is applied (success or failure). Updates confidence level.
+
+    Use when: After using a knowledge entry, report whether it was helpful.
+    Success increases confidence, failure decreases it. Helps surface reliable knowledge.
+    Returns: {success, knowledge_id, new_confidence_level}.
 
     Args:
         knowledge_id: Knowledge UUID that was applied.
@@ -3445,8 +3570,10 @@ def store_session_fact(
 ) -> dict:
     """Store a fact in your session notepad (survives context compaction).
 
-    Use for: credentials, configs, endpoints, decisions, findings.
-    These facts persist in the database so you don't forget them.
+    Use when: You learn something important mid-session that must survive
+    compaction (credentials, endpoints, decisions, key findings). Facts persist
+    in DB and can be recalled via recall_session_fact or list_session_facts.
+    Returns: {success, fact_key, fact_type, session_id}.
 
     Args:
         fact_key: Unique key for the fact (e.g., 'api_endpoint', 'nimbus_creds').
@@ -3468,6 +3595,10 @@ def recall_session_fact(
 ) -> dict:
     """Recall a specific fact by key. Looks in current session first, falls back to recent.
 
+    Use when: Retrieving a previously stored fact (e.g., after context
+    compaction or to check a stored credential/endpoint).
+    Returns: {success, fact_key, fact_value, fact_type, session_id, stored_at}.
+
     Args:
         fact_key: The key of the fact to recall.
         project_name: Project name (default: current directory).
@@ -3481,6 +3612,11 @@ def list_session_facts(
     include_sensitive: bool = False,
 ) -> dict:
     """List all facts stored in the current session.
+
+    Use when: Reviewing your session notepad to see what's been stored.
+    Sensitive values are hidden by default unless include_sensitive=True.
+    Returns: {success, facts: [{fact_key, fact_value, fact_type, stored_at}],
+              count}.
 
     Args:
         project_name: Project name (default: current directory).
@@ -3497,7 +3633,10 @@ def recall_previous_session_facts(
 ) -> dict:
     """Recall facts from previous sessions (after context compaction).
 
-    Use when resuming work or after compaction to recover important info.
+    Use when: Resuming work in a new session and need facts from prior sessions
+    (e.g., credentials, endpoints, decisions). Scans the last N sessions.
+    Returns: {success, facts: [{fact_key, fact_value, fact_type, session_id,
+              stored_at}], sessions_checked}.
 
     Args:
         project_name: Project name (default: current directory).
@@ -3515,7 +3654,9 @@ def store_session_notes(
 ) -> dict:
     """Store structured notes during a session (persists to markdown file).
 
-    Use for: progress tracking, key decisions, architectural notes, important findings.
+    Use when: Recording progress, decisions, or findings during a session.
+    Notes persist to a markdown file and survive context compaction.
+    Returns: {success, section, file_path, action: 'appended' or 'replaced'}.
 
     Args:
         content: Note content to store.
@@ -3531,7 +3672,8 @@ def get_session_notes(
 ) -> dict:
     """Retrieve session notes for the current project.
 
-    Useful after context compaction to review what was done.
+    Use when: Reviewing progress after context compaction or at end of session.
+    Returns: {success, notes: {section_name: content}, file_path}.
 
     Args:
         section: Section to retrieve (optional). If omitted, returns all notes.
