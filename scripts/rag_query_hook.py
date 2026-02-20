@@ -29,10 +29,10 @@ Output Format:
 
 CORE_PROTOCOL = """
 STOP! Read the user's message fully.
-1. Break it into tasks (TaskCreate) BEFORE doing anything else. Work through each one.
-2. Verify before claiming - read files, query DB. Never guess.
-3. Check MCP tools first (ToolSearch) - project-tools has 40+ tools.
-4. store_session_fact for decisions, credentials, and findings.
+1. DECOMPOSE: Extract EVERY directive from the user's message. Each distinct ask = one task (TaskCreate). Include thinking/design tasks, not just code tasks. Then work through them in order.
+2. PRESERVE: store_session_fact("user_intent", <what user wants in their words>) when direction changes. This survives compaction.
+3. Verify before claiming - read files, query DB. Never guess.
+4. Check MCP tools first - project-tools has 40+ tools.
 """
 
 import json

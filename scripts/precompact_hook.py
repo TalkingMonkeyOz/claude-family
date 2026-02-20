@@ -160,6 +160,31 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
                 active = f['active_tasks'] if isinstance(f, dict) else f[2]
                 lines.append(f"  - {name} ({status}, {active} active tasks)")
 
+        # Get session facts (user intent, decisions, key references)
+        # These preserve the narrative/context that structured data alone misses
+        cur.execute("""
+            SELECT fact_key, fact_value, fact_type
+            FROM claude.session_facts
+            WHERE session_id = (
+                SELECT session_id FROM claude.sessions
+                WHERE project_name = %s AND session_end IS NULL
+                ORDER BY session_start DESC LIMIT 1
+            )
+            AND fact_type IN ('decision', 'reference', 'note')
+            AND NOT is_sensitive
+            ORDER BY created_at DESC LIMIT 5
+        """, (project_name,))
+        facts = cur.fetchall()
+
+        if facts:
+            lines.append("\nSESSION CONTEXT (decisions & intent):")
+            for f in facts:
+                key = f['fact_key'] if isinstance(f, dict) else f[0]
+                value = f['fact_value'] if isinstance(f, dict) else f[1]
+                # Truncate long values
+                display = value[:200] + "..." if len(value) > 200 else value
+                lines.append(f"  [{key}]: {display}")
+
         conn.close()
         return "\n".join(lines) if lines else None
 
@@ -189,21 +214,35 @@ def build_refresh_message(hook_input: Dict) -> str:
         parts.append("")
         parts.append(session_state)
 
+    # Also inject session notes if they exist
+    notes_path = Path.home() / ".claude" / "session_notes.md"
+    if notes_path.exists():
+        try:
+            notes_content = notes_path.read_text(encoding='utf-8').strip()
+            if notes_content and len(notes_content) > 20:
+                # Truncate to avoid bloating context
+                if len(notes_content) > 500:
+                    notes_content = notes_content[:500] + "\n  ... (truncated, use get_session_notes() for full)"
+                parts.append("")
+                parts.append("SESSION NOTES (from this session):")
+                parts.append(notes_content)
+        except Exception:
+            pass
+
     parts.extend([
         "",
         "=" * 60,
         "POST-COMPACTION CHECKLIST:",
         "",
         "1. Re-read CLAUDE.md (project rules may have been lost)",
-        "2. Check the work items above - continue where you left off",
-        "3. Use MCP tools (ToolSearch first):",
+        "2. Recall user intent: recall_session_fact('user_intent')",
+        "3. Check the work items above - continue where you left off",
+        "4. Use MCP tools:",
         "   - project-tools: work tracking, knowledge, session facts",
         "   - orchestrator: agent spawning, messaging",
         "   - sequential-thinking: complex analysis",
-        "   - python-repl: data processing (keep data out of context)",
         "",
-        "4. Database is source of truth for config (not files)",
-        "   Settings regenerate from DB on SessionStart",
+        "5. Database is source of truth for config (not files)",
     ])
 
     return "\n".join(parts)
