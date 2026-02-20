@@ -1,0 +1,206 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/task-lifecycle"
+    id="Definitions_TaskLifecycle">
+
+  <bpmn:process id="task_lifecycle" name="Task Lifecycle" isExecutable="true">
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_create</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Create Task -->
+    <bpmn:userTask id="create_task" name="Create Task">
+      <bpmn:incoming>flow_start_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_sync</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Sync to DB -->
+    <bpmn:scriptTask id="sync_to_db" name="Sync to DB" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_sync</bpmn:incoming>
+      <bpmn:outgoing>flow_sync_to_gateway</bpmn:outgoing>
+      <bpmn:script>synced = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Exclusive Gateway: Has Tasks? -->
+    <bpmn:exclusiveGateway id="has_tasks_gateway" name="Has Tasks?" default="flow_no_tasks">
+      <bpmn:incoming>flow_sync_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_has_tasks</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_tasks</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Work on Task -->
+    <bpmn:userTask id="work_on_task" name="Work on Task">
+      <bpmn:incoming>flow_has_tasks</bpmn:incoming>
+      <bpmn:incoming>flow_resolve_to_work</bpmn:incoming>
+      <bpmn:outgoing>flow_work_to_action</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Task Action -->
+    <bpmn:exclusiveGateway id="task_action_gateway" name="Task Action" default="flow_action_complete">
+      <bpmn:incoming>flow_work_to_action</bpmn:incoming>
+      <bpmn:outgoing>flow_action_complete</bpmn:outgoing>
+      <bpmn:outgoing>flow_action_block</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- User Task: Resolve Blocker -->
+    <bpmn:userTask id="resolve_blocker" name="Resolve Blocker">
+      <bpmn:incoming>flow_action_block</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_work</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Mark Completed -->
+    <bpmn:scriptTask id="mark_completed" name="Mark Completed" scriptFormat="python">
+      <bpmn:incoming>flow_action_complete</bpmn:incoming>
+      <bpmn:outgoing>flow_mark_to_end_completed</bpmn:outgoing>
+      <bpmn:script>status = "completed"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Mark Blocked by Discipline Gate -->
+    <bpmn:scriptTask id="mark_gate_blocked" name="Mark Gate Blocked" scriptFormat="python">
+      <bpmn:incoming>flow_no_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_mark_gate_to_end_blocked</bpmn:outgoing>
+      <bpmn:script>gate_blocked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Task Completed -->
+    <bpmn:endEvent id="end_completed" name="Task Completed">
+      <bpmn:incoming>flow_mark_to_end_completed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- End Event: Blocked by Discipline Gate -->
+    <bpmn:endEvent id="end_blocked" name="Blocked by Discipline Gate">
+      <bpmn:incoming>flow_mark_gate_to_end_blocked</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_start_to_create" sourceRef="start_event" targetRef="create_task"/>
+    <bpmn:sequenceFlow id="flow_create_to_sync" sourceRef="create_task" targetRef="sync_to_db"/>
+    <bpmn:sequenceFlow id="flow_sync_to_gateway" sourceRef="sync_to_db" targetRef="has_tasks_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_has_tasks" sourceRef="has_tasks_gateway" targetRef="work_on_task">
+      <bpmn:conditionExpression>has_tasks == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_no_tasks" sourceRef="has_tasks_gateway" targetRef="mark_gate_blocked"/>
+
+    <bpmn:sequenceFlow id="flow_work_to_action" sourceRef="work_on_task" targetRef="task_action_gateway"/>
+
+    <bpmn:sequenceFlow id="flow_action_complete" sourceRef="task_action_gateway" targetRef="mark_completed"/>
+
+    <bpmn:sequenceFlow id="flow_action_block" sourceRef="task_action_gateway" targetRef="resolve_blocker">
+      <bpmn:conditionExpression>action == "block"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_resolve_to_work" sourceRef="resolve_blocker" targetRef="work_on_task"/>
+    <bpmn:sequenceFlow id="flow_mark_to_end_completed" sourceRef="mark_completed" targetRef="end_completed"/>
+    <bpmn:sequenceFlow id="flow_mark_gate_to_end_blocked" sourceRef="mark_gate_blocked" targetRef="end_blocked"/>
+
+  </bpmn:process>
+
+  <!-- Minimal diagram data so the parser does not fail on position lookups -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="task_lifecycle">
+
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="100" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_task" bpmnElement="create_task">
+        <dc:Bounds x="200" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_sync_to_db" bpmnElement="sync_to_db">
+        <dc:Bounds x="360" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_has_tasks_gateway" bpmnElement="has_tasks_gateway" isMarkerVisible="true">
+        <dc:Bounds x="520" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_work_on_task" bpmnElement="work_on_task">
+        <dc:Bounds x="630" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_task_action_gateway" bpmnElement="task_action_gateway" isMarkerVisible="true">
+        <dc:Bounds x="790" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_resolve_blocker" bpmnElement="resolve_blocker">
+        <dc:Bounds x="790" y="320" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_mark_completed" bpmnElement="mark_completed">
+        <dc:Bounds x="900" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_mark_gate_blocked" bpmnElement="mark_gate_blocked">
+        <dc:Bounds x="520" y="340" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_completed" bpmnElement="end_completed">
+        <dc:Bounds x="1060" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_blocked" bpmnElement="end_blocked">
+        <dc:Bounds x="680" y="358" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNEdge id="edge_flow_start_to_create" bpmnElement="flow_start_to_create">
+        <di:waypoint x="136" y="218"/>
+        <di:waypoint x="200" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_create_to_sync" bpmnElement="flow_create_to_sync">
+        <di:waypoint x="300" y="220"/>
+        <di:waypoint x="360" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_sync_to_gateway" bpmnElement="flow_sync_to_gateway">
+        <di:waypoint x="460" y="220"/>
+        <di:waypoint x="520" y="218"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_has_tasks" bpmnElement="flow_has_tasks">
+        <di:waypoint x="570" y="218"/>
+        <di:waypoint x="630" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_no_tasks" bpmnElement="flow_no_tasks">
+        <di:waypoint x="545" y="243"/>
+        <di:waypoint x="545" y="380"/>
+        <di:waypoint x="520" y="380"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_work_to_action" bpmnElement="flow_work_to_action">
+        <di:waypoint x="730" y="220"/>
+        <di:waypoint x="790" y="218"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_action_complete" bpmnElement="flow_action_complete">
+        <di:waypoint x="840" y="218"/>
+        <di:waypoint x="900" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_action_block" bpmnElement="flow_action_block">
+        <di:waypoint x="815" y="243"/>
+        <di:waypoint x="815" y="360"/>
+        <di:waypoint x="790" y="360"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_resolve_to_work" bpmnElement="flow_resolve_to_work">
+        <di:waypoint x="790" y="360"/>
+        <di:waypoint x="680" y="360"/>
+        <di:waypoint x="680" y="220"/>
+        <di:waypoint x="630" y="220"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_mark_to_end_completed" bpmnElement="flow_mark_to_end_completed">
+        <di:waypoint x="1000" y="220"/>
+        <di:waypoint x="1060" y="218"/>
+      </bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="edge_flow_mark_gate_to_end_blocked" bpmnElement="flow_mark_gate_to_end_blocked">
+        <di:waypoint x="620" y="376"/>
+        <di:waypoint x="680" y="376"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
