@@ -8,7 +8,7 @@ Blocks tool calls when no tasks have been created, ensuring Claude plans before 
 Hook Event: PreToolUse
 Matchers: Write, Edit, Task (registered separately per tool)
 
-How it works (3-way cascade - FB108):
+How it works (4-way cascade - FB108 + FB109):
 1. Reads task map file written by task_sync_hook.py on TaskCreate
 2. Checks _session_id in map matches current session
 3. Decision cascade:
@@ -16,7 +16,8 @@ How it works (3-way cascade - FB108):
    b. Tasks exist + no session_id -> allow (edge case)
    c. Tasks exist + session mismatch + map fresh (< 2h) -> allow with warning (continuation)
    d. No tasks + map recently modified (< 30s) -> allow (race condition)
-   e. Otherwise -> deny
+   e. DB fallback: query build_tasks for active tasks (covers MCP create_linked_task) -> allow
+   f. Otherwise -> deny
 
 Session scoping:
 - task_sync_hook.py writes _session_id into the map file on every TaskCreate
@@ -29,7 +30,7 @@ Response pattern: exit code 0 + JSON with permissionDecision: "deny" or "allow"
 
 Author: Claude Family
 Date: 2026-02-09
-Updated: 2026-02-20 (FB108 - continuation session + git root project detection)
+Updated: 2026-02-20 (FB108 - continuation session + FB109 - DB fallback for MCP tasks)
 """
 
 import json
@@ -38,6 +39,7 @@ import sys
 import io
 import logging
 import tempfile
+import time
 from pathlib import Path
 
 # Fix Windows encoding
@@ -151,6 +153,59 @@ def _get_project_name(cwd: str) -> str:
     return os.path.basename(cwd.rstrip('/\\'))
 
 
+def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool:
+    """Fallback: check database for recent build_tasks when task_map is empty.
+
+    This covers the case where tasks were created via MCP create_linked_task
+    (which writes to DB but not the task_map file). Only queries DB when
+    the fast task_map check fails - not on every tool call.
+
+    Returns True if active build_tasks exist for this project (created recently).
+    """
+    try:
+        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+        from config import POSTGRES_CONFIG as _PG_CONFIG
+        conn_str = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
+    except ImportError:
+        return False
+
+    try:
+        import psycopg
+        conn = psycopg.connect(conn_str)
+    except ImportError:
+        try:
+            import psycopg2 as psycopg
+            conn = psycopg.connect(conn_str)
+        except ImportError:
+            return False
+    except Exception:
+        return False
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*) FROM claude.build_tasks bt
+            JOIN claude.features f ON bt.feature_id = f.feature_id
+            JOIN claude.projects p ON f.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND bt.status IN ('todo', 'in_progress')
+              AND bt.created_at > NOW() - INTERVAL '%s hours'
+        """, (project_name, max_age_hours))
+        row = cur.fetchone()
+        count = row[0] if row else 0
+        conn.close()
+        if count > 0:
+            logger.info(f"DB fallback: found {count} active build_tasks for {project_name}")
+        return count > 0
+    except Exception as e:
+        logger.error(f"DB fallback check failed: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
 def main():
     """Main entry point."""
     try:
@@ -210,17 +265,28 @@ def main():
         )
         allow()
     else:
-        if task_entries and map_session_id != current_session_id:
+        # FB109 fix: Before denying, check DB for active build_tasks.
+        # This covers tasks created via MCP create_linked_task (which writes
+        # to DB but not the task_map file). Only fires on the deny path,
+        # so no performance impact on the normal allow path.
+        if check_db_for_recent_tasks(project_name):
+            logger.warning(
+                f"DB fallback: active build_tasks found for {project_name} "
+                f"(tasks created via MCP, not task_map) - allowing {tool_name}"
+            )
+            allow()
+        elif task_entries and map_session_id != current_session_id:
             reason = (
                 f"Stale tasks from a previous session (map > 2h old). "
                 f"Use TaskCreate to define your work for THIS session BEFORE using {tool_name}."
             )
+            deny(reason)
         else:
             reason = (
                 f"No tasks found. Use TaskCreate to define your work BEFORE using {tool_name}. "
                 f"Create at least one task describing what you're about to do."
             )
-        deny(reason)
+            deny(reason)
 
 
 if __name__ == "__main__":
@@ -229,6 +295,11 @@ if __name__ == "__main__":
     except Exception as e:
         # Fail open on any error - never block workflow due to hook crash
         logger.error(f"Task discipline hook error: {e}")
+        try:
+            from failure_capture import capture_failure
+            capture_failure("task_discipline_hook", str(e), "scripts/task_discipline_hook.py")
+        except Exception:
+            pass  # Failure capture itself failed - just log and move on
         print(json.dumps({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",

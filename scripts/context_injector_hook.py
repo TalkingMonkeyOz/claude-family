@@ -375,6 +375,11 @@ def main():
         print(json.dumps({"decision": "allow"}))  # Fail open
     except Exception as e:
         logger.error(f"Context injector error: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("context_injector_hook", str(e), "scripts/context_injector_hook.py")
+        except Exception:
+            pass
         print(json.dumps({"decision": "allow"}))  # Fail open
 
 

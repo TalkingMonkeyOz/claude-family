@@ -1,9 +1,10 @@
 """
-Tests for task_discipline_hook.py - FB108 fix validation.
+Tests for task_discipline_hook.py - FB108 + FB109 fix validation.
 
-Tests the 3-way discipline gateway logic:
+Tests the 4-way discipline gateway logic:
   - allowed: session match + tasks exist
   - continuation: session mismatch but map fresh (< 2h)
+  - db_fallback: no task_map tasks but active build_tasks in DB (FB109)
   - blocked: no tasks or truly stale map (> 2h)
 
 These tests validate the hook's decision logic WITHOUT running the hook
@@ -68,24 +69,29 @@ def simulate_hook_decision(
     map_age_seconds: float = 0,
     continuation_max_age: int = 7200,
     race_max_age: int = 30,
+    db_has_tasks: bool = False,
 ) -> str:
     """Simulate the hook's cascading decision logic.
 
-    Returns: "allow", "continuation", "race_allow", or "deny"
-    This mirrors the actual hook logic after FB108 fix.
+    Returns: "allow", "continuation", "race_allow", "db_fallback", or "deny"
+    This mirrors the actual hook logic after FB108 + FB109 fixes.
     """
     if task_entries and map_session_id == current_session_id:
         return "allow"  # Exact session match
     elif task_entries and not current_session_id:
         return "allow"  # No session_id available
+    elif not task_entries and map_age_seconds < race_max_age:
+        return "race_allow"  # Race condition fallback
     elif task_entries and map_session_id != current_session_id:
         # FB108 fix: check recency before denying
         if map_age_seconds < continuation_max_age:
             return "continuation"  # Fresh enough, allow with warning
+        elif db_has_tasks:
+            return "db_fallback"  # FB109: MCP tasks in DB
         else:
             return "deny"  # Truly stale
-    elif not task_entries and map_age_seconds < race_max_age:
-        return "race_allow"  # Race condition fallback
+    elif db_has_tasks:
+        return "db_fallback"  # FB109: no map tasks but DB has active build_tasks
     else:
         return "deny"  # No tasks, not a race
 
@@ -174,6 +180,39 @@ class TestDisciplineHookDecision:
             map_age_seconds=5,  # Very fresh
         )
         assert result == "race_allow"
+
+    def test_db_fallback_allows_when_mcp_tasks_exist(self):
+        """FB109: No task_map tasks but DB has active build_tasks = allow."""
+        result = simulate_hook_decision(
+            task_entries={},
+            map_session_id="session-abc",
+            current_session_id="session-abc",
+            map_age_seconds=60,  # Not a race
+            db_has_tasks=True,
+        )
+        assert result == "db_fallback"
+
+    def test_db_fallback_allows_stale_map_with_db_tasks(self):
+        """FB109: Stale map (> 2h) but DB has active build_tasks = allow."""
+        result = simulate_hook_decision(
+            task_entries={"1": "todo-1"},
+            map_session_id="old-session",
+            current_session_id="new-session",
+            map_age_seconds=7201,  # Stale
+            db_has_tasks=True,
+        )
+        assert result == "db_fallback"
+
+    def test_db_fallback_denied_when_no_db_tasks(self):
+        """No task_map tasks + no DB tasks = deny."""
+        result = simulate_hook_decision(
+            task_entries={},
+            map_session_id="session-abc",
+            current_session_id="session-abc",
+            map_age_seconds=60,
+            db_has_tasks=False,
+        )
+        assert result == "deny"
 
     def test_ungated_tools_skipped(self):
         """Ungated tools (Read, Grep, Glob) should never reach decision logic."""

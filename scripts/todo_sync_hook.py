@@ -487,6 +487,11 @@ def main():
 
     except Exception as e:
         logger.error(f"TodoWrite hook failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("todo_sync_hook", str(e), "scripts/todo_sync_hook.py")
+        except Exception:
+            pass
         # Return empty response on error (don't break Claude Code)
         print(json.dumps({
             "additionalContext": "",

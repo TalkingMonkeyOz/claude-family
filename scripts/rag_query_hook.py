@@ -28,15 +28,11 @@ Output Format:
 # ~45 tokens - brief imperative protocol injected every prompt.
 
 CORE_PROTOCOL = """
-STOP. Read the user's message fully. If it contains actionable work:
+STOP! Read the user's message fully.
 1. Break it into tasks (TaskCreate) BEFORE doing anything else. Work through each one.
 2. Verify before claiming - read files, query DB. Never guess.
 3. Check MCP tools first (ToolSearch) - project-tools has 40+ tools.
 4. store_session_fact for decisions, credentials, and findings.
-
-"Actionable work" = ANY request that needs investigation, code changes, debugging, or system commands.
-The ONLY exceptions: pure questions ("what is X?"), short confirmations ("yes", "ok"), slash commands.
-Bash is gated - you MUST create tasks before running shell commands.
 """
 
 import json
@@ -45,6 +41,7 @@ import sys
 import time
 import logging
 import re
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
@@ -1462,6 +1459,17 @@ def main():
         project_name = os.path.basename(cwd)
         session_id = hook_input.get('session_id') or os.environ.get('CLAUDE_SESSION_ID')
 
+        # TASK DISCIPLINE: Reset task map on every new user prompt.
+        # Forces Claude to create fresh tasks before using gated tools (Write/Edit/Task/Bash).
+        # Without this, stale tasks from earlier in the session act as a free pass.
+        try:
+            task_map_path = Path(tempfile.gettempdir()) / f"claude_task_map_{project_name}.json"
+            if task_map_path.exists():
+                task_map_path.unlink()
+                logger.info(f"Reset task map for new prompt (project: {project_name})")
+        except Exception as e:
+            logger.warning(f"Failed to reset task map: {e}")
+
         logger.info(f"RAG query hook invoked for project: {project_name}")
         logger.info(f"Query text (first 100 chars): {user_prompt[:100]}")
 
@@ -1543,6 +1551,16 @@ def main():
 
         combined_context_parts.append(CORE_PROTOCOL)
 
+        # PROCESS FAILURES: Surface pending auto-filed failures for self-improvement
+        try:
+            from failure_capture import get_pending_failures, format_pending_failures
+            pending_failures = get_pending_failures(project_name, max_age_hours=48)
+            failure_context = format_pending_failures(pending_failures)
+            if failure_context:
+                combined_context_parts.append(failure_context)
+        except Exception:
+            pass  # Don't let failure surfacing break the hook
+
         if critical_facts:
             combined_context_parts.append(critical_facts)
         if session_context:
@@ -1571,6 +1589,12 @@ def main():
 
     except Exception as e:
         logger.error(f"RAG hook failed: {e}", exc_info=True)
+        # Auto-file failure for process improvement loop
+        try:
+            from failure_capture import capture_failure
+            capture_failure("rag_query_hook", str(e), "scripts/rag_query_hook.py")
+        except Exception:
+            pass
         # On error, return empty context (don't break the flow)
         result = {
             "hookSpecificOutput": {
