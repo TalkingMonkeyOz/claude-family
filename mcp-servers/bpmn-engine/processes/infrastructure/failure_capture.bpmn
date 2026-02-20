@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/failure-capture"
+    id="Definitions_FC">
+
+  <bpmn:process id="failure_capture" name="Failure Capture Pipeline: Self-Improvement Loop" isExecutable="true">
+
+    <!--
+      Automated process improvement loop. When a hook script fails:
+        1. Hook's catch block calls capture_failure()
+        2. Failure logged to JSONL (always, even if DB is down)
+        3. Failure auto-filed as feedback in DB (with dedup)
+        4. On next prompt, rag_query_hook surfaces pending failures
+        5. Claude sees failure → follows system-change-process to fix
+
+      Two entry points:
+        A. Hook failure (automated) - scripts/failure_capture.py
+        B. Claude discovers failure (manual) - sees surfaced pending failures
+
+      Paths:
+        1. Happy: Hook fails → capture → file feedback → surface → Claude fixes
+        2. DB down: Hook fails → capture to JSONL only → surface on recovery
+        3. Duplicate: Hook fails same way → capture deduped → reuse existing FB
+        4. Claude fixes: Pending failure surfaced → BPMN-first fix → resolve feedback
+
+      Implementation:
+        - capture_failure() in scripts/failure_capture.py
+        - get_pending_failures() surfaced via rag_query_hook.py
+        - All 8 hooks have capture_failure() in fail-open catch blocks
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Hook Failure Occurs">
+      <bpmn:outgoing>flow_start_log</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: CAPTURE (Always runs, even if DB is down)                  -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="log_to_jsonl" name="[TOOL] Log to JSONL File" scriptFormat="python">
+      <bpmn:incoming>flow_start_log</bpmn:incoming>
+      <bpmn:outgoing>flow_log_to_db_check</bpmn:outgoing>
+      <bpmn:script>
+# Write failure entry to ~/.claude/process_failures.jsonl
+# Always succeeds (file-based, no external deps)
+# Entry: {timestamp, system, error, source_file, project, filed_as_feedback}
+jsonl_logged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_available_gw" name="DB Available?" default="flow_db_down">
+      <bpmn:incoming>flow_log_to_db_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_up</bpmn:outgoing>
+      <bpmn:outgoing>flow_db_down</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- DB down path: just log, skip feedback filing -->
+    <bpmn:scriptTask id="log_db_failure" name="[TOOL] Log DB Unavailable" scriptFormat="python">
+      <bpmn:incoming>flow_db_down</bpmn:incoming>
+      <bpmn:outgoing>flow_db_fail_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Log that DB was unavailable for feedback filing
+# Will be picked up on next session when DB recovers
+feedback_filed = False
+db_available = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_logged_only" name="Logged (DB Unavailable)">
+      <bpmn:incoming>flow_db_fail_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: FILE AS FEEDBACK (with deduplication)                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="check_duplicate" name="[DB] Check for Duplicate Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_db_up</bpmn:incoming>
+      <bpmn:outgoing>flow_dup_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT feedback_id FROM claude.feedback
+# WHERE title = 'Auto: {system} failure' AND status IN ('new', 'triaged', 'in_progress')
+# Sets: is_duplicate, existing_feedback_id
+is_duplicate = is_duplicate if is_duplicate is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="duplicate_gw" name="Duplicate?" default="flow_not_duplicate">
+      <bpmn:incoming>flow_dup_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_duplicate</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_duplicate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="reuse_existing" name="[DB] Reuse Existing Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_is_duplicate</bpmn:incoming>
+      <bpmn:outgoing>flow_reuse_to_surface</bpmn:outgoing>
+      <bpmn:script>
+# Use existing_feedback_id, don't create new
+feedback_filed = True
+feedback_reused = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_feedback" name="[DB] Create Feedback (type=bug)" scriptFormat="python">
+      <bpmn:incoming>flow_not_duplicate</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_surface</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.feedback (type='bug', title='Auto: {system} failure', status='new')
+# Description includes: system, source_file, error, action instruction
+feedback_filed = True
+feedback_reused = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: SURFACE TO CLAUDE                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="surface_merge" name="Feedback Ready">
+      <bpmn:incoming>flow_reuse_to_surface</bpmn:incoming>
+      <bpmn:incoming>flow_create_to_surface</bpmn:incoming>
+      <bpmn:outgoing>flow_surface_to_wait</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="wait_for_prompt" name="[HOOK] Surface on Next Prompt" scriptFormat="python">
+      <bpmn:incoming>flow_surface_to_wait</bpmn:incoming>
+      <bpmn:outgoing>flow_wait_to_claude</bpmn:outgoing>
+      <bpmn:script>
+# rag_query_hook.py calls get_pending_failures() on every UserPromptSubmit
+# Injects "PROCESS FAILURES (N pending):" into Claude's context
+# This happens automatically on the next user prompt
+surfaced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: CLAUDE ADDRESSES FAILURE                                   -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="claude_sees_failure" name="[CLAUDE] See Pending Failure">
+      <bpmn:incoming>flow_wait_to_claude</bpmn:incoming>
+      <bpmn:outgoing>flow_see_to_action_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Action?" default="flow_defer">
+      <bpmn:incoming>flow_see_to_action_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_now</bpmn:outgoing>
+      <bpmn:outgoing>flow_defer</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Fix now: follows system-change-process -->
+    <bpmn:userTask id="follow_scp" name="[CLAUDE] Follow System Change Process">
+      <bpmn:incoming>flow_fix_now</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_resolve</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="resolve_feedback" name="[DB] Resolve Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_fix_to_resolve</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_end</bpmn:outgoing>
+      <bpmn:script>
+# advance_status(feedback, id, 'resolved')
+resolved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_resolved" name="Failure Fixed">
+      <bpmn:incoming>flow_resolve_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Defer: not urgent, will be addressed later -->
+    <bpmn:scriptTask id="mark_triaged" name="[DB] Mark Triaged (Deferred)" scriptFormat="python">
+      <bpmn:incoming>flow_defer</bpmn:incoming>
+      <bpmn:outgoing>flow_triaged_to_end</bpmn:outgoing>
+      <bpmn:script>
+# advance_status(feedback, id, 'triaged')
+# Will surface again on next prompt until resolved
+triaged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_deferred" name="Deferred">
+      <bpmn:incoming>flow_triaged_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Capture -->
+    <bpmn:sequenceFlow id="flow_start_log" sourceRef="start" targetRef="log_to_jsonl"/>
+    <bpmn:sequenceFlow id="flow_log_to_db_check" sourceRef="log_to_jsonl" targetRef="db_available_gw"/>
+    <bpmn:sequenceFlow id="flow_db_up" sourceRef="db_available_gw" targetRef="check_duplicate">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_db_down" sourceRef="db_available_gw" targetRef="log_db_failure"/>
+    <bpmn:sequenceFlow id="flow_db_fail_to_end" sourceRef="log_db_failure" targetRef="end_logged_only"/>
+
+    <!-- Phase 2: File feedback -->
+    <bpmn:sequenceFlow id="flow_dup_check_to_gw" sourceRef="check_duplicate" targetRef="duplicate_gw"/>
+    <bpmn:sequenceFlow id="flow_is_duplicate" sourceRef="duplicate_gw" targetRef="reuse_existing">
+      <bpmn:conditionExpression>is_duplicate == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_duplicate" sourceRef="duplicate_gw" targetRef="create_feedback"/>
+    <bpmn:sequenceFlow id="flow_reuse_to_surface" sourceRef="reuse_existing" targetRef="surface_merge"/>
+    <bpmn:sequenceFlow id="flow_create_to_surface" sourceRef="create_feedback" targetRef="surface_merge"/>
+
+    <!-- Phase 3: Surface -->
+    <bpmn:sequenceFlow id="flow_surface_to_wait" sourceRef="surface_merge" targetRef="wait_for_prompt"/>
+    <bpmn:sequenceFlow id="flow_wait_to_claude" sourceRef="wait_for_prompt" targetRef="claude_sees_failure"/>
+
+    <!-- Phase 4: Address -->
+    <bpmn:sequenceFlow id="flow_see_to_action_gw" sourceRef="claude_sees_failure" targetRef="action_gw"/>
+    <bpmn:sequenceFlow id="flow_fix_now" sourceRef="action_gw" targetRef="follow_scp">
+      <bpmn:conditionExpression>action == "fix_now"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_defer" sourceRef="action_gw" targetRef="mark_triaged"/>
+    <bpmn:sequenceFlow id="flow_fix_to_resolve" sourceRef="follow_scp" targetRef="resolve_feedback"/>
+    <bpmn:sequenceFlow id="flow_resolve_to_end" sourceRef="resolve_feedback" targetRef="end_resolved"/>
+    <bpmn:sequenceFlow id="flow_triaged_to_end" sourceRef="mark_triaged" targetRef="end_deferred"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="failure_capture">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_log" bpmnElement="log_to_jsonl">
+        <dc:Bounds x="140" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_db_gw" bpmnElement="db_available_gw" isMarkerVisible="true">
+        <dc:Bounds x="330" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_db_fail" bpmnElement="log_db_failure">
+        <dc:Bounds x="310" y="80" width="140" height="60"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_logged" bpmnElement="end_logged_only">
+        <dc:Bounds x="500" y="93" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

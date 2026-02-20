@@ -144,7 +144,22 @@ def log_mcp_usage(
         # Best effort - don't fail the tool call
         import logging
         logging.warning(f"MCP usage logging failed: {e}")
-        print(f"MCP usage logging failed: {e}", file=sys.stderr)
+        # JSONL fallback: save data for replay when DB recovers (F114)
+        try:
+            from hook_data_fallback import log_fallback
+            log_fallback("mcp_usage", {
+                "mcp_server": mcp_server,
+                "tool_name": tool_name,
+                "execution_time_ms": execution_time_ms,
+                "success": success,
+                "error_message": error_message[:500] if error_message else None,
+                "input_size_bytes": input_size_bytes,
+                "output_size_bytes": output_size_bytes,
+                "session_id": session_id,
+                "project_name": project_name,
+            })
+        except Exception:
+            pass
     finally:
         conn.close()
 
@@ -165,10 +180,27 @@ def extract_mcp_server(tool_name: str) -> str:
 
 
 def main():
-    """Main entry point for the hook."""
-    start_time = time.time()
+    """Main entry point for the hook.
 
-    # ALWAYS log invocation to file for debugging
+    NOTE: This hook fires on ALL PostToolUse events (no matcher in config)
+    because Claude Code doesn't support glob/regex matchers. We filter to
+    mcp__ prefix tools as early as possible to minimize overhead for the
+    ~70% of calls that are built-in tools (Read, Write, Edit, Bash, etc.).
+    See FB113 for details.
+    """
+    start_time = time.time()
+    debug_mode = os.environ.get('MCP_LOGGER_DEBUG', '0') == '1'
+
+    # Read stdin once - required before any processing
+    raw_input_str = sys.stdin.read()
+
+    # FAST PATH: Quick-check for mcp__ before full JSON parse.
+    # PostToolUse input always contains "tool_name":"<name>" - check the raw string.
+    if '"mcp__' not in raw_input_str:
+        print(json.dumps({}))
+        return 0
+
+    # Set up logging (only for MCP tools that pass the fast path)
     import logging
     log_path = os.path.expanduser('~/.claude/hooks.log')
     logging.basicConfig(
@@ -177,46 +209,24 @@ def main():
         format='%(asctime)s - mcp_usage_logger - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
-    logging.info("MCP usage logger hook invoked")
 
-    # Read input early for logging
-    raw_input_for_log = sys.stdin.read()
-    logging.info(f"Raw input length: {len(raw_input_for_log)}")
-
-    # Debug: Log that hook was called
-    debug_mode = os.environ.get('MCP_LOGGER_DEBUG', '0') == '1'
-    if debug_mode:
-        print(f"DEBUG: mcp_usage_logger called", file=sys.stderr)
-
-    # Read hook input from stdin (already read above for logging)
+    # Parse JSON
     try:
-        if debug_mode:
-            print(f"DEBUG: raw input: {raw_input_for_log[:200]}", file=sys.stderr)
-        hook_input = json.loads(raw_input_for_log) if raw_input_for_log.strip() else {}
+        hook_input = json.loads(raw_input_str) if raw_input_str.strip() else {}
     except json.JSONDecodeError as e:
-        # No input or invalid JSON - pass through
         if debug_mode:
             print(f"DEBUG: JSON decode error: {e}", file=sys.stderr)
         print(json.dumps({}))
         return 0
 
-    # Extract tool info from PostToolUse format (per Claude Code docs)
+    # Extract tool info from PostToolUse format
     tool_name = hook_input.get('tool_name', '')
     tool_input = hook_input.get('tool_input', {})
-    tool_response = hook_input.get('tool_response', {})  # Correct field name per docs
-    # Check for error in response
+    tool_response = hook_input.get('tool_response', {})
     tool_error = tool_response.get('error') if isinstance(tool_response, dict) else None
 
-    logging.info(f"tool_name={tool_name}, HAS_DB={HAS_DB}")
-
-    if debug_mode:
-        print(f"DEBUG: tool_name={tool_name}", file=sys.stderr)
-        print(f"DEBUG: HAS_DB={HAS_DB}", file=sys.stderr)
-
-    # Only log MCP tools (start with mcp__) - skip built-in tools to reduce noise
+    # Definitive check after JSON parse (fast path might have false positives)
     if not tool_name.startswith('mcp__'):
-        if debug_mode:
-            print(f"DEBUG: skipping non-MCP tool", file=sys.stderr)
         print(json.dumps({}))
         return 0
 

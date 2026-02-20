@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/subagent-start"
+    id="Definitions_SS">
+
+  <bpmn:process id="subagent_start" name="SubagentStart Hook: Agent Spawn Monitoring" isExecutable="true">
+
+    <!--
+      SubagentStart hook that logs agent spawns for tracking and analytics.
+
+      Trigger: SubagentStart event (Claude Code spawns a subagent)
+      Input: subagent_id, subagent_type, task_prompt, parent_session_id
+
+      Key behaviors:
+        - Extracts agent metadata from hook input
+        - Validates subagent_id exists before logging
+        - INSERT into claude.agent_sessions (with upsert on conflict)
+        - Truncates task_prompt to 1000 chars
+        - Validates parent_session_id is valid UUID
+        - Fail-open: DB errors don't block agent spawn
+
+      Implementation: scripts/subagent_start_hook.py
+    -->
+
+    <bpmn:startEvent id="start" name="SubagentStart Event">
+      <bpmn:outgoing>flow_start_parse</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="parse_input" name="[HOOK] Parse Agent Info" scriptFormat="python">
+      <bpmn:incoming>flow_start_parse</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Extract: subagent_id, subagent_type, task_prompt, parent_session_id
+# workspace_dir from hook input or cwd
+has_agent_id = has_agent_id if has_agent_id is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_id_gw" name="Has Agent ID?" default="flow_no_id">
+      <bpmn:incoming>flow_parse_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_id</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_id</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skip" name="No Agent ID (Skip)">
+      <bpmn:incoming>flow_no_id</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="connect_db" name="[DB] Connect to PostgreSQL" scriptFormat="python">
+      <bpmn:incoming>flow_has_id</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
+      <bpmn:script>
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_gw" name="DB Available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_db" name="DB Unavailable (Fail-Open)">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="insert_agent_session" name="[DB] Insert Agent Session" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.agent_sessions
+# (session_id, agent_type, task_description, workspace_dir, parent_session_id, spawned_at)
+# ON CONFLICT (session_id) DO UPDATE (upsert)
+# Truncate task_prompt to 1000 chars
+# Validate parent_session_id is valid UUID
+agent_logged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_logged" name="Agent Spawn Logged">
+      <bpmn:incoming>flow_insert_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_parse" sourceRef="start" targetRef="parse_input"/>
+    <bpmn:sequenceFlow id="flow_parse_to_check" sourceRef="parse_input" targetRef="has_id_gw"/>
+    <bpmn:sequenceFlow id="flow_has_id" sourceRef="has_id_gw" targetRef="connect_db">
+      <bpmn:conditionExpression>has_agent_id == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_id" sourceRef="has_id_gw" targetRef="end_skip"/>
+    <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="insert_agent_session">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="end_no_db"/>
+    <bpmn:sequenceFlow id="flow_insert_to_end" sourceRef="insert_agent_session" targetRef="end_logged"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="subagent_start">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

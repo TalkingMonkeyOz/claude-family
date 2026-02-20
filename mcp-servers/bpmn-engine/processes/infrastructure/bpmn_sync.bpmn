@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/bpmn-sync"
+    id="Definitions_BpmnSync">
+
+  <bpmn:process id="bpmn_sync" name="BPMN Process Registry Sync" isExecutable="true">
+
+    <!--
+      Syncs BPMN files from project directories into the claude.bpmn_processes
+      database table for cross-project search and discovery.
+
+      Hybrid pattern (validated by Flowable/Camunda research):
+        Files in git = source of truth (development artifact)
+        DB = runtime registry (searchable, cross-project, embeddable)
+
+      Trigger: Manual (MCP tool) or on session start for a project
+      Scope: Single project per invocation
+
+      Paths:
+        1. Happy: Discover -> Hash(changed) -> Parse(ok) -> Upsert -> Embed -> Done
+        2. No files: Discover -> None found -> End(empty)
+        3. Parse error: Hash(changed) -> Parse(fail) -> Log + Skip -> Continue
+        4. Incremental: Hash(unchanged) -> Skip -> Continue
+        5. Multi-file: Loop iterates all files, mixing any of paths 1/3/4
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Sync Requested">
+      <bpmn:outgoing>flow_start_discover</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: DISCOVER BPMN FILES                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Scan project directory for .bpmn files + initialize counters -->
+    <bpmn:scriptTask id="discover_files" name="[TOOL] Discover .bpmn Files" scriptFormat="python">
+      <bpmn:incoming>flow_start_discover</bpmn:incoming>
+      <bpmn:outgoing>flow_discover_check</bpmn:outgoing>
+      <bpmn:script>
+# Glob for *.bpmn in project's processes directory
+# Input: file_list (list of paths) - seeded by caller
+# Output: file_count, current_index, counters
+file_count = len(file_list) if file_list else 0
+current_index = 0
+synced_count = 0
+skipped_count = 0
+parse_errors = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_files_gw" name="Files Found?" default="flow_no_files">
+      <bpmn:incoming>flow_discover_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_files</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_files</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_empty" name="No BPMN Files">
+      <bpmn:incoming>flow_no_files</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: ITERATE FILES (per-file processing)                        -->
+    <!-- ================================================================== -->
+
+    <!-- Pick next file from list -->
+    <bpmn:scriptTask id="pick_file" name="[TOOL] Pick Next File" scriptFormat="python">
+      <bpmn:incoming>flow_has_files</bpmn:incoming>
+      <bpmn:incoming>flow_continue_next</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_hash</bpmn:outgoing>
+      <bpmn:script>
+# Pop next file from file_list by current_index
+# Sets: current_file
+current_file = file_list[current_index] if current_index &lt; len(file_list) else None
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check if file changed (hash comparison for incremental sync) -->
+    <bpmn:scriptTask id="check_hash" name="[TOOL] Check File Hash" scriptFormat="python">
+      <bpmn:incoming>flow_pick_hash</bpmn:incoming>
+      <bpmn:outgoing>flow_hash_result</bpmn:outgoing>
+      <bpmn:script>
+# Compare file hash against DB stored hash
+# Input: new_hash, existing_hash (seeded by caller or computed)
+# Sets: file_changed (bool)
+file_changed = new_hash != existing_hash
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="changed_gw" name="File Changed?" default="flow_unchanged">
+      <bpmn:incoming>flow_hash_result</bpmn:incoming>
+      <bpmn:outgoing>flow_changed</bpmn:outgoing>
+      <bpmn:outgoing>flow_unchanged</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: PARSE + EXTRACT (only for changed files)                   -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="parse_bpmn" name="[TOOL] Parse BPMN + Extract Elements" scriptFormat="python">
+      <bpmn:incoming>flow_changed</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_result</bpmn:outgoing>
+      <bpmn:script>
+# BpmnParser.add_bpmn_file() + extract elements, flows, metadata
+# Sets: parse_success, process_id, process_name, elements, level, category
+# Testability: if _force_parse_fail is seeded True, simulates parse failure
+try:
+    _fail = _force_parse_fail
+except NameError:
+    _fail = False
+parse_success = not _fail
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="parse_gw" name="Parse OK?" default="flow_parse_fail">
+      <bpmn:incoming>flow_parse_result</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_parse_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Parse failed: log error, skip this file, advance index -->
+    <bpmn:scriptTask id="log_parse_error" name="[TOOL] Log Parse Error" scriptFormat="python">
+      <bpmn:incoming>flow_parse_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_error_continue</bpmn:outgoing>
+      <bpmn:script>
+parse_errors = parse_errors + 1
+current_index = current_index + 1
+files_remaining = current_index &lt; len(file_list)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: UPSERT TO DB + GENERATE EMBEDDING                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="upsert_db" name="[DB] Upsert bpmn_processes" scriptFormat="python">
+      <bpmn:incoming>flow_parse_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_upsert_embed</bpmn:outgoing>
+      <bpmn:script>
+# INSERT ... ON CONFLICT (process_id) DO UPDATE
+# Stores: process_id, project, file_path, name, level, category, elements, hash
+upserted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="generate_embedding" name="[TOOL] Generate Embedding" scriptFormat="python">
+      <bpmn:incoming>flow_upsert_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_embed_advance</bpmn:outgoing>
+      <bpmn:script>
+# Voyage AI embedding on: process_name + description + element names
+# UPDATE bpmn_processes SET embedding = vector WHERE process_id = ...
+embedded = True
+synced_count = synced_count + 1
+current_index = current_index + 1
+files_remaining = current_index &lt; len(file_list)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: ADVANCE TO NEXT FILE OR FINISH                             -->
+    <!-- ================================================================== -->
+
+    <!-- Merge point: unchanged, error, or successfully synced -->
+    <bpmn:exclusiveGateway id="advance_gw" name="More Files?" default="flow_done">
+      <bpmn:incoming>flow_unchanged_advance</bpmn:incoming>
+      <bpmn:incoming>flow_error_continue</bpmn:incoming>
+      <bpmn:incoming>flow_embed_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_continue_next</bpmn:outgoing>
+      <bpmn:outgoing>flow_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Skip unchanged: increment index, advance -->
+    <bpmn:scriptTask id="skip_unchanged" name="[TOOL] Skip (Unchanged)" scriptFormat="python">
+      <bpmn:incoming>flow_unchanged</bpmn:incoming>
+      <bpmn:outgoing>flow_unchanged_advance</bpmn:outgoing>
+      <bpmn:script>
+skipped_count = skipped_count + 1
+current_index = current_index + 1
+files_remaining = current_index &lt; len(file_list)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END: SYNC COMPLETE                                                  -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="summarize" name="[TOOL] Summarize Results" scriptFormat="python">
+      <bpmn:incoming>flow_done</bpmn:incoming>
+      <bpmn:outgoing>flow_summarize_end</bpmn:outgoing>
+      <bpmn:script>
+sync_complete = True
+# Output: synced_count, skipped_count, parse_errors, file_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_synced" name="Sync Complete">
+      <bpmn:incoming>flow_summarize_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Discovery -->
+    <bpmn:sequenceFlow id="flow_start_discover" sourceRef="start" targetRef="discover_files"/>
+    <bpmn:sequenceFlow id="flow_discover_check" sourceRef="discover_files" targetRef="has_files_gw"/>
+    <bpmn:sequenceFlow id="flow_has_files" sourceRef="has_files_gw" targetRef="pick_file">
+      <bpmn:conditionExpression>file_count &gt; 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_files" sourceRef="has_files_gw" targetRef="end_empty"/>
+
+    <!-- Phase 2: Per-file iteration -->
+    <bpmn:sequenceFlow id="flow_pick_hash" sourceRef="pick_file" targetRef="check_hash"/>
+    <bpmn:sequenceFlow id="flow_hash_result" sourceRef="check_hash" targetRef="changed_gw"/>
+    <bpmn:sequenceFlow id="flow_changed" sourceRef="changed_gw" targetRef="parse_bpmn">
+      <bpmn:conditionExpression>file_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_unchanged" sourceRef="changed_gw" targetRef="skip_unchanged"/>
+
+    <!-- Phase 3: Parse -->
+    <bpmn:sequenceFlow id="flow_parse_result" sourceRef="parse_bpmn" targetRef="parse_gw"/>
+    <bpmn:sequenceFlow id="flow_parse_ok" sourceRef="parse_gw" targetRef="upsert_db">
+      <bpmn:conditionExpression>parse_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_parse_fail" sourceRef="parse_gw" targetRef="log_parse_error"/>
+
+    <!-- Phase 4: Upsert + embed -->
+    <bpmn:sequenceFlow id="flow_upsert_embed" sourceRef="upsert_db" targetRef="generate_embedding"/>
+
+    <!-- Phase 5: Advance -->
+    <bpmn:sequenceFlow id="flow_embed_advance" sourceRef="generate_embedding" targetRef="advance_gw"/>
+    <bpmn:sequenceFlow id="flow_unchanged_advance" sourceRef="skip_unchanged" targetRef="advance_gw"/>
+    <bpmn:sequenceFlow id="flow_error_continue" sourceRef="log_parse_error" targetRef="advance_gw"/>
+    <bpmn:sequenceFlow id="flow_continue_next" sourceRef="advance_gw" targetRef="pick_file">
+      <bpmn:conditionExpression>files_remaining == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_done" sourceRef="advance_gw" targetRef="summarize"/>
+    <bpmn:sequenceFlow id="flow_summarize_end" sourceRef="summarize" targetRef="end_synced"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="bpmn_sync">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_discover" bpmnElement="discover_files">
+        <dc:Bounds x="140" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_has_files" bpmnElement="has_files_gw" isMarkerVisible="true">
+        <dc:Bounds x="330" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_empty" bpmnElement="end_empty">
+        <dc:Bounds x="337" y="80" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_pick" bpmnElement="pick_file">
+        <dc:Bounds x="430" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_hash" bpmnElement="check_hash">
+        <dc:Bounds x="620" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_changed" bpmnElement="changed_gw" isMarkerVisible="true">
+        <dc:Bounds x="810" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_parse" bpmnElement="parse_bpmn">
+        <dc:Bounds x="910" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_parse_gw" bpmnElement="parse_gw" isMarkerVisible="true">
+        <dc:Bounds x="1120" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_upsert" bpmnElement="upsert_db">
+        <dc:Bounds x="1220" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_embed" bpmnElement="generate_embedding">
+        <dc:Bounds x="1220" y="320" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_skip" bpmnElement="skip_unchanged">
+        <dc:Bounds x="810" y="320" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_log_err" bpmnElement="log_parse_error">
+        <dc:Bounds x="1120" y="320" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_advance" bpmnElement="advance_gw" isMarkerVisible="true">
+        <dc:Bounds x="620" y="333" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_summarize" bpmnElement="summarize">
+        <dc:Bounds x="430" y="320" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_synced" bpmnElement="end_synced">
+        <dc:Bounds x="337" y="340" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

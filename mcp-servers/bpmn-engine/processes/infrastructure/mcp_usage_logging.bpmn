@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/mcp-usage-logging"
+    id="Definitions_MUL">
+
+  <bpmn:process id="mcp_usage_logging" name="MCP Usage Logging: PostToolUse All Tools" isExecutable="true">
+
+    <!--
+      PostToolUse hook for ALL tool calls (catch-all matcher).
+      Filters to MCP tools only (mcp__ prefix) and logs usage metrics.
+
+      Trigger: PostToolUse event for every tool call (no matcher = catch-all)
+      Input: tool_name, tool_input, tool_response, execution time
+
+      Key behaviors:
+        - Only logs MCP tools (mcp__ prefix), skips builtins (Read, Write, etc.)
+        - Extracts: tool name, server name, execution time, success, input/output sizes
+        - Lazy session creation for continuations without SessionStart
+        - INSERT into claude.mcp_usage
+
+      Implementation: scripts/mcp_usage_logger.py
+    -->
+
+    <bpmn:startEvent id="start" name="PostToolUse Any Tool">
+      <bpmn:outgoing>flow_start_check</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="check_mcp_prefix" name="[HOOK] Check MCP Prefix" scriptFormat="python">
+      <bpmn:incoming>flow_start_check</bpmn:incoming>
+      <bpmn:outgoing>flow_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Check if tool_name starts with "mcp__"
+# Builtins (Read, Write, Edit, Glob, Grep, Bash, Task) are skipped
+is_mcp_tool = is_mcp_tool if is_mcp_tool is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="mcp_gw" name="Is MCP Tool?" default="flow_not_mcp">
+      <bpmn:incoming>flow_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_mcp</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_mcp</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skip" name="Skipped (Not MCP)">
+      <bpmn:incoming>flow_not_mcp</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="extract_metrics" name="[TOOL] Extract Usage Metrics" scriptFormat="python">
+      <bpmn:incoming>flow_is_mcp</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_db</bpmn:outgoing>
+      <bpmn:script>
+# Parse tool_name: mcp__server__tool → server_name, tool_name
+# Calculate: execution_time_ms, input_size, output_size
+# Determine: success (from tool_response)
+metrics_extracted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="connect_db" name="[DB] Connect to PostgreSQL" scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_db</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
+      <bpmn:script>
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_gw" name="DB Available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_db" name="DB Unavailable (Fail-Open)">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="insert_usage" name="[DB] Insert MCP Usage Record" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.mcp_usage
+# (session_id, tool_name, server_name, execution_time_ms, success, input_size, output_size)
+# Lazy session: if no session_id, create continuation session
+usage_logged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_logged" name="Usage Logged">
+      <bpmn:incoming>flow_insert_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_check" sourceRef="start" targetRef="check_mcp_prefix"/>
+    <bpmn:sequenceFlow id="flow_check_to_gw" sourceRef="check_mcp_prefix" targetRef="mcp_gw"/>
+    <bpmn:sequenceFlow id="flow_is_mcp" sourceRef="mcp_gw" targetRef="extract_metrics">
+      <bpmn:conditionExpression>is_mcp_tool == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_mcp" sourceRef="mcp_gw" targetRef="end_skip"/>
+    <bpmn:sequenceFlow id="flow_extract_to_db" sourceRef="extract_metrics" targetRef="connect_db"/>
+    <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="insert_usage">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="end_no_db"/>
+    <bpmn:sequenceFlow id="flow_insert_to_end" sourceRef="insert_usage" targetRef="end_logged"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="mcp_usage_logging">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

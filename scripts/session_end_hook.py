@@ -90,19 +90,76 @@ def get_db_connection():
         return None
 
 
+def demote_in_progress_todos(project_name: str, conn):
+    """Demote in_progress todos back to pending when session ends.
+
+    Per task_lifecycle BPMN (demote_to_pending step): when a session ends,
+    in_progress tasks should revert to pending. The next session's startup
+    hook will then check staleness and either restore or archive them.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE claude.todos t
+            SET status = 'pending', updated_at = NOW()
+            FROM claude.projects p
+            WHERE t.project_id = p.project_id
+              AND p.project_name = %s
+              AND t.status = 'in_progress'
+              AND NOT t.is_deleted
+            RETURNING t.todo_id
+        """, (project_name,))
+        demoted = cur.fetchall()
+        demoted_count = len(demoted)
+        if demoted_count > 0:
+            logger.info(f"Demoted {demoted_count} in_progress todo(s) to pending for {project_name}")
+            # Audit trail: log the demotion so it's visible in audit_log
+            try:
+                cur.execute("""
+                    INSERT INTO claude.audit_log
+                    (entity_type, entity_id, from_status, to_status, changed_by, change_reason)
+                    VALUES ('todo_demotion', %s, 'in_progress', 'pending', 'session_end_hook',
+                            %s)
+                """, (
+                    project_name,
+                    f"Auto-demoted {demoted_count} todo(s) on session exit"
+                ))
+            except Exception as audit_err:
+                logger.warning(f"Failed to write audit log for todo demotion: {audit_err}")
+        return demoted_count
+    except Exception as e:
+        logger.error(f"Failed to demote in_progress todos: {e}")
+        return 0
+
+
 def auto_save_session(session_id: str, project_name: str):
     """Auto-save session state to database on exit.
 
-    This is a lightweight save - just marks session_end and preserves state.
+    This is a lightweight save - just marks session_end, preserves state,
+    and demotes in_progress todos to pending (per task_lifecycle BPMN).
     Full session summary requires manual /session-end.
     """
     conn = get_db_connection()
     if not conn:
         logger.warning("No DB connection - cannot auto-save session")
+        # JSONL fallback when DB is entirely unavailable (F114)
+        try:
+            from hook_data_fallback import log_fallback
+            log_fallback("session_end", {
+                "session_id": session_id,
+                "project_name": project_name,
+                "action": "auto_close",
+                "reason": "db_unavailable",
+            })
+        except Exception:
+            pass
         return
 
     try:
         cur = conn.cursor()
+
+        # BPMN step: demote_to_pending - in_progress todos become pending
+        demote_in_progress_todos(project_name, conn)
 
         # Mark session end (only if not already closed)
         if session_id:
@@ -142,6 +199,16 @@ def auto_save_session(session_id: str, project_name: str):
 
     except Exception as e:
         logger.error(f"Auto-save session failed: {e}")
+        # JSONL fallback: save data for replay when DB recovers (F114)
+        try:
+            from hook_data_fallback import log_fallback
+            log_fallback("session_end", {
+                "session_id": session_id,
+                "project_name": project_name,
+                "action": "auto_close",
+            })
+        except Exception:
+            pass
         try:
             conn.close()
         except Exception:

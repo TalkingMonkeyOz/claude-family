@@ -1,0 +1,386 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/structured-autonomy"
+    id="Definitions_SA">
+
+  <bpmn:process id="structured_autonomy" name="Structured Autonomy: Plan-Generate-Implement" isExecutable="true">
+
+    <!--
+      The core "how we build features" process for Claude Family.
+      Applies to: features touching 3+ files or flagged high complexity.
+
+      3 phases + review gate:
+        Phase 1: PLAN - Research codebase, create plan, user approves
+        Phase 2: GENERATE - Convert plan to build tasks with specs
+        Phase 3: IMPLEMENT - Loop: pick task → spawn agent → verify → next
+        Phase 4: REVIEW - Spawn reviewer, fix loop if needed
+        Phase 5: COMPLETE - Run all tests, commit, mark done
+
+      Actors:
+        [CLAUDE] - Opus orchestrator making decisions
+        [AGENT]  - Spawned specialist agents (haiku/sonnet)
+        [TOOL]   - MCP tool calls (project-tools, orchestrator)
+        [DB]     - Database state changes
+
+      Cost model: Plan + Generate = premium (Opus/Sonnet), Implement = cheap (Haiku)
+      Typical 10-file feature: ~$1.10 vs ~$4.00 all-Opus (73% savings)
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Feature Request Received">
+      <bpmn:outgoing>flow_start_assess</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 0: ASSESS COMPLEXITY                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="assess_complexity" name="[CLAUDE] Assess Complexity">
+      <bpmn:incoming>flow_start_assess</bpmn:incoming>
+      <bpmn:outgoing>flow_assess_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="sa_needed_gw" name="SA Needed?" default="flow_skip_sa">
+      <bpmn:incoming>flow_assess_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_use_sa</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_sa</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Simple path: skip SA, implement directly -->
+    <bpmn:userTask id="implement_simple" name="[CLAUDE] Implement Directly">
+      <bpmn:incoming>flow_skip_sa</bpmn:incoming>
+      <bpmn:outgoing>flow_simple_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="end_simple" name="Simple Feature Done">
+      <bpmn:incoming>flow_simple_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: PLAN (Premium model, one-time)                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="create_feature_record" name="[DB] Create Feature Record" scriptFormat="python">
+      <bpmn:incoming>flow_use_sa</bpmn:incoming>
+      <bpmn:outgoing>flow_feature_to_research</bpmn:outgoing>
+      <bpmn:script>
+# create_feature() → status='draft'
+feature_created = True
+status = "draft"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="research_codebase" name="[AGENT] Research Codebase">
+      <bpmn:incoming>flow_feature_to_research</bpmn:incoming>
+      <bpmn:outgoing>flow_research_to_plan</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="create_plan" name="[CLAUDE] Create Plan Document">
+      <bpmn:incoming>flow_research_to_plan</bpmn:incoming>
+      <bpmn:outgoing>flow_plan_to_review</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="user_reviews_plan" name="[USER] Review Plan">
+      <bpmn:incoming>flow_plan_to_review</bpmn:incoming>
+      <bpmn:incoming>flow_revise_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_plan_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="plan_approved_gw" name="Plan Approved?" default="flow_plan_rejected">
+      <bpmn:incoming>flow_review_to_plan_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_plan_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_plan_rejected</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="revise_plan" name="[CLAUDE] Revise Plan">
+      <bpmn:incoming>flow_plan_rejected</bpmn:incoming>
+      <bpmn:outgoing>flow_revise_to_review</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: GENERATE (Premium model, one-time)                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="advance_to_planned" name="[DB] Advance to Planned" scriptFormat="python">
+      <bpmn:incoming>flow_plan_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_planned_to_generate</bpmn:outgoing>
+      <bpmn:script>
+# advance_status(features, id, 'planned')
+status = "planned"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="generate_specs" name="[CLAUDE] Generate Implementation Specs">
+      <bpmn:incoming>flow_planned_to_generate</bpmn:incoming>
+      <bpmn:outgoing>flow_specs_to_tasks</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="create_build_tasks" name="[DB] Create Build Tasks" scriptFormat="python">
+      <bpmn:incoming>flow_specs_to_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_tasks_to_init</bpmn:outgoing>
+      <bpmn:script>
+# create_linked_task() for each spec step
+# Sets: task_count, current_task_index
+task_count = task_count if task_count else 0
+current_task_index = 0
+completed_tasks = 0
+failed_tasks = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: IMPLEMENT (Cheap models, per-task loop)                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="advance_to_in_progress" name="[DB] Advance to In Progress" scriptFormat="python">
+      <bpmn:incoming>flow_tasks_to_init</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_pick</bpmn:outgoing>
+      <bpmn:script>
+# advance_status(features, id, 'in_progress')
+status = "in_progress"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="pick_next_task" name="[TOOL] Pick Next Task" scriptFormat="python">
+      <bpmn:incoming>flow_init_to_pick</bpmn:incoming>
+      <bpmn:incoming>flow_continue_loop</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_to_agent_gw</bpmn:outgoing>
+      <bpmn:script>
+# start_work(task_code) → loads task context
+current_task_index = current_task_index
+task_started = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="agent_type_gw" name="Agent Type?" default="flow_use_haiku">
+      <bpmn:incoming>flow_pick_to_agent_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_use_haiku</bpmn:outgoing>
+      <bpmn:outgoing>flow_use_sonnet</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="spawn_haiku" name="[AGENT] Spawn coder-haiku">
+      <bpmn:incoming>flow_use_haiku</bpmn:incoming>
+      <bpmn:outgoing>flow_haiku_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="spawn_sonnet" name="[AGENT] Spawn coder-sonnet">
+      <bpmn:incoming>flow_use_sonnet</bpmn:incoming>
+      <bpmn:outgoing>flow_sonnet_to_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="agent_merge" name="Agent Done">
+      <bpmn:incoming>flow_haiku_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_sonnet_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_verify</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="verify_step" name="[CLAUDE] Verify Step Output">
+      <bpmn:incoming>flow_merge_to_verify</bpmn:incoming>
+      <bpmn:incoming>flow_retry_to_verify</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_to_result_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="step_result_gw" name="Step Verified?" default="flow_step_failed">
+      <bpmn:incoming>flow_verify_to_result_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_step_passed</bpmn:outgoing>
+      <bpmn:outgoing>flow_step_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="fix_step" name="[CLAUDE] Fix Failed Step">
+      <bpmn:incoming>flow_step_failed</bpmn:incoming>
+      <bpmn:outgoing>flow_retry_to_verify</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="complete_task" name="[DB] Complete Task" scriptFormat="python">
+      <bpmn:incoming>flow_step_passed</bpmn:incoming>
+      <bpmn:outgoing>flow_complete_to_more_gw</bpmn:outgoing>
+      <bpmn:script>
+# complete_work(task_code)
+completed_tasks = completed_tasks + 1
+current_task_index = current_task_index + 1
+tasks_remaining = current_task_index &lt; task_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="more_tasks_gw" name="More Tasks?" default="flow_no_more_tasks">
+      <bpmn:incoming>flow_complete_to_more_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_continue_loop</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_more_tasks</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: REVIEW (Sonnet reviewer)                                   -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="spawn_reviewer" name="[AGENT] Spawn reviewer-sonnet">
+      <bpmn:incoming>flow_no_more_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_result_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="review_result_gw" name="Review Result?" default="flow_review_approved">
+      <bpmn:incoming>flow_review_to_result_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_review_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_changes_requested</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="fix_review_issues" name="[CLAUDE] Fix Review Issues">
+      <bpmn:incoming>flow_changes_requested</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_reviewer</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Re-review after fixes -->
+    <bpmn:userTask id="re_review" name="[AGENT] Re-Review">
+      <bpmn:incoming>flow_fix_to_reviewer</bpmn:incoming>
+      <bpmn:outgoing>flow_re_review_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="re_review_gw" name="Re-Review OK?" default="flow_re_review_approved">
+      <bpmn:incoming>flow_re_review_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_re_review_approved</bpmn:outgoing>
+      <bpmn:outgoing>flow_re_review_changes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: COMPLETE                                                   -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="run_all_tests" name="[TOOL] Run All Tests">
+      <bpmn:incoming>flow_review_approved</bpmn:incoming>
+      <bpmn:incoming>flow_re_review_approved</bpmn:incoming>
+      <bpmn:outgoing>flow_tests_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="final_tests_gw" name="All Tests Pass?" default="flow_final_tests_fail">
+      <bpmn:incoming>flow_tests_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_final_tests_pass</bpmn:outgoing>
+      <bpmn:outgoing>flow_final_tests_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="fix_test_failures" name="[CLAUDE] Fix Test Failures">
+      <bpmn:incoming>flow_final_tests_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_tests_to_rerun</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="commit_feature" name="[CLAUDE] Commit Feature">
+      <bpmn:incoming>flow_final_tests_pass</bpmn:incoming>
+      <bpmn:outgoing>flow_commit_to_complete</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="mark_feature_complete" name="[DB] Mark Feature Complete" scriptFormat="python">
+      <bpmn:incoming>flow_commit_to_complete</bpmn:incoming>
+      <bpmn:outgoing>flow_complete_to_end</bpmn:outgoing>
+      <bpmn:script>
+# advance_status(features, id, 'completed')
+status = "completed"
+feature_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_complete" name="Feature Complete">
+      <bpmn:incoming>flow_complete_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 0: Assessment -->
+    <bpmn:sequenceFlow id="flow_start_assess" sourceRef="start" targetRef="assess_complexity"/>
+    <bpmn:sequenceFlow id="flow_assess_to_gw" sourceRef="assess_complexity" targetRef="sa_needed_gw"/>
+    <bpmn:sequenceFlow id="flow_use_sa" sourceRef="sa_needed_gw" targetRef="create_feature_record">
+      <bpmn:conditionExpression>use_sa == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_sa" sourceRef="sa_needed_gw" targetRef="implement_simple"/>
+    <bpmn:sequenceFlow id="flow_simple_to_end" sourceRef="implement_simple" targetRef="end_simple"/>
+
+    <!-- Phase 1: Plan -->
+    <bpmn:sequenceFlow id="flow_feature_to_research" sourceRef="create_feature_record" targetRef="research_codebase"/>
+    <bpmn:sequenceFlow id="flow_research_to_plan" sourceRef="research_codebase" targetRef="create_plan"/>
+    <bpmn:sequenceFlow id="flow_plan_to_review" sourceRef="create_plan" targetRef="user_reviews_plan"/>
+    <bpmn:sequenceFlow id="flow_review_to_plan_gw" sourceRef="user_reviews_plan" targetRef="plan_approved_gw"/>
+    <bpmn:sequenceFlow id="flow_plan_approved" sourceRef="plan_approved_gw" targetRef="advance_to_planned">
+      <bpmn:conditionExpression>plan_approved == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_plan_rejected" sourceRef="plan_approved_gw" targetRef="revise_plan"/>
+    <bpmn:sequenceFlow id="flow_revise_to_review" sourceRef="revise_plan" targetRef="user_reviews_plan"/>
+
+    <!-- Phase 2: Generate -->
+    <bpmn:sequenceFlow id="flow_planned_to_generate" sourceRef="advance_to_planned" targetRef="generate_specs"/>
+    <bpmn:sequenceFlow id="flow_specs_to_tasks" sourceRef="generate_specs" targetRef="create_build_tasks"/>
+    <bpmn:sequenceFlow id="flow_tasks_to_init" sourceRef="create_build_tasks" targetRef="advance_to_in_progress"/>
+
+    <!-- Phase 3: Implement loop -->
+    <bpmn:sequenceFlow id="flow_init_to_pick" sourceRef="advance_to_in_progress" targetRef="pick_next_task"/>
+    <bpmn:sequenceFlow id="flow_pick_to_agent_gw" sourceRef="pick_next_task" targetRef="agent_type_gw"/>
+    <bpmn:sequenceFlow id="flow_use_haiku" sourceRef="agent_type_gw" targetRef="spawn_haiku"/>
+    <bpmn:sequenceFlow id="flow_use_sonnet" sourceRef="agent_type_gw" targetRef="spawn_sonnet">
+      <bpmn:conditionExpression>task_complexity == "high"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_haiku_to_merge" sourceRef="spawn_haiku" targetRef="agent_merge"/>
+    <bpmn:sequenceFlow id="flow_sonnet_to_merge" sourceRef="spawn_sonnet" targetRef="agent_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_verify" sourceRef="agent_merge" targetRef="verify_step"/>
+    <bpmn:sequenceFlow id="flow_verify_to_result_gw" sourceRef="verify_step" targetRef="step_result_gw"/>
+    <bpmn:sequenceFlow id="flow_step_passed" sourceRef="step_result_gw" targetRef="complete_task">
+      <bpmn:conditionExpression>step_verified == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_step_failed" sourceRef="step_result_gw" targetRef="fix_step"/>
+    <bpmn:sequenceFlow id="flow_retry_to_verify" sourceRef="fix_step" targetRef="verify_step"/>
+    <bpmn:sequenceFlow id="flow_complete_to_more_gw" sourceRef="complete_task" targetRef="more_tasks_gw"/>
+    <bpmn:sequenceFlow id="flow_continue_loop" sourceRef="more_tasks_gw" targetRef="pick_next_task">
+      <bpmn:conditionExpression>tasks_remaining == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_more_tasks" sourceRef="more_tasks_gw" targetRef="spawn_reviewer"/>
+
+    <!-- Phase 4: Review -->
+    <bpmn:sequenceFlow id="flow_review_to_result_gw" sourceRef="spawn_reviewer" targetRef="review_result_gw"/>
+    <bpmn:sequenceFlow id="flow_review_approved" sourceRef="review_result_gw" targetRef="run_all_tests"/>
+    <bpmn:sequenceFlow id="flow_changes_requested" sourceRef="review_result_gw" targetRef="fix_review_issues">
+      <bpmn:conditionExpression>review_result == "changes_requested"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_fix_to_reviewer" sourceRef="fix_review_issues" targetRef="re_review"/>
+    <bpmn:sequenceFlow id="flow_re_review_to_gw" sourceRef="re_review" targetRef="re_review_gw"/>
+    <bpmn:sequenceFlow id="flow_re_review_approved" sourceRef="re_review_gw" targetRef="run_all_tests"/>
+    <bpmn:sequenceFlow id="flow_re_review_changes" sourceRef="re_review_gw" targetRef="fix_review_issues">
+      <bpmn:conditionExpression>review_result == "changes_requested"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Phase 5: Complete -->
+    <bpmn:sequenceFlow id="flow_tests_to_gw" sourceRef="run_all_tests" targetRef="final_tests_gw"/>
+    <bpmn:sequenceFlow id="flow_final_tests_pass" sourceRef="final_tests_gw" targetRef="commit_feature">
+      <bpmn:conditionExpression>all_tests_pass == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_final_tests_fail" sourceRef="final_tests_gw" targetRef="fix_test_failures"/>
+    <bpmn:sequenceFlow id="flow_fix_tests_to_rerun" sourceRef="fix_test_failures" targetRef="run_all_tests"/>
+    <bpmn:sequenceFlow id="flow_commit_to_complete" sourceRef="commit_feature" targetRef="mark_feature_complete"/>
+    <bpmn:sequenceFlow id="flow_complete_to_end" sourceRef="mark_feature_complete" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="structured_autonomy">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_assess" bpmnElement="assess_complexity">
+        <dc:Bounds x="140" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_sa_gw" bpmnElement="sa_needed_gw" isMarkerVisible="true">
+        <dc:Bounds x="330" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_simple" bpmnElement="implement_simple">
+        <dc:Bounds x="310" y="80" width="140" height="60"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_simple" bpmnElement="end_simple">
+        <dc:Bounds x="500" y="93" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

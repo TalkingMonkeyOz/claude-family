@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/audit-findings"
+    id="Definitions_AFP">
+
+  <bpmn:process id="audit_findings_pipeline" name="Audit Findings Pipeline: Discovery to Action" isExecutable="true">
+
+    <!--
+      Models how discoveries from systematic analysis (BPMN modeling, alignment
+      checks, code reviews) flow into the work tracking system.
+
+      Trigger: Manual (after an audit/modeling session produces findings)
+      Input: findings[] (list of {description, source, severity, scope_files})
+
+      Pipeline:
+        1. CAPTURE: Findings collected with metadata
+        2. CLASSIFY: Each finding triaged by scope and actionability
+        3. FILE: Create feature (3+ files/needs planning), feedback (quick fix), or knowledge (observation)
+        4. LINK: Connect work item back to source audit
+        5. TRACK: Normal WorkflowEngine state machines take over
+
+      Classification criteria:
+        - Feature: scope >= 3 files OR needs decomposition OR has dependencies
+        - Feedback(bug): Something broken or inconsistent, 1-2 file fix
+        - Feedback(improvement): Works but suboptimal, 1-2 file fix
+        - Feedback(idea): Worth considering, no immediate action
+        - Knowledge: Observation only, document for future reference
+
+      Implementation: Manual process executed by Claude during audits.
+      MCP tools used: create_feature, create_feedback, store_knowledge, add_build_task
+    -->
+
+    <bpmn:startEvent id="start" name="Audit Complete">
+      <bpmn:outgoing>flow_start_validate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- PHASE 1: CAPTURE -->
+
+    <bpmn:scriptTask id="validate_findings" name="[CLAUDE] Validate Findings List" scriptFormat="python">
+      <bpmn:incoming>flow_start_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Validate findings list has required fields
+# Each finding needs: description, source, severity
+has_findings = has_findings if has_findings is not None else (finding_count > 0)
+finding_count = finding_count if finding_count is not None else 0
+features_created = 0
+feedback_filed = 0
+knowledge_stored = 0
+current_index = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_findings_gw" name="Has Findings?" default="flow_no_findings">
+      <bpmn:incoming>flow_validate_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_findings</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_findings</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_empty" name="No Findings">
+      <bpmn:incoming>flow_no_findings</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- PHASE 2: CLASSIFY (loop over findings) -->
+
+    <bpmn:scriptTask id="pick_finding" name="[CLAUDE] Pick Next Finding" scriptFormat="python">
+      <bpmn:incoming>flow_has_findings</bpmn:incoming>
+      <bpmn:incoming>flow_loop_back</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_to_classify</bpmn:outgoing>
+      <bpmn:script>
+# Select findings[current_index]
+# Extract: description, source, severity, scope_files
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="classify_finding" name="[CLAUDE] Classify Finding" scriptFormat="python">
+      <bpmn:incoming>flow_pick_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_actionable</bpmn:outgoing>
+      <bpmn:script>
+# Classification logic:
+# is_actionable: does this need a code change?
+# needs_planning: scope >= 3 files OR has dependencies OR needs decomposition
+# work_item_type: feature | feedback | knowledge
+is_actionable = is_actionable if is_actionable is not None else True
+needs_planning = needs_planning if needs_planning is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="actionable_gw" name="Is Actionable?" default="flow_not_actionable">
+      <bpmn:incoming>flow_classify_to_actionable</bpmn:incoming>
+      <bpmn:outgoing>flow_actionable</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_actionable</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- PHASE 3a: Knowledge path (not actionable) -->
+
+    <bpmn:scriptTask id="store_as_knowledge" name="[MCP] Store Knowledge" scriptFormat="python">
+      <bpmn:incoming>flow_not_actionable</bpmn:incoming>
+      <bpmn:outgoing>flow_knowledge_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# store_knowledge(title, description, type='learned', category='audit')
+knowledge_stored = knowledge_stored + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- PHASE 3b: Actionable path - feature vs feedback -->
+
+    <bpmn:exclusiveGateway id="planning_gw" name="Needs Planning?" default="flow_quick_fix">
+      <bpmn:incoming>flow_actionable</bpmn:incoming>
+      <bpmn:outgoing>flow_needs_planning</bpmn:outgoing>
+      <bpmn:outgoing>flow_quick_fix</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Feature path -->
+
+    <bpmn:scriptTask id="create_feature" name="[MCP] Create Feature" scriptFormat="python">
+      <bpmn:incoming>flow_needs_planning</bpmn:incoming>
+      <bpmn:outgoing>flow_feature_to_tasks</bpmn:outgoing>
+      <bpmn:script>
+# create_feature(project, feature_name, description, feature_type, priority)
+# Returns feature_code (e.g. F42)
+features_created = features_created + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_build_tasks" name="[MCP] Create Build Tasks" scriptFormat="python">
+      <bpmn:incoming>flow_feature_to_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_tasks_to_link</bpmn:outgoing>
+      <bpmn:script>
+# For each subtask identified during classification:
+# create_linked_task(feature_code, task_name, description, verification, files)
+# Decompose the finding into implementable steps
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Feedback path -->
+
+    <bpmn:scriptTask id="classify_feedback_type" name="[CLAUDE] Determine Feedback Type" scriptFormat="python">
+      <bpmn:incoming>flow_quick_fix</bpmn:incoming>
+      <bpmn:outgoing>flow_fb_type_to_create</bpmn:outgoing>
+      <bpmn:script>
+# Determine feedback_type based on finding nature:
+# bug: something broken or inconsistent
+# improvement: works but suboptimal
+# idea: worth considering, not urgent
+# feedback_type set by classification
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_feedback" name="[MCP] Create Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_fb_type_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_feedback_to_link</bpmn:outgoing>
+      <bpmn:script>
+# create_feedback(project, feedback_type, description, title, priority)
+# Returns feedback_code (e.g. FB42)
+feedback_filed = feedback_filed + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- PHASE 4: LINK back to source -->
+
+    <bpmn:scriptTask id="link_to_source" name="[MCP] Link to Audit Source" scriptFormat="python">
+      <bpmn:incoming>flow_tasks_to_link</bpmn:incoming>
+      <bpmn:incoming>flow_feedback_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_link_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# Store reference connecting work item back to:
+# - Source BPMN model or alignment check
+# - Original finding description
+# - Audit session that discovered it
+# Uses store_session_fact or knowledge linking
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- PHASE 5: Loop control -->
+
+    <bpmn:scriptTask id="advance_loop" name="[TOOL] Advance Loop Counter" scriptFormat="python">
+      <bpmn:incoming>flow_link_to_advance</bpmn:incoming>
+      <bpmn:incoming>flow_knowledge_to_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_advance_to_check</bpmn:outgoing>
+      <bpmn:script>
+current_index = current_index + 1
+more_findings = current_index &lt; finding_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="more_findings_gw" name="More Findings?" default="flow_done">
+      <bpmn:incoming>flow_advance_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_loop_back</bpmn:outgoing>
+      <bpmn:outgoing>flow_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- PHASE 5: Summary -->
+
+    <bpmn:scriptTask id="build_summary" name="[CLAUDE] Build Summary Report" scriptFormat="python">
+      <bpmn:incoming>flow_done</bpmn:incoming>
+      <bpmn:outgoing>flow_summary_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Summary: X features created, Y feedback filed, Z knowledge stored
+pipeline_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_tracked" name="All Findings Tracked">
+      <bpmn:incoming>flow_summary_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_validate" sourceRef="start" targetRef="validate_findings"/>
+    <bpmn:sequenceFlow id="flow_validate_to_check" sourceRef="validate_findings" targetRef="has_findings_gw"/>
+    <bpmn:sequenceFlow id="flow_has_findings" sourceRef="has_findings_gw" targetRef="pick_finding">
+      <bpmn:conditionExpression>has_findings == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_findings" sourceRef="has_findings_gw" targetRef="end_empty"/>
+
+    <bpmn:sequenceFlow id="flow_pick_to_classify" sourceRef="pick_finding" targetRef="classify_finding"/>
+    <bpmn:sequenceFlow id="flow_classify_to_actionable" sourceRef="classify_finding" targetRef="actionable_gw"/>
+    <bpmn:sequenceFlow id="flow_actionable" sourceRef="actionable_gw" targetRef="planning_gw">
+      <bpmn:conditionExpression>is_actionable == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_actionable" sourceRef="actionable_gw" targetRef="store_as_knowledge"/>
+
+    <bpmn:sequenceFlow id="flow_needs_planning" sourceRef="planning_gw" targetRef="create_feature">
+      <bpmn:conditionExpression>needs_planning == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_quick_fix" sourceRef="planning_gw" targetRef="classify_feedback_type"/>
+
+    <bpmn:sequenceFlow id="flow_feature_to_tasks" sourceRef="create_feature" targetRef="create_build_tasks"/>
+    <bpmn:sequenceFlow id="flow_tasks_to_link" sourceRef="create_build_tasks" targetRef="link_to_source"/>
+
+    <bpmn:sequenceFlow id="flow_fb_type_to_create" sourceRef="classify_feedback_type" targetRef="create_feedback"/>
+    <bpmn:sequenceFlow id="flow_feedback_to_link" sourceRef="create_feedback" targetRef="link_to_source"/>
+
+    <bpmn:sequenceFlow id="flow_link_to_advance" sourceRef="link_to_source" targetRef="advance_loop"/>
+    <bpmn:sequenceFlow id="flow_knowledge_to_advance" sourceRef="store_as_knowledge" targetRef="advance_loop"/>
+
+    <bpmn:sequenceFlow id="flow_advance_to_check" sourceRef="advance_loop" targetRef="more_findings_gw"/>
+    <bpmn:sequenceFlow id="flow_loop_back" sourceRef="more_findings_gw" targetRef="pick_finding">
+      <bpmn:conditionExpression>more_findings == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_done" sourceRef="more_findings_gw" targetRef="build_summary"/>
+
+    <bpmn:sequenceFlow id="flow_summary_to_end" sourceRef="build_summary" targetRef="end_tracked"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="audit_findings_pipeline">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

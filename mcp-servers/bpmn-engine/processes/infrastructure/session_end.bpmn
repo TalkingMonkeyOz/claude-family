@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/session-end"
+    id="Definitions_SE">
+
+  <bpmn:process id="session_end" name="Session End Hook: Auto-Save on Exit" isExecutable="true">
+
+    <!--
+      SessionEnd hook that auto-saves session state when Claude Code exits.
+      Lightweight save - full summary requires manual /session-end.
+
+      Trigger: SessionEnd event (Claude Code process exit)
+      Input: session_id, cwd
+
+      Key behaviors:
+        - Demotes in_progress todos to pending (per task_lifecycle BPMN)
+        - Marks session as closed (session_end timestamp)
+        - Closes most recent unclosed session if no session_id
+        - Returns reminder to run /session-end for full summary
+        - Fail-open: errors don't prevent exit
+
+      Implementation: scripts/session_end_hook.py
+    -->
+
+    <bpmn:startEvent id="start" name="SessionEnd Event">
+      <bpmn:outgoing>flow_start_parse</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="parse_input" name="[HOOK] Parse Session Info" scriptFormat="python">
+      <bpmn:incoming>flow_start_parse</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_to_db</bpmn:outgoing>
+      <bpmn:script>
+# Extract session_id and project_name from hook input
+# project_name = os.path.basename(cwd)
+has_session_id = has_session_id if has_session_id is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="connect_db" name="[DB] Connect to PostgreSQL" scriptFormat="python">
+      <bpmn:incoming>flow_parse_to_db</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
+      <bpmn:script>
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_gw" name="DB Available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_db" name="Exit (No DB)">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="demote_todos" name="[DB] Demote In-Progress Todos" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_demote_to_close</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.todos SET status='pending'
+# WHERE project matches AND status='in_progress' AND NOT is_deleted
+# Per task_lifecycle BPMN: demote_to_pending step
+todos_demoted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="close_session" name="[DB] Close Session Record" scriptFormat="python">
+      <bpmn:incoming>flow_demote_to_close</bpmn:incoming>
+      <bpmn:outgoing>flow_close_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.sessions SET session_end=NOW()
+# If session_id provided: close specific session
+# If not: close most recent unclosed session (&lt; 24h old)
+# session_summary defaults to 'Session auto-closed'
+session_closed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_saved" name="Session Auto-Saved">
+      <bpmn:incoming>flow_close_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_parse" sourceRef="start" targetRef="parse_input"/>
+    <bpmn:sequenceFlow id="flow_parse_to_db" sourceRef="parse_input" targetRef="connect_db"/>
+    <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="demote_todos">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="end_no_db"/>
+    <bpmn:sequenceFlow id="flow_demote_to_close" sourceRef="demote_todos" targetRef="close_session"/>
+    <bpmn:sequenceFlow id="flow_close_to_end" sourceRef="close_session" targetRef="end_saved"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="session_end">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

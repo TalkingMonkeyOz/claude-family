@@ -1,0 +1,260 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/content-validation"
+    id="Definitions_CV">
+
+  <bpmn:process id="content_validation" name="Content Validation Pipeline: PreToolUse Write/Edit" isExecutable="true">
+
+    <!--
+      Combined model for the two PreToolUse hooks that gate Write/Edit operations:
+
+      1. Context Injector (context_injector_hook.py):
+         - Queries claude.context_rules matching file patterns
+         - Composes additionalContext from standards, skill_content
+         - ALWAYS allows operation, only ADDS context
+
+      2. Standards Validator (standards_validator.py):
+         - Queries claude.coding_standards matching file patterns
+         - Validates content against rules (file size limits, etc.)
+         - Can ALLOW, DENY (block), or ASK (suggest correction)
+
+      Together these form the "content gate" for file operations:
+        Write/Edit trigger → inject context → validate standards → allow/deny/ask
+
+      Both hooks are fail-open: DB errors allow the operation to proceed.
+
+      Implementation:
+        - scripts/context_injector_hook.py
+        - scripts/standards_validator.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="PreToolUse Write/Edit">
+      <bpmn:outgoing>flow_start_extract</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: EXTRACT FILE INFO                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="extract_file_info" name="[HOOK] Extract File Path and Content" scriptFormat="python">
+      <bpmn:incoming>flow_start_extract</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_db</bpmn:outgoing>
+      <bpmn:script>
+# Read tool_input from stdin JSON
+# Extract file_path, content (Write) or new_string (Edit)
+# Normalize path separators for cross-platform matching
+has_file_path = has_file_path if has_file_path is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="connect_db" name="[DB] Connect to PostgreSQL" scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_db</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Try psycopg3 then psycopg2
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_gw" name="DB Available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="allow_no_db" name="[HOOK] Allow (No DB)" scriptFormat="python">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+      <bpmn:outgoing>flow_no_db_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Fail-open: no DB means no validation possible
+decision = "allow"
+reason = "DB unavailable, fail-open"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: CONTEXT INJECTION (context_injector_hook.py)               -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="load_context_rules" name="[DB] Load Context Rules" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_rules_to_inject</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from claude.context_rules
+# WHERE tool_patterns match Write/Edit AND file_patterns match target file
+# Load: static_context, standards files, skill_content
+has_context_rules = has_context_rules if has_context_rules is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_context" name="[HOOK] Compose Additional Context" scriptFormat="python">
+      <bpmn:incoming>flow_rules_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_standards</bpmn:outgoing>
+      <bpmn:script>
+# Compose additionalContext from matching rules:
+# - Static context strings
+# - Standards file contents (read from disk)
+# - Skill content from claude.skill_content
+# This gets injected into Claude's context for the Write/Edit
+context_injected = has_context_rules
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: STANDARDS VALIDATION (standards_validator.py)              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="load_standards" name="[DB] Load Coding Standards" scriptFormat="python">
+      <bpmn:incoming>flow_inject_to_standards</bpmn:incoming>
+      <bpmn:outgoing>flow_standards_to_check</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from claude.coding_standards WHERE active=true
+# Filter by applies_to_patterns matching file_path (glob patterns)
+has_matching_standards = has_matching_standards if has_matching_standards is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_standards_gw" name="Standards Apply?" default="flow_no_standards">
+      <bpmn:incoming>flow_standards_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_standards</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_standards</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="allow_no_standards" name="[HOOK] Allow (No Standards)" scriptFormat="python">
+      <bpmn:incoming>flow_no_standards</bpmn:incoming>
+      <bpmn:outgoing>flow_no_stds_to_end</bpmn:outgoing>
+      <bpmn:script>
+decision = "allow"
+reason = "No matching standards"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_content" name="[TOOL] Validate Against Standards" scriptFormat="python">
+      <bpmn:incoming>flow_has_standards</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_result</bpmn:outgoing>
+      <bpmn:script>
+# Check file size limits (max_lines_by_type from validation_rules)
+# Check other validation rules as defined in coding_standards
+# Sets: validation_passed, violation_message, can_suggest_fix
+validation_passed = validation_passed if validation_passed is not None else True
+can_suggest_fix = can_suggest_fix if can_suggest_fix is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="validation_result_gw" name="Validation Result?" default="flow_validation_failed">
+      <bpmn:incoming>flow_validate_to_result</bpmn:incoming>
+      <bpmn:outgoing>flow_validation_passed</bpmn:outgoing>
+      <bpmn:outgoing>flow_validation_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="allow_validated" name="[HOOK] Allow (Validated)" scriptFormat="python">
+      <bpmn:incoming>flow_validation_passed</bpmn:incoming>
+      <bpmn:outgoing>flow_validated_to_end</bpmn:outgoing>
+      <bpmn:script>
+decision = "allow"
+reason = "Validation passed"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Failure path: deny or suggest fix -->
+    <bpmn:exclusiveGateway id="suggest_gw" name="Can Suggest Fix?" default="flow_no_suggest">
+      <bpmn:incoming>flow_validation_failed</bpmn:incoming>
+      <bpmn:outgoing>flow_can_suggest</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_suggest</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="ask_with_correction" name="[HOOK] Ask with Suggested Fix" scriptFormat="python">
+      <bpmn:incoming>flow_can_suggest</bpmn:incoming>
+      <bpmn:outgoing>flow_ask_to_end</bpmn:outgoing>
+      <bpmn:script>
+# v2.1.0: Return ask + updatedInput
+# User sees the suggested correction and can approve/reject
+decision = "ask"
+reason = "Suggesting corrected content"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="deny_violation" name="[HOOK] Deny (Violation)" scriptFormat="python">
+      <bpmn:incoming>flow_no_suggest</bpmn:incoming>
+      <bpmn:outgoing>flow_deny_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Block operation with helpful error message
+# Claude must adjust and retry
+decision = "deny"
+reason = "Standards violation"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END EVENTS                                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:endEvent id="end_allowed" name="Operation Allowed">
+      <bpmn:incoming>flow_no_db_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_no_stds_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_validated_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_asked" name="Correction Suggested">
+      <bpmn:incoming>flow_ask_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_denied" name="Operation Blocked">
+      <bpmn:incoming>flow_deny_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Extract -->
+    <bpmn:sequenceFlow id="flow_start_extract" sourceRef="start" targetRef="extract_file_info"/>
+    <bpmn:sequenceFlow id="flow_extract_to_db" sourceRef="extract_file_info" targetRef="connect_db"/>
+    <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="load_context_rules">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="allow_no_db"/>
+    <bpmn:sequenceFlow id="flow_no_db_to_end" sourceRef="allow_no_db" targetRef="end_allowed"/>
+
+    <!-- Phase 2: Context Injection -->
+    <bpmn:sequenceFlow id="flow_rules_to_inject" sourceRef="load_context_rules" targetRef="inject_context"/>
+    <bpmn:sequenceFlow id="flow_inject_to_standards" sourceRef="inject_context" targetRef="load_standards"/>
+
+    <!-- Phase 3: Standards Validation -->
+    <bpmn:sequenceFlow id="flow_standards_to_check" sourceRef="load_standards" targetRef="has_standards_gw"/>
+    <bpmn:sequenceFlow id="flow_has_standards" sourceRef="has_standards_gw" targetRef="validate_content">
+      <bpmn:conditionExpression>has_matching_standards == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_standards" sourceRef="has_standards_gw" targetRef="allow_no_standards"/>
+    <bpmn:sequenceFlow id="flow_no_stds_to_end" sourceRef="allow_no_standards" targetRef="end_allowed"/>
+    <bpmn:sequenceFlow id="flow_validate_to_result" sourceRef="validate_content" targetRef="validation_result_gw"/>
+    <bpmn:sequenceFlow id="flow_validation_passed" sourceRef="validation_result_gw" targetRef="allow_validated">
+      <bpmn:conditionExpression>validation_passed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_validation_failed" sourceRef="validation_result_gw" targetRef="suggest_gw"/>
+    <bpmn:sequenceFlow id="flow_validated_to_end" sourceRef="allow_validated" targetRef="end_allowed"/>
+    <bpmn:sequenceFlow id="flow_can_suggest" sourceRef="suggest_gw" targetRef="ask_with_correction">
+      <bpmn:conditionExpression>can_suggest_fix == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_suggest" sourceRef="suggest_gw" targetRef="deny_violation"/>
+    <bpmn:sequenceFlow id="flow_ask_to_end" sourceRef="ask_with_correction" targetRef="end_asked"/>
+    <bpmn:sequenceFlow id="flow_deny_to_end" sourceRef="deny_violation" targetRef="end_denied"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="content_validation">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

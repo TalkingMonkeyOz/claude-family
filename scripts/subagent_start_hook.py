@@ -60,12 +60,19 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
+PSYCOPG_VERSION = None
 try:
-    import psycopg2
+    import psycopg
     HAS_DB = True
+    PSYCOPG_VERSION = 3
 except ImportError:
-    HAS_DB = False
-    logging.warning("psycopg2 not available - agent tracking disabled")
+    try:
+        import psycopg2 as psycopg
+        HAS_DB = True
+        PSYCOPG_VERSION = 2
+    except ImportError:
+        HAS_DB = False
+        logging.warning("No psycopg driver available - agent tracking disabled")
 
 
 def get_db_connection():
@@ -73,7 +80,7 @@ def get_db_connection():
     if not HAS_DB:
         return None
     try:
-        return psycopg2.connect(DATABASE_URI)
+        return psycopg.connect(DATABASE_URI)
     except Exception as e:
         logging.error(f"DB connection failed: {e}")
         return None
@@ -116,6 +123,18 @@ def log_agent_spawn(
     except Exception as e:
         logging.error(f"Failed to log agent spawn: {e}")
         conn.rollback()
+        # JSONL fallback: save data for replay when DB recovers (F114)
+        try:
+            from hook_data_fallback import log_fallback
+            log_fallback("subagent_start", {
+                "session_id": subagent_id,
+                "agent_type": subagent_type,
+                "task_description": task_prompt[:1000] if task_prompt else 'No description',
+                "workspace_dir": workspace_dir or 'unknown',
+                "parent_session_id": parent_session_id if is_valid_uuid(parent_session_id) else None,
+            })
+        except Exception:
+            pass
     finally:
         conn.close()
 

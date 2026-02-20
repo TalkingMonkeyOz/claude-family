@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/todo-sync"
+    id="Definitions_TS">
+
+  <bpmn:process id="todo_sync" name="Todo Sync Hook: PostToolUse TodoWrite" isExecutable="true">
+
+    <!--
+      PostToolUse hook for TodoWrite operations.
+      Syncs Claude's in-memory todos to claude.todos database table.
+
+      Trigger: PostToolUse event when tool_name == "TodoWrite"
+      Input: tool_input containing todos array [{content, status, priority}]
+
+      Key behaviors:
+        - Fuzzy matching (SequenceMatcher >= 75%) to find existing todos
+        - INSERT new todos, UPDATE existing ones
+        - 'deleted' status maps to is_deleted=true (preserves audit trail)
+        - Tracks created_session_id and completed_session_id
+        - Fail-open: DB errors don't block the tool operation
+
+      Implementation: scripts/todo_sync_hook.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="PostToolUse TodoWrite">
+      <bpmn:outgoing>flow_start_parse</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: PARSE INPUT                                                -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="parse_input" name="[HOOK] Parse TodoWrite Input" scriptFormat="python">
+      <bpmn:incoming>flow_start_parse</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Read tool_input from stdin JSON
+# Extract todos array: [{content, status, priority}]
+todos = todos if todos is not None else []
+todo_count = len(todos) if isinstance(todos, list) else 0
+has_todos = todo_count > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_todos_gw" name="Has Todos?" default="flow_no_todos">
+      <bpmn:incoming>flow_parse_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_todos</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_todos</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_empty" name="No Todos to Sync">
+      <bpmn:incoming>flow_no_todos</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: DATABASE CONNECTION                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="connect_db" name="[DB] Connect to PostgreSQL" scriptFormat="python">
+      <bpmn:incoming>flow_has_todos</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Try psycopg3 then psycopg2 fallback
+# Load connection string from config or DATABASE_URL env var
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_gw" name="DB Available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_db" name="DB Unavailable (Fail-Open)">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: TODO SYNC LOOP                                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="init_loop" name="[TOOL] Initialize Loop" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_pick</bpmn:outgoing>
+      <bpmn:script>
+current_index = 0
+synced_count = 0
+inserted_count = 0
+updated_count = 0
+archived_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="pick_todo" name="[TOOL] Pick Next Todo" scriptFormat="python">
+      <bpmn:incoming>flow_init_to_pick</bpmn:incoming>
+      <bpmn:incoming>flow_loop_back</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_to_match</bpmn:outgoing>
+      <bpmn:script>
+# Get current todo from array
+# current_todo = todos[current_index]
+has_match = has_match if has_match is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="fuzzy_match" name="[DB] Fuzzy Match Existing Todo" scriptFormat="python">
+      <bpmn:incoming>flow_pick_to_match</bpmn:incoming>
+      <bpmn:outgoing>flow_match_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from claude.todos WHERE project_id matches
+# Compare content using SequenceMatcher (threshold >= 0.75)
+# Also try substring match (min 20 chars)
+# Sets: has_match, matched_todo_id
+has_match = has_match if has_match is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="match_gw" name="Existing Match?" default="flow_no_match">
+      <bpmn:incoming>flow_match_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_matched</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_match</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="update_existing" name="[DB] Update Existing Todo" scriptFormat="python">
+      <bpmn:incoming>flow_matched</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.todos SET status, priority, updated_at
+# If status changed to completed: set completed_session_id
+updated_count = updated_count + 1
+synced_count = synced_count + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="insert_new" name="[DB] Insert New Todo" scriptFormat="python">
+      <bpmn:incoming>flow_no_match</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.todos (content, status, priority, project_id, created_session_id)
+inserted_count = inserted_count + 1
+synced_count = synced_count + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="upsert_merge" name="Post-Upsert">
+      <bpmn:incoming>flow_update_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_insert_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_deleted</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Check if this todo was marked deleted -->
+    <bpmn:exclusiveGateway id="deleted_gw" name="Status=Deleted?" default="flow_not_deleted">
+      <bpmn:incoming>flow_merge_to_deleted</bpmn:incoming>
+      <bpmn:outgoing>flow_is_deleted</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_deleted</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="mark_archived" name="[DB] Mark as Archived" scriptFormat="python">
+      <bpmn:incoming>flow_is_deleted</bpmn:incoming>
+      <bpmn:outgoing>flow_archived_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.todos SET is_deleted=true WHERE todo_id = matched_todo_id
+# 'deleted' maps to archived (preserves audit trail, never hard delete)
+archived_count = archived_count + 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Advance loop -->
+    <bpmn:scriptTask id="advance_loop" name="[TOOL] Advance Loop Counter" scriptFormat="python">
+      <bpmn:incoming>flow_not_deleted</bpmn:incoming>
+      <bpmn:incoming>flow_archived_to_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_advance_to_more</bpmn:outgoing>
+      <bpmn:script>
+current_index = current_index + 1
+more_todos = current_index &lt; todo_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="more_todos_gw" name="More Todos?" default="flow_done">
+      <bpmn:incoming>flow_advance_to_more</bpmn:incoming>
+      <bpmn:outgoing>flow_loop_back</bpmn:outgoing>
+      <bpmn:outgoing>flow_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: COMMIT AND COMPLETE                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="commit_changes" name="[DB] Commit Transaction" scriptFormat="python">
+      <bpmn:incoming>flow_done</bpmn:incoming>
+      <bpmn:outgoing>flow_commit_to_end</bpmn:outgoing>
+      <bpmn:script>
+# conn.commit()
+sync_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_synced" name="Todos Synced">
+      <bpmn:incoming>flow_commit_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Parse -->
+    <bpmn:sequenceFlow id="flow_start_parse" sourceRef="start" targetRef="parse_input"/>
+    <bpmn:sequenceFlow id="flow_parse_to_check" sourceRef="parse_input" targetRef="has_todos_gw"/>
+    <bpmn:sequenceFlow id="flow_has_todos" sourceRef="has_todos_gw" targetRef="connect_db">
+      <bpmn:conditionExpression>has_todos == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_todos" sourceRef="has_todos_gw" targetRef="end_empty"/>
+
+    <!-- Phase 2: DB Connection -->
+    <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="init_loop">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="end_no_db"/>
+
+    <!-- Phase 3: Loop -->
+    <bpmn:sequenceFlow id="flow_init_to_pick" sourceRef="init_loop" targetRef="pick_todo"/>
+    <bpmn:sequenceFlow id="flow_pick_to_match" sourceRef="pick_todo" targetRef="fuzzy_match"/>
+    <bpmn:sequenceFlow id="flow_match_to_gw" sourceRef="fuzzy_match" targetRef="match_gw"/>
+    <bpmn:sequenceFlow id="flow_matched" sourceRef="match_gw" targetRef="update_existing">
+      <bpmn:conditionExpression>has_match == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_match" sourceRef="match_gw" targetRef="insert_new"/>
+    <bpmn:sequenceFlow id="flow_update_to_merge" sourceRef="update_existing" targetRef="upsert_merge"/>
+    <bpmn:sequenceFlow id="flow_insert_to_merge" sourceRef="insert_new" targetRef="upsert_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_deleted" sourceRef="upsert_merge" targetRef="deleted_gw"/>
+    <bpmn:sequenceFlow id="flow_is_deleted" sourceRef="deleted_gw" targetRef="mark_archived">
+      <bpmn:conditionExpression>is_deleted == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_deleted" sourceRef="deleted_gw" targetRef="advance_loop"/>
+    <bpmn:sequenceFlow id="flow_archived_to_advance" sourceRef="mark_archived" targetRef="advance_loop"/>
+    <bpmn:sequenceFlow id="flow_advance_to_more" sourceRef="advance_loop" targetRef="more_todos_gw"/>
+    <bpmn:sequenceFlow id="flow_loop_back" sourceRef="more_todos_gw" targetRef="pick_todo">
+      <bpmn:conditionExpression>more_todos == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_done" sourceRef="more_todos_gw" targetRef="commit_changes"/>
+
+    <!-- Phase 4: Complete -->
+    <bpmn:sequenceFlow id="flow_commit_to_end" sourceRef="commit_changes" targetRef="end_synced"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="todo_sync">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

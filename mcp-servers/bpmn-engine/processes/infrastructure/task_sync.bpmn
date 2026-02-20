@@ -1,0 +1,258 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/task-sync"
+    id="Definitions_TKS">
+
+  <bpmn:process id="task_sync" name="Task Sync Hook: PostToolUse TaskCreate/TaskUpdate" isExecutable="true">
+
+    <!--
+      PostToolUse hook for TaskCreate and TaskUpdate operations.
+      Bridges Claude's task system to claude.todos and build_tasks.
+
+      Trigger: PostToolUse event when tool_name in {TaskCreate, TaskUpdate}
+      Input: tool_input containing task data + tool_response with result
+
+      Key behaviors:
+        TaskCreate path:
+          - Insert todo into claude.todos
+          - Check for matching build_task (75% similarity)
+          - If matched: link via task_map file
+        TaskUpdate path:
+          - Look up todo via task_map
+          - Update todo status in DB
+          - If completed + linked to build_task: advance build_task status
+          - If all sibling tasks done: surface feature completion
+        Shared:
+          - File-based task_map with Windows file locking (msvcrt)
+          - Duplicate detection: substring match + fuzzy match
+
+      Implementation: scripts/task_sync_hook.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="PostToolUse Task Operation">
+      <bpmn:outgoing>flow_start_detect</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: DETECT OPERATION TYPE                                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="detect_operation" name="[HOOK] Detect Operation Type" scriptFormat="python">
+      <bpmn:incoming>flow_start_detect</bpmn:incoming>
+      <bpmn:outgoing>flow_detect_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Read tool_name from hook input
+# operation = "create" if tool_name == "TaskCreate" else "update"
+operation = operation if operation is not None else "create"
+is_create = operation == "create"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="op_type_gw" name="Create or Update?" default="flow_update_path">
+      <bpmn:incoming>flow_detect_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_create_path</bpmn:outgoing>
+      <bpmn:outgoing>flow_update_path</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2A: TASKCREATE PATH                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="insert_todo" name="[DB] Insert Todo from Task" scriptFormat="python">
+      <bpmn:incoming>flow_create_path</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_bt_check</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.todos (content=task.subject, status=task.status,
+#   priority=task.priority, project_id, created_session_id)
+# Uses duplicate detection: substring match (min 20 chars) + fuzzy (75%)
+todo_inserted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_build_task_match" name="[DB] Check Matching Build Task" scriptFormat="python">
+      <bpmn:incoming>flow_insert_to_bt_check</bpmn:incoming>
+      <bpmn:outgoing>flow_bt_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from claude.build_tasks WHERE feature in active features
+# Compare task name to todo content using SequenceMatcher >= 0.75
+# Sets: has_build_task_match, matched_build_task_id
+has_build_task_match = has_build_task_match if has_build_task_match is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="bt_match_gw" name="Build Task Match?" default="flow_no_bt_match">
+      <bpmn:incoming>flow_bt_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_bt_matched</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_bt_match</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="link_build_task" name="[TOOL] Link to Build Task in Map" scriptFormat="python">
+      <bpmn:incoming>flow_bt_matched</bpmn:incoming>
+      <bpmn:outgoing>flow_link_to_create_merge</bpmn:outgoing>
+      <bpmn:script>
+# Write mapping to task_map file: task_id -> build_task_id
+# Uses Windows file locking (msvcrt) for concurrent access safety
+build_task_linked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="create_merge" name="Create Complete">
+      <bpmn:incoming>flow_no_bt_match</bpmn:incoming>
+      <bpmn:incoming>flow_link_to_create_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_map</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2B: TASKUPDATE PATH                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="lookup_task_map" name="[TOOL] Look Up Task in Map" scriptFormat="python">
+      <bpmn:incoming>flow_update_path</bpmn:incoming>
+      <bpmn:outgoing>flow_lookup_to_update</bpmn:outgoing>
+      <bpmn:script>
+# Read task_map file to find todo_id and optional build_task_id
+# Uses Windows file locking for read safety
+task_found_in_map = task_found_in_map if task_found_in_map is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="update_todo_status" name="[DB] Update Todo Status" scriptFormat="python">
+      <bpmn:incoming>flow_lookup_to_update</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_completion_check</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.todos SET status, updated_at
+# If completed: set completed_session_id
+todo_updated = True
+is_completed = is_completed if is_completed is not None else False
+has_linked_build_task = has_linked_build_task if has_linked_build_task is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="completion_gw" name="Completed + Linked?" default="flow_not_completed">
+      <bpmn:incoming>flow_update_to_completion_check</bpmn:incoming>
+      <bpmn:outgoing>flow_completed_and_linked</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_completed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="advance_build_task" name="[DB] Advance Build Task Status" scriptFormat="python">
+      <bpmn:incoming>flow_completed_and_linked</bpmn:incoming>
+      <bpmn:outgoing>flow_advance_to_sibling_check</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.build_tasks SET status='completed'
+# Uses advance_status() for state machine enforcement
+build_task_advanced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_sibling_tasks" name="[DB] Check All Sibling Tasks" scriptFormat="python">
+      <bpmn:incoming>flow_advance_to_sibling_check</bpmn:incoming>
+      <bpmn:outgoing>flow_sibling_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT COUNT(*) FROM claude.build_tasks
+# WHERE feature_id = X AND status != 'completed'
+# Sets: all_siblings_done
+all_siblings_done = all_siblings_done if all_siblings_done is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="all_done_gw" name="All Tasks Done?" default="flow_not_all_done">
+      <bpmn:incoming>flow_sibling_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_all_done</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_all_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="surface_feature_completion" name="[HOOK] Surface Feature Completion" scriptFormat="python">
+      <bpmn:incoming>flow_all_done</bpmn:incoming>
+      <bpmn:outgoing>flow_surface_to_update_merge</bpmn:outgoing>
+      <bpmn:script>
+# Log message: "All tasks for feature X are complete!"
+# This gets surfaced to Claude on next prompt
+feature_completion_surfaced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="update_merge" name="Update Complete">
+      <bpmn:incoming>flow_not_completed</bpmn:incoming>
+      <bpmn:incoming>flow_not_all_done</bpmn:incoming>
+      <bpmn:incoming>flow_surface_to_update_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_map</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: UPDATE MAP AND COMPLETE                                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="update_task_map" name="[TOOL] Update Task Map File" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_map</bpmn:incoming>
+      <bpmn:incoming>flow_update_to_map</bpmn:incoming>
+      <bpmn:outgoing>flow_map_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Write updated task_map to .claude/task_map.json
+# Uses Windows file locking (msvcrt.locking)
+# Map structure: {task_id: {todo_id, build_task_id, status}, _session_id: ...}
+map_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_synced" name="Task Synced">
+      <bpmn:incoming>flow_map_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Detect -->
+    <bpmn:sequenceFlow id="flow_start_detect" sourceRef="start" targetRef="detect_operation"/>
+    <bpmn:sequenceFlow id="flow_detect_to_gw" sourceRef="detect_operation" targetRef="op_type_gw"/>
+    <bpmn:sequenceFlow id="flow_create_path" sourceRef="op_type_gw" targetRef="insert_todo">
+      <bpmn:conditionExpression>is_create == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_update_path" sourceRef="op_type_gw" targetRef="lookup_task_map"/>
+
+    <!-- Phase 2A: Create -->
+    <bpmn:sequenceFlow id="flow_insert_to_bt_check" sourceRef="insert_todo" targetRef="check_build_task_match"/>
+    <bpmn:sequenceFlow id="flow_bt_check_to_gw" sourceRef="check_build_task_match" targetRef="bt_match_gw"/>
+    <bpmn:sequenceFlow id="flow_bt_matched" sourceRef="bt_match_gw" targetRef="link_build_task">
+      <bpmn:conditionExpression>has_build_task_match == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_bt_match" sourceRef="bt_match_gw" targetRef="create_merge"/>
+    <bpmn:sequenceFlow id="flow_link_to_create_merge" sourceRef="link_build_task" targetRef="create_merge"/>
+    <bpmn:sequenceFlow id="flow_create_to_map" sourceRef="create_merge" targetRef="update_task_map"/>
+
+    <!-- Phase 2B: Update -->
+    <bpmn:sequenceFlow id="flow_lookup_to_update" sourceRef="lookup_task_map" targetRef="update_todo_status"/>
+    <bpmn:sequenceFlow id="flow_update_to_completion_check" sourceRef="update_todo_status" targetRef="completion_gw"/>
+    <bpmn:sequenceFlow id="flow_completed_and_linked" sourceRef="completion_gw" targetRef="advance_build_task">
+      <bpmn:conditionExpression>is_completed == True and has_linked_build_task == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_completed" sourceRef="completion_gw" targetRef="update_merge"/>
+    <bpmn:sequenceFlow id="flow_advance_to_sibling_check" sourceRef="advance_build_task" targetRef="check_sibling_tasks"/>
+    <bpmn:sequenceFlow id="flow_sibling_to_gw" sourceRef="check_sibling_tasks" targetRef="all_done_gw"/>
+    <bpmn:sequenceFlow id="flow_all_done" sourceRef="all_done_gw" targetRef="surface_feature_completion">
+      <bpmn:conditionExpression>all_siblings_done == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_all_done" sourceRef="all_done_gw" targetRef="update_merge"/>
+    <bpmn:sequenceFlow id="flow_surface_to_update_merge" sourceRef="surface_feature_completion" targetRef="update_merge"/>
+    <bpmn:sequenceFlow id="flow_update_to_map" sourceRef="update_merge" targetRef="update_task_map"/>
+
+    <!-- Phase 3: Complete -->
+    <bpmn:sequenceFlow id="flow_map_to_end" sourceRef="update_task_map" targetRef="end_synced"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="task_sync">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
