@@ -162,6 +162,21 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
 
         # Get session facts (user intent, decisions, key references)
         # These preserve the narrative/context that structured data alone misses
+        # FB137 fix: First count total facts to log what gets dropped
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM claude.session_facts
+            WHERE session_id = (
+                SELECT session_id FROM claude.sessions
+                WHERE project_name = %s AND session_end IS NULL
+                ORDER BY session_start DESC LIMIT 1
+            )
+            AND fact_type IN ('decision', 'reference', 'note')
+            AND NOT is_sensitive
+        """, (project_name,))
+        total_facts = cur.fetchone()
+        total_facts = total_facts[0] if total_facts else 0
+
         cur.execute("""
             SELECT fact_key, fact_value, fact_type
             FROM claude.session_facts
@@ -177,13 +192,28 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
         facts = cur.fetchall()
 
         if facts:
-            lines.append("\nSESSION CONTEXT (decisions & intent):")
+            # FB137: Log dropped facts for audit
+            if total_facts > 5:
+                logger.warning(
+                    f"PreCompact: {total_facts} facts exist, only injecting 5. "
+                    f"{total_facts - 5} facts will be lost after compaction."
+                )
+                lines.append(f"\nSESSION CONTEXT (decisions & intent) - WARNING: {total_facts - 5} older facts truncated:")
+            else:
+                lines.append("\nSESSION CONTEXT (decisions & intent):")
+            truncated_count = 0
             for f in facts:
                 key = f['fact_key'] if isinstance(f, dict) else f[0]
                 value = f['fact_value'] if isinstance(f, dict) else f[1]
                 # Truncate long values
-                display = value[:200] + "..." if len(value) > 200 else value
+                if len(value) > 200:
+                    display = value[:200] + "..."
+                    truncated_count += 1
+                else:
+                    display = value
                 lines.append(f"  [{key}]: {display}")
+            if truncated_count > 0:
+                logger.info(f"PreCompact: {truncated_count} fact values truncated at 200 chars")
 
         conn.close()
         return "\n".join(lines) if lines else None

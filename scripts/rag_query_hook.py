@@ -25,15 +25,16 @@ Output Format:
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
 # This ensures Claude always has the input processing workflow fresh in context.
-# ~45 tokens - brief imperative protocol injected every prompt.
+# ~100 tokens - imperative protocol injected every prompt.
 
 CORE_PROTOCOL = """
 STOP! Read the user's message fully.
-1. DECOMPOSE: Extract EVERY directive from the user's message. Each distinct ask = one task (TaskCreate). Include thinking/design tasks, not just code tasks. Then work through them in order.
-2. PRESERVE: store_session_fact("user_intent", <what user wants in their words>) when direction changes. This survives compaction.
-3. BUDGET: Before executing, classify tasks (heavy: BPMN/large files/multi-file, medium: single edit/test, light: query/status). If 3+ heavy tasks, DELEGATE to agents. save_checkpoint() after each completed task.
-4. Verify before claiming - read files, query DB. Never guess.
-5. Check MCP tools first - project-tools has 40+ tools.
+1. DECOMPOSE: Create a task (TaskCreate) for EVERY distinct directive BEFORE acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+2. NOTEPAD: Use store_session_fact() to save credentials, decisions, endpoints, findings, progress. These survive compaction. Use list_session_facts() to review. recall_session_fact() works across sessions. This is your memory.
+3. DELEGATE: Tasks touching 3+ files = spawn an agent (coder-sonnet for complex, coder-haiku for simple). Don't bloat the main context. save_checkpoint() after completing each task.
+4. BPMN-FIRST: For any process or system change - model it in BPMN first, write tests, then implement code. Never code without a model.
+5. Verify before claiming - read files, query DB. Never guess.
+6. Check MCP tools first - project-tools has 40+ tools.
 """
 
 import json
@@ -1435,7 +1436,8 @@ def main():
     - ALWAYS: Core principles (~80 tokens) + session facts (~100 tokens)
     - CONDITIONAL: Session context (on session keywords), config warning (on config keywords)
     - ON-DEMAND: RAG + knowledge (only for questions/exploration, not actions)
-    - REMOVED: Skill suggestions (never acted on), periodic reminders (use hooks instead)
+    - RE-ENABLED: Skill suggestions (FB138 fix - was disabled, now injected for non-action prompts)
+    - REMOVED: Periodic reminders (use hooks instead)
     """
     try:
         # Read hook input from stdin
@@ -1472,16 +1474,30 @@ def main():
         project_name = os.path.basename(cwd)
         session_id = hook_input.get('session_id') or os.environ.get('CLAUDE_SESSION_ID')
 
-        # TASK DISCIPLINE: Reset task map on every new user prompt.
-        # Forces Claude to create fresh tasks before using gated tools (Write/Edit/Task/Bash).
-        # Without this, stale tasks from earlier in the session act as a free pass.
+        # TASK DISCIPLINE: Reset task map only when session changes.
+        # FB141 fix: Previously reset on EVERY prompt, which wiped tasks created
+        # earlier in the same turn (before Claude responded). Now only resets if
+        # the session_id in the map doesn't match current session.
         try:
             task_map_path = Path(tempfile.gettempdir()) / f"claude_task_map_{project_name}.json"
             if task_map_path.exists():
-                task_map_path.unlink()
-                logger.info(f"Reset task map for new prompt (project: {project_name})")
+                import json as _json
+                try:
+                    map_data = _json.loads(task_map_path.read_text(encoding='utf-8'))
+                    map_session = map_data.get('_session_id', '')
+                    current_sid = session_id or ''
+                    # Only reset if session actually changed (not just new prompt)
+                    if map_session and current_sid and map_session != current_sid:
+                        task_map_path.unlink()
+                        logger.info(f"Reset stale task map (old session: {map_session[:8]}, new: {current_sid[:8]})")
+                    else:
+                        logger.debug(f"Kept task map (same session: {map_session[:8] if map_session else 'none'})")
+                except (json.JSONDecodeError, KeyError):
+                    # Corrupt map file - delete it
+                    task_map_path.unlink()
+                    logger.info("Reset corrupt task map")
         except Exception as e:
-            logger.warning(f"Failed to reset task map: {e}")
+            logger.warning(f"Failed to check task map: {e}")
 
         logger.info(f"RAG query hook invoked for project: {project_name}")
         logger.info(f"Query text (first 100 chars): {user_prompt[:100]}")
@@ -1515,6 +1531,21 @@ def main():
         if detect_config_keywords(user_prompt):
             logger.info("Config keywords detected - injecting config management warning")
             config_warning = CONFIG_WARNING
+
+        # SKILL SUGGESTIONS: Re-enabled (FB138 fix)
+        # Query skill_content for semantically relevant skills on non-command prompts.
+        # Previously disabled ("never acted on") but the discovery gap was the root cause.
+        skill_context = None
+        if DB_AVAILABLE:
+            try:
+                skill_context = query_skill_suggestions(
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    top_k=2,
+                    min_similarity=0.55
+                )
+            except Exception as e:
+                logger.warning(f"Skill suggestion query failed: {e}")
 
         # CONDITIONAL: Only query RAG/knowledge for questions and exploration
         # Action prompts ("implement X", "fix Y") don't benefit from documentation retrieval
@@ -1586,6 +1617,8 @@ def main():
             combined_context_parts.append(rag_context)
         if nimbus_context:
             combined_context_parts.append(nimbus_context)
+        if skill_context:
+            combined_context_parts.append(skill_context)
 
         combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
 
