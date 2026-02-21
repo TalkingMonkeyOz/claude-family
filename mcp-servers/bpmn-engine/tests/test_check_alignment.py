@@ -41,10 +41,10 @@ class TestHookChainAlignment:
             f"Missing artifacts: {result['missing_artifacts']}"
         )
 
-    def test_rag_query_maps_to_hook(self):
+    def test_query_rag_maps_to_hook(self):
         result = check_alignment("hook_chain")
         assert result["success"] is True
-        rag_entries = [m for m in result["mapped"] if m["element_id"] == "rag_query"]
+        rag_entries = [m for m in result["mapped"] if m["element_id"] == "query_rag"]
         assert len(rag_entries) == 1
         assert rag_entries[0]["artifact_type"] == "hook_script"
         assert "rag_query_hook.py" in rag_entries[0]["artifact_details"]
@@ -79,8 +79,9 @@ class TestArtifactRegistry:
     """The artifact registry should have entries for key processes."""
 
     def test_registry_has_hook_chain_entries(self):
-        hook_chain_keys = {"rag_query", "check_discipline", "inject_context",
-                           "post_tool_sync", "mark_blocked"}
+        hook_chain_keys = {"query_rag", "check_discipline", "inject_tool_context",
+                           "post_tool_sync", "mark_blocked", "check_session_changed",
+                           "classify_prompt", "inject_rag_context"}
         assert hook_chain_keys.issubset(set(_ARTIFACT_REGISTRY.keys()))
 
     def test_registry_has_session_entries(self):

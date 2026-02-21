@@ -4370,7 +4370,6 @@ def recover_session(
     Args:
         project: Project name. Defaults to current directory.
     """
-    import subprocess
     from pathlib import Path
 
     project = project or os.path.basename(os.getcwd())
@@ -4515,39 +4514,70 @@ def recover_session(
         crash_analysis = {"analyzed": False}
         if genuine_crashes:
             try:
-                # Find project transcript directory
+                # Find project transcript directory (exact match to avoid
+                # picking up sub-project dirs like ...-mcp-servers-orchestrator)
                 home = Path.home()
                 projects_dir = home / ".claude" / "projects"
                 project_slug = f"C--Projects-{project}"
-                project_dirs = list(projects_dir.glob(f"*{project_slug}*"))
+                # Use exact directory name first, fall back to glob
+                exact_dir = projects_dir / project_slug
+                if exact_dir.is_dir():
+                    project_dir = exact_dir
+                else:
+                    project_dirs = list(projects_dir.glob(f"*{project_slug}"))
+                    project_dir = project_dirs[0] if project_dirs else None
 
-                if project_dirs:
+                if project_dir:
                     jsonl_files = sorted(
-                        project_dirs[0].glob("*.jsonl"),
+                        project_dir.glob("*.jsonl"),
                         key=lambda f: f.stat().st_mtime,
                         reverse=True,
                     )
-                    if jsonl_files:
+                    # Skip the MOST RECENT file (index 0) - it's the
+                    # current session's transcript, actively locked by
+                    # Claude Code on Windows. Reading it causes deadlock.
+                    # Use the PREVIOUS session's transcript instead.
+                    transcript_file = None
+                    if len(jsonl_files) > 1:
+                        transcript_file = jsonl_files[1]
+                    elif len(jsonl_files) == 1:
+                        # Only one file - try non-blocking read with timeout
                         transcript_file = jsonl_files[0]
+
+                    if transcript_file:
                         file_size_kb = transcript_file.stat().st_size / 1024
 
-                        # Parse last entries for crash signals
+                        # Parse only the TAIL of the file (last 200 lines)
                         entries = []
-                        with open(transcript_file, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                if line.strip():
-                                    try:
-                                        entries.append(json.loads(line))
-                                    except json.JSONDecodeError:
-                                        pass
+                        all_lines = []
+                        try:
+                            with open(transcript_file, 'r', encoding='utf-8') as f:
+                                all_lines = f.readlines()
+                        except (PermissionError, OSError):
+                            # File locked (Windows) - skip transcript analysis
+                            all_lines = []
 
-                        # Analyze crash signals
+                        tail_lines = all_lines[-200:] if len(all_lines) > 200 else all_lines
+                        for line in tail_lines:
+                            if line.strip():
+                                try:
+                                    entries.append(json.loads(line))
+                                except json.JSONDecodeError:
+                                    pass
+
+                        # Count continuation markers from full file
+                        continuation_markers = sum(
+                            1 for ln in all_lines
+                            if 'continued from' in ln.lower()
+                        )
+                        del all_lines  # Free memory
+
+                        # Analyze crash signals from tail entries
                         output_tokens_1_count = 0
                         stop_reason_none_count = 0
                         max_input_tokens = 0
                         last_user_msg = ""
                         last_assistant_action = ""
-                        continuation_markers = 0
 
                         for entry in entries:
                             t = entry.get('type', '')
@@ -4555,8 +4585,6 @@ def recover_session(
 
                             if t == 'user':
                                 content = msg.get('content', '') if isinstance(msg, dict) else ''
-                                if isinstance(content, str) and 'continued from' in content.lower():
-                                    continuation_markers += 1
                                 if isinstance(content, str) and '<system-reminder>' not in content and content.strip():
                                     last_user_msg = content[:200]
                                 elif isinstance(content, list):
@@ -4621,24 +4649,41 @@ def recover_session(
 
         result["crash_analysis"] = crash_analysis
 
-        # ── Step 7: Git status ──
+        # ── Step 7: Git info (file-based, no subprocess) ──
+        # subprocess.run deadlocks on Windows when called from MCP server
+        # subprocesses (pipe handle inheritance issue). Read .git/ directly.
         git_info = {}
         try:
-            status_out = subprocess.run(
-                ["git", "status", "--short"],
-                capture_output=True, text=True, timeout=5,
-                cwd=os.getcwd(),
-            )
-            git_info["uncommitted_changes"] = status_out.stdout.strip().split('\n') if status_out.stdout.strip() else []
+            git_dir = Path(os.getcwd()) / ".git"
+            if git_dir.is_dir():
+                # Current branch
+                head_file = git_dir / "HEAD"
+                if head_file.exists():
+                    head = head_file.read_text().strip()
+                    if head.startswith("ref: refs/heads/"):
+                        git_info["branch"] = head[16:]
+                    else:
+                        git_info["branch"] = head[:8] + "... (detached)"
 
-            log_out = subprocess.run(
-                ["git", "log", "--oneline", "-5"],
-                capture_output=True, text=True, timeout=5,
-                cwd=os.getcwd(),
-            )
-            git_info["recent_commits"] = log_out.stdout.strip().split('\n') if log_out.stdout.strip() else []
-        except Exception:
-            git_info = {"error": "Could not read git status"}
+                # Recent commits from reflog (no subprocess needed)
+                reflog = git_dir / "logs" / "HEAD"
+                if reflog.exists():
+                    lines = reflog.read_text(encoding='utf-8', errors='replace').strip().split('\n')
+                    recent = []
+                    for line in reversed(lines[-5:]):
+                        # Reflog format: old_sha new_sha Author <email> timestamp tz\taction: message
+                        parts = line.split('\t', 1)
+                        if len(parts) == 2:
+                            sha = parts[0].split()[1][:7] if parts[0].split() else "?"
+                            msg = parts[1]
+                            recent.append(f"{sha} {msg}")
+                    git_info["recent_reflog"] = recent
+
+                git_info["note"] = "File-based read (no git subprocess). Run 'git status' for full details."
+            else:
+                git_info["note"] = "Not a git repository"
+        except Exception as e:
+            git_info = {"error": f"Could not read .git: {str(e)}"}
 
         result["git_status"] = git_info
 
@@ -4650,8 +4695,8 @@ def recover_session(
             actions.append(f"{len(genuine_crashes)} crashed session(s) found - review crash analysis")
         if result["in_progress_work"]["count"] > 0:
             actions.append(f"{result['in_progress_work']['count']} in-progress work item(s) - continue where you left off")
-        if git_info.get("uncommitted_changes"):
-            actions.append(f"{len(git_info['uncommitted_changes'])} uncommitted change(s) - review and commit")
+        if git_info.get("branch"):
+            actions.append(f"On branch '{git_info['branch']}' - run 'git status' to check uncommitted changes")
         if crash_analysis.get("crash_type") == "cli_process_crash":
             actions.append("CLI crash detected (output_tokens=1 pattern) - not a context issue")
         elif crash_analysis.get("crash_type") == "context_exhaustion":

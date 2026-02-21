@@ -4,9 +4,10 @@ Task Discipline Hook - PreToolUse Hook for Claude Code
 
 Enforces that TaskCreate is called before "action" tools (Write, Edit, Task).
 Blocks tool calls when no tasks have been created, ensuring Claude plans before acting.
+Also tracks unique files edited per session and issues a delegation advisory at 3+ files.
 
 Hook Event: PreToolUse
-Matchers: Write, Edit, Task (registered separately per tool)
+Matchers: Write, Edit, Task, Bash (registered separately per tool)
 
 How it works (4-way cascade - FB108 + FB109):
 1. Reads task map file written by task_sync_hook.py on TaskCreate
@@ -19,6 +20,12 @@ How it works (4-way cascade - FB108 + FB109):
    e. DB fallback: query build_tasks for active tasks (covers MCP create_linked_task) -> allow
    f. Otherwise -> deny
 
+Delegation advisory (FB139):
+- Tracks unique file paths edited via Write/Edit in `_files_edited` list in the task map
+- At 3+ unique files, emits a one-time additionalContext advisory suggesting agent delegation
+- Advisory state tracked by `_delegation_advised` boolean in the task map
+- Never blocks; advisory only
+
 Session scoping:
 - task_sync_hook.py writes _session_id into the map file on every TaskCreate
 - This hook compares map's _session_id with the current session_id from hook_input
@@ -30,7 +37,7 @@ Response pattern: exit code 0 + JSON with permissionDecision: "deny" or "allow"
 
 Author: Claude Family
 Date: 2026-02-09
-Updated: 2026-02-20 (FB108 - continuation session + FB109 - DB fallback for MCP tasks)
+Updated: 2026-02-21 (FB139 - delegation advisory at 3+ unique files edited)
 """
 
 import json
@@ -85,6 +92,117 @@ def load_task_map(project_name: str) -> dict:
     return {}
 
 
+def save_task_map_fields(project_name: str, updates: dict):
+    """Merge specific fields into the task map using Windows file locking.
+
+    Used by the delegation tracker to persist _files_edited and _delegation_advised
+    without clobbering task entries written by task_sync_hook.py. Uses the same
+    locking strategy as task_sync_hook.save_task_map for safety.
+
+    Args:
+        project_name: Project name (used to resolve the map file path).
+        updates: Dict of key-value pairs to merge into the existing map.
+    """
+    import msvcrt  # Windows file locking
+
+    path = get_task_map_path(project_name)
+    lock_path = path.with_suffix('.lock')
+    try:
+        with open(lock_path, 'w') as lock_file:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                current_map = {}
+                if path.exists():
+                    try:
+                        with open(path, 'r') as f:
+                            current_map = json.load(f)
+                            if not isinstance(current_map, dict):
+                                current_map = {}
+                    except (json.JSONDecodeError, IOError):
+                        current_map = {}
+
+                current_map.update(updates)
+
+                with open(path, 'w') as f:
+                    json.dump(current_map, f)
+            finally:
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    except (IOError, OSError) as e:
+        # Lock acquisition failed - fall back to direct write of only the updates
+        logger.warning(f"Delegation tracker: lock failed, falling back to direct merge: {e}")
+        try:
+            current_map = load_task_map(project_name)
+            current_map.update(updates)
+            with open(path, 'w') as f:
+                json.dump(current_map, f)
+        except IOError as e2:
+            logger.error(f"Delegation tracker: failed to save task map: {e2}")
+
+
+def check_and_issue_delegation_advisory(
+    tool_name: str,
+    tool_input: dict,
+    project_name: str,
+    task_map: dict,
+) -> str | None:
+    """Track file edits and return a delegation advisory if the 3-file threshold is crossed.
+
+    Only tracks Write and Edit tool calls (not Bash or Task which don't directly
+    edit named files). Reads _files_edited and _delegation_advised from task_map
+    in memory, writes back updates via save_task_map_fields if state changes.
+
+    Args:
+        tool_name: Name of the tool being called.
+        tool_input: Parsed tool_input dict from the hook payload.
+        project_name: Project name for task map resolution.
+        task_map: Already-loaded task map dict (avoids double read).
+
+    Returns:
+        Advisory string if this call crosses the threshold and advisory has not
+        yet been issued, otherwise None.
+    """
+    # Only track Write and Edit - these directly modify named files
+    if tool_name not in ('Write', 'Edit'):
+        return None
+
+    file_path = tool_input.get('file_path', '').strip()
+    if not file_path:
+        return None
+
+    # Normalise to lowercase for deduplication (Windows paths are case-insensitive)
+    normalised_path = file_path.lower().replace('\\', '/')
+
+    already_advised = task_map.get('_delegation_advised', False)
+    if already_advised:
+        # Advisory already sent this session - nothing more to do
+        return None
+
+    files_edited: list = list(task_map.get('_files_edited', []))
+
+    if normalised_path not in files_edited:
+        files_edited.append(normalised_path)
+
+    file_count = len(files_edited)
+
+    if file_count < 3:
+        # Below threshold - persist updated list, no advisory yet
+        save_task_map_fields(project_name, {'_files_edited': files_edited})
+        return None
+
+    # Threshold crossed - mark advised and persist both fields atomically
+    save_task_map_fields(project_name, {
+        '_files_edited': files_edited,
+        '_delegation_advised': True,
+    })
+
+    advisory = (
+        f"DELEGATION ADVISORY: You've edited {file_count} unique file(s) this session. "
+        f"Consider spawning a coder-sonnet or coder-haiku agent for the remaining work. "
+        f"See Delegation Rules in CLAUDE.md."
+    )
+    return advisory
+
+
 def allow():
     """Allow the tool call to proceed."""
     response = {
@@ -92,6 +210,20 @@ def allow():
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow"
         }
+    }
+    print(json.dumps(response))
+    sys.exit(0)
+
+
+def allow_with_advisory(advisory: str):
+    """Allow the tool call but surface an advisory message to Claude."""
+    logger.info(f"Delegation advisory issued: {advisory[:100]}")
+    response = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow"
+        },
+        "additionalContext": advisory
     }
     print(json.dumps(response))
     sys.exit(0)
@@ -206,6 +338,20 @@ def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool
         return False
 
 
+def _do_allow(tool_name: str, tool_input: dict, project_name: str, task_map: dict):
+    """Issue an allow response, with a delegation advisory if the file-edit threshold is met.
+
+    Centralises the allow path so every branch in main() uses identical advisory logic.
+    Calls allow_with_advisory() when the delegation check returns a message, otherwise
+    calls allow().
+    """
+    advisory = check_and_issue_delegation_advisory(tool_name, tool_input, project_name, task_map)
+    if advisory:
+        allow_with_advisory(advisory)
+    else:
+        allow()
+
+
 def main():
     """Main entry point."""
     try:
@@ -228,6 +374,8 @@ def main():
     # Get current session_id for scoping
     current_session_id = hook_input.get('session_id', '')
 
+    tool_input = hook_input.get('tool_input', {})
+
     # Check if tasks have been created THIS session
     task_map = load_task_map(project_name)
 
@@ -243,17 +391,17 @@ def main():
     # Session scoping: tasks must be from THIS session
     if task_entries and map_session_id == current_session_id:
         logger.debug(f"Tasks exist ({len(task_entries)} tasks, session match) - allowing {tool_name}")
-        allow()
+        _do_allow(tool_name, tool_input, project_name, task_map)
     elif task_entries and not current_session_id:
         # No session_id available (edge case) - allow if tasks exist
         logger.debug(f"Tasks exist ({len(task_entries)} tasks, no session_id) - allowing {tool_name}")
-        allow()
+        _do_allow(tool_name, tool_input, project_name, task_map)
     elif not task_entries and map_recently_modified(project_name):
         # Race condition fallback: map is empty but was recently written to.
         # This happens when multiple PostToolUse hooks fire concurrently (e.g.,
         # batch TaskCreate) and the map is mid-write. Allow with a warning.
         logger.warning(f"Map empty but recently modified (race condition) - allowing {tool_name}")
-        allow()
+        _do_allow(tool_name, tool_input, project_name, task_map)
     elif task_entries and map_recently_modified(project_name, max_age_seconds=7200):
         # FB108 fix: Session mismatch but map is fresh (< 2 hours).
         # This happens in continuation sessions where Claude Code assigns a new
@@ -263,7 +411,7 @@ def main():
             f"Continuation session detected: map session={map_session_id[:8]}, "
             f"current={current_session_id[:8]}, allowing {tool_name}"
         )
-        allow()
+        _do_allow(tool_name, tool_input, project_name, task_map)
     else:
         # FB109 fix: Before denying, check DB for active build_tasks.
         # This covers tasks created via MCP create_linked_task (which writes
@@ -274,7 +422,7 @@ def main():
                 f"DB fallback: active build_tasks found for {project_name} "
                 f"(tasks created via MCP, not task_map) - allowing {tool_name}"
             )
-            allow()
+            _do_allow(tool_name, tool_input, project_name, task_map)
         elif task_entries and map_session_id != current_session_id:
             reason = (
                 f"Stale tasks from a previous session (map > 2h old). "

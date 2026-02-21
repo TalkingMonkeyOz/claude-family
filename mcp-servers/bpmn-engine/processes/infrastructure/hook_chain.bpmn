@@ -7,253 +7,303 @@
     targetNamespace="http://claude-family/bpmn/hook-chain"
     id="Definitions_HookChain">
 
-  <bpmn:process id="hook_chain" name="Hook Chain" isExecutable="true">
+  <bpmn:process id="hook_chain" name="Hook Chain: Prompt to Response with Shared State" isExecutable="true">
 
-    <!-- Start Event -->
-    <bpmn:startEvent id="start_event" name="Start">
-      <bpmn:outgoing>flow_start_to_receive</bpmn:outgoing>
+    <!-- ========================================================
+         Phase 1: UserPromptSubmit (RAG Hook)
+         Fires on every user message. Manages task_map state,
+         skill suggestions, RAG context injection, and notepad.
+         ======================================================== -->
+
+    <bpmn:startEvent id="start_event" name="User Prompt Received">
+      <bpmn:outgoing>flow_start_to_check_session</bpmn:outgoing>
     </bpmn:startEvent>
 
-    <!-- User Task: Receive Prompt -->
-    <bpmn:userTask id="receive_prompt" name="Receive Prompt">
-      <bpmn:incoming>flow_start_to_receive</bpmn:incoming>
-      <bpmn:outgoing>flow_receive_to_rag</bpmn:outgoing>
-    </bpmn:userTask>
-
-    <!-- Script Task: RAG Query -->
-    <bpmn:scriptTask id="rag_query" name="RAG Query" scriptFormat="python">
-      <bpmn:incoming>flow_receive_to_rag</bpmn:incoming>
-      <bpmn:outgoing>flow_rag_to_gateway</bpmn:outgoing>
-      <bpmn:script>rag_executed = True</bpmn:script>
+    <!-- FB141 FIX: Check if session changed before resetting task_map -->
+    <bpmn:scriptTask id="check_session_changed" name="[HOOK] Check Session Changed" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_check_session</bpmn:incoming>
+      <bpmn:outgoing>flow_session_check_to_gateway</bpmn:outgoing>
+      <bpmn:script>
+# Read task_map file, extract _session_id
+# Compare with current session_id from environment
+task_map_session = task_map.get('_session_id', None) if task_map else None
+session_changed = (task_map_session != current_session_id)
+      </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Exclusive Gateway: Is Tool Call? -->
-    <bpmn:exclusiveGateway id="is_tool_call_gateway" name="Is Tool Call?" default="flow_no_tool">
-      <bpmn:incoming>flow_rag_to_gateway</bpmn:incoming>
+    <bpmn:exclusiveGateway id="session_changed_gw" name="Session Changed?" default="flow_session_same">
+      <bpmn:incoming>flow_session_check_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_session_changed</bpmn:outgoing>
+      <bpmn:outgoing>flow_session_same</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="reset_task_map" name="[HOOK] Reset Task Map" scriptFormat="python">
+      <bpmn:incoming>flow_session_changed</bpmn:incoming>
+      <bpmn:outgoing>flow_reset_to_classify</bpmn:outgoing>
+      <bpmn:script>
+# Only reset when session actually changed (new session started)
+# This preserves tasks created earlier in the same session
+task_map = {'_session_id': current_session_id}
+task_map_reset = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Classify prompt: action vs question -->
+    <bpmn:scriptTask id="classify_prompt" name="[HOOK] Classify Prompt" scriptFormat="python">
+      <bpmn:incoming>flow_session_same</bpmn:incoming>
+      <bpmn:incoming>flow_reset_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_rag_gw</bpmn:outgoing>
+      <bpmn:script>
+# Classify as action (skip RAG) or question (do RAG)
+is_action = prompt.startswith('/') or prompt.startswith('do ') or prompt.startswith('fix ')
+needs_rag = not is_action
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="needs_rag_gw" name="Needs RAG?" default="flow_skip_rag">
+      <bpmn:incoming>flow_classify_to_rag_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_rag</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_rag</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="query_rag" name="[HOOK] Query RAG Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_do_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_rag_to_skills</bpmn:outgoing>
+      <bpmn:script>
+# Voyage AI embedding query against vault_embeddings
+# Production: rag_results = query_vault_embeddings(prompt)
+rag_results = []
+rag_executed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- FB138 FIX: Re-enable skill suggestions after RAG -->
+    <bpmn:scriptTask id="query_skill_suggestions" name="[HOOK] Query Skill Suggestions" scriptFormat="python">
+      <bpmn:incoming>flow_rag_to_skills</bpmn:incoming>
+      <bpmn:outgoing>flow_skills_to_inject</bpmn:outgoing>
+      <bpmn:script>
+# Generate embedding for prompt, search skill_content by similarity
+# Production: skill_suggestions = query_skill_content(prompt_embedding)
+skill_suggestions = []
+skills_suggested = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Inject notepad + RAG + skills into context -->
+    <bpmn:scriptTask id="inject_rag_context" name="[HOOK] Inject Context (RAG + Notepad + Skills)" scriptFormat="python">
+      <bpmn:incoming>flow_skills_to_inject</bpmn:incoming>
+      <bpmn:incoming>flow_skip_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_tool_gw</bpmn:outgoing>
+      <bpmn:script>
+# Always inject: notepad (session facts), core protocol
+# Conditionally inject: RAG results, skill suggestions
+context_injected = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ========================================================
+         Phase 2: PreToolUse (Discipline + Context Injection)
+         Fires when Claude attempts to use a tool.
+         ======================================================== -->
+
+    <bpmn:exclusiveGateway id="is_tool_call_gw" name="Is Tool Call?" default="flow_no_tool">
+      <bpmn:incoming>flow_inject_to_tool_gw</bpmn:incoming>
       <bpmn:outgoing>flow_is_tool_call</bpmn:outgoing>
       <bpmn:outgoing>flow_no_tool</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <!-- Script Task: Check Discipline -->
-    <bpmn:scriptTask id="check_discipline" name="Check Discipline" scriptFormat="python">
+    <!-- Task discipline reads the SAME task_map that RAG hook manages -->
+    <bpmn:scriptTask id="check_discipline" name="[HOOK] Check Task Discipline" scriptFormat="python">
       <bpmn:incoming>flow_is_tool_call</bpmn:incoming>
-      <bpmn:outgoing>flow_check_to_discipline_result</bpmn:outgoing>
-      <bpmn:script>discipline_checked = True</bpmn:script>
+      <bpmn:outgoing>flow_discipline_to_result_gw</bpmn:outgoing>
+      <bpmn:script>
+# Read task_map file (SHARED STATE with RAG hook)
+# Check: tool in GATED_TOOLS? tasks exist? session_id matches?
+# FB141: task_map must NOT have been wiped by RAG hook mid-session
+has_tasks = len(task_map.get('tasks', {})) > 0
+is_gated = tool_name in ['Write', 'Edit', 'Task', 'Bash']
+discipline_blocked = is_gated and not has_tasks
+      </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Exclusive Gateway: Discipline Result -->
-    <bpmn:exclusiveGateway id="discipline_result_gateway" name="Discipline Result" default="flow_discipline_pass">
-      <bpmn:incoming>flow_check_to_discipline_result</bpmn:incoming>
+    <bpmn:exclusiveGateway id="discipline_result_gw" name="Discipline Result" default="flow_discipline_pass">
+      <bpmn:incoming>flow_discipline_to_result_gw</bpmn:incoming>
       <bpmn:outgoing>flow_discipline_blocked</bpmn:outgoing>
       <bpmn:outgoing>flow_discipline_pass</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <!-- Script Task: Mark Blocked -->
-    <bpmn:scriptTask id="mark_blocked" name="Mark Blocked" scriptFormat="python">
+    <bpmn:scriptTask id="mark_blocked" name="[HOOK] Deny Tool (No Tasks)" scriptFormat="python">
       <bpmn:incoming>flow_discipline_blocked</bpmn:incoming>
-      <bpmn:outgoing>flow_mark_blocked_to_end</bpmn:outgoing>
-      <bpmn:script>blocked = True</bpmn:script>
+      <bpmn:outgoing>flow_blocked_to_end</bpmn:outgoing>
+      <bpmn:script>
+blocked = True
+# Return permissionDecision: deny with message
+      </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Script Task: Inject Context -->
-    <bpmn:scriptTask id="inject_context" name="Inject Context" scriptFormat="python">
+    <bpmn:scriptTask id="inject_tool_context" name="[HOOK] Inject Coding Standards" scriptFormat="python">
       <bpmn:incoming>flow_discipline_pass</bpmn:incoming>
       <bpmn:outgoing>flow_inject_to_execute</bpmn:outgoing>
-      <bpmn:script>context_injected = True</bpmn:script>
+      <bpmn:script>
+# context_injector_hook: inject coding standards for Write/Edit
+coding_standards_injected = True
+      </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- User Task: Execute Tool -->
+    <!-- ========================================================
+         Phase 3: PostToolUse (Sync hooks)
+         Fires after tool execution completes.
+         ======================================================== -->
+
     <bpmn:userTask id="execute_tool" name="Execute Tool">
       <bpmn:incoming>flow_inject_to_execute</bpmn:incoming>
       <bpmn:outgoing>flow_execute_to_sync</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- Script Task: Post Tool Sync -->
-    <bpmn:scriptTask id="post_tool_sync" name="Post Tool Sync" scriptFormat="python">
+    <bpmn:scriptTask id="post_tool_sync" name="[HOOK] Post Tool Sync (Todo/Task/MCP)" scriptFormat="python">
       <bpmn:incoming>flow_execute_to_sync</bpmn:incoming>
-      <bpmn:outgoing>flow_sync_to_end_tool</bpmn:outgoing>
-      <bpmn:script>tool_synced = True</bpmn:script>
+      <bpmn:outgoing>flow_sync_to_end</bpmn:outgoing>
+      <bpmn:script>
+# todo_sync_hook: sync TodoWrite to DB
+# task_sync_hook: sync TaskCreate/TaskUpdate to DB + task_map
+# mcp_usage_logger: log all mcp__ tool calls
+tool_synced = True
+      </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Script Task: Generate Response -->
+    <!-- Generate response (no tool path) -->
     <bpmn:scriptTask id="generate_response" name="Generate Response" scriptFormat="python">
       <bpmn:incoming>flow_no_tool</bpmn:incoming>
-      <bpmn:outgoing>flow_generate_to_end</bpmn:outgoing>
+      <bpmn:outgoing>flow_response_to_end</bpmn:outgoing>
       <bpmn:script>response_generated = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- End Event: Blocked -->
-    <bpmn:endEvent id="end_blocked" name="Blocked">
-      <bpmn:incoming>flow_mark_blocked_to_end</bpmn:incoming>
+    <!-- End Events -->
+    <bpmn:endEvent id="end_blocked" name="Blocked (No Tasks)">
+      <bpmn:incoming>flow_blocked_to_end</bpmn:incoming>
     </bpmn:endEvent>
 
-    <!-- End Event: Tool Complete -->
     <bpmn:endEvent id="end_tool_complete" name="Tool Complete">
-      <bpmn:incoming>flow_sync_to_end_tool</bpmn:incoming>
+      <bpmn:incoming>flow_sync_to_end</bpmn:incoming>
     </bpmn:endEvent>
 
-    <!-- End Event: Response -->
-    <bpmn:endEvent id="end_response" name="Response">
-      <bpmn:incoming>flow_generate_to_end</bpmn:incoming>
+    <bpmn:endEvent id="end_response" name="Response Sent">
+      <bpmn:incoming>flow_response_to_end</bpmn:incoming>
     </bpmn:endEvent>
 
-    <!-- Sequence Flows -->
-    <bpmn:sequenceFlow id="flow_start_to_receive" sourceRef="start_event" targetRef="receive_prompt"/>
-    <bpmn:sequenceFlow id="flow_receive_to_rag" sourceRef="receive_prompt" targetRef="rag_query"/>
-    <bpmn:sequenceFlow id="flow_rag_to_gateway" sourceRef="rag_query" targetRef="is_tool_call_gateway"/>
+    <!-- ========================================================
+         Sequence Flows
+         ======================================================== -->
 
-    <bpmn:sequenceFlow id="flow_is_tool_call" sourceRef="is_tool_call_gateway" targetRef="check_discipline">
+    <!-- Phase 1: RAG hook -->
+    <bpmn:sequenceFlow id="flow_start_to_check_session" sourceRef="start_event" targetRef="check_session_changed"/>
+    <bpmn:sequenceFlow id="flow_session_check_to_gateway" sourceRef="check_session_changed" targetRef="session_changed_gw"/>
+    <bpmn:sequenceFlow id="flow_session_changed" sourceRef="session_changed_gw" targetRef="reset_task_map">
+      <bpmn:conditionExpression>session_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_session_same" sourceRef="session_changed_gw" targetRef="classify_prompt"/>
+    <bpmn:sequenceFlow id="flow_reset_to_classify" sourceRef="reset_task_map" targetRef="classify_prompt"/>
+    <bpmn:sequenceFlow id="flow_classify_to_rag_gw" sourceRef="classify_prompt" targetRef="needs_rag_gw"/>
+    <bpmn:sequenceFlow id="flow_do_rag" sourceRef="needs_rag_gw" targetRef="query_rag">
+      <bpmn:conditionExpression>needs_rag == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_rag" sourceRef="needs_rag_gw" targetRef="inject_rag_context"/>
+    <bpmn:sequenceFlow id="flow_rag_to_skills" sourceRef="query_rag" targetRef="query_skill_suggestions"/>
+    <bpmn:sequenceFlow id="flow_skills_to_inject" sourceRef="query_skill_suggestions" targetRef="inject_rag_context"/>
+
+    <!-- Phase 2: Discipline + context injection -->
+    <bpmn:sequenceFlow id="flow_inject_to_tool_gw" sourceRef="inject_rag_context" targetRef="is_tool_call_gw"/>
+    <bpmn:sequenceFlow id="flow_is_tool_call" sourceRef="is_tool_call_gw" targetRef="check_discipline">
       <bpmn:conditionExpression>is_tool_call == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-
-    <bpmn:sequenceFlow id="flow_no_tool" sourceRef="is_tool_call_gateway" targetRef="generate_response"/>
-
-    <bpmn:sequenceFlow id="flow_check_to_discipline_result" sourceRef="check_discipline" targetRef="discipline_result_gateway"/>
-
-    <bpmn:sequenceFlow id="flow_discipline_blocked" sourceRef="discipline_result_gateway" targetRef="mark_blocked">
+    <bpmn:sequenceFlow id="flow_no_tool" sourceRef="is_tool_call_gw" targetRef="generate_response"/>
+    <bpmn:sequenceFlow id="flow_discipline_to_result_gw" sourceRef="check_discipline" targetRef="discipline_result_gw"/>
+    <bpmn:sequenceFlow id="flow_discipline_blocked" sourceRef="discipline_result_gw" targetRef="mark_blocked">
       <bpmn:conditionExpression>discipline_blocked == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_discipline_pass" sourceRef="discipline_result_gw" targetRef="inject_tool_context"/>
+    <bpmn:sequenceFlow id="flow_inject_to_execute" sourceRef="inject_tool_context" targetRef="execute_tool"/>
 
-    <bpmn:sequenceFlow id="flow_discipline_pass" sourceRef="discipline_result_gateway" targetRef="inject_context"/>
-
-    <bpmn:sequenceFlow id="flow_mark_blocked_to_end" sourceRef="mark_blocked" targetRef="end_blocked"/>
-    <bpmn:sequenceFlow id="flow_inject_to_execute" sourceRef="inject_context" targetRef="execute_tool"/>
+    <!-- Phase 3: Post-tool -->
     <bpmn:sequenceFlow id="flow_execute_to_sync" sourceRef="execute_tool" targetRef="post_tool_sync"/>
-    <bpmn:sequenceFlow id="flow_sync_to_end_tool" sourceRef="post_tool_sync" targetRef="end_tool_complete"/>
-    <bpmn:sequenceFlow id="flow_generate_to_end" sourceRef="generate_response" targetRef="end_response"/>
+    <bpmn:sequenceFlow id="flow_sync_to_end" sourceRef="post_tool_sync" targetRef="end_tool_complete"/>
+    <bpmn:sequenceFlow id="flow_blocked_to_end" sourceRef="mark_blocked" targetRef="end_blocked"/>
+    <bpmn:sequenceFlow id="flow_response_to_end" sourceRef="generate_response" targetRef="end_response"/>
 
   </bpmn:process>
 
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="hook_chain">
 
-      <!-- Main horizontal lane: y=200 -->
-      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
-        <dc:Bounds x="100" y="200" width="36" height="36"/>
+      <!-- Phase 1: RAG Hook (y=200 main lane) -->
+      <bpmndi:BPMNShape id="shape_start" bpmnElement="start_event">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_check_session" bpmnElement="check_session_changed">
+        <dc:Bounds x="140" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_session_gw" bpmnElement="session_changed_gw" isMarkerVisible="true">
+        <dc:Bounds x="310" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_reset_map" bpmnElement="reset_task_map">
+        <dc:Bounds x="285" y="80" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_classify" bpmnElement="classify_prompt">
+        <dc:Bounds x="420" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_rag_gw" bpmnElement="needs_rag_gw" isMarkerVisible="true">
+        <dc:Bounds x="590" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_rag" bpmnElement="query_rag">
+        <dc:Bounds x="700" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_skills" bpmnElement="query_skill_suggestions">
+        <dc:Bounds x="880" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_inject_rag" bpmnElement="inject_rag_context">
+        <dc:Bounds x="1060" y="180" width="130" height="80"/>
       </bpmndi:BPMNShape>
 
-      <bpmndi:BPMNShape id="shape_receive_prompt" bpmnElement="receive_prompt">
-        <dc:Bounds x="196" y="180" width="100" height="80"/>
+      <!-- Phase 2: Discipline (y=200 continues) -->
+      <bpmndi:BPMNShape id="shape_tool_gw" bpmnElement="is_tool_call_gw" isMarkerVisible="true">
+        <dc:Bounds x="1250" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_discipline" bpmnElement="check_discipline">
+        <dc:Bounds x="1360" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_disc_gw" bpmnElement="discipline_result_gw" isMarkerVisible="true">
+        <dc:Bounds x="1540" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_blocked" bpmnElement="mark_blocked">
+        <dc:Bounds x="1515" y="340" width="100" height="60"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_inject_tool" bpmnElement="inject_tool_context">
+        <dc:Bounds x="1650" y="180" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
-      <bpmndi:BPMNShape id="shape_rag_query" bpmnElement="rag_query">
-        <dc:Bounds x="356" y="180" width="100" height="80"/>
+      <!-- Phase 3: Execution -->
+      <bpmndi:BPMNShape id="shape_execute" bpmnElement="execute_tool">
+        <dc:Bounds x="1830" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_sync" bpmnElement="post_tool_sync">
+        <dc:Bounds x="1990" y="180" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
-      <bpmndi:BPMNShape id="shape_is_tool_call_gateway" bpmnElement="is_tool_call_gateway" isMarkerVisible="true">
-        <dc:Bounds x="516" y="193" width="50" height="50"/>
+      <!-- No-tool path -->
+      <bpmndi:BPMNShape id="shape_response" bpmnElement="generate_response">
+        <dc:Bounds x="1225" y="340" width="100" height="60"/>
       </bpmndi:BPMNShape>
 
-      <!-- Tool call branch: continues right -->
-      <bpmndi:BPMNShape id="shape_check_discipline" bpmnElement="check_discipline">
-        <dc:Bounds x="626" y="180" width="100" height="80"/>
-      </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="shape_discipline_result_gateway" bpmnElement="discipline_result_gateway" isMarkerVisible="true">
-        <dc:Bounds x="786" y="193" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Blocked branch: goes down -->
-      <bpmndi:BPMNShape id="shape_mark_blocked" bpmnElement="mark_blocked">
-        <dc:Bounds x="761" y="340" width="100" height="80"/>
-      </bpmndi:BPMNShape>
-
+      <!-- End events -->
       <bpmndi:BPMNShape id="shape_end_blocked" bpmnElement="end_blocked">
-        <dc:Bounds x="921" y="358" width="36" height="36"/>
+        <dc:Bounds x="1680" y="352" width="36" height="36"/>
       </bpmndi:BPMNShape>
-
-      <!-- Allowed branch: continues right -->
-      <bpmndi:BPMNShape id="shape_inject_context" bpmnElement="inject_context">
-        <dc:Bounds x="896" y="180" width="100" height="80"/>
+      <bpmndi:BPMNShape id="shape_end_tool" bpmnElement="end_tool_complete">
+        <dc:Bounds x="2170" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="shape_execute_tool" bpmnElement="execute_tool">
-        <dc:Bounds x="1056" y="180" width="100" height="80"/>
-      </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="shape_post_tool_sync" bpmnElement="post_tool_sync">
-        <dc:Bounds x="1216" y="180" width="100" height="80"/>
-      </bpmndi:BPMNShape>
-
-      <bpmndi:BPMNShape id="shape_end_tool_complete" bpmnElement="end_tool_complete">
-        <dc:Bounds x="1376" y="200" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-
-      <!-- No-tool branch: goes down then right -->
-      <bpmndi:BPMNShape id="shape_generate_response" bpmnElement="generate_response">
-        <dc:Bounds x="491" y="340" width="100" height="80"/>
-      </bpmndi:BPMNShape>
-
       <bpmndi:BPMNShape id="shape_end_response" bpmnElement="end_response">
-        <dc:Bounds x="651" y="358" width="36" height="36"/>
+        <dc:Bounds x="1390" y="352" width="36" height="36"/>
       </bpmndi:BPMNShape>
-
-      <!-- Edges -->
-      <bpmndi:BPMNEdge id="edge_flow_start_to_receive" bpmnElement="flow_start_to_receive">
-        <di:waypoint x="136" y="218"/>
-        <di:waypoint x="196" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_receive_to_rag" bpmnElement="flow_receive_to_rag">
-        <di:waypoint x="296" y="220"/>
-        <di:waypoint x="356" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_rag_to_gateway" bpmnElement="flow_rag_to_gateway">
-        <di:waypoint x="456" y="220"/>
-        <di:waypoint x="516" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_is_tool_call" bpmnElement="flow_is_tool_call">
-        <di:waypoint x="566" y="218"/>
-        <di:waypoint x="626" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_no_tool" bpmnElement="flow_no_tool">
-        <di:waypoint x="541" y="243"/>
-        <di:waypoint x="541" y="380"/>
-        <di:waypoint x="491" y="380"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_check_to_discipline_result" bpmnElement="flow_check_to_discipline_result">
-        <di:waypoint x="726" y="220"/>
-        <di:waypoint x="786" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_discipline_blocked" bpmnElement="flow_discipline_blocked">
-        <di:waypoint x="811" y="243"/>
-        <di:waypoint x="811" y="340"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_discipline_pass" bpmnElement="flow_discipline_pass">
-        <di:waypoint x="836" y="218"/>
-        <di:waypoint x="896" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_mark_blocked_to_end" bpmnElement="flow_mark_blocked_to_end">
-        <di:waypoint x="861" y="376"/>
-        <di:waypoint x="921" y="376"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_inject_to_execute" bpmnElement="flow_inject_to_execute">
-        <di:waypoint x="996" y="220"/>
-        <di:waypoint x="1056" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_execute_to_sync" bpmnElement="flow_execute_to_sync">
-        <di:waypoint x="1156" y="220"/>
-        <di:waypoint x="1216" y="220"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_sync_to_end_tool" bpmnElement="flow_sync_to_end_tool">
-        <di:waypoint x="1316" y="220"/>
-        <di:waypoint x="1376" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_generate_to_end" bpmnElement="flow_generate_to_end">
-        <di:waypoint x="591" y="376"/>
-        <di:waypoint x="651" y="376"/>
-      </bpmndi:BPMNEdge>
 
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>

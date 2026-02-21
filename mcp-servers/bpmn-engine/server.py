@@ -823,17 +823,42 @@ def search_processes(query: str, actor: Optional[str] = None, level: Optional[st
 # These are manually curated to establish ground truth for validation.
 _ARTIFACT_REGISTRY: dict[str, dict] = {
     # hook_chain.bpmn elements → actual hook scripts
-    "rag_query": {
+    "check_session_changed": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Session ID comparison in RAG hook (FB141 fix)",
+    },
+    "reset_task_map": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Task map reset on session change",
+    },
+    "classify_prompt": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Action vs question classification for RAG gating",
+    },
+    "query_rag": {
         "type": "hook_script",
         "file": "scripts/rag_query_hook.py",
         "hook_event": "UserPromptSubmit",
+    },
+    "query_skill_suggestions": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Skill content similarity search (FB138 fix)",
+    },
+    "inject_rag_context": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Injects RAG results + notepad + skills into context",
     },
     "check_discipline": {
         "type": "hook_script",
         "file": "scripts/task_discipline_hook.py",
         "hook_event": "PreToolUse",
     },
-    "inject_context": {
+    "inject_tool_context": {
         "type": "hook_script",
         "file": "scripts/context_injector_hook.py",
         "hook_event": "PreToolUse",
@@ -847,6 +872,17 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     "mark_blocked": {
         "type": "hook_output",
         "description": "task_discipline_hook returns permissionDecision=deny",
+    },
+    # Legacy alias for old BPMN models
+    "rag_query": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "hook_event": "UserPromptSubmit",
+    },
+    "inject_context": {
+        "type": "hook_script",
+        "file": "scripts/context_injector_hook.py",
+        "hook_event": "PreToolUse",
     },
     # session_lifecycle.bpmn elements → hook scripts
     "session_start": {
