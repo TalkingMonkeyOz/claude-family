@@ -3743,6 +3743,11 @@ def _infer_level_category(process_id: str, file_path: str) -> tuple[str, str]:
     return "L2", "unknown"
 
 
+def _get_current_session_id() -> str | None:
+    """Get current session UUID from environment, or None."""
+    return os.environ.get('CLAUDE_SESSION_ID')
+
+
 def _parse_bpmn_file(file_path: str) -> dict | None:
     """Parse a BPMN file and extract process metadata, elements, and flows."""
     try:
@@ -3900,8 +3905,9 @@ def sync_bpmn_processes(
             cur.execute("""
                 INSERT INTO claude.bpmn_processes
                     (process_id, project_name, file_path, process_name, level, category,
-                     description, elements, flows, file_hash, embedding, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                     description, elements, flows, file_hash, embedding,
+                     created_by_session, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (process_id) DO UPDATE SET
                     project_name = EXCLUDED.project_name,
                     file_path = EXCLUDED.file_path,
@@ -3913,6 +3919,7 @@ def sync_bpmn_processes(
                     flows = EXCLUDED.flows,
                     file_hash = EXCLUDED.file_hash,
                     embedding = EXCLUDED.embedding,
+                    created_by_session = COALESCE(claude.bpmn_processes.created_by_session, EXCLUDED.created_by_session),
                     updated_at = NOW()
             """, (
                 pid, project, rel_path, parsed["process_name"],
@@ -3920,6 +3927,7 @@ def sync_bpmn_processes(
                 json.dumps(parsed["elements"]), json.dumps(parsed["flows"]),
                 file_hash,
                 str(embedding) if embedding else None,
+                _get_current_session_id(),
             ))
 
             action = "updated" if pid in existing_hashes else "created"
@@ -3952,12 +3960,15 @@ def search_bpmn_processes(
     project: str = "",
     level: str = "",
     category: str = "",
+    client_domain: str = "",
     limit: int = 10,
 ) -> dict:
     """Search BPMN processes using semantic similarity or filters.
 
     Uses Voyage AI embeddings for semantic search across all registered
-    BPMN processes. Can filter by project, level (L0/L1/L2), and category.
+    BPMN processes. Can filter by project, level (L0/L1/L2), category,
+    and client_domain (groups related projects, e.g. 'nimbus' includes
+    nimbus-import, nimbus-user-loader, nimbus-mui).
 
     Use when: Looking for a process that handles a specific workflow,
     understanding how processes relate, or finding processes by keyword.
@@ -3970,6 +3981,8 @@ def search_bpmn_processes(
         project: Filter by project name (optional).
         level: Filter by level: L0, L1, or L2 (optional).
         category: Filter by category (optional).
+        client_domain: Filter by client domain (e.g. 'nimbus', 'ato', 'finance').
+            Also includes 'infrastructure' processes which are shared. (optional).
         limit: Maximum results (default: 10).
     """
     conn = get_db_connection()
@@ -3979,20 +3992,29 @@ def search_bpmn_processes(
         # Generate query embedding
         query_embedding = generate_query_embedding(query)
 
+        # Build JOIN clause for client_domain filtering
+        join_sql = ""
+        if client_domain:
+            join_sql = "JOIN claude.projects p ON bp.project_name = p.project_name"
+
         if query_embedding:
             # Semantic search with optional filters
             where_clauses = []
             params = [str(query_embedding)]
 
             if project:
-                where_clauses.append("project_name = %s")
+                where_clauses.append("bp.project_name = %s")
                 params.append(project)
             if level:
-                where_clauses.append("level = %s")
+                where_clauses.append("bp.level = %s")
                 params.append(level)
             if category:
-                where_clauses.append("category = %s")
+                where_clauses.append("bp.category = %s")
                 params.append(category)
+            if client_domain:
+                # Include the requested domain + infrastructure (shared)
+                where_clauses.append("(p.client_domain = %s OR p.client_domain = 'infrastructure')")
+                params.append(client_domain)
 
             where_sql = ""
             if where_clauses:
@@ -4001,38 +4023,45 @@ def search_bpmn_processes(
             params.append(limit)
 
             cur.execute(f"""
-                SELECT process_id, process_name, level, category, project_name,
-                       file_path, description, elements, flows,
-                       1 - (embedding <=> %s::vector) AS similarity
-                FROM claude.bpmn_processes
+                SELECT bp.process_id, bp.process_name, bp.level, bp.category,
+                       bp.project_name, bp.file_path, bp.description,
+                       bp.elements, bp.flows,
+                       1 - (bp.embedding <=> %s::vector) AS similarity
+                FROM claude.bpmn_processes bp
+                {join_sql}
                 {where_sql}
-                ORDER BY embedding <=> %s::vector
+                ORDER BY bp.embedding <=> %s::vector
                 LIMIT %s
             """, (*params, str(query_embedding), limit))
         else:
             # Fallback: keyword search on process_name + description
-            where_clauses = ["(process_name ILIKE %s OR description ILIKE %s)"]
+            where_clauses = ["(bp.process_name ILIKE %s OR bp.description ILIKE %s)"]
             params = [f"%{query}%", f"%{query}%"]
 
             if project:
-                where_clauses.append("project_name = %s")
+                where_clauses.append("bp.project_name = %s")
                 params.append(project)
             if level:
-                where_clauses.append("level = %s")
+                where_clauses.append("bp.level = %s")
                 params.append(level)
             if category:
-                where_clauses.append("category = %s")
+                where_clauses.append("bp.category = %s")
                 params.append(category)
+            if client_domain:
+                where_clauses.append("(p.client_domain = %s OR p.client_domain = 'infrastructure')")
+                params.append(client_domain)
 
             params.append(limit)
 
             cur.execute(f"""
-                SELECT process_id, process_name, level, category, project_name,
-                       file_path, description, elements, flows,
+                SELECT bp.process_id, bp.process_name, bp.level, bp.category,
+                       bp.project_name, bp.file_path, bp.description,
+                       bp.elements, bp.flows,
                        0.5 AS similarity
-                FROM claude.bpmn_processes
+                FROM claude.bpmn_processes bp
+                {join_sql}
                 WHERE {" AND ".join(where_clauses)}
-                ORDER BY process_name
+                ORDER BY bp.process_name
                 LIMIT %s
             """, params)
 

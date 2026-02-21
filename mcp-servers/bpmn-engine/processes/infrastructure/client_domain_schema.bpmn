@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/client-domain-schema"
+    id="Definitions_ClientDomain">
+
+  <bpmn:process id="client_domain_schema" name="Client Domain: Add Multi-Tenancy to Projects and BPMN Search" isExecutable="true">
+
+    <!--
+      Adds client_domain to claude.projects for multi-tenancy grouping.
+      BPMN processes inherit client context through project_name join.
+
+      Purpose:
+        - Group related projects (nimbus-import, nimbus-user-loader, nimbus-mui -> "nimbus")
+        - Filter BPMN search by client domain across multiple projects
+        - Each Claude sees processes relevant to their client context
+        - Infrastructure/shared processes visible to all
+
+      Schema Changes:
+        1. ALTER TABLE claude.projects ADD COLUMN client_domain varchar
+        2. ALTER TABLE claude.bpmn_processes ADD COLUMN created_by_session uuid
+        3. UPDATE projects SET client_domain for all 14 active projects
+        4. Add client_domain to column_registry
+        5. Create index on projects.client_domain
+
+      Domain Values:
+        - 'infrastructure' = claude-family, claude-desktop-config (shared, visible to all)
+        - 'nimbus' = nimbus-import, nimbus-user-loader, nimbus-mui, nimbus-odata-configurator, monash-nimbus-reports
+        - 'ato' = ATO-Tax-Agent, ATO-Infrastructure
+        - 'claude-tools' = claude-family-manager-v2, claude-manager-mui
+        - 'finance' = finance-mui, trading-intelligence
+        - 'personal' = bee-game
+        - NULL = unassigned
+
+      Search Enhancement:
+        - search_bpmn_processes gains client_domain parameter
+        - Joins bpmn_processes.project_name -> projects.client_domain
+        - Infrastructure processes always included when scope='all'
+
+      Paths:
+        1. Schema migration: Add columns -> Backfill -> Registry -> Index
+        2. Tool update: Add client_domain param -> Join query -> Test
+        3. Sync update: Record created_by_session on upsert
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Migration Requested">
+      <bpmn:outgoing>flow_start_validate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: VALIDATE PREREQUISITES                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="validate_prereqs" name="[DB] Check Current Schema" scriptFormat="python">
+      <bpmn:incoming>flow_start_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_check</bpmn:outgoing>
+      <bpmn:script>
+# Check if client_domain column already exists on projects
+# Check if created_by_session column already exists on bpmn_processes
+# Sets: projects_needs_column, bpmn_needs_column
+# Testability: has_client_domain/has_created_by can be pre-seeded
+try:
+    _hcd = has_client_domain
+except NameError:
+    _hcd = False
+try:
+    _hcb = has_created_by
+except NameError:
+    _hcb = False
+has_client_domain = _hcd
+has_created_by = _hcb
+projects_needs_column = not has_client_domain
+bpmn_needs_column = not has_created_by
+needs_migration = projects_needs_column or bpmn_needs_column
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="needs_migration_gw" name="Migration Needed?" default="flow_already_done">
+      <bpmn:incoming>flow_validate_check</bpmn:incoming>
+      <bpmn:outgoing>flow_needs_migration</bpmn:outgoing>
+      <bpmn:outgoing>flow_already_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_op" name="Already Migrated">
+      <bpmn:incoming>flow_already_done</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: SCHEMA MIGRATION                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="alter_projects" name="[DB] ALTER TABLE projects ADD client_domain" scriptFormat="python">
+      <bpmn:incoming>flow_needs_migration</bpmn:incoming>
+      <bpmn:outgoing>flow_projects_altered</bpmn:outgoing>
+      <bpmn:script>
+# ALTER TABLE claude.projects ADD COLUMN IF NOT EXISTS client_domain varchar
+# Nullable - NULL means unassigned
+projects_altered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="alter_bpmn" name="[DB] ALTER TABLE bpmn_processes ADD created_by_session" scriptFormat="python">
+      <bpmn:incoming>flow_projects_altered</bpmn:incoming>
+      <bpmn:outgoing>flow_bpmn_altered</bpmn:outgoing>
+      <bpmn:script>
+# ALTER TABLE claude.bpmn_processes ADD COLUMN IF NOT EXISTS created_by_session uuid
+# FK to claude.sessions(session_id) - nullable, SET NULL on delete
+bpmn_altered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: BACKFILL DOMAIN VALUES                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="backfill_domains" name="[DB] Backfill client_domain for All Projects" scriptFormat="python">
+      <bpmn:incoming>flow_bpmn_altered</bpmn:incoming>
+      <bpmn:outgoing>flow_backfilled</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.projects SET client_domain = CASE
+#   WHEN project_name IN ('claude-family','claude-desktop-config') THEN 'infrastructure'
+#   WHEN project_name LIKE 'nimbus%' OR project_name = 'monash-nimbus-reports' THEN 'nimbus'
+#   WHEN project_name LIKE 'ATO%' THEN 'ato'
+#   WHEN project_name IN ('claude-family-manager-v2','claude-manager-mui') THEN 'claude-tools'
+#   WHEN project_name IN ('finance-mui','trading-intelligence') THEN 'finance'
+#   WHEN project_name = 'bee-game' THEN 'personal'
+# END
+backfill_count = 14
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: REGISTRY + INDEX                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="update_registry" name="[DB] Add client_domain to column_registry" scriptFormat="python">
+      <bpmn:incoming>flow_backfilled</bpmn:incoming>
+      <bpmn:outgoing>flow_registry_done</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.column_registry (table_name, column_name, valid_values, description)
+# VALUES ('projects', 'client_domain',
+#   '["infrastructure","nimbus","ato","claude-tools","finance","personal"]',
+#   'Client/domain grouping for multi-tenancy. Infrastructure visible to all.')
+registry_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_index" name="[DB] Create Index on projects.client_domain" scriptFormat="python">
+      <bpmn:incoming>flow_registry_done</bpmn:incoming>
+      <bpmn:outgoing>flow_index_done</bpmn:outgoing>
+      <bpmn:script>
+# CREATE INDEX IF NOT EXISTS idx_projects_client_domain
+#   ON claude.projects (client_domain)
+index_created = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: UPDATE SEARCH TOOL                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="update_search_tool" name="[CLAUDE] Update search_bpmn_processes in server_v2.py">
+      <bpmn:incoming>flow_index_done</bpmn:incoming>
+      <bpmn:outgoing>flow_tool_updated</bpmn:outgoing>
+      <!-- Add client_domain parameter to search_bpmn_processes function.
+           When client_domain is specified:
+             JOIN claude.projects p ON bp.project_name = p.project_name
+             WHERE p.client_domain = %s
+           Infrastructure processes (client_domain='infrastructure') always
+           included unless explicitly filtered out. -->
+    </bpmn:userTask>
+
+    <bpmn:userTask id="update_sync_tool" name="[CLAUDE] Update sync_bpmn_processes to record session">
+      <bpmn:incoming>flow_tool_updated</bpmn:incoming>
+      <bpmn:outgoing>flow_sync_updated</bpmn:outgoing>
+      <!-- On upsert, set created_by_session = current session UUID
+           (from session_facts or environment) -->
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 6: VERIFY                                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="verify_migration" name="[DB] Verify Migration" scriptFormat="python">
+      <bpmn:incoming>flow_sync_updated</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_result</bpmn:outgoing>
+      <bpmn:script>
+# SELECT project_name, client_domain FROM claude.projects WHERE client_domain IS NOT NULL
+# Expect: 14 projects with domains assigned
+# SELECT COUNT(*) FROM claude.column_registry WHERE column_name = 'client_domain'
+# Expect: 1
+verification_passed = backfill_count >= 14 and registry_updated and index_created
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="verify_gw" name="Verification OK?" default="flow_verify_fail">
+      <bpmn:incoming>flow_verify_result</bpmn:incoming>
+      <bpmn:outgoing>flow_verify_pass</bpmn:outgoing>
+      <bpmn:outgoing>flow_verify_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_success" name="Migration Complete">
+      <bpmn:incoming>flow_verify_pass</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_failed" name="Migration Failed">
+      <bpmn:incoming>flow_verify_fail</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Validate -->
+    <bpmn:sequenceFlow id="flow_start_validate" sourceRef="start" targetRef="validate_prereqs"/>
+    <bpmn:sequenceFlow id="flow_validate_check" sourceRef="validate_prereqs" targetRef="needs_migration_gw"/>
+    <bpmn:sequenceFlow id="flow_needs_migration" sourceRef="needs_migration_gw" targetRef="alter_projects">
+      <bpmn:conditionExpression>needs_migration == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_already_done" sourceRef="needs_migration_gw" targetRef="end_no_op"/>
+
+    <!-- Phase 2: Schema -->
+    <bpmn:sequenceFlow id="flow_projects_altered" sourceRef="alter_projects" targetRef="alter_bpmn"/>
+    <bpmn:sequenceFlow id="flow_bpmn_altered" sourceRef="alter_bpmn" targetRef="backfill_domains"/>
+
+    <!-- Phase 3: Backfill -->
+    <bpmn:sequenceFlow id="flow_backfilled" sourceRef="backfill_domains" targetRef="update_registry"/>
+
+    <!-- Phase 4: Registry + Index -->
+    <bpmn:sequenceFlow id="flow_registry_done" sourceRef="update_registry" targetRef="create_index"/>
+    <bpmn:sequenceFlow id="flow_index_done" sourceRef="create_index" targetRef="update_search_tool"/>
+
+    <!-- Phase 5: Tool updates -->
+    <bpmn:sequenceFlow id="flow_tool_updated" sourceRef="update_search_tool" targetRef="update_sync_tool"/>
+    <bpmn:sequenceFlow id="flow_sync_updated" sourceRef="update_sync_tool" targetRef="verify_migration"/>
+
+    <!-- Phase 6: Verify -->
+    <bpmn:sequenceFlow id="flow_verify_result" sourceRef="verify_migration" targetRef="verify_gw"/>
+    <bpmn:sequenceFlow id="flow_verify_pass" sourceRef="verify_gw" targetRef="end_success">
+      <bpmn:conditionExpression>verification_passed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_verify_fail" sourceRef="verify_gw" targetRef="end_failed"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="client_domain_schema">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_validate" bpmnElement="validate_prereqs">
+        <dc:Bounds x="140" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_needs_gw" bpmnElement="needs_migration_gw" isMarkerVisible="true">
+        <dc:Bounds x="350" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_noop" bpmnElement="end_no_op">
+        <dc:Bounds x="357" y="80" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_alter_proj" bpmnElement="alter_projects">
+        <dc:Bounds x="450" y="180" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_alter_bpmn" bpmnElement="alter_bpmn">
+        <dc:Bounds x="680" y="180" width="200" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_backfill" bpmnElement="backfill_domains">
+        <dc:Bounds x="930" y="180" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_registry" bpmnElement="update_registry">
+        <dc:Bounds x="930" y="320" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_index" bpmnElement="create_index">
+        <dc:Bounds x="680" y="320" width="200" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_search_tool" bpmnElement="update_search_tool">
+        <dc:Bounds x="450" y="320" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_sync_tool" bpmnElement="update_sync_tool">
+        <dc:Bounds x="450" y="460" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_verify" bpmnElement="verify_migration">
+        <dc:Bounds x="680" y="460" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_verify_gw" bpmnElement="verify_gw" isMarkerVisible="true">
+        <dc:Bounds x="890" y="473" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_ok" bpmnElement="end_success">
+        <dc:Bounds x="990" y="480" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end_fail" bpmnElement="end_failed">
+        <dc:Bounds x="897" y="560" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
