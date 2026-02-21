@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/crash-recovery"
+    id="Definitions_CR">
+
+  <bpmn:process id="crash_recovery" name="Crash Recovery: Recover Context from Lost Sessions" isExecutable="true">
+
+    <!--
+      MCP tool that recovers context after a session crash or unexpected exit.
+      Single-call replacement for the raw SQL crash-recovery command.
+
+      Trigger: User invokes /crash-recovery or calls recover_session() MCP tool
+      Input: project_name
+
+      Key behaviors:
+        - Loads session facts from recent sessions (survives compaction)
+        - Finds unclosed sessions, filtering out re-fires (<60s apart)
+        - Gets last completed session summary
+        - Queries in-progress work items (todos, build_tasks, features)
+        - Parses most recent transcript for crash signals
+        - Returns structured recovery context in one call
+
+      Implementation: mcp-servers/project-tools/server_v2.py (recover_session)
+    -->
+
+    <bpmn:startEvent id="start" name="Recovery Requested">
+      <bpmn:outgoing>flow_start_to_facts</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Step 1: Load session facts from recent sessions -->
+    <bpmn:scriptTask id="load_session_facts" name="[MCP] Load Session Facts" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_facts</bpmn:incoming>
+      <bpmn:outgoing>flow_facts_to_sessions</bpmn:outgoing>
+      <bpmn:script>
+# recall_previous_session_facts(project, n_sessions=3)
+# Returns facts grouped by type: credential, config, decision, note
+try:
+    if facts_loaded is None:
+        facts_loaded = True
+except NameError:
+    facts_loaded = True
+facts_count = facts_count if 'facts_count' in dir() else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 2: Find unclosed sessions, filter re-fires -->
+    <bpmn:scriptTask id="find_unclosed_sessions" name="[DB] Find Unclosed Sessions" scriptFormat="python">
+      <bpmn:incoming>flow_facts_to_sessions</bpmn:incoming>
+      <bpmn:outgoing>flow_sessions_to_filter</bpmn:outgoing>
+      <bpmn:script>
+# Query: sessions WHERE session_end IS NULL ORDER BY session_start DESC LIMIT 10
+# Returns session_id, session_start, hours_ago
+try:
+    if unclosed_sessions is None:
+        unclosed_sessions = []
+except NameError:
+    unclosed_sessions = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 3: Filter continuation re-fires (<60s between sessions) -->
+    <bpmn:scriptTask id="filter_refires" name="[LOGIC] Filter Continuation Re-fires" scriptFormat="python">
+      <bpmn:incoming>flow_sessions_to_filter</bpmn:incoming>
+      <bpmn:outgoing>flow_filter_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# For each pair of unclosed sessions: if time between them &lt; 60s,
+# mark the later one as a re-fire (not a true crash).
+# Keep only genuine unclosed sessions.
+try:
+    if filtered_sessions is None:
+        filtered_sessions = []
+except NameError:
+    filtered_sessions = unclosed_sessions if 'unclosed_sessions' in dir() else []
+refires_filtered = len(unclosed_sessions) - len(filtered_sessions) if 'unclosed_sessions' in dir() else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 4: Check if any genuine crashes found -->
+    <bpmn:exclusiveGateway id="has_crashes_gw" name="Crashes Found?" default="flow_no_crashes">
+      <bpmn:incoming>flow_filter_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_has_crashes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_crashes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Step 5a: Parse transcript for crash signals -->
+    <bpmn:scriptTask id="parse_transcript" name="[FILE] Parse Crash Transcript" scriptFormat="python">
+      <bpmn:incoming>flow_has_crashes</bpmn:incoming>
+      <bpmn:outgoing>flow_transcript_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Find most recent .jsonl transcript file
+# Parse last N entries looking for crash signals:
+#   - output_tokens=1 pattern (CLI crash)
+#   - stop_reason=None (incomplete response)
+#   - "continued from previous conversation" (context exhaustion)
+#   - Last user message and assistant actions
+# Return: crash_type, last_action, token_count, crash_signals
+try:
+    if transcript_parsed is None:
+        transcript_parsed = True
+except NameError:
+    transcript_parsed = True
+crash_type = crash_type if 'crash_type' in dir() else 'unknown'
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 5b: No crashes - skip transcript parsing -->
+    <bpmn:scriptTask id="no_crash_report" name="[LOGIC] No Crashes Detected" scriptFormat="python">
+      <bpmn:incoming>flow_no_crashes</bpmn:incoming>
+      <bpmn:outgoing>flow_nocrash_to_merge</bpmn:outgoing>
+      <bpmn:script>
+transcript_parsed = False
+crash_type = 'none'
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge after crash detection -->
+    <bpmn:exclusiveGateway id="crash_merge" name="Merge">
+      <bpmn:incoming>flow_transcript_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_nocrash_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_completed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Step 6: Get last completed session -->
+    <bpmn:scriptTask id="get_last_completed" name="[DB] Get Last Completed Session" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_completed</bpmn:incoming>
+      <bpmn:outgoing>flow_completed_to_work</bpmn:outgoing>
+      <bpmn:script>
+# Query: sessions WHERE session_end IS NOT NULL ORDER BY session_end DESC LIMIT 1
+# Returns: session_summary, tasks_completed, session_end
+try:
+    if last_session is None:
+        last_session = {}
+except NameError:
+    last_session = {}
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 7: Get in-progress work items -->
+    <bpmn:scriptTask id="get_in_progress_work" name="[DB] Get In-Progress Work" scriptFormat="python">
+      <bpmn:incoming>flow_completed_to_work</bpmn:incoming>
+      <bpmn:outgoing>flow_work_to_git</bpmn:outgoing>
+      <bpmn:script>
+# Query UNION: in_progress todos + in_progress build_tasks + in_progress features
+# Returns: type, description, priority for each
+try:
+    if work_items is None:
+        work_items = []
+except NameError:
+    work_items = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 8: Get git status -->
+    <bpmn:scriptTask id="get_git_status" name="[SHELL] Get Git Status" scriptFormat="python">
+      <bpmn:incoming>flow_work_to_git</bpmn:incoming>
+      <bpmn:outgoing>flow_git_to_format</bpmn:outgoing>
+      <bpmn:script>
+# Run: git status --short + git log --oneline -5
+# Returns: uncommitted_changes, recent_commits
+try:
+    if git_status is None:
+        git_status = {}
+except NameError:
+    git_status = {}
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 9: Format recovery context -->
+    <bpmn:scriptTask id="format_recovery" name="[LOGIC] Format Recovery Context" scriptFormat="python">
+      <bpmn:incoming>flow_git_to_format</bpmn:incoming>
+      <bpmn:outgoing>flow_format_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Assemble all collected data into structured response:
+# - session_facts (grouped by type)
+# - crashed_sessions (filtered, with crash analysis)
+# - last_completed_session (summary + tasks)
+# - in_progress_work (todos, tasks, features)
+# - git_status (uncommitted changes, recent commits)
+# - crash_analysis (type, signals, token count)
+recovery_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_recovered" name="Recovery Context Ready">
+      <bpmn:incoming>flow_format_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_to_facts" sourceRef="start" targetRef="load_session_facts"/>
+    <bpmn:sequenceFlow id="flow_facts_to_sessions" sourceRef="load_session_facts" targetRef="find_unclosed_sessions"/>
+    <bpmn:sequenceFlow id="flow_sessions_to_filter" sourceRef="find_unclosed_sessions" targetRef="filter_refires"/>
+    <bpmn:sequenceFlow id="flow_filter_to_gw" sourceRef="filter_refires" targetRef="has_crashes_gw"/>
+    <bpmn:sequenceFlow id="flow_has_crashes" sourceRef="has_crashes_gw" targetRef="parse_transcript">
+      <bpmn:conditionExpression>len(filtered_sessions) > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_crashes" sourceRef="has_crashes_gw" targetRef="no_crash_report"/>
+    <bpmn:sequenceFlow id="flow_transcript_to_merge" sourceRef="parse_transcript" targetRef="crash_merge"/>
+    <bpmn:sequenceFlow id="flow_nocrash_to_merge" sourceRef="no_crash_report" targetRef="crash_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_completed" sourceRef="crash_merge" targetRef="get_last_completed"/>
+    <bpmn:sequenceFlow id="flow_completed_to_work" sourceRef="get_last_completed" targetRef="get_in_progress_work"/>
+    <bpmn:sequenceFlow id="flow_work_to_git" sourceRef="get_in_progress_work" targetRef="get_git_status"/>
+    <bpmn:sequenceFlow id="flow_git_to_format" sourceRef="get_git_status" targetRef="format_recovery"/>
+    <bpmn:sequenceFlow id="flow_format_to_end" sourceRef="format_recovery" targetRef="end_recovered"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="crash_recovery">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

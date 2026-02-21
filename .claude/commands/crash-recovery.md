@@ -6,161 +6,77 @@ Use this when a session ended unexpectedly (crash, compaction, timeout) and you 
 
 ## Execute These Steps
 
-### Step 1: Identify Project
-Use the current working directory basename as `{project_name}`.
+### Step 1: Call the MCP Tool
 
-### Step 2: Check Session Facts (Your Notepad)
-Use the MCP tool `mcp__project-tools__recall_previous_session_facts` with `n_sessions=3` to retrieve stored facts from recent sessions.
+Use the MCP tool `mcp__project-tools__recover_session` with no arguments (auto-detects project from cwd).
 
-Display any recovered facts grouped by category (credential, config, decision, note).
+This single call returns ALL recovery context:
+- Session facts from recent sessions
+- Crashed sessions (with continuation re-fires filtered out)
+- Last completed session summary
+- In-progress work items (todos, build tasks, features)
+- Crash analysis (transcript parsing for crash signals)
+- Git status (uncommitted changes, recent commits)
+- Suggested recovery actions
 
-### Step 3: Find Unclosed Sessions
-```sql
-SELECT
-    session_id::text,
-    session_start,
-    EXTRACT(EPOCH FROM (NOW() - session_start))/3600 as hours_ago
-FROM claude.sessions
-WHERE project_name = '{project_name}'
-  AND session_end IS NULL
-ORDER BY session_start DESC
-LIMIT 5;
-```
+### Step 2: Display the Results
 
-### Step 4: Get Last Completed Session
-```sql
-SELECT
-    session_id::text,
-    session_start,
-    session_end,
-    session_summary,
-    tasks_completed
-FROM claude.sessions
-WHERE project_name = '{project_name}'
-  AND session_end IS NOT NULL
-ORDER BY session_end DESC
-LIMIT 1;
-```
-
-### Step 5: Check In-Progress Work Items
-```sql
--- In-progress todos
-SELECT 'TODO' as type, content as description, priority
-FROM claude.todos t
-JOIN claude.projects p ON t.project_id = p.project_id
-WHERE p.project_name = '{project_name}'
-  AND t.status = 'in_progress'
-  AND t.is_deleted = false
-
-UNION ALL
-
--- In-progress build tasks
-SELECT 'TASK' as type, bt.task_name as description, 2 as priority
-FROM claude.build_tasks bt
-JOIN claude.features f ON bt.feature_id = f.feature_id
-JOIN claude.projects p ON f.project_id = p.project_id
-WHERE p.project_name = '{project_name}'
-  AND bt.status = 'in_progress'
-
-UNION ALL
-
--- In-progress features
-SELECT 'FEATURE' as type, f.feature_name as description, 1 as priority
-FROM claude.features f
-JOIN claude.projects p ON f.project_id = p.project_id
-WHERE p.project_name = '{project_name}'
-  AND f.status = 'in_progress'
-
-ORDER BY priority;
-```
-
-### Step 6: List Recent Transcript Files
-Run via Bash:
-```bash
-ls -lt ~/.claude/projects/C--Projects-{project_name_escaped}/*.jsonl 2>/dev/null | head -5
-```
-
-Note: The most recent .jsonl file contains the conversation transcript. If needed, you can read the summary at the end of this file.
-
-### Step 7: Check for TODO Files
-```bash
-ls -la docs/TODO*.md 2>/dev/null || echo "No TODO files found"
-```
-
-### Step 8: Check Git Status
-```bash
-git status --short
-git log --oneline -5
-```
-
----
-
-## Display Format
+Format the MCP tool response as follows:
 
 ```
 +======================================================================+
-|  CRASH RECOVERY - {project_name}                                      |
+|  CRASH RECOVERY - {project}                                          |
 +======================================================================+
 
-## SESSION FACTS RECOVERED
-(facts from mcp__project-tools__recall_previous_session_facts)
-  [decision] key: value
-  [config] key: value
+## SESSION FACTS RECOVERED ({session_facts.count})
+  [type] key: value (truncated to 200 chars)
   ...
 
-## UNCLOSED SESSIONS ({count})
-  - {session_id} started {hours_ago}h ago (likely crashed)
-  - ...
+## CRASHED SESSIONS ({crashed_sessions.count}, {refires_filtered} re-fires filtered)
+  - {session_id} started {hours_ago}h ago
+  ...
+
+## CRASH ANALYSIS
+  Type: {crash_analysis.crash_type}
+  Max tokens: {crash_analysis.max_input_tokens}
+  Transcript: {crash_analysis.transcript_file} ({file_size_kb}KB, {total_entries} entries)
+  Last user message: {crash_analysis.last_user_message}
+  Last assistant action: {crash_analysis.last_assistant_action}
+  Signals: output_tokens=1 x{count}, stop_reason=None x{count}
 
 ## LAST COMPLETED SESSION
-  Ended: {session_end}
-  Summary: {session_summary}
-  Completed: {tasks_completed}
+  Ended: {last_completed_session.ended}
+  Summary: {last_completed_session.summary}
+  Completed: {last_completed_session.tasks_completed}
 
-## IN-PROGRESS WORK ({count} items)
-  FEATURE: {description}
-  TASK: {description}
-  TODO: {description}
+## IN-PROGRESS WORK ({in_progress_work.count} items)
+  {type}: {description}
+  ...
 
-## TRANSCRIPT FILES
-  Most recent: {filename} ({size}, {modified})
-  To read context: Read the last 500 lines of the .jsonl file
+## GIT STATUS
+  Uncommitted: {git_status.uncommitted_changes}
+  Recent commits: {git_status.recent_commits}
 
-## UNCOMMITTED CHANGES
-  {git status output}
-
-## RECENT COMMITS
-  {git log output}
+## RECOVERY ACTIONS
+  - {action}
+  ...
 
 +======================================================================+
 ```
 
----
+### Step 3: Follow Recovery Actions
 
-## Recovery Actions
-
-After reviewing the recovered context:
-
-1. **Session Facts Present**: Use them to restore key decisions/configs
-2. **Unclosed Sessions**: These were likely crashes - note the session_id
-3. **In-Progress Work**: Continue where you left off
-4. **Need More Detail**: Read the transcript file:
-   ```bash
-   tail -500 ~/.claude/projects/C--Projects-{project}/*.jsonl | head -200
-   ```
+The `recovery_actions` list tells you what to do next:
+- **Session facts recovered** → Key decisions/configs are available
+- **Crashed sessions found** → Review crash analysis for root cause
+- **In-progress work** → Continue where you left off
+- **Uncommitted changes** → Review and commit if appropriate
+- **CLI crash detected** → Not a context issue, work may be complete
+- **Context exhaustion** → Consider smaller tasks or checkpointing
 
 ---
 
-## Notes
-
-- **Transcript files** are JSONL format with conversation turns
-- **Session facts** are automatically injected but may not survive compaction
-- **Unclosed sessions** indicate crashes (no /session-end was run)
-- **In-progress items** show what was being worked on
-
----
-
-**Version**: 1.0
+**Version**: 2.0
 **Created**: 2026-02-03
-**Updated**: 2026-02-03
+**Updated**: 2026-02-21
 **Location**: .claude/commands/crash-recovery.md

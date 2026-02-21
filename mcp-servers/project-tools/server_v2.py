@@ -4350,6 +4350,322 @@ def resolve_feedback(
         conn.close()
 
 
+@mcp.tool()
+def recover_session(
+    project: str = "",
+) -> dict:
+    """Recover context after a session crash or unexpected exit.
+
+    Single-call replacement for raw SQL crash-recovery. Follows the
+    crash_recovery BPMN process: loads session facts, finds crashed sessions
+    (filtering re-fires), parses transcript for crash signals, collects
+    in-progress work, and returns structured recovery context.
+
+    Use when: A session ended unexpectedly (crash, timeout, CLI exit) and
+    you need to understand what happened and recover context.
+    Returns: {success, project, session_facts, crashed_sessions,
+              last_completed_session, in_progress_work, crash_analysis,
+              git_status, recovery_actions}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+    """
+    import subprocess
+    from pathlib import Path
+
+    project = project or os.path.basename(os.getcwd())
+    result = {"success": True, "project": project}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # ── Step 1: Load session facts from recent sessions ──
+        # (Reuses recall_previous_session_facts logic inline)
+        cur.execute("""
+            WITH recent_sessions AS (
+                SELECT session_id
+                FROM claude.sessions
+                WHERE project_name = %s
+                ORDER BY session_start DESC
+                LIMIT 3
+            )
+            SELECT sf.fact_key, sf.fact_value, sf.fact_type, sf.created_at,
+                   sf.session_id::text
+            FROM claude.session_facts sf
+            WHERE sf.session_id = ANY(
+                SELECT session_id FROM recent_sessions
+            )
+              AND sf.is_sensitive = false
+            ORDER BY sf.created_at DESC
+        """, (project,))
+        facts = cur.fetchall()
+        result["session_facts"] = {
+            "count": len(facts),
+            "facts": [
+                {
+                    "key": f['fact_key'],
+                    "value": f['fact_value'][:200],
+                    "type": f['fact_type'],
+                }
+                for f in facts
+            ],
+        }
+
+        # ── Step 2: Find unclosed sessions ──
+        cur.execute("""
+            SELECT session_id::text,
+                   session_start,
+                   EXTRACT(EPOCH FROM (NOW() - session_start))/3600 as hours_ago
+            FROM claude.sessions
+            WHERE project_name = %s
+              AND session_end IS NULL
+            ORDER BY session_start DESC
+            LIMIT 10
+        """, (project,))
+        unclosed = cur.fetchall()
+
+        # ── Step 3: Filter continuation re-fires (<60s apart) ──
+        genuine_crashes = []
+        refires = 0
+        for i, s in enumerate(unclosed):
+            if i == 0:
+                # Most recent is always kept (likely current session)
+                genuine_crashes.append(s)
+                continue
+            # Check if this session started within 60s of the previous one
+            prev = unclosed[i - 1]
+            time_gap = abs(
+                (prev['session_start'] - s['session_start']).total_seconds()
+            )
+            if time_gap < 60:
+                refires += 1  # Skip re-fire
+            else:
+                genuine_crashes.append(s)
+
+        # Remove current session from crash list (it's the one running now)
+        if genuine_crashes and genuine_crashes[0]['hours_ago'] < 0.01:
+            current_session = genuine_crashes.pop(0)
+
+        result["crashed_sessions"] = {
+            "count": len(genuine_crashes),
+            "refires_filtered": refires,
+            "sessions": [
+                {
+                    "session_id": s['session_id'][:8] + "...",
+                    "hours_ago": round(float(s['hours_ago']), 2),
+                    "started": str(s['session_start']),
+                }
+                for s in genuine_crashes
+            ],
+        }
+
+        # ── Step 4: Get last completed session ──
+        cur.execute("""
+            SELECT session_summary, session_end, tasks_completed
+            FROM claude.sessions
+            WHERE project_name = %s AND session_end IS NOT NULL
+            ORDER BY session_end DESC LIMIT 1
+        """, (project,))
+        last = cur.fetchone()
+        if last:
+            result["last_completed_session"] = {
+                "summary": last['session_summary'],
+                "ended": str(last['session_end']),
+                "tasks_completed": last['tasks_completed'] or [],
+            }
+        else:
+            result["last_completed_session"] = None
+
+        # ── Step 5: Get in-progress work items ──
+        cur.execute("""
+            SELECT 'TODO' as type, t.content as description, t.priority::text
+            FROM claude.todos t
+            JOIN claude.projects p ON t.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND t.status = 'in_progress'
+              AND t.is_deleted = false
+
+            UNION ALL
+
+            SELECT 'TASK' as type, bt.task_name as description, '2' as priority
+            FROM claude.build_tasks bt
+            JOIN claude.features f ON bt.feature_id = f.feature_id
+            JOIN claude.projects p ON f.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND bt.status = 'in_progress'
+
+            UNION ALL
+
+            SELECT 'FEATURE' as type, f.feature_name as description, '1' as priority
+            FROM claude.features f
+            JOIN claude.projects p ON f.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND f.status = 'in_progress'
+
+            ORDER BY priority
+        """, (project, project, project))
+        work = cur.fetchall()
+        result["in_progress_work"] = {
+            "count": len(work),
+            "items": [dict(w) for w in work],
+        }
+
+        # ── Step 6: Parse transcript for crash signals ──
+        crash_analysis = {"analyzed": False}
+        if genuine_crashes:
+            try:
+                # Find project transcript directory
+                home = Path.home()
+                projects_dir = home / ".claude" / "projects"
+                project_slug = f"C--Projects-{project}"
+                project_dirs = list(projects_dir.glob(f"*{project_slug}*"))
+
+                if project_dirs:
+                    jsonl_files = sorted(
+                        project_dirs[0].glob("*.jsonl"),
+                        key=lambda f: f.stat().st_mtime,
+                        reverse=True,
+                    )
+                    if jsonl_files:
+                        transcript_file = jsonl_files[0]
+                        file_size_kb = transcript_file.stat().st_size / 1024
+
+                        # Parse last entries for crash signals
+                        entries = []
+                        with open(transcript_file, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                if line.strip():
+                                    try:
+                                        entries.append(json.loads(line))
+                                    except json.JSONDecodeError:
+                                        pass
+
+                        # Analyze crash signals
+                        output_tokens_1_count = 0
+                        stop_reason_none_count = 0
+                        max_input_tokens = 0
+                        last_user_msg = ""
+                        last_assistant_action = ""
+                        continuation_markers = 0
+
+                        for entry in entries:
+                            t = entry.get('type', '')
+                            msg = entry.get('message', {})
+
+                            if t == 'user':
+                                content = msg.get('content', '') if isinstance(msg, dict) else ''
+                                if isinstance(content, str) and 'continued from' in content.lower():
+                                    continuation_markers += 1
+                                if isinstance(content, str) and '<system-reminder>' not in content and content.strip():
+                                    last_user_msg = content[:200]
+                                elif isinstance(content, list):
+                                    for c in content:
+                                        if isinstance(c, dict) and c.get('type') == 'text':
+                                            text = c.get('text', '')
+                                            if '<system-reminder>' not in text and text.strip():
+                                                last_user_msg = text[:200]
+
+                            if t == 'assistant' and isinstance(msg, dict):
+                                usage = msg.get('usage', {})
+                                if usage:
+                                    out_tokens = usage.get('output_tokens', 0)
+                                    total_in = (
+                                        usage.get('cache_read_input_tokens', 0)
+                                        + usage.get('input_tokens', 0)
+                                        + usage.get('cache_creation_input_tokens', 0)
+                                    )
+                                    if total_in > max_input_tokens:
+                                        max_input_tokens = total_in
+                                    if out_tokens == 1:
+                                        output_tokens_1_count += 1
+
+                                stop = msg.get('stop_reason')
+                                if stop is None and usage:
+                                    stop_reason_none_count += 1
+
+                                content = msg.get('content', [])
+                                if isinstance(content, list):
+                                    for c in content:
+                                        if isinstance(c, dict):
+                                            if c.get('type') == 'tool_use':
+                                                last_assistant_action = f"tool:{c.get('name', '?')}"
+                                            elif c.get('type') == 'text' and c.get('text', '').strip():
+                                                last_assistant_action = f"text:{c['text'][:100]}"
+
+                        # Determine crash type
+                        crash_type = "unknown"
+                        if output_tokens_1_count >= 5 and stop_reason_none_count >= 3:
+                            crash_type = "cli_process_crash"
+                        elif continuation_markers > 0:
+                            crash_type = "context_exhaustion"
+                        elif max_input_tokens > 180000:
+                            crash_type = "context_limit"
+
+                        crash_analysis = {
+                            "analyzed": True,
+                            "transcript_file": transcript_file.name,
+                            "file_size_kb": round(file_size_kb, 1),
+                            "total_entries": len(entries),
+                            "crash_type": crash_type,
+                            "max_input_tokens": max_input_tokens,
+                            "output_tokens_1_count": output_tokens_1_count,
+                            "stop_reason_none_count": stop_reason_none_count,
+                            "continuation_markers": continuation_markers,
+                            "last_user_message": last_user_msg,
+                            "last_assistant_action": last_assistant_action,
+                        }
+
+            except Exception as e:
+                crash_analysis = {"analyzed": False, "error": str(e)}
+
+        result["crash_analysis"] = crash_analysis
+
+        # ── Step 7: Git status ──
+        git_info = {}
+        try:
+            status_out = subprocess.run(
+                ["git", "status", "--short"],
+                capture_output=True, text=True, timeout=5,
+                cwd=os.getcwd(),
+            )
+            git_info["uncommitted_changes"] = status_out.stdout.strip().split('\n') if status_out.stdout.strip() else []
+
+            log_out = subprocess.run(
+                ["git", "log", "--oneline", "-5"],
+                capture_output=True, text=True, timeout=5,
+                cwd=os.getcwd(),
+            )
+            git_info["recent_commits"] = log_out.stdout.strip().split('\n') if log_out.stdout.strip() else []
+        except Exception:
+            git_info = {"error": "Could not read git status"}
+
+        result["git_status"] = git_info
+
+        # ── Step 8: Recovery actions ──
+        actions = []
+        if result["session_facts"]["count"] > 0:
+            actions.append("Session facts recovered - key decisions/configs available")
+        if len(genuine_crashes) > 0:
+            actions.append(f"{len(genuine_crashes)} crashed session(s) found - review crash analysis")
+        if result["in_progress_work"]["count"] > 0:
+            actions.append(f"{result['in_progress_work']['count']} in-progress work item(s) - continue where you left off")
+        if git_info.get("uncommitted_changes"):
+            actions.append(f"{len(git_info['uncommitted_changes'])} uncommitted change(s) - review and commit")
+        if crash_analysis.get("crash_type") == "cli_process_crash":
+            actions.append("CLI crash detected (output_tokens=1 pattern) - not a context issue")
+        elif crash_analysis.get("crash_type") == "context_exhaustion":
+            actions.append("Context exhaustion detected - consider smaller tasks or checkpointing")
+        result["recovery_actions"] = actions
+
+        return result
+
+    except Exception as e:
+        return {"success": False, "error": f"Recovery failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
 # ============================================================================
 # Main Entry Point
 # ============================================================================
