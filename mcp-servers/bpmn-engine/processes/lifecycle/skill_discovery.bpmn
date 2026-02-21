@@ -1,0 +1,332 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/skill-discovery"
+    id="Definitions_SD">
+
+  <bpmn:process id="skill_discovery" name="Skill Discovery and Loading Lifecycle" isExecutable="true">
+
+    <!--
+      Models how Claude discovers, loads, and uses skills.
+
+      Four discovery paths:
+        A. Semantic suggestion (RAG hook): UserPromptSubmit -> query_skill_suggestions()
+           -> inject into context -> Claude decides to load
+           STATUS: DISABLED (line 1438: "never acted on")
+        B. Context injection (PreToolUse hook): Write/Edit -> context_rules match
+           -> skill_content loaded from DB -> truncated to 4000 chars -> injected
+           STATUS: WORKING but limited (only Write/Edit, truncated)
+        C. Manual recall: Claude reads CLAUDE.md -> remembers skill -> invokes Skill tool
+           STATUS: UNRELIABLE (depends on Claude memory, rarely happens)
+        D. MCP search: Claude calls find_skill(description) -> keyword search
+           STATUS: DEAD CODE (0 calls ever recorded)
+
+      Key tables:
+        - claude.skill_content: 26 entries (content + embeddings for semantic search)
+        - claude.context_rules: 16 active rules (tool_patterns -> skill_content_ids)
+        - claude.mcp_usage: Skill tool NOT tracked (built-in, not MCP)
+
+      Known gaps (FB138, FB140):
+        - Semantic suggestion was built then disabled
+        - Skill tool usage not tracked in telemetry
+        - No hook suggests skills at decision points
+
+      Implementation:
+        - scripts/rag_query_hook.py (query_skill_suggestions, disabled)
+        - scripts/context_injector_hook.py (get_matching_rules, load_skill_content)
+        - .claude/skills/*/skill.md (16 skill files)
+        - mcp-servers/project-tools/server_v2.py (find_skill)
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Trigger: Prompt or Tool Use">
+      <bpmn:outgoing>flow_start_to_identify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="identify_trigger" name="[HOOK] Identify Trigger Type" scriptFormat="python">
+      <bpmn:script>
+try:
+    trigger_type = trigger_type
+except NameError:
+    trigger_type = "user_prompt"
+      </bpmn:script>
+      <bpmn:incoming>flow_start_to_identify</bpmn:incoming>
+      <bpmn:outgoing>flow_identify_to_gw</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- TRIGGER GATEWAY                                                     -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="trigger_gw" name="Which trigger?" default="flow_manual">
+      <bpmn:incoming>flow_identify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_user_prompt</bpmn:outgoing>
+      <bpmn:outgoing>flow_tool_use</bpmn:outgoing>
+      <bpmn:outgoing>flow_manual</bpmn:outgoing>
+      <bpmn:outgoing>flow_mcp_search</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH A: Semantic Suggestion (RAG Hook) - CURRENTLY DISABLED         -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="rag_hook_fires" name="[HOOK] UserPromptSubmit Hook Fires" scriptFormat="python">
+      <bpmn:script>
+rag_hook_active = True
+try:
+    skill_suggestions_enabled = skill_suggestions_enabled
+except NameError:
+    skill_suggestions_enabled = False
+      </bpmn:script>
+      <bpmn:incoming>flow_user_prompt</bpmn:incoming>
+      <bpmn:outgoing>flow_rag_to_check</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="skill_suggest_enabled_gw" name="Skill suggestions enabled?" default="flow_suggest_disabled">
+      <bpmn:incoming>flow_rag_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_suggest_enabled</bpmn:outgoing>
+      <bpmn:outgoing>flow_suggest_disabled</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="query_skill_suggestions" name="[DB] Semantic Search skill_content" scriptFormat="python">
+      <bpmn:script>
+skill_suggestions_found = True
+      </bpmn:script>
+      <bpmn:incoming>flow_suggest_enabled</bpmn:incoming>
+      <bpmn:outgoing>flow_suggestions_to_inject</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_skill_suggestion" name="[HOOK] Inject Suggestion into Context" scriptFormat="python">
+      <bpmn:script>
+suggestion_injected = True
+      </bpmn:script>
+      <bpmn:incoming>flow_suggestions_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_decide</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="skip_suggestions" name="[HOOK] Skip - Suggestions Disabled (line 1438)" scriptFormat="python">
+      <bpmn:script>
+suggestion_skipped = True
+      </bpmn:script>
+      <bpmn:incoming>flow_suggest_disabled</bpmn:incoming>
+      <bpmn:outgoing>flow_skip_to_decide</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH B: Context Injection (PreToolUse Hook)                         -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="context_hook_fires" name="[HOOK] PreToolUse(Write/Edit) Fires" scriptFormat="python">
+      <bpmn:script>
+context_hook_active = True
+try:
+    rules_matched = rules_matched
+except NameError:
+    rules_matched = True
+      </bpmn:script>
+      <bpmn:incoming>flow_tool_use</bpmn:incoming>
+      <bpmn:outgoing>flow_context_to_match</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="match_context_rules" name="[DB] Query context_rules for Tool/File Match" scriptFormat="python">
+      <bpmn:script>
+rules_queried = True
+      </bpmn:script>
+      <bpmn:incoming>flow_context_to_match</bpmn:incoming>
+      <bpmn:outgoing>flow_match_to_check</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="rules_matched_gw" name="Any rules match?" default="flow_no_rules">
+      <bpmn:incoming>flow_match_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_rules_found</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_rules</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="load_skill_content" name="[DB] Load skill_content (truncated 4000 chars)" scriptFormat="python">
+      <bpmn:script>
+skill_content_loaded = True
+      </bpmn:script>
+      <bpmn:incoming>flow_rules_found</bpmn:incoming>
+      <bpmn:outgoing>flow_loaded_to_inject_context</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_context" name="[HOOK] Inject Standards + Skill into Tool Context" scriptFormat="python">
+      <bpmn:script>
+context_injected = True
+      </bpmn:script>
+      <bpmn:incoming>flow_loaded_to_inject_context</bpmn:incoming>
+      <bpmn:outgoing>flow_injected_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="no_rules_matched" name="[HOOK] No Context Rules - No Skill Injected" scriptFormat="python">
+      <bpmn:script>
+no_skill_injected = True
+      </bpmn:script>
+      <bpmn:incoming>flow_no_rules</bpmn:incoming>
+      <bpmn:outgoing>flow_no_rules_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH C: Manual Recall (Claude Memory)                               -->
+    <!-- ================================================================== -->
+    <bpmn:userTask id="claude_remembers_skill" name="[CLAUDE] Recall Skill from CLAUDE.md / Memory">
+      <bpmn:incoming>flow_manual</bpmn:incoming>
+      <bpmn:outgoing>flow_remember_to_decide</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH D: MCP Search (find_skill tool) - 0 calls ever                 -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="find_skill_mcp" name="[MCP] find_skill(task_description) - 0 calls ever" scriptFormat="python">
+      <bpmn:script>
+find_skill_called = True
+      </bpmn:script>
+      <bpmn:incoming>flow_mcp_search</bpmn:incoming>
+      <bpmn:outgoing>flow_find_to_decide</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- DECISION: Load Skill?                                               -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="decide_merge" name="Merge to decision">
+      <bpmn:incoming>flow_inject_to_decide</bpmn:incoming>
+      <bpmn:incoming>flow_skip_to_decide</bpmn:incoming>
+      <bpmn:incoming>flow_remember_to_decide</bpmn:incoming>
+      <bpmn:incoming>flow_find_to_decide</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_decide</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="decide_to_load" name="[CLAUDE] Decide: Load Skill via Skill Tool?">
+      <bpmn:incoming>flow_merge_to_decide</bpmn:incoming>
+      <bpmn:outgoing>flow_decide_to_load_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="load_skill_gw" name="Load skill?" default="flow_skip_loading">
+      <bpmn:incoming>flow_decide_to_load_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_load</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_loading</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- LOAD + APPLY                                                        -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="invoke_skill_tool" name="[CLAUDE] Invoke Skill Tool (not tracked FB140)" scriptFormat="python">
+      <bpmn:script>
+skill_loaded = True
+      </bpmn:script>
+      <bpmn:incoming>flow_do_load</bpmn:incoming>
+      <bpmn:outgoing>flow_loaded_to_apply</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="apply_skill_guidance" name="[CLAUDE] Apply Skill Guidelines to Task">
+      <bpmn:incoming>flow_loaded_to_apply</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="skip_skill_loading" name="Claude Proceeds Without Skill (most common)" scriptFormat="python">
+      <bpmn:script>
+skill_skipped = True
+      </bpmn:script>
+      <bpmn:incoming>flow_skip_loading</bpmn:incoming>
+      <bpmn:outgoing>flow_skipped_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END                                                                 -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="end_merge" name="Merge to end">
+      <bpmn:incoming>flow_injected_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_no_rules_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_apply_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_skipped_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Discovery Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+    <bpmn:sequenceFlow id="flow_start_to_identify" sourceRef="start" targetRef="identify_trigger" />
+    <bpmn:sequenceFlow id="flow_identify_to_gw" sourceRef="identify_trigger" targetRef="trigger_gw" />
+
+    <bpmn:sequenceFlow id="flow_user_prompt" name="trigger_type == user_prompt" sourceRef="trigger_gw" targetRef="rag_hook_fires">
+      <bpmn:conditionExpression>trigger_type == "user_prompt"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_tool_use" name="trigger_type == tool_use" sourceRef="trigger_gw" targetRef="context_hook_fires">
+      <bpmn:conditionExpression>trigger_type == "tool_use"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_manual" name="Default: manual recall" sourceRef="trigger_gw" targetRef="claude_remembers_skill" />
+    <bpmn:sequenceFlow id="flow_mcp_search" name="trigger_type == mcp_search" sourceRef="trigger_gw" targetRef="find_skill_mcp">
+      <bpmn:conditionExpression>trigger_type == "mcp_search"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_rag_to_check" sourceRef="rag_hook_fires" targetRef="skill_suggest_enabled_gw" />
+    <bpmn:sequenceFlow id="flow_suggest_enabled" name="skill_suggestions_enabled == True" sourceRef="skill_suggest_enabled_gw" targetRef="query_skill_suggestions">
+      <bpmn:conditionExpression>skill_suggestions_enabled == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_suggest_disabled" name="Default: disabled" sourceRef="skill_suggest_enabled_gw" targetRef="skip_suggestions" />
+    <bpmn:sequenceFlow id="flow_suggestions_to_inject" sourceRef="query_skill_suggestions" targetRef="inject_skill_suggestion" />
+    <bpmn:sequenceFlow id="flow_inject_to_decide" sourceRef="inject_skill_suggestion" targetRef="decide_merge" />
+    <bpmn:sequenceFlow id="flow_skip_to_decide" sourceRef="skip_suggestions" targetRef="decide_merge" />
+
+    <bpmn:sequenceFlow id="flow_context_to_match" sourceRef="context_hook_fires" targetRef="match_context_rules" />
+    <bpmn:sequenceFlow id="flow_match_to_check" sourceRef="match_context_rules" targetRef="rules_matched_gw" />
+    <bpmn:sequenceFlow id="flow_rules_found" name="rules_matched == True" sourceRef="rules_matched_gw" targetRef="load_skill_content">
+      <bpmn:conditionExpression>rules_matched == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_rules" name="Default: no match" sourceRef="rules_matched_gw" targetRef="no_rules_matched" />
+    <bpmn:sequenceFlow id="flow_loaded_to_inject_context" sourceRef="load_skill_content" targetRef="inject_context" />
+    <bpmn:sequenceFlow id="flow_injected_to_end" sourceRef="inject_context" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_no_rules_to_end" sourceRef="no_rules_matched" targetRef="end_merge" />
+
+    <bpmn:sequenceFlow id="flow_remember_to_decide" sourceRef="claude_remembers_skill" targetRef="decide_merge" />
+    <bpmn:sequenceFlow id="flow_find_to_decide" sourceRef="find_skill_mcp" targetRef="decide_merge" />
+
+    <bpmn:sequenceFlow id="flow_merge_to_decide" sourceRef="decide_merge" targetRef="decide_to_load" />
+    <bpmn:sequenceFlow id="flow_decide_to_load_gw" sourceRef="decide_to_load" targetRef="load_skill_gw" />
+    <bpmn:sequenceFlow id="flow_do_load" name="load_skill == True" sourceRef="load_skill_gw" targetRef="invoke_skill_tool">
+      <bpmn:conditionExpression>load_skill == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_loading" name="Default: skip" sourceRef="load_skill_gw" targetRef="skip_skill_loading" />
+
+    <bpmn:sequenceFlow id="flow_loaded_to_apply" sourceRef="invoke_skill_tool" targetRef="apply_skill_guidance" />
+    <bpmn:sequenceFlow id="flow_apply_to_end" sourceRef="apply_skill_guidance" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_skipped_to_end" sourceRef="skip_skill_loading" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="diagram_sd">
+    <bpmndi:BPMNPlane id="plane_sd" bpmnElement="skill_discovery">
+      <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><dc:Bounds x="100" y="300" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_identify" bpmnElement="identify_trigger"><dc:Bounds x="200" y="280" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_trigger_gw" bpmnElement="trigger_gw"><dc:Bounds x="380" y="295" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_rag" bpmnElement="rag_hook_fires"><dc:Bounds x="500" y="100" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_suggest_gw" bpmnElement="skill_suggest_enabled_gw"><dc:Bounds x="700" y="115" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_query" bpmnElement="query_skill_suggestions"><dc:Bounds x="800" y="50" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_inject_suggest" bpmnElement="inject_skill_suggestion"><dc:Bounds x="1000" y="50" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_skip" bpmnElement="skip_suggestions"><dc:Bounds x="800" y="160" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_context" bpmnElement="context_hook_fires"><dc:Bounds x="500" y="260" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_match" bpmnElement="match_context_rules"><dc:Bounds x="700" y="260" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_rules_gw" bpmnElement="rules_matched_gw"><dc:Bounds x="900" y="275" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_load_content" bpmnElement="load_skill_content"><dc:Bounds x="1000" y="240" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_inject_ctx" bpmnElement="inject_context"><dc:Bounds x="1200" y="240" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_no_rules" bpmnElement="no_rules_matched"><dc:Bounds x="1000" y="340" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_manual" bpmnElement="claude_remembers_skill"><dc:Bounds x="500" y="420" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_mcp" bpmnElement="find_skill_mcp"><dc:Bounds x="500" y="540" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_decide_merge" bpmnElement="decide_merge"><dc:Bounds x="1200" y="445" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_decide" bpmnElement="decide_to_load"><dc:Bounds x="1300" y="430" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_load_gw" bpmnElement="load_skill_gw"><dc:Bounds x="1500" y="445" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_invoke" bpmnElement="invoke_skill_tool"><dc:Bounds x="1600" y="380" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_apply" bpmnElement="apply_skill_guidance"><dc:Bounds x="1800" y="380" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_skip_load" bpmnElement="skip_skill_loading"><dc:Bounds x="1600" y="500" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_end_merge" bpmnElement="end_merge"><dc:Bounds x="1950" y="445" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><dc:Bounds x="2050" y="452" width="36" height="36" /></bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

@@ -1,0 +1,357 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/process-governance"
+    id="Definitions_PG">
+
+  <bpmn:process id="process_governance" name="Process Governance: BPMN Discovery, Compliance, and Self-Enforcement" isExecutable="true">
+
+    <!--
+      The "mother of all processes" - the meta-process that governs how Claude
+      discovers BPMN models exist and follows them during work.
+
+      This process answers: "How does Claude know to check for BPMN models,
+      and what happens when it finds (or doesn't find) one?"
+
+      Two main paths:
+        A. System Change Path (modifying hooks, workflows, configs, BPMN, rules):
+           → MUST update BPMN model first, test, then implement code
+        B. Regular Work Path (features, bug fixes, ad-hoc tasks):
+           → SHOULD check if a BPMN model covers this workflow, follow if found
+
+      Enforcement mechanisms:
+        1. .claude/rules/system-change-process.md (auto-loaded rule, advisory)
+        2. task_discipline_hook.py (blocks Write/Edit/Task/Bash without tasks)
+        3. check_alignment MCP tool (validates BPMN vs code artifacts)
+        4. _ARTIFACT_REGISTRY in bpmn-engine/server.py (static artifact mapping)
+
+      Known gaps (this process documents them):
+        - system-change-process rule is advisory only, no automated enforcement
+        - _ARTIFACT_REGISTRY is static, not auto-synced from codebase
+        - search_processes uses substring match, not semantic search
+        - No hook detects "you're modifying a hook - have you updated BPMN?"
+
+      Actors:
+        [CLAUDE]  = userTask (decisions, modeling, implementation)
+        [MCP]     = scriptTask (bpmn-engine MCP tool calls)
+        [RULE]    = scriptTask (auto-loaded .claude/rules/ enforcement)
+        [HOOK]    = scriptTask (task_discipline_hook enforcement)
+
+      Implementation:
+        - .claude/rules/system-change-process.md
+        - mcp-servers/bpmn-engine/server.py (search_processes, check_alignment, etc.)
+        - scripts/task_discipline_hook.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Claude Begins Task">
+      <bpmn:outgoing>flow_start_to_classify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- TASK CLASSIFICATION                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="classify_task" name="[CLAUDE] Classify Task Type">
+      <bpmn:incoming>flow_start_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="task_type_gw" name="System Change?" default="flow_regular_work">
+      <bpmn:incoming>flow_classify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_system_change</bpmn:outgoing>
+      <bpmn:outgoing>flow_regular_work</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH A: SYSTEM CHANGE (BPMN-first mandatory)                        -->
+    <!--                                                                     -->
+    <!-- Triggered when modifying:                                           -->
+    <!--   - Hook scripts: scripts/*_hook*.py                                -->
+    <!--   - Workflow code: mcp-servers/*/server*.py                         -->
+    <!--   - Config management: scripts/generate_*.py, deploy_*.py           -->
+    <!--   - BPMN processes: processes/**/*.bpmn                             -->
+    <!--   - Enforcement rules: .claude/rules/*.md, .claude/skills/**        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="rule_fires" name="[RULE] system-change-process.md Auto-Loaded" scriptFormat="python">
+      <bpmn:incoming>flow_system_change</bpmn:incoming>
+      <bpmn:outgoing>flow_rule_to_search</bpmn:outgoing>
+      <bpmn:script>
+# .claude/rules/system-change-process.md is auto-loaded into context
+# Claude is instructed to follow BPMN-first process
+# This is ADVISORY - no automated enforcement blocks non-compliance
+# The rule text describes: search → model → test → implement → commit together
+rule_loaded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="search_existing_models" name="[MCP] Search Existing BPMN Models (search_processes)" scriptFormat="python">
+      <bpmn:incoming>flow_rule_to_search</bpmn:incoming>
+      <bpmn:outgoing>flow_search_to_model_gw</bpmn:outgoing>
+      <bpmn:script>
+# search_processes(query=system_name, actor=None, level=None)
+# Also: list_processes() to browse all available
+# Uses case-insensitive substring match (NOT semantic search)
+# Returns: [{process_id, process_name, file, matching_elements}]
+try:
+    if model_found is None:
+        model_found = False
+except NameError:
+    model_found = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="model_exists_gw" name="Model Exists?" default="flow_create_model">
+      <bpmn:incoming>flow_search_to_model_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_update_model</bpmn:outgoing>
+      <bpmn:outgoing>flow_create_model</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- A1: Update existing model -->
+    <bpmn:scriptTask id="load_current_model" name="[MCP] Load Current Model (get_process)" scriptFormat="python">
+      <bpmn:incoming>flow_update_model</bpmn:incoming>
+      <bpmn:outgoing>flow_load_to_gap</bpmn:outgoing>
+      <bpmn:script>
+# get_process(process_id)
+# Returns: {elements, flows, subprocesses}
+# Also available: get_subprocess(process_id, element_id) for detail
+# get_dependency_tree(process_id) for L0→L1→L2 hierarchy
+model_loaded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="identify_gap" name="[CLAUDE] Identify Gap Between Model and Needed Change">
+      <bpmn:incoming>flow_load_to_gap</bpmn:incoming>
+      <bpmn:outgoing>flow_gap_to_update_bpmn</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="update_bpmn" name="[CLAUDE] Update BPMN Model FIRST">
+      <bpmn:incoming>flow_gap_to_update_bpmn</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- A2: Create new model -->
+    <bpmn:userTask id="create_bpmn" name="[CLAUDE] Create New BPMN Model">
+      <bpmn:incoming>flow_create_model</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Validate model (both paths converge) -->
+    <bpmn:exclusiveGateway id="validate_merge" name="Validate Merge">
+      <bpmn:incoming>flow_update_to_validate</bpmn:incoming>
+      <bpmn:incoming>flow_create_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_validate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="validate_model" name="[MCP] Validate Model (validate_process + pytest)" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_validate</bpmn:incoming>
+      <bpmn:incoming>flow_fix_to_revalidate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_test_gw</bpmn:outgoing>
+      <bpmn:script>
+# validate_process(process_id)
+# 1. Parse check: XML valid, elements well-formed
+# 2. pytest run: finds test_*.py matching process_id
+# Returns: {parse_valid, parse_errors, tests_found, tests_passed, tests_failed}
+try:
+    if tests_pass is None:
+        tests_pass = True
+except NameError:
+    tests_pass = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="tests_pass_gw" name="Tests Pass?" default="flow_tests_pass">
+      <bpmn:incoming>flow_validate_to_test_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_tests_pass</bpmn:outgoing>
+      <bpmn:outgoing>flow_tests_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="fix_model" name="[CLAUDE] Fix BPMN Model">
+      <bpmn:incoming>flow_tests_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_revalidate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Implement code -->
+    <bpmn:userTask id="implement_code" name="[CLAUDE] Implement Code Changes">
+      <bpmn:incoming>flow_tests_pass</bpmn:incoming>
+      <bpmn:outgoing>flow_implement_to_align</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Check alignment -->
+    <bpmn:scriptTask id="check_alignment" name="[MCP] Check Alignment (BPMN vs code artifacts)" scriptFormat="python">
+      <bpmn:incoming>flow_implement_to_align</bpmn:incoming>
+      <bpmn:outgoing>flow_align_to_commit</bpmn:outgoing>
+      <bpmn:script>
+# check_alignment(process_id)
+# Parses BPMN → extracts all tasks
+# Checks each against _ARTIFACT_REGISTRY (static dict in server.py)
+# For hook_script artifacts: verifies file exists on disk
+# Returns: {mapped, unmapped, missing_artifacts, coverage_pct}
+# Note: _ARTIFACT_REGISTRY must be manually updated for new artifacts
+try:
+    if alignment_ok is None:
+        alignment_ok = True
+except NameError:
+    alignment_ok = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="commit_together" name="[CLAUDE] Commit BPMN + Code Together">
+      <bpmn:incoming>flow_align_to_commit</bpmn:incoming>
+      <bpmn:outgoing>flow_commit_to_sys_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH B: REGULAR WORK (BPMN guidance optional)                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="search_for_process" name="[MCP] Search for Relevant BPMN Process" scriptFormat="python">
+      <bpmn:incoming>flow_regular_work</bpmn:incoming>
+      <bpmn:outgoing>flow_search_to_found_gw</bpmn:outgoing>
+      <bpmn:script>
+# search_processes(query=task_keywords)
+# Look for processes that cover this workflow
+# E.g., "commit" → commit_workflow, "feature" → feature_workflow
+# This is the DISCOVERY step - how Claude becomes aware of BPMN models
+try:
+    if process_found is None:
+        process_found = False
+except NameError:
+    process_found = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="process_found_gw" name="Process Found?" default="flow_no_process">
+      <bpmn:incoming>flow_search_to_found_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_has_process</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_process</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- B1: Follow the process (GPS navigation) -->
+    <bpmn:scriptTask id="get_current_step" name="[MCP] Get Current Step (GPS navigation)" scriptFormat="python">
+      <bpmn:incoming>flow_has_process</bpmn:incoming>
+      <bpmn:incoming>flow_next_step</bpmn:incoming>
+      <bpmn:outgoing>flow_step_to_done_gw</bpmn:outgoing>
+      <bpmn:script>
+# get_current_step(process_id, completed_steps=[...], data={})
+# Tell it what steps are done, it returns what's next
+# Returns: {current_tasks: [{id, name, type}], is_completed, data}
+try:
+    if is_completed is None:
+        is_completed = False
+except NameError:
+    is_completed = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="process_done_gw" name="Process Complete?" default="flow_not_done">
+      <bpmn:incoming>flow_step_to_done_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_process_done</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="execute_step" name="[CLAUDE] Execute Current Process Step">
+      <bpmn:incoming>flow_not_done</bpmn:incoming>
+      <bpmn:outgoing>flow_next_step</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- B2: No process found - proceed without guidance -->
+    <bpmn:userTask id="proceed_without_bpmn" name="[CLAUDE] Proceed Without BPMN Guidance">
+      <bpmn:incoming>flow_no_process</bpmn:incoming>
+      <bpmn:outgoing>flow_no_bpmn_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- END EVENTS                                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>flow_commit_to_sys_end</bpmn:incoming>
+      <bpmn:incoming>flow_process_done</bpmn:incoming>
+      <bpmn:incoming>flow_no_bpmn_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Task Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start and classify -->
+    <bpmn:sequenceFlow id="flow_start_to_classify" sourceRef="start" targetRef="classify_task"/>
+    <bpmn:sequenceFlow id="flow_classify_to_gw" sourceRef="classify_task" targetRef="task_type_gw"/>
+
+    <!-- System change path -->
+    <bpmn:sequenceFlow id="flow_system_change" sourceRef="task_type_gw" targetRef="rule_fires">
+      <bpmn:conditionExpression>is_system_change == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_rule_to_search" sourceRef="rule_fires" targetRef="search_existing_models"/>
+    <bpmn:sequenceFlow id="flow_search_to_model_gw" sourceRef="search_existing_models" targetRef="model_exists_gw"/>
+
+    <!-- Update existing model -->
+    <bpmn:sequenceFlow id="flow_update_model" sourceRef="model_exists_gw" targetRef="load_current_model">
+      <bpmn:conditionExpression>model_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_load_to_gap" sourceRef="load_current_model" targetRef="identify_gap"/>
+    <bpmn:sequenceFlow id="flow_gap_to_update_bpmn" sourceRef="identify_gap" targetRef="update_bpmn"/>
+    <bpmn:sequenceFlow id="flow_update_to_validate" sourceRef="update_bpmn" targetRef="validate_merge"/>
+
+    <!-- Create new model -->
+    <bpmn:sequenceFlow id="flow_create_model" sourceRef="model_exists_gw" targetRef="create_bpmn"/>
+    <bpmn:sequenceFlow id="flow_create_to_validate" sourceRef="create_bpmn" targetRef="validate_merge"/>
+
+    <!-- Validate -->
+    <bpmn:sequenceFlow id="flow_merge_to_validate" sourceRef="validate_merge" targetRef="validate_model"/>
+    <bpmn:sequenceFlow id="flow_validate_to_test_gw" sourceRef="validate_model" targetRef="tests_pass_gw"/>
+    <bpmn:sequenceFlow id="flow_tests_pass" sourceRef="tests_pass_gw" targetRef="implement_code"/>
+    <bpmn:sequenceFlow id="flow_tests_fail" sourceRef="tests_pass_gw" targetRef="fix_model">
+      <bpmn:conditionExpression>tests_pass == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_fix_to_revalidate" sourceRef="fix_model" targetRef="validate_model"/>
+
+    <!-- Implement and commit -->
+    <bpmn:sequenceFlow id="flow_implement_to_align" sourceRef="implement_code" targetRef="check_alignment"/>
+    <bpmn:sequenceFlow id="flow_align_to_commit" sourceRef="check_alignment" targetRef="commit_together"/>
+    <bpmn:sequenceFlow id="flow_commit_to_sys_end" sourceRef="commit_together" targetRef="end_merge"/>
+
+    <!-- Regular work path -->
+    <bpmn:sequenceFlow id="flow_regular_work" sourceRef="task_type_gw" targetRef="search_for_process"/>
+    <bpmn:sequenceFlow id="flow_search_to_found_gw" sourceRef="search_for_process" targetRef="process_found_gw"/>
+
+    <!-- Follow process -->
+    <bpmn:sequenceFlow id="flow_has_process" sourceRef="process_found_gw" targetRef="get_current_step">
+      <bpmn:conditionExpression>process_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_step_to_done_gw" sourceRef="get_current_step" targetRef="process_done_gw"/>
+    <bpmn:sequenceFlow id="flow_process_done" sourceRef="process_done_gw" targetRef="end_merge">
+      <bpmn:conditionExpression>is_completed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_done" sourceRef="process_done_gw" targetRef="execute_step"/>
+    <bpmn:sequenceFlow id="flow_next_step" sourceRef="execute_step" targetRef="get_current_step"/>
+
+    <!-- No process -->
+    <bpmn:sequenceFlow id="flow_no_process" sourceRef="process_found_gw" targetRef="proceed_without_bpmn"/>
+    <bpmn:sequenceFlow id="flow_no_bpmn_to_end" sourceRef="proceed_without_bpmn" targetRef="end_merge"/>
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="process_governance">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

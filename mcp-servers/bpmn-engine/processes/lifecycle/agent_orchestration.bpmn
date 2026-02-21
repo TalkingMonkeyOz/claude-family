@@ -1,0 +1,293 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/agent-orchestration"
+    id="Definitions_AO">
+
+  <bpmn:process id="agent_orchestration" name="Agent Orchestration: Spawn, Monitor, Integrate" isExecutable="true">
+
+    <!--
+      Models the full agent orchestration lifecycle: when to spawn agents,
+      how to pick agent types, spawn mechanisms, monitoring, and integration.
+
+      Two spawn mechanisms:
+        1. Native agents (Task tool): In-session, hooks work, preferred
+        2. Orchestrator MCP (spawn_agent): DB tracking, process isolation
+
+      Agent selection (CLAUDE.md - DOCUMENTATION ONLY, NOT ENFORCED):
+        - Simple code (less than 3 files) -> coder-haiku
+        - Complex code (3+ files) -> coder-sonnet
+        - Code review -> ALWAYS reviewer-sonnet
+        - Testing -> tester-haiku
+        - Research -> analyst-sonnet or researcher-opus
+
+      Known gaps (FB139):
+        - No code counts files or estimates complexity
+        - No hook suggests agent types
+        - 43 total spawns ever, 0 in last 30 days
+
+      Key tables:
+        - claude.agent_sessions: Spawn log (subagent_start_hook.py)
+        - claude.agent_status: Real-time progress (update_agent_status)
+        - claude.agent_definitions: Agent specs (source of truth)
+        - claude.context_rules: Auto-injected context per agent type
+
+      Implementation:
+        - mcp-servers/orchestrator/ (spawn_agent, agent management)
+        - scripts/subagent_start_hook.py (SubagentStart hook)
+        - .claude/skills/agentic-orchestration/skill.md
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Task Identified">
+      <bpmn:outgoing>flow_start_to_assess</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- COMPLEXITY ASSESSMENT                                               -->
+    <!-- ================================================================== -->
+    <bpmn:userTask id="assess_complexity" name="[CLAUDE] Assess Task Complexity (manual, no automation)">
+      <bpmn:incoming>flow_start_to_assess</bpmn:incoming>
+      <bpmn:outgoing>flow_assess_to_init</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="init_assessment" name="Init assessment defaults" scriptFormat="python">
+      <bpmn:script>
+try:
+    needs_delegation = needs_delegation
+except NameError:
+    needs_delegation = False
+try:
+    spawn_mechanism = spawn_mechanism
+except NameError:
+    spawn_mechanism = "native"
+try:
+    coordination_pattern = coordination_pattern
+except NameError:
+    coordination_pattern = "single"
+      </bpmn:script>
+      <bpmn:incoming>flow_assess_to_init</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_delegate_gw</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="delegate_gw" name="Delegate to agent?" default="flow_do_inline">
+      <bpmn:incoming>flow_init_to_delegate_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_delegate</bpmn:outgoing>
+      <bpmn:outgoing>flow_do_inline</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- INLINE PATH (No Agent) - Most Common                                -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="work_inline" name="[CLAUDE] Do Work Inline (95%+ of tasks)" scriptFormat="python">
+      <bpmn:script>
+work_done_inline = True
+      </bpmn:script>
+      <bpmn:incoming>flow_do_inline</bpmn:incoming>
+      <bpmn:outgoing>flow_inline_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- AGENT SELECTION                                                     -->
+    <!-- ================================================================== -->
+    <bpmn:userTask id="select_agent_type" name="[CLAUDE] Select Agent Type (from memory/CLAUDE.md)">
+      <bpmn:incoming>flow_do_delegate</bpmn:incoming>
+      <bpmn:outgoing>flow_select_to_mechanism</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- SPAWN MECHANISM                                                     -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="mechanism_gw" name="Spawn mechanism?" default="flow_native">
+      <bpmn:incoming>flow_select_to_mechanism</bpmn:incoming>
+      <bpmn:outgoing>flow_native</bpmn:outgoing>
+      <bpmn:outgoing>flow_orchestrator</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="spawn_native" name="[CLAUDE] Task Tool: Spawn Native Agent" scriptFormat="python">
+      <bpmn:script>
+native_spawned = True
+      </bpmn:script>
+      <bpmn:incoming>flow_native</bpmn:incoming>
+      <bpmn:outgoing>flow_native_to_log</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="spawn_orchestrator" name="[MCP] orchestrator.spawn_agent (DB tracked)" scriptFormat="python">
+      <bpmn:script>
+orchestrator_spawned = True
+      </bpmn:script>
+      <bpmn:incoming>flow_orchestrator</bpmn:incoming>
+      <bpmn:outgoing>flow_orch_to_log</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- AGENT LIFECYCLE                                                     -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="log_merge" name="Merge spawn paths">
+      <bpmn:incoming>flow_native_to_log</bpmn:incoming>
+      <bpmn:incoming>flow_orch_to_log</bpmn:incoming>
+      <bpmn:outgoing>flow_log_to_hook</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="subagent_hook_logs" name="[HOOK] SubagentStart Hook Logs to agent_sessions" scriptFormat="python">
+      <bpmn:script>
+agent_logged = True
+      </bpmn:script>
+      <bpmn:incoming>flow_log_to_hook</bpmn:incoming>
+      <bpmn:outgoing>flow_hook_to_context</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_agent_context" name="[DB] Auto-inject Context via context_rules" scriptFormat="python">
+      <bpmn:script>
+context_injected = True
+      </bpmn:script>
+      <bpmn:incoming>flow_hook_to_context</bpmn:incoming>
+      <bpmn:outgoing>flow_context_to_work</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="agent_works" name="[AGENT] Execute Task (disableAllHooks=true)" scriptFormat="python">
+      <bpmn:script>
+agent_completed = True
+      </bpmn:script>
+      <bpmn:incoming>flow_context_to_work</bpmn:incoming>
+      <bpmn:outgoing>flow_work_to_pattern</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- COORDINATION PATTERN                                                -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="pattern_gw" name="Coordination pattern?" default="flow_single">
+      <bpmn:incoming>flow_work_to_pattern</bpmn:incoming>
+      <bpmn:outgoing>flow_single</bpmn:outgoing>
+      <bpmn:outgoing>flow_parallel</bpmn:outgoing>
+      <bpmn:outgoing>flow_sequential</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="single_result" name="[CLAUDE] Receive Single Agent Result" scriptFormat="python">
+      <bpmn:script>
+single_completed = True
+      </bpmn:script>
+      <bpmn:incoming>flow_single</bpmn:incoming>
+      <bpmn:outgoing>flow_single_to_integrate</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="parallel_collect" name="[CLAUDE] Collect Parallel Results" scriptFormat="python">
+      <bpmn:script>
+parallel_collected = True
+      </bpmn:script>
+      <bpmn:incoming>flow_parallel</bpmn:incoming>
+      <bpmn:outgoing>flow_parallel_to_integrate</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sequential_chain" name="[CLAUDE] Chain Sequential Outputs" scriptFormat="python">
+      <bpmn:script>
+sequential_chained = True
+      </bpmn:script>
+      <bpmn:incoming>flow_sequential</bpmn:incoming>
+      <bpmn:outgoing>flow_sequential_to_integrate</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- INTEGRATION                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="integrate_merge" name="Merge patterns">
+      <bpmn:incoming>flow_single_to_integrate</bpmn:incoming>
+      <bpmn:incoming>flow_parallel_to_integrate</bpmn:incoming>
+      <bpmn:incoming>flow_sequential_to_integrate</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_review</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="review_result" name="[CLAUDE] Review Agent Output and Integrate">
+      <bpmn:incoming>flow_merge_to_review</bpmn:incoming>
+      <bpmn:outgoing>flow_review_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- END                                                                 -->
+    <!-- ================================================================== -->
+    <bpmn:exclusiveGateway id="end_merge" name="Merge to end">
+      <bpmn:incoming>flow_inline_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_review_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Task Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+    <bpmn:sequenceFlow id="flow_start_to_assess" sourceRef="start" targetRef="assess_complexity" />
+    <bpmn:sequenceFlow id="flow_assess_to_init" sourceRef="assess_complexity" targetRef="init_assessment" />
+    <bpmn:sequenceFlow id="flow_init_to_delegate_gw" sourceRef="init_assessment" targetRef="delegate_gw" />
+
+    <bpmn:sequenceFlow id="flow_do_delegate" name="needs_delegation == True" sourceRef="delegate_gw" targetRef="select_agent_type">
+      <bpmn:conditionExpression>needs_delegation == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_do_inline" name="Default: do inline" sourceRef="delegate_gw" targetRef="work_inline" />
+
+    <bpmn:sequenceFlow id="flow_inline_to_end" sourceRef="work_inline" targetRef="end_merge" />
+
+    <bpmn:sequenceFlow id="flow_select_to_mechanism" sourceRef="select_agent_type" targetRef="mechanism_gw" />
+    <bpmn:sequenceFlow id="flow_native" name="Default: native Task tool" sourceRef="mechanism_gw" targetRef="spawn_native" />
+    <bpmn:sequenceFlow id="flow_orchestrator" name="spawn_mechanism == orchestrator" sourceRef="mechanism_gw" targetRef="spawn_orchestrator">
+      <bpmn:conditionExpression>spawn_mechanism == "orchestrator"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_native_to_log" sourceRef="spawn_native" targetRef="log_merge" />
+    <bpmn:sequenceFlow id="flow_orch_to_log" sourceRef="spawn_orchestrator" targetRef="log_merge" />
+    <bpmn:sequenceFlow id="flow_log_to_hook" sourceRef="log_merge" targetRef="subagent_hook_logs" />
+    <bpmn:sequenceFlow id="flow_hook_to_context" sourceRef="subagent_hook_logs" targetRef="inject_agent_context" />
+    <bpmn:sequenceFlow id="flow_context_to_work" sourceRef="inject_agent_context" targetRef="agent_works" />
+    <bpmn:sequenceFlow id="flow_work_to_pattern" sourceRef="agent_works" targetRef="pattern_gw" />
+
+    <bpmn:sequenceFlow id="flow_single" name="Default: single" sourceRef="pattern_gw" targetRef="single_result" />
+    <bpmn:sequenceFlow id="flow_parallel" name="coordination_pattern == parallel" sourceRef="pattern_gw" targetRef="parallel_collect">
+      <bpmn:conditionExpression>coordination_pattern == "parallel"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_sequential" name="coordination_pattern == sequential" sourceRef="pattern_gw" targetRef="sequential_chain">
+      <bpmn:conditionExpression>coordination_pattern == "sequential"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_single_to_integrate" sourceRef="single_result" targetRef="integrate_merge" />
+    <bpmn:sequenceFlow id="flow_parallel_to_integrate" sourceRef="parallel_collect" targetRef="integrate_merge" />
+    <bpmn:sequenceFlow id="flow_sequential_to_integrate" sourceRef="sequential_chain" targetRef="integrate_merge" />
+
+    <bpmn:sequenceFlow id="flow_merge_to_review" sourceRef="integrate_merge" targetRef="review_result" />
+    <bpmn:sequenceFlow id="flow_review_to_end" sourceRef="review_result" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="diagram_ao">
+    <bpmndi:BPMNPlane id="plane_ao" bpmnElement="agent_orchestration">
+      <bpmndi:BPMNShape id="shape_start" bpmnElement="start"><dc:Bounds x="100" y="300" width="36" height="36" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_assess" bpmnElement="assess_complexity"><dc:Bounds x="200" y="280" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_init" bpmnElement="init_assessment"><dc:Bounds x="400" y="280" width="120" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_delegate_gw" bpmnElement="delegate_gw"><dc:Bounds x="580" y="295" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_inline" bpmnElement="work_inline"><dc:Bounds x="700" y="400" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_select" bpmnElement="select_agent_type"><dc:Bounds x="700" y="180" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_mechanism_gw" bpmnElement="mechanism_gw"><dc:Bounds x="900" y="195" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_native" bpmnElement="spawn_native"><dc:Bounds x="1000" y="130" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_orch" bpmnElement="spawn_orchestrator"><dc:Bounds x="1000" y="240" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_log_merge" bpmnElement="log_merge"><dc:Bounds x="1200" y="195" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_hook" bpmnElement="subagent_hook_logs"><dc:Bounds x="1300" y="180" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_context" bpmnElement="inject_agent_context"><dc:Bounds x="1500" y="180" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_work" bpmnElement="agent_works"><dc:Bounds x="1700" y="180" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_pattern_gw" bpmnElement="pattern_gw"><dc:Bounds x="1900" y="195" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_single" bpmnElement="single_result"><dc:Bounds x="2000" y="100" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_parallel" bpmnElement="parallel_collect"><dc:Bounds x="2000" y="200" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_seq" bpmnElement="sequential_chain"><dc:Bounds x="2000" y="300" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_int_merge" bpmnElement="integrate_merge"><dc:Bounds x="2200" y="195" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_review" bpmnElement="review_result"><dc:Bounds x="2300" y="180" width="140" height="80" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_end_merge" bpmnElement="end_merge"><dc:Bounds x="2500" y="295" width="50" height="50" /></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="shape_end" bpmnElement="end"><dc:Bounds x="2600" y="302" width="36" height="36" /></bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

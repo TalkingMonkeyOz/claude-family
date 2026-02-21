@@ -1,0 +1,307 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/working-memory"
+    id="Definitions_WM">
+
+  <bpmn:process id="working_memory" name="Working Memory: Session Facts Lifecycle" isExecutable="true">
+
+    <!--
+      Session facts serve as Claude's scratchpad - persistent key-value pairs
+      that survive context compaction and can be recalled across sessions.
+
+      Paths:
+        1. Store: Encounter context → Classify → Store fact (upsert)
+        2. Recall (same session): Need fact → recall_session_fact
+        3. Survive compaction: PreCompact hook → inject facts into system message
+        4. Post-compaction recovery: recall user_intent → check work items
+        5. Cross-session recall: recall_previous_session_facts(n_sessions=3)
+        6. Session notes (parallel): store_session_notes → markdown file
+
+      Actors:
+        [CLAUDE] = userTask (decides what to store/recall)
+        [MCP]    = scriptTask (store_session_fact, recall_session_fact)
+        [HOOK]   = scriptTask (precompact_hook.py injection)
+        [DB]     = scriptTask (claude.session_facts table)
+
+      Key constraints:
+        - fact_types: credential, config, endpoint, decision, note, data, reference
+        - Upsert on (session_id, fact_key) - no duplicates
+        - Sensitive facts (is_sensitive=True) excluded from precompact injection
+        - PreCompact injects max 5 facts (decision/reference/note only, 200 char truncation)
+        - Session notes stored in ~/.claude/session_notes.md (500 char truncation in precompact)
+
+      Implementation: mcp-servers/project-tools/server_v2.py + scripts/precompact_hook.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Important Context Encountered">
+      <bpmn:outgoing>flow_start_to_action</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- ACTION CLASSIFICATION                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="identify_action" name="[CLAUDE] Identify Memory Action">
+      <bpmn:incoming>flow_start_to_action</bpmn:incoming>
+      <bpmn:outgoing>flow_action_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Action Type?" default="flow_store">
+      <bpmn:incoming>flow_action_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_store</bpmn:outgoing>
+      <bpmn:outgoing>flow_recall</bpmn:outgoing>
+      <bpmn:outgoing>flow_notes</bpmn:outgoing>
+      <bpmn:outgoing>flow_cross_session</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH 1: STORE A FACT                                                -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="classify_fact" name="[CLAUDE] Classify Fact Type and Sensitivity">
+      <bpmn:incoming>flow_store</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_sensitive</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="sensitive_gw" name="Sensitive?" default="flow_not_sensitive">
+      <bpmn:incoming>flow_classify_to_sensitive</bpmn:incoming>
+      <bpmn:outgoing>flow_sensitive</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_sensitive</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="store_sensitive" name="[MCP] Store Fact (is_sensitive=True)" scriptFormat="python">
+      <bpmn:incoming>flow_sensitive</bpmn:incoming>
+      <bpmn:outgoing>flow_sensitive_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# store_session_fact(fact_key, fact_value, fact_type, is_sensitive=True)
+# Sensitive facts: REDACTED in list_session_facts, EXCLUDED from precompact injection
+# Survives in DB but never leaked to context
+try:
+    if stored is None:
+        stored = True
+except NameError:
+    stored = True
+is_sensitive = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_normal" name="[MCP] Store Fact (normal)" scriptFormat="python">
+      <bpmn:incoming>flow_not_sensitive</bpmn:incoming>
+      <bpmn:outgoing>flow_normal_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# store_session_fact(fact_key, fact_value, fact_type)
+# _resolve_session_id(project) → finds current open session
+# UPSERT: ON CONFLICT (session_id, fact_key) DO UPDATE
+# Valid types: credential, config, endpoint, decision, note, data, reference
+try:
+    if stored is None:
+        stored = True
+except NameError:
+    stored = True
+is_sensitive = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="store_merge" name="Store Merge">
+      <bpmn:incoming>flow_sensitive_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_normal_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_store_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH 2: RECALL (SAME SESSION)                                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="recall_fact" name="[MCP] Recall Session Fact" scriptFormat="python">
+      <bpmn:incoming>flow_recall</bpmn:incoming>
+      <bpmn:outgoing>flow_recall_to_found</bpmn:outgoing>
+      <bpmn:script>
+# recall_session_fact(fact_key)
+# 1. Try current session first (WHERE session_id = current AND fact_key = key)
+# 2. Fall back to recent sessions (ORDER BY session_id match, created_at DESC)
+# Returns: {fact_key, fact_value, fact_type, session_id, stored_at}
+try:
+    if fact_found is None:
+        fact_found = True
+except NameError:
+    fact_found = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="found_gw" name="Fact Found?" default="flow_found">
+      <bpmn:incoming>flow_recall_to_found</bpmn:incoming>
+      <bpmn:outgoing>flow_found</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_found</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="apply_fact" name="[CLAUDE] Apply Retrieved Fact">
+      <bpmn:incoming>flow_found</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="fact_missing" name="[CLAUDE] Fact Not Found - Reconstruct or Ask User">
+      <bpmn:incoming>flow_not_found</bpmn:incoming>
+      <bpmn:outgoing>flow_missing_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 3: COMPACTION SURVIVAL                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="precompact_fires" name="[HOOK] PreCompact Hook Fires" scriptFormat="python">
+      <bpmn:incoming>flow_notes</bpmn:incoming>
+      <bpmn:outgoing>flow_precompact_to_query</bpmn:outgoing>
+      <bpmn:script>
+# Triggered automatically by Claude Code when context approaches limit
+# precompact_hook.py runs
+precompact_triggered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="query_facts_for_injection" name="[HOOK] Query Facts for Injection" scriptFormat="python">
+      <bpmn:incoming>flow_precompact_to_query</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_build</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.session_facts WHERE:
+#   - session_id = current_session
+#   - fact_type IN ('decision', 'reference', 'note') -- NOT credential, NOT sensitive
+#   - is_sensitive = False
+#   - LIMIT 5
+#   - Truncate fact_value at 200 chars
+# Also query: active todos (max 10), session_state focus, features (max 3)
+# Also read: ~/.claude/session_notes.md (truncate at 500 chars)
+facts_queried = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="build_system_message" name="[HOOK] Build &amp; Inject System Message" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_build</bpmn:incoming>
+      <bpmn:outgoing>flow_build_to_recover</bpmn:outgoing>
+      <bpmn:script>
+# Assemble &lt;claude-context-refresh&gt; system message containing:
+#   - Active todos (pending + in_progress, max 10)
+#   - Current focus from session_state
+#   - Next steps from session_state
+#   - Active features (in_progress + planned, max 3)
+#   - Session facts (decision/reference/note, max 5, 200 char)
+#   - Session notes (500 char)
+#   - Post-compaction checklist: re-read CLAUDE.md, recall user_intent, check work items
+# Return: {"systemMessage": "&lt;claude-context-refresh&gt;...&lt;/claude-context-refresh&gt;"}
+message_built = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="post_compact_recovery" name="[CLAUDE] Post-Compaction Recovery">
+      <bpmn:incoming>flow_build_to_recover</bpmn:incoming>
+      <bpmn:outgoing>flow_recover_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 4: CROSS-SESSION RECALL                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="recall_previous" name="[MCP] Recall Previous Session Facts" scriptFormat="python">
+      <bpmn:incoming>flow_cross_session</bpmn:incoming>
+      <bpmn:outgoing>flow_previous_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# recall_previous_session_facts(project, n_sessions=3)
+# Scans last N sessions for the project
+# Returns facts grouped by session: [{fact_key, fact_value, fact_type, session_id, stored_at}]
+# Used after crash recovery or session resume
+try:
+    if previous_facts is None:
+        previous_facts = []
+except NameError:
+    previous_facts = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="merge_with_current" name="[CLAUDE] Merge Previous Facts with Current Context">
+      <bpmn:incoming>flow_previous_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_prev_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- END EVENTS                                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>flow_store_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_apply_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_missing_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_recover_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_merge_prev_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Memory Action Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="flow_start_to_action" sourceRef="start" targetRef="identify_action"/>
+    <bpmn:sequenceFlow id="flow_action_to_gw" sourceRef="identify_action" targetRef="action_gw"/>
+
+    <!-- Store path -->
+    <bpmn:sequenceFlow id="flow_store" sourceRef="action_gw" targetRef="classify_fact"/>
+    <bpmn:sequenceFlow id="flow_classify_to_sensitive" sourceRef="classify_fact" targetRef="sensitive_gw"/>
+    <bpmn:sequenceFlow id="flow_sensitive" sourceRef="sensitive_gw" targetRef="store_sensitive">
+      <bpmn:conditionExpression>is_sensitive == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_sensitive" sourceRef="sensitive_gw" targetRef="store_normal"/>
+    <bpmn:sequenceFlow id="flow_sensitive_to_merge" sourceRef="store_sensitive" targetRef="store_merge"/>
+    <bpmn:sequenceFlow id="flow_normal_to_merge" sourceRef="store_normal" targetRef="store_merge"/>
+    <bpmn:sequenceFlow id="flow_store_to_end" sourceRef="store_merge" targetRef="end_merge"/>
+
+    <!-- Recall path -->
+    <bpmn:sequenceFlow id="flow_recall" sourceRef="action_gw" targetRef="recall_fact">
+      <bpmn:conditionExpression>action == "recall"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_recall_to_found" sourceRef="recall_fact" targetRef="found_gw"/>
+    <bpmn:sequenceFlow id="flow_found" sourceRef="found_gw" targetRef="apply_fact"/>
+    <bpmn:sequenceFlow id="flow_not_found" sourceRef="found_gw" targetRef="fact_missing">
+      <bpmn:conditionExpression>fact_found == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_apply_to_end" sourceRef="apply_fact" targetRef="end_merge"/>
+    <bpmn:sequenceFlow id="flow_missing_to_end" sourceRef="fact_missing" targetRef="end_merge"/>
+
+    <!-- Compaction path -->
+    <bpmn:sequenceFlow id="flow_notes" sourceRef="action_gw" targetRef="precompact_fires">
+      <bpmn:conditionExpression>action == "compaction"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_precompact_to_query" sourceRef="precompact_fires" targetRef="query_facts_for_injection"/>
+    <bpmn:sequenceFlow id="flow_query_to_build" sourceRef="query_facts_for_injection" targetRef="build_system_message"/>
+    <bpmn:sequenceFlow id="flow_build_to_recover" sourceRef="build_system_message" targetRef="post_compact_recovery"/>
+    <bpmn:sequenceFlow id="flow_recover_to_end" sourceRef="post_compact_recovery" targetRef="end_merge"/>
+
+    <!-- Cross-session path -->
+    <bpmn:sequenceFlow id="flow_cross_session" sourceRef="action_gw" targetRef="recall_previous">
+      <bpmn:conditionExpression>action == "cross_session"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_previous_to_merge" sourceRef="recall_previous" targetRef="merge_with_current"/>
+    <bpmn:sequenceFlow id="flow_merge_prev_to_end" sourceRef="merge_with_current" targetRef="end_merge"/>
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="working_memory">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

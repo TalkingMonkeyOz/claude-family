@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/project-lifecycle"
+    id="Definitions_PL">
+
+  <bpmn:process id="project_lifecycle" name="Project Lifecycle: Init to Maturity" isExecutable="true">
+
+    <!--
+      Full project lifecycle from creation through phases to retirement.
+
+      Paths:
+        1. New project: Init → Register → Generate Config → Governance Docs → Setup Phase
+        2. Existing project: Load → Compliance Check → Fix or Continue
+        3. Phase advancement: Setup → Implementation → Mature → Retired
+        4. Config change: Update DB → Regenerate Files → Verify
+
+      Actors:
+        [CLAUDE]  = userTask (decisions, authoring)
+        [SKILL]   = scriptTask (skill invocation: /project-init, /check-compliance)
+        [DB]      = scriptTask (database operations)
+        [SCRIPT]  = scriptTask (generate_project_settings.py, deploy scripts)
+        [MCP]     = scriptTask (project-tools MCP calls)
+
+      Implementation:
+        - /project-init skill → SQL inserts + generate_project_settings.py
+        - Config Management SOP (knowledge-vault/40-Procedures/)
+        - generate_project_settings.py (3-layer merge: config_templates + project_type_configs + workspaces.startup_config)
+        - v_project_governance view for compliance checks
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Project Need Identified">
+      <bpmn:outgoing>flow_start_to_classify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- CLASSIFICATION: New or Existing?                                    -->
+    <!-- ================================================================== -->
+    <bpmn:userTask id="classify_project" name="[CLAUDE] New or Existing Project?">
+      <bpmn:incoming>flow_start_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="new_or_existing_gw" name="New or Existing?" default="flow_existing">
+      <bpmn:incoming>flow_classify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_new_project</bpmn:outgoing>
+      <bpmn:outgoing>flow_existing</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH A: NEW PROJECT CREATION                                       -->
+    <!-- ================================================================== -->
+
+    <!-- Step A1: Define project parameters -->
+    <bpmn:userTask id="define_project" name="[CLAUDE] Define Project (name, type, description)">
+      <bpmn:incoming>flow_new_project</bpmn:incoming>
+      <bpmn:outgoing>flow_define_to_register</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Step A2: Register in database (projects + workspaces + identities) -->
+    <bpmn:scriptTask id="register_in_db" name="[DB] Register Project (projects, workspaces, identities)" scriptFormat="python">
+      <bpmn:incoming>flow_define_to_register</bpmn:incoming>
+      <bpmn:outgoing>flow_register_to_generate</bpmn:outgoing>
+      <bpmn:script>
+# INSERT claude.projects (project_id, project_name, status='active')
+# INSERT claude.workspaces (project_type from: infrastructure, csharp-desktop, csharp-winforms, web-app, tauri-react)
+# INSERT claude.identities (linked to project)
+# workspace.startup_config = {} (JSONB for project-specific overrides)
+try:
+    if registered is None:
+        registered = True
+except NameError:
+    registered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step A3: Generate settings from 3-layer merge -->
+    <bpmn:scriptTask id="generate_settings" name="[SCRIPT] Generate Settings (3-layer merge)" scriptFormat="python">
+      <bpmn:incoming>flow_register_to_generate</bpmn:incoming>
+      <bpmn:outgoing>flow_generate_to_docs</bpmn:outgoing>
+      <bpmn:script>
+# generate_project_settings.py performs 3-layer merge:
+#   Layer 1: config_templates (template_name='hooks-base') - base hooks
+#   Layer 2: project_type_configs (by project_type) - MCPs, skills, instructions
+#   Layer 3: workspaces.startup_config (project-specific overrides, last wins)
+# Preserves existing permissions from current settings file
+# Output: .claude/settings.local.json
+try:
+    if settings_generated is None:
+        settings_generated = True
+except NameError:
+    settings_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step A4: Create governance documents -->
+    <bpmn:userTask id="create_governance_docs" name="[CLAUDE] Create Governance Docs (CLAUDE.md, PROBLEM_STATEMENT.md, ARCHITECTURE.md)">
+      <bpmn:incoming>flow_generate_to_docs</bpmn:incoming>
+      <bpmn:outgoing>flow_docs_to_mcp</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Step A5: Register MCP configuration -->
+    <bpmn:scriptTask id="register_mcp" name="[DB] Register MCP Config (.mcp.json + claude.mcp_configs)" scriptFormat="python">
+      <bpmn:incoming>flow_docs_to_mcp</bpmn:incoming>
+      <bpmn:outgoing>flow_mcp_to_compliance</bpmn:outgoing>
+      <bpmn:script>
+# Create .mcp.json in project root
+# INSERT into claude.mcp_configs for each MCP server
+# Update workspaces.startup_config with mcpServers list
+try:
+    if mcp_registered is None:
+        mcp_registered = True
+except NameError:
+    mcp_registered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH B: EXISTING PROJECT                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="load_project" name="[MCP] Load Project Context (start_session)" scriptFormat="python">
+      <bpmn:incoming>flow_existing</bpmn:incoming>
+      <bpmn:outgoing>flow_load_to_compliance</bpmn:outgoing>
+      <bpmn:script>
+# start_session(project, resume=True/False)
+# Returns: project info, session state, todos, features, messages
+try:
+    if project_loaded is None:
+        project_loaded = True
+except NameError:
+    project_loaded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- COMPLIANCE CHECK (both paths converge)                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="compliance_merge" name="Merge">
+      <bpmn:incoming>flow_mcp_to_compliance</bpmn:incoming>
+      <bpmn:incoming>flow_load_to_compliance</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_check</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="check_compliance" name="[DB] Check Compliance (v_project_governance)" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Query v_project_governance view:
+#   - has_claude_md, has_problem_statement, has_architecture
+#   - has_settings, has_mcp_config
+#   - workspace registered, identity registered
+# compliance_ok = all checks pass
+try:
+    if compliance_ok is None:
+        compliance_ok = True
+except NameError:
+    compliance_ok = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="compliance_gw" name="Compliant?" default="flow_compliant">
+      <bpmn:incoming>flow_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_compliant</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_compliant</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="fix_compliance" name="[CLAUDE] Fix Compliance Gaps">
+      <bpmn:incoming>flow_not_compliant</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_recheck</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- WORK PHASE                                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="work_merge" name="Work Merge">
+      <bpmn:incoming>flow_compliant</bpmn:incoming>
+      <bpmn:incoming>flow_fix_to_recheck</bpmn:incoming>
+      <bpmn:outgoing>flow_to_work</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="do_work" name="[CLAUDE] Do Work (feature development)">
+      <bpmn:incoming>flow_to_work</bpmn:incoming>
+      <bpmn:incoming>flow_config_to_work</bpmn:incoming>
+      <bpmn:outgoing>flow_work_to_action</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Next Action?" default="flow_continue_work">
+      <bpmn:incoming>flow_work_to_action</bpmn:incoming>
+      <bpmn:outgoing>flow_continue_work</bpmn:outgoing>
+      <bpmn:outgoing>flow_config_change</bpmn:outgoing>
+      <bpmn:outgoing>flow_phase_advance</bpmn:outgoing>
+      <bpmn:outgoing>flow_retire</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- CONFIG CHANGE SUBPROCESS                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="update_config_db" name="[DB] Update Config in Database" scriptFormat="python">
+      <bpmn:incoming>flow_config_change</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_regen</bpmn:outgoing>
+      <bpmn:script>
+# Depending on scope:
+#   All projects: UPDATE config_templates (template_name='hooks-base')
+#   All of type:  UPDATE project_type_configs
+#   Single:       UPDATE workspaces.startup_config (JSONB merge)
+# Or use MCP tools: update_claude_md(), regenerate_settings()
+try:
+    if config_updated is None:
+        config_updated = True
+except NameError:
+    config_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="regenerate_files" name="[SCRIPT] Regenerate Files (settings, CLAUDE.md)" scriptFormat="python">
+      <bpmn:incoming>flow_db_to_regen</bpmn:incoming>
+      <bpmn:outgoing>flow_regen_to_verify</bpmn:outgoing>
+      <bpmn:script>
+# regenerate_settings(project) → .claude/settings.local.json
+# deploy_claude_md(project) → CLAUDE.md from profiles.config->'behavior'
+# deploy_project(project, components) → rules, skills, instructions
+# Logged to config_deployment_log
+try:
+    if files_regenerated is None:
+        files_regenerated = True
+except NameError:
+    files_regenerated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="verify_config" name="[SCRIPT] Verify Config (diff check)" scriptFormat="python">
+      <bpmn:incoming>flow_regen_to_verify</bpmn:incoming>
+      <bpmn:outgoing>flow_config_to_work</bpmn:outgoing>
+      <bpmn:script>
+# Compare generated files with expected content
+# Check settings.local.json has correct hooks, MCPs, permissions
+# Verify CLAUDE.md sections match DB
+config_verified = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE ADVANCEMENT                                                  -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="assess_phase" name="[CLAUDE] Assess Phase Readiness">
+      <bpmn:incoming>flow_phase_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_assess_to_advance</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="advance_phase" name="[DB] Advance Project Phase" scriptFormat="python">
+      <bpmn:incoming>flow_assess_to_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_advance_to_work</bpmn:outgoing>
+      <bpmn:script>
+# Phases: setup → implementation → mature → retired
+# Requirements per phase:
+#   setup→implementation: governance docs complete, config working
+#   implementation→mature: core features done, tests passing, stable
+#   mature→retired: user decision, archive data
+# UPDATE claude.projects SET phase = new_phase
+try:
+    if phase_advanced is None:
+        phase_advanced = True
+except NameError:
+    phase_advanced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- RETIREMENT                                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="archive_project" name="[DB] Archive Project (status='archived')" scriptFormat="python">
+      <bpmn:incoming>flow_retire</bpmn:incoming>
+      <bpmn:outgoing>flow_archive_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.projects SET status = 'archived'
+# Close all open features, build_tasks
+# Archive session data
+project_archived = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END EVENTS                                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:endEvent id="end_active" name="Project Active">
+      <bpmn:incoming>flow_continue_work</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_archived" name="Project Archived">
+      <bpmn:incoming>flow_archive_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                     -->
+    <!-- ================================================================== -->
+
+    <!-- Start to classification -->
+    <bpmn:sequenceFlow id="flow_start_to_classify" sourceRef="start" targetRef="classify_project"/>
+    <bpmn:sequenceFlow id="flow_classify_to_gw" sourceRef="classify_project" targetRef="new_or_existing_gw"/>
+
+    <!-- New project path -->
+    <bpmn:sequenceFlow id="flow_new_project" sourceRef="new_or_existing_gw" targetRef="define_project">
+      <bpmn:conditionExpression>project_type == "new"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_define_to_register" sourceRef="define_project" targetRef="register_in_db"/>
+    <bpmn:sequenceFlow id="flow_register_to_generate" sourceRef="register_in_db" targetRef="generate_settings"/>
+    <bpmn:sequenceFlow id="flow_generate_to_docs" sourceRef="generate_settings" targetRef="create_governance_docs"/>
+    <bpmn:sequenceFlow id="flow_docs_to_mcp" sourceRef="create_governance_docs" targetRef="register_mcp"/>
+    <bpmn:sequenceFlow id="flow_mcp_to_compliance" sourceRef="register_mcp" targetRef="compliance_merge"/>
+
+    <!-- Existing project path -->
+    <bpmn:sequenceFlow id="flow_existing" sourceRef="new_or_existing_gw" targetRef="load_project"/>
+    <bpmn:sequenceFlow id="flow_load_to_compliance" sourceRef="load_project" targetRef="compliance_merge"/>
+
+    <!-- Compliance check -->
+    <bpmn:sequenceFlow id="flow_merge_to_check" sourceRef="compliance_merge" targetRef="check_compliance"/>
+    <bpmn:sequenceFlow id="flow_check_to_gw" sourceRef="check_compliance" targetRef="compliance_gw"/>
+    <bpmn:sequenceFlow id="flow_compliant" sourceRef="compliance_gw" targetRef="work_merge"/>
+    <bpmn:sequenceFlow id="flow_not_compliant" sourceRef="compliance_gw" targetRef="fix_compliance">
+      <bpmn:conditionExpression>compliance_ok == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_fix_to_recheck" sourceRef="fix_compliance" targetRef="work_merge"/>
+
+    <!-- Work phase -->
+    <bpmn:sequenceFlow id="flow_to_work" sourceRef="work_merge" targetRef="do_work"/>
+    <bpmn:sequenceFlow id="flow_work_to_action" sourceRef="do_work" targetRef="action_gw"/>
+    <bpmn:sequenceFlow id="flow_continue_work" sourceRef="action_gw" targetRef="end_active"/>
+
+    <!-- Config change loop -->
+    <bpmn:sequenceFlow id="flow_config_change" sourceRef="action_gw" targetRef="update_config_db">
+      <bpmn:conditionExpression>action == "config_change"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_db_to_regen" sourceRef="update_config_db" targetRef="regenerate_files"/>
+    <bpmn:sequenceFlow id="flow_regen_to_verify" sourceRef="regenerate_files" targetRef="verify_config"/>
+    <bpmn:sequenceFlow id="flow_config_to_work" sourceRef="verify_config" targetRef="do_work"/>
+
+    <!-- Phase advancement -->
+    <bpmn:sequenceFlow id="flow_phase_advance" sourceRef="action_gw" targetRef="assess_phase">
+      <bpmn:conditionExpression>action == "phase_advance"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_assess_to_advance" sourceRef="assess_phase" targetRef="advance_phase"/>
+    <bpmn:sequenceFlow id="flow_advance_to_work" sourceRef="advance_phase" targetRef="do_work"/>
+
+    <!-- Retirement -->
+    <bpmn:sequenceFlow id="flow_retire" sourceRef="action_gw" targetRef="archive_project">
+      <bpmn:conditionExpression>action == "retire"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_archive_to_end" sourceRef="archive_project" targetRef="end_archived"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="project_lifecycle">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

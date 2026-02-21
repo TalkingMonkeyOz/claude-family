@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/knowledge-full-cycle"
+    id="Definitions_KFC">
+
+  <bpmn:process id="knowledge_full_cycle" name="Knowledge Management: Full Lifecycle" isExecutable="true">
+
+    <!--
+      Complete knowledge management lifecycle covering all knowledge sources,
+      storage mechanisms, retrieval paths, and the confidence feedback loop.
+
+      Replaces the oversimplified L1_knowledge_management.bpmn with full coverage.
+
+      Knowledge Sources:
+        1. Direct capture: Claude formulates insight → Voyage AI embedding → claude.knowledge
+        2. Vault embedding: Scan .md files → chunk → Voyage AI → pgvector (batch pipeline)
+        3. Book references: store_book → store_book_reference (concept + embedding)
+        4. Conversation mining: extract_conversation → extract_insights → auto-create entries
+        5. Knowledge relations: link_knowledge between entries (graph structure)
+
+      Retrieval Paths:
+        1. RAG (vault): UserPromptSubmit hook → classify → Voyage AI query → inject context
+        2. Direct search: recall_knowledge (semantic search with filters)
+        3. Book search: recall_book_reference (semantic search over book concepts)
+        4. Graph traversal: get_related_knowledge (follow typed edges)
+
+      Feedback Loop:
+        - mark_knowledge_applied(success=True/False) adjusts confidence_level
+        - High-confidence knowledge surfaces more readily
+
+      Actors:
+        [CLAUDE] = userTask (formulation, application decisions)
+        [KM]     = scriptTask (Voyage AI embedding generation)
+        [DB]     = scriptTask (pgvector storage, CRUD operations)
+        [HOOK]   = scriptTask (rag_query_hook.py automatic injection)
+        [SCRIPT] = scriptTask (embed_vault_documents.py batch pipeline)
+
+      Implementation:
+        - mcp-servers/project-tools/server_v2.py (store_knowledge, recall_knowledge, etc.)
+        - scripts/embed_vault_documents.py (vault batch embedding)
+        - scripts/rag_query_hook.py (automatic retrieval)
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Knowledge Event">
+      <bpmn:outgoing>flow_start_to_identify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="identify_action" name="[CLAUDE] Identify Knowledge Action">
+      <bpmn:incoming>flow_start_to_identify</bpmn:incoming>
+      <bpmn:outgoing>flow_identify_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Action Type?" default="flow_capture_direct">
+      <bpmn:incoming>flow_identify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_capture_direct</bpmn:outgoing>
+      <bpmn:outgoing>flow_embed_vault</bpmn:outgoing>
+      <bpmn:outgoing>flow_book_ref</bpmn:outgoing>
+      <bpmn:outgoing>flow_mine_conversation</bpmn:outgoing>
+      <bpmn:outgoing>flow_retrieve</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH 1: DIRECT CAPTURE (Claude formulates knowledge)                -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="formulate_knowledge" name="[CLAUDE] Formulate Knowledge (insight, pattern, gotcha, fact)">
+      <bpmn:incoming>flow_capture_direct</bpmn:incoming>
+      <bpmn:outgoing>flow_formulate_to_embed</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="generate_embedding" name="[KM] Generate Embedding (Voyage AI voyage-3, 1024d)" scriptFormat="python">
+      <bpmn:incoming>flow_formulate_to_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_embed_to_store</bpmn:outgoing>
+      <bpmn:script>
+# generate_embedding(f"{title}: {description}")
+# Model: voyage-3, dimensions: 1024
+# Returns: float[] vector
+try:
+    if embedding_generated is None:
+        embedding_generated = True
+except NameError:
+    embedding_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_in_knowledge" name="[DB] Store in claude.knowledge (pgvector)" scriptFormat="python">
+      <bpmn:incoming>flow_embed_to_store</bpmn:incoming>
+      <bpmn:outgoing>flow_store_to_link_gw</bpmn:outgoing>
+      <bpmn:script>
+# INSERT claude.knowledge (title, description, knowledge_type, knowledge_category,
+#   code_example, applies_to_projects, confidence_level, embedding)
+# knowledge_type: learned, pattern, gotcha, preference, fact, procedure
+# Returns: knowledge_id
+try:
+    if knowledge_stored is None:
+        knowledge_stored = True
+except NameError:
+    knowledge_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="link_gw" name="Link to Related?" default="flow_no_link">
+      <bpmn:incoming>flow_store_to_link_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_link</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_link</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="link_knowledge" name="[DB] Create Knowledge Relation" scriptFormat="python">
+      <bpmn:incoming>flow_link</bpmn:incoming>
+      <bpmn:outgoing>flow_link_to_capture_end</bpmn:outgoing>
+      <bpmn:script>
+# link_knowledge(from_id, to_id, relation_type, strength, notes)
+# Relation types: extends, contradicts, supports, supersedes,
+#   depends_on, relates_to, part_of, caused_by
+# Stored in claude.knowledge_relations
+linked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 2: VAULT EMBEDDING (batch pipeline)                            -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="scan_vault" name="[SCRIPT] Scan Vault for Changes (SHA256 hash)" scriptFormat="python">
+      <bpmn:incoming>flow_embed_vault</bpmn:incoming>
+      <bpmn:outgoing>flow_scan_to_changes</bpmn:outgoing>
+      <bpmn:script>
+# embed_vault_documents.py walks knowledge-vault/ for .md files
+# Computes SHA256 hash per file
+# Compares against stored hashes (incremental sync)
+# Returns list of changed files
+try:
+    if changes_found is None:
+        changes_found = False
+except NameError:
+    changes_found = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="changes_gw" name="Changes Found?" default="flow_no_changes">
+      <bpmn:incoming>flow_scan_to_changes</bpmn:incoming>
+      <bpmn:outgoing>flow_has_changes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_changes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="chunk_and_embed" name="[SCRIPT] Chunk (1000/200 overlap) + Voyage AI Embed" scriptFormat="python">
+      <bpmn:incoming>flow_has_changes</bpmn:incoming>
+      <bpmn:outgoing>flow_chunk_to_upsert</bpmn:outgoing>
+      <bpmn:script>
+# For each changed file:
+#   1. Read markdown content
+#   2. Chunk at CHUNK_SIZE=1000 chars with CHUNK_OVERLAP=200
+#   3. Call Voyage AI (voyage-3) for each chunk → 1024d vector
+#   4. Batch upsert into pgvector storage
+try:
+    if chunks_embedded is None:
+        chunks_embedded = True
+except NameError:
+    chunks_embedded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="upsert_vectors" name="[DB] Upsert Embeddings in pgvector" scriptFormat="python">
+      <bpmn:incoming>flow_chunk_to_upsert</bpmn:incoming>
+      <bpmn:outgoing>flow_upsert_to_vault_end</bpmn:outgoing>
+      <bpmn:script>
+# UPSERT into vault document embeddings table
+# Update file hash to mark as synced
+vectors_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 3: BOOK REFERENCE                                              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="store_book" name="[MCP] Store Book Record (claude.books)" scriptFormat="python">
+      <bpmn:incoming>flow_book_ref</bpmn:incoming>
+      <bpmn:outgoing>flow_book_to_ref</bpmn:outgoing>
+      <bpmn:script>
+# store_book(title, author, isbn, year, topics, summary)
+# INSERT claude.books
+# Returns: book_id
+try:
+    if book_stored is None:
+        book_stored = True
+except NameError:
+    book_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_book_reference" name="[MCP] Store Book Reference (concept + embedding)" scriptFormat="python">
+      <bpmn:incoming>flow_book_to_ref</bpmn:incoming>
+      <bpmn:outgoing>flow_ref_to_book_end</bpmn:outgoing>
+      <bpmn:script>
+# store_book_reference(book_title, concept, chapter, page_range, description, quote, tags)
+# 1. Look up book_id by title (ILIKE)
+# 2. Generate embedding for "{concept}: {description}" via Voyage AI
+# 3. INSERT claude.book_references with embedding vector
+# Returns: ref_id, has_embedding
+try:
+    if ref_stored is None:
+        ref_stored = True
+except NameError:
+    ref_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 4: CONVERSATION MINING                                         -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="extract_conversation" name="[MCP] Extract Conversation from JSONL" scriptFormat="python">
+      <bpmn:incoming>flow_mine_conversation</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_insights</bpmn:outgoing>
+      <bpmn:script>
+# extract_conversation(session_id)
+# Finds JSONL log file, parses turns
+# Skips tool_use blocks, returns [{role, content}]
+# Stored in claude.conversations (JSONB turns)
+try:
+    if conversation_extracted is None:
+        conversation_extracted = True
+except NameError:
+    conversation_extracted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="extract_insights" name="[MCP] Extract Insights (pattern match → knowledge)" scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_insights</bpmn:incoming>
+      <bpmn:outgoing>flow_insights_to_mine_end</bpmn:outgoing>
+      <bpmn:script>
+# extract_insights(session_id)
+# Reads turns from claude.conversations
+# Pattern matches user turns for:
+#   - Decisions: "we should", "let's", "decided to", "going with"
+#   - Rules: "make sure", "always", "never", "must", "don't"
+#   - Learnings: "i learned", "the fix was", "turned out", "discovered that"
+#   - Patterns: "the pattern is", "solution is to", "technique is"
+# Auto-creates claude.knowledge entries for each match
+try:
+    if insights_extracted is None:
+        insights_extracted = True
+except NameError:
+    insights_extracted = True
+insights_count = insights_count if 'insights_count' in dir() else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 5: RETRIEVAL                                                   -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="init_retrieve_source" name="[LOGIC] Init Retrieval Source Default" scriptFormat="python">
+      <bpmn:incoming>flow_retrieve</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_source_gw</bpmn:outgoing>
+      <bpmn:script>
+source = source if 'source' in dir() else "rag"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="retrieve_source_gw" name="Retrieval Source?" default="flow_rag_auto">
+      <bpmn:incoming>flow_init_to_source_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_rag_auto</bpmn:outgoing>
+      <bpmn:outgoing>flow_direct_search</bpmn:outgoing>
+      <bpmn:outgoing>flow_book_search</bpmn:outgoing>
+      <bpmn:outgoing>flow_graph_traverse</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- 5a: RAG (automatic via hook) -->
+    <bpmn:scriptTask id="rag_classify" name="[HOOK] Classify Prompt (rag_query_hook.py)" scriptFormat="python">
+      <bpmn:incoming>flow_rag_auto</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_to_rag_gw</bpmn:outgoing>
+      <bpmn:script>
+# UserPromptSubmit hook fires
+# Classify prompt: question/exploration → needs_rag=True, action → skip
+# Keywords: "how", "what", "why", "explain", "find" → RAG
+needs_rag = needs_rag if 'needs_rag' in dir() else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="needs_rag_gw" name="Needs RAG?" default="flow_do_rag">
+      <bpmn:incoming>flow_classify_to_rag_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_rag</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_rag</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="rag_query" name="[HOOK] Query Vault Embeddings (cosine similarity)" scriptFormat="python">
+      <bpmn:incoming>flow_do_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_rag_to_inject</bpmn:outgoing>
+      <bpmn:script>
+# Generate query embedding via Voyage AI
+# SELECT ... ORDER BY embedding &lt;=&gt; query_embedding LIMIT 3
+# Returns top-k matching vault documents with similarity scores
+rag_results_count = rag_results_count if 'rag_results_count' in dir() else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_context" name="[HOOK] Inject Retrieved Context into Prompt" scriptFormat="python">
+      <bpmn:incoming>flow_rag_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_retrieve_end</bpmn:outgoing>
+      <bpmn:script>
+# Format matching docs as system-reminder
+# Inject via UserPromptSubmit hook response
+context_injected = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- 5b: Direct search (MCP tool) -->
+    <bpmn:scriptTask id="direct_search" name="[MCP] recall_knowledge (semantic search + filters)" scriptFormat="python">
+      <bpmn:incoming>flow_direct_search</bpmn:incoming>
+      <bpmn:outgoing>flow_direct_to_apply</bpmn:outgoing>
+      <bpmn:script>
+# recall_knowledge(query, knowledge_type, project, min_similarity, domain, tags, date_range_days)
+# Generates query embedding, cosine similarity against claude.knowledge.embedding
+# Returns: [{knowledge_id, title, description, similarity, confidence_level, code_example}]
+try:
+    if search_results is None:
+        search_results = []
+except NameError:
+    search_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- 5c: Book search -->
+    <bpmn:scriptTask id="book_search" name="[MCP] recall_book_reference (semantic search)" scriptFormat="python">
+      <bpmn:incoming>flow_book_search</bpmn:incoming>
+      <bpmn:outgoing>flow_book_search_to_apply</bpmn:outgoing>
+      <bpmn:script>
+# recall_book_reference(query, book_title, tags, limit)
+# Cosine similarity against claude.book_references.embedding
+# Returns: [{ref_id, book, concept, description, quote, chapter, page_range, similarity}]
+try:
+    if book_results is None:
+        book_results = []
+except NameError:
+    book_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- 5d: Graph traversal -->
+    <bpmn:scriptTask id="graph_traverse" name="[MCP] get_related_knowledge (graph edges)" scriptFormat="python">
+      <bpmn:incoming>flow_graph_traverse</bpmn:incoming>
+      <bpmn:outgoing>flow_graph_to_apply</bpmn:outgoing>
+      <bpmn:script>
+# get_related_knowledge(knowledge_id, relation_types, include_reverse=True)
+# Traverses outgoing and incoming edges in claude.knowledge_relations
+# Returns: [{relation_type, direction, related: {knowledge_id, title, description}}]
+try:
+    if related is None:
+        related = []
+except NameError:
+    related = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Apply and feedback -->
+    <bpmn:exclusiveGateway id="apply_merge" name="Apply Merge">
+      <bpmn:incoming>flow_direct_to_apply</bpmn:incoming>
+      <bpmn:incoming>flow_book_search_to_apply</bpmn:incoming>
+      <bpmn:incoming>flow_graph_to_apply</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_apply</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="apply_knowledge" name="[CLAUDE] Apply Retrieved Knowledge">
+      <bpmn:incoming>flow_merge_to_apply</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_to_feedback</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="mark_applied" name="[MCP] Mark Applied (confidence feedback)" scriptFormat="python">
+      <bpmn:incoming>flow_apply_to_feedback</bpmn:incoming>
+      <bpmn:outgoing>flow_feedback_to_retrieve_end</bpmn:outgoing>
+      <bpmn:script>
+# mark_knowledge_applied(knowledge_id, success=True/False)
+# Success: confidence_level += 5 (capped at 100)
+# Failure: confidence_level -= 10 (floored at 0)
+# High-confidence knowledge surfaces more readily in future searches
+confidence_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END MERGE                                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>flow_no_link</bpmn:incoming>
+      <bpmn:incoming>flow_link_to_capture_end</bpmn:incoming>
+      <bpmn:incoming>flow_upsert_to_vault_end</bpmn:incoming>
+      <bpmn:incoming>flow_no_changes</bpmn:incoming>
+      <bpmn:incoming>flow_ref_to_book_end</bpmn:incoming>
+      <bpmn:incoming>flow_insights_to_mine_end</bpmn:incoming>
+      <bpmn:incoming>flow_inject_to_retrieve_end</bpmn:incoming>
+      <bpmn:incoming>flow_skip_rag</bpmn:incoming>
+      <bpmn:incoming>flow_feedback_to_retrieve_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Knowledge Managed">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="flow_start_to_identify" sourceRef="start" targetRef="identify_action"/>
+    <bpmn:sequenceFlow id="flow_identify_to_gw" sourceRef="identify_action" targetRef="action_gw"/>
+
+    <!-- Path 1: Direct capture -->
+    <bpmn:sequenceFlow id="flow_capture_direct" sourceRef="action_gw" targetRef="formulate_knowledge"/>
+    <bpmn:sequenceFlow id="flow_formulate_to_embed" sourceRef="formulate_knowledge" targetRef="generate_embedding"/>
+    <bpmn:sequenceFlow id="flow_embed_to_store" sourceRef="generate_embedding" targetRef="store_in_knowledge"/>
+    <bpmn:sequenceFlow id="flow_store_to_link_gw" sourceRef="store_in_knowledge" targetRef="link_gw"/>
+    <bpmn:sequenceFlow id="flow_link" sourceRef="link_gw" targetRef="link_knowledge">
+      <bpmn:conditionExpression>has_related == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_link" sourceRef="link_gw" targetRef="end_merge"/>
+    <bpmn:sequenceFlow id="flow_link_to_capture_end" sourceRef="link_knowledge" targetRef="end_merge"/>
+
+    <!-- Path 2: Vault embedding -->
+    <bpmn:sequenceFlow id="flow_embed_vault" sourceRef="action_gw" targetRef="scan_vault">
+      <bpmn:conditionExpression>action == "embed_vault"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_scan_to_changes" sourceRef="scan_vault" targetRef="changes_gw"/>
+    <bpmn:sequenceFlow id="flow_has_changes" sourceRef="changes_gw" targetRef="chunk_and_embed">
+      <bpmn:conditionExpression>changes_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_changes" sourceRef="changes_gw" targetRef="end_merge"/>
+    <bpmn:sequenceFlow id="flow_chunk_to_upsert" sourceRef="chunk_and_embed" targetRef="upsert_vectors"/>
+    <bpmn:sequenceFlow id="flow_upsert_to_vault_end" sourceRef="upsert_vectors" targetRef="end_merge"/>
+
+    <!-- Path 3: Book reference -->
+    <bpmn:sequenceFlow id="flow_book_ref" sourceRef="action_gw" targetRef="store_book">
+      <bpmn:conditionExpression>action == "book_reference"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_book_to_ref" sourceRef="store_book" targetRef="store_book_reference"/>
+    <bpmn:sequenceFlow id="flow_ref_to_book_end" sourceRef="store_book_reference" targetRef="end_merge"/>
+
+    <!-- Path 4: Conversation mining -->
+    <bpmn:sequenceFlow id="flow_mine_conversation" sourceRef="action_gw" targetRef="extract_conversation">
+      <bpmn:conditionExpression>action == "mine_conversation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_extract_to_insights" sourceRef="extract_conversation" targetRef="extract_insights"/>
+    <bpmn:sequenceFlow id="flow_insights_to_mine_end" sourceRef="extract_insights" targetRef="end_merge"/>
+
+    <!-- Path 5: Retrieval -->
+    <bpmn:sequenceFlow id="flow_retrieve" sourceRef="action_gw" targetRef="init_retrieve_source">
+      <bpmn:conditionExpression>action == "retrieve"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_init_to_source_gw" sourceRef="init_retrieve_source" targetRef="retrieve_source_gw"/>
+    <bpmn:sequenceFlow id="flow_rag_auto" sourceRef="retrieve_source_gw" targetRef="rag_classify"/>
+    <bpmn:sequenceFlow id="flow_direct_search" sourceRef="retrieve_source_gw" targetRef="direct_search">
+      <bpmn:conditionExpression>source == "direct"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_book_search" sourceRef="retrieve_source_gw" targetRef="book_search">
+      <bpmn:conditionExpression>source == "books"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_graph_traverse" sourceRef="retrieve_source_gw" targetRef="graph_traverse">
+      <bpmn:conditionExpression>source == "graph"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- RAG sub-path -->
+    <bpmn:sequenceFlow id="flow_classify_to_rag_gw" sourceRef="rag_classify" targetRef="needs_rag_gw"/>
+    <bpmn:sequenceFlow id="flow_do_rag" sourceRef="needs_rag_gw" targetRef="rag_query"/>
+    <bpmn:sequenceFlow id="flow_skip_rag" sourceRef="needs_rag_gw" targetRef="end_merge">
+      <bpmn:conditionExpression>needs_rag == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_rag_to_inject" sourceRef="rag_query" targetRef="inject_context"/>
+    <bpmn:sequenceFlow id="flow_inject_to_retrieve_end" sourceRef="inject_context" targetRef="end_merge"/>
+
+    <!-- Apply and feedback -->
+    <bpmn:sequenceFlow id="flow_direct_to_apply" sourceRef="direct_search" targetRef="apply_merge"/>
+    <bpmn:sequenceFlow id="flow_book_search_to_apply" sourceRef="book_search" targetRef="apply_merge"/>
+    <bpmn:sequenceFlow id="flow_graph_to_apply" sourceRef="graph_traverse" targetRef="apply_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_apply" sourceRef="apply_merge" targetRef="apply_knowledge"/>
+    <bpmn:sequenceFlow id="flow_apply_to_feedback" sourceRef="apply_knowledge" targetRef="mark_applied"/>
+    <bpmn:sequenceFlow id="flow_feedback_to_retrieve_end" sourceRef="mark_applied" targetRef="end_merge"/>
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="knowledge_full_cycle">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="400" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

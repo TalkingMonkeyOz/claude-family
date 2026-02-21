@@ -1,0 +1,425 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/project-tools-routing"
+    id="Definitions_PTR">
+
+  <bpmn:process id="project_tools_routing" name="Project Tools: MCP Request Routing and WorkflowEngine" isExecutable="true">
+
+    <!--
+      Models how the project-tools MCP server processes incoming tool calls,
+      routes them to the correct handler, and how the WorkflowEngine validates
+      and executes state transitions.
+
+      Tool Categories (40+ tools):
+        1. Session tools: start_session, end_session, save_checkpoint
+        2. Workflow tools: advance_status, start_work, complete_work
+        3. Work creation: create_feature, create_linked_task, add_build_task, create_feedback
+        4. Knowledge tools: store_knowledge, recall_knowledge, store_book, recall_book_reference
+        5. Config tools: update_claude_md, deploy_project, regenerate_settings
+        6. Query tools: get_work_context, get_ready_tasks, get_incomplete_todos
+
+      WorkflowEngine (the core state machine):
+        - ENTITY_MAP: feedback→(claude.feedback, feedback_id, 'FB'),
+                      features→(claude.features, feature_id, 'F'),
+                      build_tasks→(claude.build_tasks, task_id, 'BT')
+        - workflow_transitions table: 28 valid transitions with conditions/side_effects
+        - Audit trail: every transition logged to claude.audit_log
+
+      Architecture:
+        - server_v2.py: FastMCP sync wrappers, WorkflowEngine class
+        - server.py: async implementations (imported by v2)
+        - Bridge: _run_async(tool_func(...)) converts sync→async
+
+      Implementation: mcp-servers/project-tools/server_v2.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="MCP Tool Call Received">
+      <bpmn:outgoing>flow_start_to_dispatch</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- FASTMCP DISPATCH                                                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="fastmcp_dispatch" name="[MCP] FastMCP Route to Handler (@mcp.tool decorator)" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_dispatch</bpmn:incoming>
+      <bpmn:outgoing>flow_dispatch_to_category</bpmn:outgoing>
+      <bpmn:script>
+# FastMCP framework matches tool_name to @mcp.tool() decorated function
+# Most v2 tools call _run_async(async_tool_func(...)) to bridge sync/async
+# CLAUDE_SESSION_ID env var available for audit trail
+try:
+    if tool_name is None:
+        tool_name = ""
+except NameError:
+    tool_name = ""
+category = category if 'category' in dir() else "query"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="category_gw" name="Tool Category?" default="flow_query">
+      <bpmn:incoming>flow_dispatch_to_category</bpmn:incoming>
+      <bpmn:outgoing>flow_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_workflow</bpmn:outgoing>
+      <bpmn:outgoing>flow_creation</bpmn:outgoing>
+      <bpmn:outgoing>flow_knowledge</bpmn:outgoing>
+      <bpmn:outgoing>flow_config</bpmn:outgoing>
+      <bpmn:outgoing>flow_query</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH 1: SESSION TOOLS                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="session_handler" name="[DB] Session Handler (start/end/checkpoint)" scriptFormat="python">
+      <bpmn:incoming>flow_session</bpmn:incoming>
+      <bpmn:outgoing>flow_session_to_end</bpmn:outgoing>
+      <bpmn:script>
+# start_session: query project + session_state + todos + features + messages
+#   Returns pre-formatted display box (resume=True) or raw data
+# end_session: save summary, next_steps, learnings; extract conversation
+# save_checkpoint: update session_state focus without closing
+session_handled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 2: WORKFLOW TOOLS (WorkflowEngine)                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="resolve_entity" name="[WF] Resolve Entity (short_code → UUID)" scriptFormat="python">
+      <bpmn:incoming>flow_workflow</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# WorkflowEngine._resolve_entity(item_type, item_id)
+# ENTITY_MAP lookup: feedback/features/build_tasks → (table, pk_col, prefix)
+# Try short_code first (e.g., 'BT3' → WHERE short_code=3)
+# Fall back to UUID match
+# Returns: (entity_uuid, current_status)
+try:
+    if entity_resolved is None:
+        entity_resolved = True
+except NameError:
+    entity_resolved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_transition" name="[WF] Validate Transition (query workflow_transitions)" scriptFormat="python">
+      <bpmn:incoming>flow_resolve_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_valid_gw</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.workflow_transitions:
+#   WHERE entity_type = type AND from_status = current AND to_status = target
+# 28 valid transitions defined (feedback: 7, features: 5, build_tasks: 7, etc.)
+# Returns: {valid, requires_condition, side_effect} or NULL if invalid
+try:
+    if transition_valid is None:
+        transition_valid = True
+except NameError:
+    transition_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="valid_transition_gw" name="Valid Transition?" default="flow_valid">
+      <bpmn:incoming>flow_validate_to_valid_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_valid</bpmn:outgoing>
+      <bpmn:outgoing>flow_invalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Invalid transition → return error with valid options -->
+    <bpmn:scriptTask id="return_invalid" name="[WF] Return Error + Valid Transitions List" scriptFormat="python">
+      <bpmn:incoming>flow_invalid</bpmn:incoming>
+      <bpmn:outgoing>flow_invalid_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Query all valid transitions from current_status:
+#   SELECT to_status FROM workflow_transitions WHERE entity_type=type AND from_status=current
+# Return: {success: false, error: "Invalid transition", valid_transitions: [...]}
+error_returned = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Valid transition → check condition if required -->
+    <bpmn:exclusiveGateway id="has_condition_gw" name="Has Condition?" default="flow_no_condition">
+      <bpmn:incoming>flow_valid</bpmn:incoming>
+      <bpmn:outgoing>flow_has_condition</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_condition</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="check_condition" name="[WF] Check Condition (all_tasks_done, has_assignee)" scriptFormat="python">
+      <bpmn:incoming>flow_has_condition</bpmn:incoming>
+      <bpmn:outgoing>flow_condition_to_met_gw</bpmn:outgoing>
+      <bpmn:script>
+# WorkflowEngine.check_condition(condition_name, entity_type, entity_id)
+# Known conditions:
+#   - all_tasks_done: SELECT count(*) FROM build_tasks WHERE feature_id=X AND status != 'completed'
+#   - has_assignee: (reserved for future use)
+# Returns: True/False
+try:
+    if condition_met is None:
+        condition_met = True
+except NameError:
+    condition_met = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="condition_met_gw" name="Condition Met?" default="flow_condition_met">
+      <bpmn:incoming>flow_condition_to_met_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_condition_met</bpmn:outgoing>
+      <bpmn:outgoing>flow_condition_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="return_condition_error" name="[WF] Return Condition Error" scriptFormat="python">
+      <bpmn:incoming>flow_condition_failed</bpmn:incoming>
+      <bpmn:outgoing>flow_cond_err_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Return: {success: false, error: "Condition not met: all_tasks_done"}
+condition_error = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Execute the transition -->
+    <bpmn:exclusiveGateway id="execute_merge" name="Execute Merge">
+      <bpmn:incoming>flow_condition_met</bpmn:incoming>
+      <bpmn:incoming>flow_no_condition</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_update</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="execute_update" name="[DB] Execute Status UPDATE" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_update</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_side_effect</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.{table} SET status = new_status WHERE {pk} = entity_id
+# Atomic DB operation
+status_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="side_effect_gw" name="Has Side Effect?" default="flow_no_side_effect">
+      <bpmn:incoming>flow_update_to_side_effect</bpmn:incoming>
+      <bpmn:outgoing>flow_has_side_effect</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_side_effect</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="execute_side_effect" name="[WF] Execute Side Effect (check_feature_completion)" scriptFormat="python">
+      <bpmn:incoming>flow_has_side_effect</bpmn:incoming>
+      <bpmn:outgoing>flow_side_to_audit</bpmn:outgoing>
+      <bpmn:script>
+# WorkflowEngine.execute_side_effect(effect_name, entity_type, entity_id)
+# Known effects:
+#   - check_feature_completion: count remaining non-done tasks for parent feature
+#     If all done, could auto-advance feature status
+# Fires on build_task completion
+side_effect_executed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="audit_merge" name="Audit Merge">
+      <bpmn:incoming>flow_side_to_audit</bpmn:incoming>
+      <bpmn:incoming>flow_no_side_effect</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_audit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="log_audit" name="[DB] Log to audit_log (immutable trail)" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_audit</bpmn:incoming>
+      <bpmn:outgoing>flow_audit_to_wf_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT claude.audit_log (entity_type, entity_id, short_code,
+#   from_status, to_status, changed_by, side_effects_executed)
+# changed_by = CLAUDE_SESSION_ID environment variable
+# Immutable - no UPDATE/DELETE on audit_log
+audit_logged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 3: WORK CREATION                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="creation_handler" name="[DB] Create Work Item (feature/task/feedback)" scriptFormat="python">
+      <bpmn:incoming>flow_creation</bpmn:incoming>
+      <bpmn:outgoing>flow_creation_to_end</bpmn:outgoing>
+      <bpmn:script>
+# create_feature: INSERT claude.features (status='draft', auto short_code)
+# create_linked_task: Validate feature active, INSERT claude.build_tasks (status='todo')
+#   Enforces: description >= 100 chars, verification non-empty, files_affected >= 1
+# add_build_task: Lighter version without strict validation
+# create_feedback: INSERT claude.feedback (status='new')
+#   Validates feedback_type against column_registry
+work_created = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 4: KNOWLEDGE TOOLS                                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="knowledge_handler" name="[KM] Knowledge Handler (store/recall + embedding)" scriptFormat="python">
+      <bpmn:incoming>flow_knowledge</bpmn:incoming>
+      <bpmn:outgoing>flow_knowledge_to_end</bpmn:outgoing>
+      <bpmn:script>
+# store_knowledge: generate Voyage AI embedding → INSERT claude.knowledge
+# recall_knowledge: generate query embedding → cosine similarity search
+# store_book/store_book_reference: INSERT with embedding
+# recall_book_reference: semantic search over book_references
+# link_knowledge: INSERT claude.knowledge_relations
+# mark_knowledge_applied: UPDATE confidence_level (+5 success, -10 failure)
+# See knowledge_full_cycle.bpmn for detailed flows
+knowledge_handled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 5: CONFIG TOOLS                                                -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="config_handler" name="[CONFIG] Config Handler (deploy/regenerate)" scriptFormat="python">
+      <bpmn:incoming>flow_config</bpmn:incoming>
+      <bpmn:outgoing>flow_config_to_end</bpmn:outgoing>
+      <bpmn:script>
+# update_claude_md(project, section, content, mode):
+#   Parse CLAUDE.md by ## headers → update section → write file + update profiles DB
+# deploy_claude_md(project): Read profiles.config->'behavior' → write CLAUDE.md
+# deploy_project(project, components): Deploy settings/rules/skills/instructions from DB
+# regenerate_settings(project): 3-layer merge → write settings.local.json
+# All logged to config_deployment_log
+config_handled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 6: QUERY TOOLS (read-only)                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="query_handler" name="[DB] Query Handler (read-only lookups)" scriptFormat="python">
+      <bpmn:incoming>flow_query</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_end</bpmn:outgoing>
+      <bpmn:script>
+# get_work_context(scope): Token-budgeted context at current/feature/project zoom
+# get_ready_tasks(project): build_tasks with status='todo' and no open blockers
+# get_incomplete_todos(project): todos across all sessions
+# find_skill(task_description): Search skill_content by keyword similarity
+# All read-only, no state changes
+query_handled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- RESPONSE FORMATTING                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="response_merge" name="Response Merge">
+      <bpmn:incoming>flow_session_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_audit_to_wf_end</bpmn:incoming>
+      <bpmn:incoming>flow_invalid_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_cond_err_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_creation_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_knowledge_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_config_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_query_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_respond</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="format_response" name="[MCP] Format JSON Response" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_respond</bpmn:incoming>
+      <bpmn:outgoing>flow_respond_to_end</bpmn:outgoing>
+      <bpmn:script>
+# All tools return structured JSON dict:
+#   Success: {success: true, ...tool-specific fields}
+#   Error: {success: false, error: "message", ...context}
+# FastMCP serializes and returns to Claude Code
+response_formatted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end" name="Response Returned">
+      <bpmn:incoming>flow_respond_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start and dispatch -->
+    <bpmn:sequenceFlow id="flow_start_to_dispatch" sourceRef="start" targetRef="fastmcp_dispatch"/>
+    <bpmn:sequenceFlow id="flow_dispatch_to_category" sourceRef="fastmcp_dispatch" targetRef="category_gw"/>
+
+    <!-- Category routing -->
+    <bpmn:sequenceFlow id="flow_session" sourceRef="category_gw" targetRef="session_handler">
+      <bpmn:conditionExpression>category == "session"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_workflow" sourceRef="category_gw" targetRef="resolve_entity">
+      <bpmn:conditionExpression>category == "workflow"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_creation" sourceRef="category_gw" targetRef="creation_handler">
+      <bpmn:conditionExpression>category == "creation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_knowledge" sourceRef="category_gw" targetRef="knowledge_handler">
+      <bpmn:conditionExpression>category == "knowledge"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_config" sourceRef="category_gw" targetRef="config_handler">
+      <bpmn:conditionExpression>category == "config"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_query" sourceRef="category_gw" targetRef="query_handler"/>
+
+    <!-- Session path -->
+    <bpmn:sequenceFlow id="flow_session_to_end" sourceRef="session_handler" targetRef="response_merge"/>
+
+    <!-- Workflow engine path -->
+    <bpmn:sequenceFlow id="flow_resolve_to_validate" sourceRef="resolve_entity" targetRef="validate_transition"/>
+    <bpmn:sequenceFlow id="flow_validate_to_valid_gw" sourceRef="validate_transition" targetRef="valid_transition_gw"/>
+    <bpmn:sequenceFlow id="flow_valid" sourceRef="valid_transition_gw" targetRef="has_condition_gw"/>
+    <bpmn:sequenceFlow id="flow_invalid" sourceRef="valid_transition_gw" targetRef="return_invalid">
+      <bpmn:conditionExpression>transition_valid == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_invalid_to_end" sourceRef="return_invalid" targetRef="response_merge"/>
+
+    <!-- Condition check -->
+    <bpmn:sequenceFlow id="flow_has_condition" sourceRef="has_condition_gw" targetRef="check_condition">
+      <bpmn:conditionExpression>requires_condition != None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_condition" sourceRef="has_condition_gw" targetRef="execute_merge"/>
+    <bpmn:sequenceFlow id="flow_condition_to_met_gw" sourceRef="check_condition" targetRef="condition_met_gw"/>
+    <bpmn:sequenceFlow id="flow_condition_met" sourceRef="condition_met_gw" targetRef="execute_merge"/>
+    <bpmn:sequenceFlow id="flow_condition_failed" sourceRef="condition_met_gw" targetRef="return_condition_error">
+      <bpmn:conditionExpression>condition_met == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_cond_err_to_end" sourceRef="return_condition_error" targetRef="response_merge"/>
+
+    <!-- Execute transition -->
+    <bpmn:sequenceFlow id="flow_merge_to_update" sourceRef="execute_merge" targetRef="execute_update"/>
+    <bpmn:sequenceFlow id="flow_update_to_side_effect" sourceRef="execute_update" targetRef="side_effect_gw"/>
+    <bpmn:sequenceFlow id="flow_has_side_effect" sourceRef="side_effect_gw" targetRef="execute_side_effect">
+      <bpmn:conditionExpression>has_side_effect == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_side_effect" sourceRef="side_effect_gw" targetRef="audit_merge"/>
+    <bpmn:sequenceFlow id="flow_side_to_audit" sourceRef="execute_side_effect" targetRef="audit_merge"/>
+    <bpmn:sequenceFlow id="flow_merge_to_audit" sourceRef="audit_merge" targetRef="log_audit"/>
+    <bpmn:sequenceFlow id="flow_audit_to_wf_end" sourceRef="log_audit" targetRef="response_merge"/>
+
+    <!-- Other paths to end -->
+    <bpmn:sequenceFlow id="flow_creation_to_end" sourceRef="creation_handler" targetRef="response_merge"/>
+    <bpmn:sequenceFlow id="flow_knowledge_to_end" sourceRef="knowledge_handler" targetRef="response_merge"/>
+    <bpmn:sequenceFlow id="flow_config_to_end" sourceRef="config_handler" targetRef="response_merge"/>
+    <bpmn:sequenceFlow id="flow_query_to_end" sourceRef="query_handler" targetRef="response_merge"/>
+
+    <!-- Response -->
+    <bpmn:sequenceFlow id="flow_merge_to_respond" sourceRef="response_merge" targetRef="format_response"/>
+    <bpmn:sequenceFlow id="flow_respond_to_end" sourceRef="format_response" targetRef="end"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="project_tools_routing">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="400" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
