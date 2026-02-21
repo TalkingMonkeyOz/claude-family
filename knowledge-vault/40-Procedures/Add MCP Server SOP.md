@@ -203,7 +203,7 @@ Global MCPs are loaded at startup, not during SessionStart hook.
 
 ---
 
-## Method 1: Add to Project Type (All Projects of Type)
+## Method 2: Add to Project Type (All Projects of Type)
 
 ```sql
 -- Add to all infrastructure projects
@@ -221,7 +221,7 @@ WHERE project_type = 'infrastructure';
 
 ---
 
-## Method 2: Add to Specific Project
+## Method 3: Add to Specific Project
 
 ```sql
 -- Add to one project only
@@ -242,7 +242,7 @@ FROM claude.workspaces WHERE project_name = 'personal-finance-system';
 
 ---
 
-## Method 3: Add to Base Template (All Projects, All Types)
+## Method 4: Add to Base Template (All Projects, All Types)
 
 ```sql
 -- Update hooks-base template
@@ -375,13 +375,15 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 
 | MCP Server | Purpose | Scope | Projects Using |
 |------------|---------|-------|----------------|
-| postgres | Database access | Global | All |
-| orchestrator | Agent spawning, messaging | Global | All |
-| project-tools | Work tracking, knowledge, session facts | Global | All |
-| sequential-thinking | Complex problem solving | Global | All |
-| python-repl | Python code execution | Global | All |
-| nimbus-knowledge | Nimbus API domain knowledge | Global (Nimbus projects) | nimbus-* |
-| mui | MUI X component docs | Project (.mcp.json) | nimbus-mui, ATO-Tax-Agent |
+| postgres | Database access | Global (~/.claude/mcp.json) | All |
+| orchestrator | Agent spawning, messaging | Global (~/.claude/mcp.json) | All |
+| project-tools | Work tracking, knowledge, config ops (40+ tools) | Global (~/.claude/mcp.json) | All |
+| sequential-thinking | Complex problem solving | Global (~/.claude/mcp.json) | All |
+| python-repl | Python code execution | Global (~/.claude.json) | All |
+| bpmn-engine | BPMN process navigation, search, validation | Project (DB → .mcp.json) | All (23 projects) |
+| nimbus-knowledge | Nimbus API domain knowledge | Project (DB → .mcp.json) | nimbus-mui, nimbus-import, nimbus-odata-configurator, nimbus-user-loader |
+| mui | MUI X component docs | Project (DB → .mcp.json) | nimbus-mui, ATO-Tax-Agent |
+| playwright | Browser automation | Project (DB → .mcp.json) | ATO-Tax-Agent |
 
 ---
 
@@ -425,17 +427,22 @@ cat ~/.claude/hooks.log | tail -50
 
 ---
 
+## BPMN Process Model
+
+The MCP configuration deployment process is modeled in BPMN: `L2_mcp_config_deployment`
+
+See [[MCP configuration]] for architecture details.
+
 ## Related
 
 - [[New Project SOP]] - Creating projects with MCPs
 - [[Config Management SOP]] - Configuration flow
 - [[Session Lifecycle - Session Start]] - When config syncs
-- [[MCP Registry]] - Complete MCP list
 - [[MCP configuration]] - MCP configuration overview
 
 ---
 
-**Version**: 3.1 (Updated MCP server list, added DATABASE_URI requirement, removed deprecated MCPs)
+**Version**: 3.2 (Added bpmn-engine to all projects, fixed nimbus-knowledge scope to project-specific, added BPMN ref)
 **Created**: 2025-12-27
-**Updated**: 2026-02-07
+**Updated**: 2026-02-21
 **Location**: 40-Procedures/Add MCP Server SOP.md

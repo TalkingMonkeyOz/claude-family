@@ -165,7 +165,7 @@ WHERE project_name = 'finance-htmx';
 
 ## Common MCP Servers
 
-### Infrastructure (Global)
+### Infrastructure (Global - ~/.claude/mcp.json)
 
 | MCP | Package | Purpose |
 |-----|---------|---------|
@@ -175,6 +175,12 @@ WHERE project_name = 'finance-htmx';
 | **orchestrator** | Custom Python | Agent spawning, messaging |
 | ~~memory~~ | ~~`@modelcontextprotocol/server-memory`~~ | Removed 2026-01 (replaced by project-tools knowledge) |
 | ~~filesystem~~ | ~~`@modelcontextprotocol/server-filesystem`~~ | Removed 2026-01 (Claude has built-in Read/Write/Edit) |
+
+### Universal Project MCPs (DB-driven, all 23 projects)
+
+| MCP | Package | Purpose |
+|-----|---------|---------|
+| **bpmn-engine** | Custom Python | BPMN process navigation, search, validation, dependency trees |
 
 ### project-tools v3 Tool Categories
 
@@ -195,13 +201,14 @@ The project-tools MCP evolved from a CRUD wrapper (v1) to a workflow engine (v2)
 
 ---
 
-### Tech Stack Specific (Project)
+### Domain-Specific (Project, DB-driven)
 
-| MCP | Package | Use Case |
-|-----|---------|----------|
-| **tailwindcss** | `tailwindcss-mcp-server` | Tailwind/DaisyUI projects |
-| **mui** | `@mui/mcp@latest` | React + Material-UI projects |
-| **playwright** | `@playwright/mcp` | Browser automation (or use orchestrator agent) |
+| MCP | Package | Use Case | Projects |
+|-----|---------|----------|----------|
+| **nimbus-knowledge** | Custom Python | Nimbus API entities, patterns, learnings | nimbus-mui, nimbus-import, nimbus-odata-configurator, nimbus-user-loader |
+| **tailwindcss** | `tailwindcss-mcp-server` | Tailwind/DaisyUI projects | finance-htmx |
+| **mui** | `@mui/mcp@latest` | React + Material-UI projects | nimbus-mui, ATO-Tax-Agent |
+| **playwright** | `@playwright/mcp` | Browser automation (or use orchestrator agent) | ATO-Tax-Agent |
 
 ---
 
@@ -502,7 +509,7 @@ INSERT INTO claude.mcp_configs (
 
 ---
 
-**Version**: 1.2
+**Version**: 1.3 (Added bpmn-engine (universal), fixed nimbus-knowledge scope (project-specific), added domain-specific section)
 **Created**: 2025-12-28
-**Updated**: 2026-02-11
+**Updated**: 2026-02-21
 **Location**: 20-Domains/MCP Server Management.md

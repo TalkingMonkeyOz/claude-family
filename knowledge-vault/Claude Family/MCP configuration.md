@@ -17,11 +17,13 @@ How MCP servers are configured across Claude projects.
 
 | Tier | Source of Truth | Generated File | Update Method |
 |------|-----------------|----------------|---------------|
-| **1. Global/User MCPs** | `~/.claude.json` | — | Manual file edit |
+| **1. Global MCPs** | `~/.claude/mcp.json` | — | Manual file edit |
 | **2. Project MCPs** | Database `mcp_configs` | `.mcp.json` | Database UPDATE |
 | 3. Enable Control | Database `enabledMcpjsonServers` | `settings.local.json` | Database UPDATE |
 
-**Global MCPs**: postgres, orchestrator, sequential-thinking, python-repl
+**Global MCPs**: postgres, orchestrator, sequential-thinking, project-tools
+
+**Note**: `~/.claude/mcp.json` is the global config (manually maintained). Do NOT confuse with `~/.claude.json` which is Claude Code's internal config file managed by `/mcp add` CLI.
 
 ---
 
@@ -108,7 +110,14 @@ WHERE project_name = 'your-project';
 
 ### Add Global MCP (All Projects)
 
-Edit `~/.claude.json` directly (manual file edit - not database-driven).
+Edit `~/.claude/mcp.json` directly (manual file edit - not database-driven).
+
+### BPMN Process Model
+
+The MCP configuration deployment process is modeled in BPMN:
+- **Process**: `L2_mcp_config_deployment` (`processes/infrastructure/mcp_config_deployment.bpmn`)
+- **Flow A (Launcher)**: start-claude.bat → read DB → generate .mcp.json → launch Claude
+- **Flow B (Add/Remove)**: scope decision → global (manual edit) or project (DB update → regenerate)
 
 ---
 
@@ -224,7 +233,7 @@ psql -c "SELECT startup_config->'mcp_configs' FROM claude.workspaces WHERE proje
 
 ---
 
-**Version**: 5.0 (npx resolved to direct node paths - eliminates cmd.exe shim overhead)
+**Version**: 5.1 (Fixed global MCPs location: ~/.claude/mcp.json not ~/.claude.json, added BPMN reference)
 **Created**: 2025-12-26
-**Updated**: 2026-02-20
+**Updated**: 2026-02-21
 **Location**: Claude Family/MCP configuration.md
