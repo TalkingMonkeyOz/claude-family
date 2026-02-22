@@ -1,0 +1,300 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-core-claude"
+    id="Definitions_L1_CC">
+
+  <!--
+    LEVEL 1: Core Claude Prompt Processing
+
+    Models ONE prompt-response cycle for vanilla Claude. No hooks, no sessions,
+    no Claude Family infrastructure. Every element uses [CLAUDE] actor prefix.
+
+    This is the base model that the Claude Family Extensions wrapper calls
+    via CallActivity. Changes here represent Anthropic platform changes.
+
+    Flow:
+      Prompt Received
+        -> Load Context Layers
+        -> Parse User Intent
+        -> [question] -> Formulate Answer
+        -> [conversation/default] -> Generate Conversational Reply
+        -> [action] -> Analyze Complexity
+            -> [simple] -> Plan Single Step
+            -> [multi_step] -> Decompose Into Steps -> Create Execution Plan
+            -> [delegation] -> Assess Delegation -> Delegate to Sub-Agent
+        -> Tool Needed?
+            [no] -> Reflect on Output -> merge
+            [yes] -> Select Tool -> Validate Params -> Execute Tool
+                  -> Evaluate Result -> [more_tools] -> loop / [done] -> Reflect -> merge
+        -> Compose Response -> Deliver Response -> end
+
+    Gateway variables (seed data):
+      intent_type: "question", "action", default="conversation"
+      complexity: "simple" (default), "multi_step", "delegation"
+      needs_tool: True/False (default=False)
+      more_tools_needed: True/False (default=False)
+  -->
+
+  <bpmn:process id="L1_core_claude" name="L1: Core Claude Prompt Processing" isExecutable="true">
+
+    <!-- ============================================================
+         Entry: Prompt received
+         ============================================================ -->
+
+    <bpmn:startEvent id="cc_start" name="Prompt Received">
+      <bpmn:outgoing>f_start_context</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Context loading: system prompt, CLAUDE.md, conversation history -->
+    <bpmn:scriptTask id="load_context" name="[CLAUDE] Load Context Layers" scriptFormat="python">
+      <bpmn:incoming>f_start_context</bpmn:incoming>
+      <bpmn:outgoing>f_context_intent</bpmn:outgoing>
+      <bpmn:script>context_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Intent Classification
+         ============================================================ -->
+
+    <bpmn:scriptTask id="parse_intent" name="[CLAUDE] Parse User Intent" scriptFormat="python">
+      <bpmn:incoming>f_context_intent</bpmn:incoming>
+      <bpmn:outgoing>f_intent_gw</bpmn:outgoing>
+      <bpmn:script>intent_parsed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="intent_gw" name="Intent Type?" default="flow_conversation">
+      <bpmn:incoming>f_intent_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_question</bpmn:outgoing>
+      <bpmn:outgoing>flow_action</bpmn:outgoing>
+      <bpmn:outgoing>flow_conversation</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         Question Path: formulate answer directly
+         ============================================================ -->
+
+    <bpmn:scriptTask id="formulate_answer" name="[CLAUDE] Formulate Answer" scriptFormat="python">
+      <bpmn:incoming>flow_question</bpmn:incoming>
+      <bpmn:outgoing>f_answer_merge</bpmn:outgoing>
+      <bpmn:script>answer_formulated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Conversation Path (default): generate reply
+         ============================================================ -->
+
+    <bpmn:scriptTask id="conversational_reply" name="[CLAUDE] Generate Conversational Reply" scriptFormat="python">
+      <bpmn:incoming>flow_conversation</bpmn:incoming>
+      <bpmn:outgoing>f_convo_merge</bpmn:outgoing>
+      <bpmn:script>reply_generated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Action Path: analyze complexity
+         ============================================================ -->
+
+    <bpmn:scriptTask id="analyze_complexity" name="[CLAUDE] Analyze Complexity" scriptFormat="python">
+      <bpmn:incoming>flow_action</bpmn:incoming>
+      <bpmn:outgoing>f_complexity_gw</bpmn:outgoing>
+      <bpmn:script>complexity_analyzed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="complexity_gw" name="Complexity Level?" default="flow_simple">
+      <bpmn:incoming>f_complexity_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_simple</bpmn:outgoing>
+      <bpmn:outgoing>flow_multi_step</bpmn:outgoing>
+      <bpmn:outgoing>flow_delegation</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Simple: plan single step -->
+    <bpmn:scriptTask id="plan_single_step" name="[CLAUDE] Plan Single Step" scriptFormat="python">
+      <bpmn:incoming>flow_simple</bpmn:incoming>
+      <bpmn:outgoing>f_simple_merge</bpmn:outgoing>
+      <bpmn:script>single_step_planned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Multi-step: decompose + create plan -->
+    <bpmn:scriptTask id="decompose_steps" name="[CLAUDE] Decompose Into Steps" scriptFormat="python">
+      <bpmn:incoming>flow_multi_step</bpmn:incoming>
+      <bpmn:outgoing>f_decompose_plan</bpmn:outgoing>
+      <bpmn:script>steps_decomposed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_plan" name="[CLAUDE] Create Execution Plan" scriptFormat="python">
+      <bpmn:incoming>f_decompose_plan</bpmn:incoming>
+      <bpmn:outgoing>f_plan_merge</bpmn:outgoing>
+      <bpmn:script>plan_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Delegation: assess + delegate -->
+    <bpmn:scriptTask id="assess_delegation" name="[CLAUDE] Assess Delegation Need" scriptFormat="python">
+      <bpmn:incoming>flow_delegation</bpmn:incoming>
+      <bpmn:outgoing>f_assess_delegate</bpmn:outgoing>
+      <bpmn:script>delegation_assessed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="delegate_to_agent" name="[CLAUDE] Delegate to Sub-Agent">
+      <bpmn:incoming>f_assess_delegate</bpmn:incoming>
+      <bpmn:outgoing>f_delegate_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Merge all action paths (simple/multi_step/delegation) -->
+    <bpmn:exclusiveGateway id="action_merge" name="Action Path Merge">
+      <bpmn:incoming>f_simple_merge</bpmn:incoming>
+      <bpmn:incoming>f_plan_merge</bpmn:incoming>
+      <bpmn:incoming>f_delegate_merge</bpmn:incoming>
+      <bpmn:outgoing>f_action_tool_check</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         Tool Loop (within action path)
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="tool_needed_gw" name="Tool Needed?" default="flow_no_tool">
+      <bpmn:incoming>f_action_tool_check</bpmn:incoming>
+      <bpmn:outgoing>flow_needs_tool</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_tool</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- No tool -> reflect directly -->
+    <bpmn:scriptTask id="reflect_no_tool" name="[CLAUDE] Reflect on Output" scriptFormat="python">
+      <bpmn:incoming>flow_no_tool</bpmn:incoming>
+      <bpmn:outgoing>f_reflect_no_tool_merge</bpmn:outgoing>
+      <bpmn:script>reflected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Tool path: select -> validate -> execute -> evaluate -->
+    <bpmn:scriptTask id="select_tool" name="[CLAUDE] Select Tool" scriptFormat="python">
+      <bpmn:incoming>flow_needs_tool</bpmn:incoming>
+      <bpmn:incoming>flow_more_tools</bpmn:incoming>
+      <bpmn:outgoing>f_select_validate</bpmn:outgoing>
+      <bpmn:script>tool_selected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_tool_params" name="[CLAUDE] Validate Parameters" scriptFormat="python">
+      <bpmn:incoming>f_select_validate</bpmn:incoming>
+      <bpmn:outgoing>f_validate_execute</bpmn:outgoing>
+      <bpmn:script>params_validated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="execute_tool" name="[CLAUDE] Execute Tool">
+      <bpmn:incoming>f_validate_execute</bpmn:incoming>
+      <bpmn:outgoing>f_execute_evaluate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="evaluate_result" name="[CLAUDE] Evaluate Result" scriptFormat="python">
+      <bpmn:incoming>f_execute_evaluate</bpmn:incoming>
+      <bpmn:outgoing>f_evaluate_more_gw</bpmn:outgoing>
+      <bpmn:script>result_evaluated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="more_tools_gw" name="More Tools Needed?" default="flow_tools_done">
+      <bpmn:incoming>f_evaluate_more_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_more_tools</bpmn:outgoing>
+      <bpmn:outgoing>flow_tools_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Tool loop done -> reflect -->
+    <bpmn:scriptTask id="reflect_after_tools" name="[CLAUDE] Reflect on Output" scriptFormat="python">
+      <bpmn:incoming>flow_tools_done</bpmn:incoming>
+      <bpmn:outgoing>f_reflect_tools_merge</bpmn:outgoing>
+      <bpmn:script>reflected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Output Composition (all paths merge here)
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="output_merge" name="Output Merge">
+      <bpmn:incoming>f_answer_merge</bpmn:incoming>
+      <bpmn:incoming>f_convo_merge</bpmn:incoming>
+      <bpmn:incoming>f_reflect_no_tool_merge</bpmn:incoming>
+      <bpmn:incoming>f_reflect_tools_merge</bpmn:incoming>
+      <bpmn:outgoing>f_to_compose</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="compose_response" name="[CLAUDE] Compose Response" scriptFormat="python">
+      <bpmn:incoming>f_to_compose</bpmn:incoming>
+      <bpmn:outgoing>f_compose_deliver</bpmn:outgoing>
+      <bpmn:script>response_composed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="deliver_response" name="[CLAUDE] Deliver Response" scriptFormat="python">
+      <bpmn:incoming>f_compose_deliver</bpmn:incoming>
+      <bpmn:outgoing>f_deliver_end</bpmn:outgoing>
+      <bpmn:script>response_delivered = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="cc_end" name="Response Delivered">
+      <bpmn:incoming>f_deliver_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Sequence Flows
+         ============================================================ -->
+
+    <!-- Entry -->
+    <bpmn:sequenceFlow id="f_start_context" sourceRef="cc_start" targetRef="load_context"/>
+    <bpmn:sequenceFlow id="f_context_intent" sourceRef="load_context" targetRef="parse_intent"/>
+    <bpmn:sequenceFlow id="f_intent_gw" sourceRef="parse_intent" targetRef="intent_gw"/>
+
+    <!-- Intent branches -->
+    <bpmn:sequenceFlow id="flow_question" sourceRef="intent_gw" targetRef="formulate_answer">
+      <bpmn:conditionExpression>intent_type == "question"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_action" sourceRef="intent_gw" targetRef="analyze_complexity">
+      <bpmn:conditionExpression>intent_type == "action"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_conversation" sourceRef="intent_gw" targetRef="conversational_reply"/>
+
+    <!-- Complexity branches -->
+    <bpmn:sequenceFlow id="f_complexity_gw" sourceRef="analyze_complexity" targetRef="complexity_gw"/>
+    <bpmn:sequenceFlow id="flow_simple" sourceRef="complexity_gw" targetRef="plan_single_step"/>
+    <bpmn:sequenceFlow id="flow_multi_step" sourceRef="complexity_gw" targetRef="decompose_steps">
+      <bpmn:conditionExpression>complexity == "multi_step"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_delegation" sourceRef="complexity_gw" targetRef="assess_delegation">
+      <bpmn:conditionExpression>complexity == "delegation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Action sub-paths -->
+    <bpmn:sequenceFlow id="f_decompose_plan" sourceRef="decompose_steps" targetRef="create_plan"/>
+    <bpmn:sequenceFlow id="f_assess_delegate" sourceRef="assess_delegation" targetRef="delegate_to_agent"/>
+
+    <!-- Merge action paths -->
+    <bpmn:sequenceFlow id="f_simple_merge" sourceRef="plan_single_step" targetRef="action_merge"/>
+    <bpmn:sequenceFlow id="f_plan_merge" sourceRef="create_plan" targetRef="action_merge"/>
+    <bpmn:sequenceFlow id="f_delegate_merge" sourceRef="delegate_to_agent" targetRef="action_merge"/>
+    <bpmn:sequenceFlow id="f_action_tool_check" sourceRef="action_merge" targetRef="tool_needed_gw"/>
+
+    <!-- Tool needed check -->
+    <bpmn:sequenceFlow id="flow_needs_tool" sourceRef="tool_needed_gw" targetRef="select_tool">
+      <bpmn:conditionExpression>needs_tool == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_tool" sourceRef="tool_needed_gw" targetRef="reflect_no_tool"/>
+
+    <!-- Tool loop -->
+    <bpmn:sequenceFlow id="f_select_validate" sourceRef="select_tool" targetRef="validate_tool_params"/>
+    <bpmn:sequenceFlow id="f_validate_execute" sourceRef="validate_tool_params" targetRef="execute_tool"/>
+    <bpmn:sequenceFlow id="f_execute_evaluate" sourceRef="execute_tool" targetRef="evaluate_result"/>
+    <bpmn:sequenceFlow id="f_evaluate_more_gw" sourceRef="evaluate_result" targetRef="more_tools_gw"/>
+    <bpmn:sequenceFlow id="flow_more_tools" sourceRef="more_tools_gw" targetRef="select_tool">
+      <bpmn:conditionExpression>more_tools_needed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_tools_done" sourceRef="more_tools_gw" targetRef="reflect_after_tools"/>
+
+    <!-- Reflect paths -->
+    <bpmn:sequenceFlow id="f_reflect_no_tool_merge" sourceRef="reflect_no_tool" targetRef="output_merge"/>
+    <bpmn:sequenceFlow id="f_reflect_tools_merge" sourceRef="reflect_after_tools" targetRef="output_merge"/>
+
+    <!-- Output merge -> compose -> deliver -> end -->
+    <bpmn:sequenceFlow id="f_answer_merge" sourceRef="formulate_answer" targetRef="output_merge"/>
+    <bpmn:sequenceFlow id="f_convo_merge" sourceRef="conversational_reply" targetRef="output_merge"/>
+    <bpmn:sequenceFlow id="f_to_compose" sourceRef="output_merge" targetRef="compose_response"/>
+    <bpmn:sequenceFlow id="f_compose_deliver" sourceRef="compose_response" targetRef="deliver_response"/>
+    <bpmn:sequenceFlow id="f_deliver_end" sourceRef="deliver_response" targetRef="cc_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

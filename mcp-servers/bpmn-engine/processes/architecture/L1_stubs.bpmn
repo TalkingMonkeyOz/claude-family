@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-stubs"
+    id="Definitions_L1_Stubs">
+
+  <!--
+    L1 Stub Processes for L0 Call Activity Resolution
+
+    Minimal stub processes (startEvent → userTask → endEvent) used by
+    L0_claude_family.bpmn to resolve callActivity references without loading
+    the full L1 implementations. Each stub has a single user task that
+    acts as a placeholder for the real L1 process.
+
+    Stubs provided for:
+      - 6 existing capabilities (session, work tracking, knowledge, enforcement, agents, config)
+      - 2 new architecture models (core claude, claude family extensions)
+  -->
+
+  <!-- Existing L1 capabilities -->
+
+  <bpmn:process id="L1_session_management" name="L1 Stub: Session Management" isExecutable="true">
+    <bpmn:startEvent id="sm_stub_start" name="Start">
+      <bpmn:outgoing>sm_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="sm_placeholder" name="Session Management Placeholder">
+      <bpmn:incoming>sm_f1</bpmn:incoming>
+      <bpmn:outgoing>sm_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="sm_stub_end" name="End">
+      <bpmn:incoming>sm_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="sm_f1" sourceRef="sm_stub_start" targetRef="sm_placeholder"/>
+    <bpmn:sequenceFlow id="sm_f2" sourceRef="sm_placeholder" targetRef="sm_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_work_tracking" name="L1 Stub: Work Tracking" isExecutable="true">
+    <bpmn:startEvent id="wt_stub_start" name="Start">
+      <bpmn:outgoing>wt_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="wt_placeholder" name="Work Tracking Placeholder">
+      <bpmn:incoming>wt_f1</bpmn:incoming>
+      <bpmn:outgoing>wt_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="wt_stub_end" name="End">
+      <bpmn:incoming>wt_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="wt_f1" sourceRef="wt_stub_start" targetRef="wt_placeholder"/>
+    <bpmn:sequenceFlow id="wt_f2" sourceRef="wt_placeholder" targetRef="wt_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_knowledge_management" name="L1 Stub: Knowledge Management" isExecutable="true">
+    <bpmn:startEvent id="km_stub_start" name="Start">
+      <bpmn:outgoing>km_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="km_l1_placeholder" name="Knowledge Management Placeholder">
+      <bpmn:incoming>km_f1</bpmn:incoming>
+      <bpmn:outgoing>km_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="km_stub_end" name="End">
+      <bpmn:incoming>km_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="km_f1" sourceRef="km_stub_start" targetRef="km_l1_placeholder"/>
+    <bpmn:sequenceFlow id="km_f2" sourceRef="km_l1_placeholder" targetRef="km_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_enforcement" name="L1 Stub: Enforcement" isExecutable="true">
+    <bpmn:startEvent id="ef_stub_start" name="Start">
+      <bpmn:outgoing>ef_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="ef_placeholder" name="Enforcement Placeholder">
+      <bpmn:incoming>ef_f1</bpmn:incoming>
+      <bpmn:outgoing>ef_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="ef_stub_end" name="End">
+      <bpmn:incoming>ef_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="ef_f1" sourceRef="ef_stub_start" targetRef="ef_placeholder"/>
+    <bpmn:sequenceFlow id="ef_f2" sourceRef="ef_placeholder" targetRef="ef_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_agent_orchestration" name="L1 Stub: Agent Orchestration" isExecutable="true">
+    <bpmn:startEvent id="ao_stub_start" name="Start">
+      <bpmn:outgoing>ao_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="ao_placeholder" name="Agent Orchestration Placeholder">
+      <bpmn:incoming>ao_f1</bpmn:incoming>
+      <bpmn:outgoing>ao_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="ao_stub_end" name="End">
+      <bpmn:incoming>ao_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="ao_f1" sourceRef="ao_stub_start" targetRef="ao_placeholder"/>
+    <bpmn:sequenceFlow id="ao_f2" sourceRef="ao_placeholder" targetRef="ao_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_config_management" name="L1 Stub: Configuration Management" isExecutable="true">
+    <bpmn:startEvent id="cm_stub_start" name="Start">
+      <bpmn:outgoing>cm_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="cm_placeholder" name="Configuration Management Placeholder">
+      <bpmn:incoming>cm_f1</bpmn:incoming>
+      <bpmn:outgoing>cm_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="cm_stub_end" name="End">
+      <bpmn:incoming>cm_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="cm_f1" sourceRef="cm_stub_start" targetRef="cm_placeholder"/>
+    <bpmn:sequenceFlow id="cm_f2" sourceRef="cm_placeholder" targetRef="cm_stub_end"/>
+  </bpmn:process>
+
+  <!-- New architecture models -->
+
+  <bpmn:process id="L1_core_claude" name="L1 Stub: Core Claude" isExecutable="true">
+    <bpmn:startEvent id="cc_stub_start" name="Start">
+      <bpmn:outgoing>cc_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="cc_placeholder" name="Core Claude Placeholder">
+      <bpmn:incoming>cc_f1</bpmn:incoming>
+      <bpmn:outgoing>cc_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="cc_stub_end" name="End">
+      <bpmn:incoming>cc_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="cc_f1" sourceRef="cc_stub_start" targetRef="cc_placeholder"/>
+    <bpmn:sequenceFlow id="cc_f2" sourceRef="cc_placeholder" targetRef="cc_stub_end"/>
+  </bpmn:process>
+
+  <bpmn:process id="L1_claude_family_extensions" name="L1 Stub: Claude Family Extensions" isExecutable="true">
+    <bpmn:startEvent id="cfe_stub_start" name="Start">
+      <bpmn:outgoing>cfe_f1</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="cfe_placeholder" name="Claude Family Extensions Placeholder">
+      <bpmn:incoming>cfe_f1</bpmn:incoming>
+      <bpmn:outgoing>cfe_f2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="cfe_stub_end" name="End">
+      <bpmn:incoming>cfe_f2</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="cfe_f1" sourceRef="cfe_stub_start" targetRef="cfe_placeholder"/>
+    <bpmn:sequenceFlow id="cfe_f2" sourceRef="cfe_placeholder" targetRef="cfe_stub_end"/>
+  </bpmn:process>
+
+</bpmn:definitions>

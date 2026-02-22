@@ -1,0 +1,340 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L1-claude-family-extensions"
+    id="Definitions_L1_CFE">
+
+  <!--
+    LEVEL 1: Claude Family Extensions
+
+    Extension wrapper around L1_core_claude. Models the full Claude Family
+    session lifecycle including hooks, RAG, and session management. Wraps
+    the core via CallActivity for each prompt cycle.
+
+    This lets us:
+      - Test extension config changes without touching the core model
+      - Update the core model when Anthropic changes Claude
+      - Give the manager app a clear model to display and configure against
+
+    Flow:
+      Session Started
+        -> [HOOK] Log Session -> Init Task Map -> Archive Stale -> Check Inbox
+        -> [CLAUDE] Load State -> [has prior] -> Restore / [fresh] -> Fresh Session
+        +-> [CLAUDE] Receive Prompt (loop)
+        |  -> [HOOK] Check Session Changed -> [changed] -> Reset Task Map
+        |  -> [HOOK] Classify Prompt -> [needs_rag] -> Query RAG -> Suggest Skills
+        |  -> [HOOK] Inject Context
+        |  -> [CORE] Process Prompt (CallActivity to L1_core_claude)
+        |  -> [HOOK] Post-Processing Sync
+        |  -> Action?
+        |      [continue] -> loop back
+        |      [compact] -> PreCompact -> Checkpoint -> [session_id_changed] -> Warning -> loop
+        |      [end_auto] -> Auto-Close -> end
+        |      [end_manual] -> Summary -> Knowledge -> Close -> end
+        +=======================================================================+
+
+    Actors: [HOOK], [CLAUDE], [DB], [KM], [CORE]
+  -->
+
+  <bpmn:process id="L1_claude_family_extensions" name="L1: Claude Family Extensions" isExecutable="true">
+
+    <!-- ============================================================
+         Phase 1: Session Startup (SessionStart hook - automated)
+         ============================================================ -->
+
+    <bpmn:startEvent id="cfe_start" name="Session Started">
+      <bpmn:outgoing>f1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="hook_log_session" name="[HOOK] Log Session to DB" scriptFormat="python">
+      <bpmn:incoming>f1</bpmn:incoming>
+      <bpmn:outgoing>f2</bpmn:outgoing>
+      <bpmn:script>session_logged = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="hook_init_task_map" name="[HOOK] Initialize Task Map" scriptFormat="python">
+      <bpmn:incoming>f2</bpmn:incoming>
+      <bpmn:outgoing>f3</bpmn:outgoing>
+      <bpmn:script>task_map_initialized = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="hook_archive_stale" name="[HOOK] Archive Stale Todos" scriptFormat="python">
+      <bpmn:incoming>f3</bpmn:incoming>
+      <bpmn:outgoing>f4</bpmn:outgoing>
+      <bpmn:script>stale_archived = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="hook_check_inbox" name="[HOOK] Check Inbox Messages" scriptFormat="python">
+      <bpmn:incoming>f4</bpmn:incoming>
+      <bpmn:outgoing>f5</bpmn:outgoing>
+      <bpmn:script>inbox_checked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Phase 2: State Loading
+         ============================================================ -->
+
+    <bpmn:userTask id="load_state" name="[CLAUDE] Load Session State">
+      <bpmn:incoming>f5</bpmn:incoming>
+      <bpmn:outgoing>f6</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="prior_state_gw" name="Has Prior State?" default="flow_fresh">
+      <bpmn:incoming>f6</bpmn:incoming>
+      <bpmn:outgoing>flow_resume</bpmn:outgoing>
+      <bpmn:outgoing>flow_fresh</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="restore_context" name="[CLAUDE] Restore Session Context">
+      <bpmn:incoming>flow_resume</bpmn:incoming>
+      <bpmn:outgoing>f_resume_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="fresh_session" name="[CLAUDE] Fresh Session" scriptFormat="python">
+      <bpmn:incoming>flow_fresh</bpmn:incoming>
+      <bpmn:outgoing>f_fresh_merge</bpmn:outgoing>
+      <bpmn:script>session_context = "fresh"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="state_merge" name="State Merge">
+      <bpmn:incoming>f_resume_merge</bpmn:incoming>
+      <bpmn:incoming>f_fresh_merge</bpmn:incoming>
+      <bpmn:outgoing>f7</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         Phase 3: Prompt Loop
+         ============================================================ -->
+
+    <bpmn:userTask id="receive_prompt" name="[CLAUDE] Receive User Prompt">
+      <bpmn:incoming>f7</bpmn:incoming>
+      <bpmn:incoming>flow_continue</bpmn:incoming>
+      <bpmn:incoming>flow_after_compact</bpmn:incoming>
+      <bpmn:outgoing>f8</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Pre-prompt hooks: session change check -->
+    <bpmn:scriptTask id="hook_check_session" name="[HOOK] Check Session Changed" scriptFormat="python">
+      <bpmn:incoming>f8</bpmn:incoming>
+      <bpmn:outgoing>f_session_check_gw</bpmn:outgoing>
+      <bpmn:script>session_check_done = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="session_change_gw" name="Session Changed?" default="flow_session_same">
+      <bpmn:incoming>f_session_check_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_session_changed</bpmn:outgoing>
+      <bpmn:outgoing>flow_session_same</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="hook_reset_task_map" name="[HOOK] Reset Task Map" scriptFormat="python">
+      <bpmn:incoming>flow_session_changed</bpmn:incoming>
+      <bpmn:outgoing>f_reset_classify</bpmn:outgoing>
+      <bpmn:script>task_map_reset = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Pre-prompt hooks: classify + RAG -->
+    <bpmn:scriptTask id="hook_classify_prompt" name="[HOOK] Classify Prompt" scriptFormat="python">
+      <bpmn:incoming>flow_session_same</bpmn:incoming>
+      <bpmn:incoming>f_reset_classify</bpmn:incoming>
+      <bpmn:outgoing>f_classify_rag_gw</bpmn:outgoing>
+      <bpmn:script>prompt_classified = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="rag_needed_gw" name="Needs RAG?" default="flow_skip_rag">
+      <bpmn:incoming>f_classify_rag_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_rag</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_rag</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="hook_query_rag" name="[HOOK] Query RAG Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_do_rag</bpmn:incoming>
+      <bpmn:outgoing>f_rag_skills</bpmn:outgoing>
+      <bpmn:script>rag_executed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="hook_suggest_skills" name="[HOOK] Suggest Skills" scriptFormat="python">
+      <bpmn:incoming>f_rag_skills</bpmn:incoming>
+      <bpmn:outgoing>f_skills_inject</bpmn:outgoing>
+      <bpmn:script>skills_suggested = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Context injection (always runs - merges RAG and non-RAG paths) -->
+    <bpmn:scriptTask id="hook_inject_context" name="[HOOK] Inject Context (RAG + Notepad + Protocol)" scriptFormat="python">
+      <bpmn:incoming>f_skills_inject</bpmn:incoming>
+      <bpmn:incoming>flow_skip_rag</bpmn:incoming>
+      <bpmn:outgoing>f_inject_core</bpmn:outgoing>
+      <bpmn:script>context_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Phase 4: Core Processing (CallActivity to L1_core_claude)
+         ============================================================ -->
+
+    <bpmn:callActivity id="call_core_claude" name="[CORE] Process Prompt" calledElement="L1_core_claude">
+      <bpmn:incoming>f_inject_core</bpmn:incoming>
+      <bpmn:outgoing>f_core_post</bpmn:outgoing>
+    </bpmn:callActivity>
+
+    <!-- ============================================================
+         Phase 5: Post-Processing
+         ============================================================ -->
+
+    <bpmn:scriptTask id="hook_post_sync" name="[HOOK] Post-Processing Sync (Todo/Task/MCP)" scriptFormat="python">
+      <bpmn:incoming>f_core_post</bpmn:incoming>
+      <bpmn:outgoing>f_post_action_gw</bpmn:outgoing>
+      <bpmn:script>post_synced = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Phase 6: Session Action Decision
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="action_gw" name="Session Action?" default="flow_continue">
+      <bpmn:incoming>f_post_action_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_continue</bpmn:outgoing>
+      <bpmn:outgoing>flow_compact</bpmn:outgoing>
+      <bpmn:outgoing>flow_end_auto</bpmn:outgoing>
+      <bpmn:outgoing>flow_end_manual</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Continue: loop back to receive_prompt -->
+
+    <!-- Compact path -->
+    <bpmn:scriptTask id="precompact_inject" name="[HOOK] PreCompact: Inject Work Items" scriptFormat="python">
+      <bpmn:incoming>flow_compact</bpmn:incoming>
+      <bpmn:outgoing>f_compact_save</bpmn:outgoing>
+      <bpmn:script>precompact_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="save_checkpoint" name="[DB] Save Checkpoint" scriptFormat="python">
+      <bpmn:incoming>f_compact_save</bpmn:incoming>
+      <bpmn:outgoing>f_compact_detect</bpmn:outgoing>
+      <bpmn:script>checkpoint_saved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="continuation_gw" name="Session ID Changed?" default="flow_same_session">
+      <bpmn:incoming>f_compact_detect</bpmn:incoming>
+      <bpmn:outgoing>flow_same_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_new_session_id</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="log_continuation" name="[HOOK] Log Continuation Warning" scriptFormat="python">
+      <bpmn:incoming>flow_new_session_id</bpmn:incoming>
+      <bpmn:outgoing>f_cont_merge</bpmn:outgoing>
+      <bpmn:script>continuation_warning = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="compact_merge" name="Post-Compact Merge">
+      <bpmn:incoming>flow_same_session</bpmn:incoming>
+      <bpmn:incoming>f_cont_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_after_compact</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Auto-close path -->
+    <bpmn:scriptTask id="auto_close" name="[HOOK] Auto-Close Session" scriptFormat="python">
+      <bpmn:incoming>flow_end_auto</bpmn:incoming>
+      <bpmn:outgoing>f_auto_end</bpmn:outgoing>
+      <bpmn:script>session_closed = True; close_type = "auto"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Manual end path -->
+    <bpmn:userTask id="write_summary" name="[CLAUDE] Write Session Summary">
+      <bpmn:incoming>flow_end_manual</bpmn:incoming>
+      <bpmn:outgoing>f_summary_km</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="capture_knowledge" name="[KM] Capture Learnings + Knowledge" scriptFormat="python">
+      <bpmn:incoming>f_summary_km</bpmn:incoming>
+      <bpmn:outgoing>f_km_close</bpmn:outgoing>
+      <bpmn:script>knowledge_captured = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="manual_close" name="[DB] Close Session with Summary" scriptFormat="python">
+      <bpmn:incoming>f_km_close</bpmn:incoming>
+      <bpmn:outgoing>f_manual_end</bpmn:outgoing>
+      <bpmn:script>session_closed = True; close_type = "manual"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- End events -->
+    <bpmn:endEvent id="end_auto" name="Session Auto-Closed">
+      <bpmn:incoming>f_auto_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_manual" name="Session Manually Closed">
+      <bpmn:incoming>f_manual_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Sequence Flows
+         ============================================================ -->
+
+    <!-- Phase 1: Startup hooks -->
+    <bpmn:sequenceFlow id="f1" sourceRef="cfe_start" targetRef="hook_log_session"/>
+    <bpmn:sequenceFlow id="f2" sourceRef="hook_log_session" targetRef="hook_init_task_map"/>
+    <bpmn:sequenceFlow id="f3" sourceRef="hook_init_task_map" targetRef="hook_archive_stale"/>
+    <bpmn:sequenceFlow id="f4" sourceRef="hook_archive_stale" targetRef="hook_check_inbox"/>
+    <bpmn:sequenceFlow id="f5" sourceRef="hook_check_inbox" targetRef="load_state"/>
+
+    <!-- Phase 2: State loading -->
+    <bpmn:sequenceFlow id="f6" sourceRef="load_state" targetRef="prior_state_gw"/>
+    <bpmn:sequenceFlow id="flow_resume" sourceRef="prior_state_gw" targetRef="restore_context">
+      <bpmn:conditionExpression>prior_state == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_fresh" sourceRef="prior_state_gw" targetRef="fresh_session"/>
+    <bpmn:sequenceFlow id="f_resume_merge" sourceRef="restore_context" targetRef="state_merge"/>
+    <bpmn:sequenceFlow id="f_fresh_merge" sourceRef="fresh_session" targetRef="state_merge"/>
+    <bpmn:sequenceFlow id="f7" sourceRef="state_merge" targetRef="receive_prompt"/>
+
+    <!-- Phase 3: Prompt loop - pre-hooks -->
+    <bpmn:sequenceFlow id="f8" sourceRef="receive_prompt" targetRef="hook_check_session"/>
+    <bpmn:sequenceFlow id="f_session_check_gw" sourceRef="hook_check_session" targetRef="session_change_gw"/>
+    <bpmn:sequenceFlow id="flow_session_changed" sourceRef="session_change_gw" targetRef="hook_reset_task_map">
+      <bpmn:conditionExpression>session_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_session_same" sourceRef="session_change_gw" targetRef="hook_classify_prompt"/>
+    <bpmn:sequenceFlow id="f_reset_classify" sourceRef="hook_reset_task_map" targetRef="hook_classify_prompt"/>
+    <bpmn:sequenceFlow id="f_classify_rag_gw" sourceRef="hook_classify_prompt" targetRef="rag_needed_gw"/>
+    <bpmn:sequenceFlow id="flow_do_rag" sourceRef="rag_needed_gw" targetRef="hook_query_rag">
+      <bpmn:conditionExpression>needs_rag == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_rag" sourceRef="rag_needed_gw" targetRef="hook_inject_context"/>
+    <bpmn:sequenceFlow id="f_rag_skills" sourceRef="hook_query_rag" targetRef="hook_suggest_skills"/>
+    <bpmn:sequenceFlow id="f_skills_inject" sourceRef="hook_suggest_skills" targetRef="hook_inject_context"/>
+
+    <!-- Phase 4: Core CallActivity -->
+    <bpmn:sequenceFlow id="f_inject_core" sourceRef="hook_inject_context" targetRef="call_core_claude"/>
+
+    <!-- Phase 5: Post-processing -->
+    <bpmn:sequenceFlow id="f_core_post" sourceRef="call_core_claude" targetRef="hook_post_sync"/>
+    <bpmn:sequenceFlow id="f_post_action_gw" sourceRef="hook_post_sync" targetRef="action_gw"/>
+
+    <!-- Phase 6: Action decision -->
+    <bpmn:sequenceFlow id="flow_continue" sourceRef="action_gw" targetRef="receive_prompt"/>
+
+    <bpmn:sequenceFlow id="flow_compact" sourceRef="action_gw" targetRef="precompact_inject">
+      <bpmn:conditionExpression>action == "compact"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_compact_save" sourceRef="precompact_inject" targetRef="save_checkpoint"/>
+    <bpmn:sequenceFlow id="f_compact_detect" sourceRef="save_checkpoint" targetRef="continuation_gw"/>
+    <bpmn:sequenceFlow id="flow_same_session" sourceRef="continuation_gw" targetRef="compact_merge"/>
+    <bpmn:sequenceFlow id="flow_new_session_id" sourceRef="continuation_gw" targetRef="log_continuation">
+      <bpmn:conditionExpression>session_id_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_cont_merge" sourceRef="log_continuation" targetRef="compact_merge"/>
+    <bpmn:sequenceFlow id="flow_after_compact" sourceRef="compact_merge" targetRef="receive_prompt"/>
+
+    <bpmn:sequenceFlow id="flow_end_auto" sourceRef="action_gw" targetRef="auto_close">
+      <bpmn:conditionExpression>action == "end_auto"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_auto_end" sourceRef="auto_close" targetRef="end_auto"/>
+
+    <bpmn:sequenceFlow id="flow_end_manual" sourceRef="action_gw" targetRef="write_summary">
+      <bpmn:conditionExpression>action == "end_manual"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_summary_km" sourceRef="write_summary" targetRef="capture_knowledge"/>
+    <bpmn:sequenceFlow id="f_km_close" sourceRef="capture_knowledge" targetRef="manual_close"/>
+    <bpmn:sequenceFlow id="f_manual_end" sourceRef="manual_close" targetRef="end_manual"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>
