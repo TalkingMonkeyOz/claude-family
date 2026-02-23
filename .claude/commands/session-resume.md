@@ -1,8 +1,10 @@
-**QUICK SESSION RESUME - Database-Driven Context with Task Restoration**
+**QUICK SESSION RESUME - Display-Only Context (No Task Restoration)**
 
-One MCP call returns a pre-formatted display box + task list. You display it and restore tasks. That's it.
+One MCP call returns a pre-formatted display box. You display it and check git. That's it.
 
 **Do NOT call `get_project_context`, `get_incomplete_todos`, `execute_sql`, `check_inbox`, or any other tool to fetch session data. Everything comes from `start_session(resume=True)`.**
+
+**Do NOT call TaskCreate to restore previous session tasks.** Claude Code natively persists tasks in `~/.claude/tasks/`. Our DB todo restoration was creating zombie tasks carried forward indefinitely.
 
 ---
 
@@ -13,26 +15,10 @@ One MCP call returns a pre-formatted display box + task list. You display it and
 Call `mcp__project-tools__start_session` with `project` = current project name and `resume` = `true`.
 
 Response contains:
-- `display` - Pre-formatted resume box. Print this verbatim.
-- `restore_tasks` - Array of tasks to restore (each has `content`, `active_form`, `status`, `priority`).
-- `git_check_needed` - If true, run git status in Step 3.
+- `display` - Pre-formatted resume box showing prior session summary, features, and prior tasks as **reference only**.
+- `git_check_needed` - If true, run git status in Step 2.
 
-### Step 2: Restore Tasks FIRST
-
-**IMPORTANT**: Restore tasks BEFORE running any Bash commands (task_discipline_hook blocks Bash when no tasks exist).
-
-For each item in `restore_tasks`:
-
-1. Call `TaskCreate` with:
-   - `subject`: item's `content`
-   - `activeForm`: item's `active_form`
-   - `description`: item's `content`
-2. If item's `status` is `in_progress`:
-   - Call `TaskUpdate(taskId=<new_id>, status="in_progress")`
-
-The `task_sync_hook` will match these to existing DB todos via duplicate detection (75% similarity) and reuse the existing `todo_id` rather than creating duplicates.
-
-### Step 3: Git Status (After Tasks Exist)
+### Step 2: Git Status
 
 ```bash
 git status --short
@@ -40,22 +26,24 @@ git status --short
 
 Mention the uncommitted file count when displaying the box.
 
-### Step 4: Display
+### Step 3: Display
 
 Print the `display` string from Step 1. Done.
+
+Prior session tasks are shown as **informational text** in the display box. The user decides what to work on fresh - no zombie task restoration.
 
 ---
 
 ## Notes
 
 - **One call**: `start_session(resume=True)` fetches project info, session state, todos, features, messages - and formats the box server-side
-- **Why TaskCreate**: Restored tasks appear in the live task panel, not just as display text
-- **Why tasks before git**: `task_discipline_hook` blocks Bash when no tasks exist - restore tasks first to avoid the error
-- **Duplicate safety**: `task_sync_hook.py` uses substring + fuzzy matching (75% threshold)
+- **No TaskCreate**: Previous tasks are shown as reference, not restored. User creates fresh tasks based on current priorities
+- **Why no restore**: Claude Code persists tasks natively at `~/.claude/tasks/`. Our DB sync was creating a restore loop where stale tasks kept coming back as zombies across sessions
+- **Task discipline**: The task_discipline_hook requires tasks before Bash/Write/Edit. Create tasks for your current session work, don't rely on restored ones
 
 ---
 
-**Version**: 5.1 (Fixed: restore tasks BEFORE git status to avoid task_discipline_hook blocking)
+**Version**: 6.0 (Removed task restoration - display-only resume. Claude Code has native task persistence.)
 **Created**: 2025-12-26
-**Updated**: 2026-02-20
+**Updated**: 2026-02-24
 **Location**: .claude/commands/session-resume.md

@@ -378,30 +378,31 @@ def _format_resume(data: dict) -> dict:
     lines.append(row(f"Focus: {focus[:w - 10]}"))
     lines.append(div)
 
-    # Tasks section
+    # Prior tasks section (display-only, NOT restored as TaskCreate)
+    # Claude Code natively persists tasks in ~/.claude/tasks/.
+    # DB todo restoration was creating zombie tasks carried forward indefinitely.
     in_prog = todos.get("in_progress", [])
     pending = todos.get("pending", [])
     stale = todos.get("stale", [])
     task_count = len(in_prog) + len(pending)
-    lines.append(row(f"RESTORED TASKS ({task_count}):"))
-
-    if in_prog:
-        lines.append(row("In Progress:"))
-        for t in in_prog:
-            lines.append(row(f"  > {t['content'][:w - 8]}"))
-    if pending:
-        lines.append(row("Pending:"))
-        for t in pending:
-            lines.append(row(f"  [ ] {t['content'][:w - 10]}"))
-    if not in_prog and not pending:
-        lines.append(row("  (none)"))
+    if task_count > 0:
+        lines.append(row(f"PRIOR SESSION TASKS ({task_count}) - for reference only:"))
+        if in_prog:
+            lines.append(row("  Were in progress:"))
+            for t in in_prog:
+                lines.append(row(f"    > {t['content'][:w - 8]}"))
+        if pending:
+            lines.append(row("  Were pending:"))
+            for t in pending:
+                lines.append(row(f"    - {t['content'][:w - 10]}"))
+    else:
+        lines.append(row("PRIOR SESSION TASKS: (none)"))
 
     if stale:
-        lines.append(row(""))
-        lines.append(row(f"STALE ({len(stale)}) - not restored, delete or reactivate:"))
+        lines.append(row(f"  Stale ({len(stale)}):"))
         for t in stale:
             age = t.get('age_days', '?')
-            lines.append(row(f"  ~ {t['content'][:w - 16]} ({age}d old)"))
+            lines.append(row(f"    ~ {t['content'][:w - 16]} ({age}d old)"))
     lines.append(div)
 
     # Features section
@@ -428,26 +429,13 @@ def _format_resume(data: dict) -> dict:
 
     display = "\n".join(lines)
 
-    # Build restore_tasks list for TaskCreate
-    restore_tasks = []
-    for t in in_prog:
-        restore_tasks.append({
-            "content": t["content"],
-            "active_form": t.get("active_form", ""),
-            "status": "in_progress",
-            "priority": t.get("priority", 3),
-        })
-    for t in pending:
-        restore_tasks.append({
-            "content": t["content"],
-            "active_form": t.get("active_form", ""),
-            "status": "pending",
-            "priority": t.get("priority", 3),
-        })
+    # No longer returning restore_tasks - Claude Code natively persists tasks
+    # in ~/.claude/tasks/. DB todo restoration was creating zombie tasks.
+    # Prior tasks are displayed as informational text only.
 
     return {
         "display": display,
-        "restore_tasks": restore_tasks,
+        "restore_tasks": [],  # Empty - no task restoration (display-only)
         "git_check_needed": True,
     }
 
@@ -1004,8 +992,22 @@ def end_session(
                 conn.commit()
             results["knowledge_created"] = knowledge_count
 
+        # 5. FB136: Auto-extract insights from conversation (if stored)
+        if results.get("conversation_extracted") and closed_session_id:
+            try:
+                insight_result = extract_insights(closed_session_id, project)
+                if insight_result.get("success"):
+                    results["insights_extracted"] = insight_result.get("insights_count", 0)
+                else:
+                    results["insights_extracted"] = 0
+            except Exception as insight_err:
+                # Non-blocking - don't fail end_session for insight extraction
+                results["insights_extracted"] = 0
+                results["insights_error"] = str(insight_err)
+
         knowledge_note = f", {results['knowledge_created']} knowledge entries created" if results.get("knowledge_created") else ""
-        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}."
+        insights_note = f", {results['insights_extracted']} insights extracted" if results.get("insights_extracted") else ""
+        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}."
         return results
 
     except Exception as e:
@@ -2662,18 +2664,21 @@ def update_claude_md(
                 lines = lines[:end_idx] + append_lines + lines[end_idx:]
                 lines_changed = len(append_lines)
 
-        # Update profiles table if record exists (DB first, then file)
+        # Build the new full content for DB sync
+        new_full_content = ''.join(lines)
+
+        # Update profiles table: sync full CLAUDE.md content to config->behavior
         cur.execute("""
             UPDATE claude.profiles
             SET config = jsonb_set(
                 COALESCE(config, '{}'::jsonb),
-                '{behavior,claude_md_updated}',
-                'true'::jsonb
+                '{behavior}',
+                to_jsonb(%s::text)
             ),
             updated_at = NOW()
-            WHERE project_id IN (SELECT project_id FROM claude.workspaces WHERE project_name = %s)
+            WHERE name = %s
             RETURNING profile_id::text
-        """, (project,))
+        """, (new_full_content, project))
         profile_updated = cur.fetchone() is not None
 
         # Log to audit_log
@@ -2682,7 +2687,7 @@ def update_claude_md(
             (entity_type, entity_id, entity_code, to_status, changed_by, change_source, metadata)
             VALUES (
                 'profiles',
-                (SELECT project_id FROM claude.workspaces WHERE project_name = %s),
+                (SELECT profile_id FROM claude.profiles WHERE name = %s),
                 %s,
                 'updated',
                 %s,
@@ -2757,8 +2762,8 @@ def deploy_claude_md(
         cur.execute("""
             SELECT config->'behavior' as behavior_text
             FROM claude.profiles
-            WHERE project_id = %s::uuid
-        """, (project_id,))
+            WHERE name = %s
+        """, (project,))
         profile_row = cur.fetchone()
 
         if not profile_row or not profile_row['behavior_text']:
@@ -2787,14 +2792,14 @@ def deploy_claude_md(
             (entity_type, entity_id, to_status, changed_by, change_source, metadata)
             VALUES (
                 'profiles',
-                %s::uuid,
+                (SELECT profile_id FROM claude.profiles WHERE name = %s),
                 'deployed',
                 %s,
                 'deploy_claude_md',
                 %s::jsonb
             )
         """, (
-            project_id,
+            project,
             os.environ.get('CLAUDE_SESSION_ID'),
             json.dumps({"diff_summary": diff_summary})
         ))
@@ -4736,6 +4741,178 @@ def recover_session(
 
     except Exception as e:
         return {"success": False, "error": f"Recovery failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Protocol Version Control
+# ============================================================================
+
+
+@mcp.tool()
+def update_protocol(
+    content: str,
+    change_reason: str,
+    protocol_name: str = "CORE_PROTOCOL",
+) -> dict:
+    """Update a protocol to a new version. Deactivates old, inserts new, deploys to file.
+
+    Use when: Changing the CORE_PROTOCOL or other injected protocols.
+    Creates a new version in claude.protocol_versions, sets it active,
+    and deploys to scripts/core_protocol.txt for runtime use.
+    Returns: {success, protocol_name, old_version, new_version, deployed}.
+
+    Args:
+        content: The full new protocol text.
+        change_reason: Why this change was made (for audit trail).
+        protocol_name: Protocol to update (default: CORE_PROTOCOL).
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+
+        # Get current active version
+        cur.execute("""
+            SELECT version_id, version FROM claude.protocol_versions
+            WHERE protocol_name = %s AND is_active = true
+        """, (protocol_name,))
+        current = cur.fetchone()
+        old_version = current["version"] if current else 0
+
+        new_version = old_version + 1
+
+        # Deactivate current
+        if current:
+            cur.execute("""
+                UPDATE claude.protocol_versions
+                SET is_active = false
+                WHERE version_id = %s
+            """, (current["version_id"],))
+
+        # Insert new version
+        cur.execute("""
+            INSERT INTO claude.protocol_versions
+            (protocol_name, version, content, change_reason, changed_by, is_active)
+            VALUES (%s, %s, %s, %s, %s, true)
+            RETURNING version_id
+        """, (protocol_name, new_version, content.strip(), change_reason,
+              f"session:{os.environ.get('SESSION_ID', 'unknown')}"))
+
+        new_id = cur.fetchone()["version_id"]
+
+        # Deploy to file
+        deployed = False
+        try:
+            scripts_dir = Path(__file__).parent.parent.parent / "scripts"
+            protocol_file = scripts_dir / "core_protocol.txt"
+            if scripts_dir.exists():
+                protocol_file.write_text(content.strip(), encoding="utf-8")
+                deployed = True
+        except Exception:
+            pass  # Non-fatal - hook falls back to hardcoded default
+
+        conn.commit()
+        return {
+            "success": True,
+            "protocol_name": protocol_name,
+            "old_version": old_version,
+            "new_version": new_version,
+            "version_id": new_id,
+            "deployed": deployed,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_protocol_history(
+    protocol_name: str = "CORE_PROTOCOL",
+    limit: int = 10,
+) -> dict:
+    """Get version history for a protocol.
+
+    Use when: Reviewing what changed in the CORE_PROTOCOL over time.
+    Returns all versions with content, change reasons, and timestamps.
+    Returns: {success, protocol_name, versions: [{version, content,
+              change_reason, changed_by, created_at, is_active}]}.
+
+    Args:
+        protocol_name: Protocol to get history for (default: CORE_PROTOCOL).
+        limit: Maximum versions to return (default: 10).
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT version, content, change_reason, changed_by,
+                   created_at::text, is_active
+            FROM claude.protocol_versions
+            WHERE protocol_name = %s
+            ORDER BY version DESC
+            LIMIT %s
+        """, (protocol_name, limit))
+
+        versions = []
+        for row in cur.fetchall():
+            versions.append({
+                "version": row["version"],
+                "content": row["content"],
+                "change_reason": row["change_reason"],
+                "changed_by": row["changed_by"],
+                "created_at": row["created_at"],
+                "is_active": row["is_active"],
+            })
+
+        return {
+            "success": True,
+            "protocol_name": protocol_name,
+            "version_count": len(versions),
+            "versions": versions,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_active_protocol(
+    protocol_name: str = "CORE_PROTOCOL",
+) -> dict:
+    """Get the currently active protocol content.
+
+    Use when: Checking what protocol is currently being injected.
+    Returns: {success, protocol_name, version, content, change_reason, created_at}.
+
+    Args:
+        protocol_name: Protocol to retrieve (default: CORE_PROTOCOL).
+    """
+    conn = _get_conn()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT version, content, change_reason, changed_by, created_at::text
+            FROM claude.protocol_versions
+            WHERE protocol_name = %s AND is_active = true
+        """, (protocol_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"No active version for {protocol_name}"}
+        return {
+            "success": True,
+            "protocol_name": protocol_name,
+            "version": row["version"],
+            "content": row["content"],
+            "change_reason": row["change_reason"],
+            "changed_by": row["changed_by"],
+            "created_at": row["created_at"],
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
     finally:
         conn.close()
 
