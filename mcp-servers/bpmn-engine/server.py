@@ -982,8 +982,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "select_next_task": {
         "type": "claude_behavior",
-        "description": "Claude selects next task - NO automation or priority enforcement",
-        "gap": "No hook or tool enforces task selection order",
+        "description": "Claude manually selects next task from ready list (userTask decision point)",
     },
     "mark_in_progress": {
         "type": "claude_behavior",
@@ -1000,22 +999,11 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
         "calledElement": "L1_core_claude",
         "description": "CallActivity to core Claude prompt processing model",
     },
-    "checkpoint_task": {
-        "type": "mcp_tool",
-        "tool": "save_checkpoint",
-        "description": "MCP tool exists but NEVER called automatically per-task",
-        "gap": "Model expects per-task checkpoint but only PreCompact triggers it",
-    },
-    "sync_checkpoint": {
-        "type": "hook_script",
-        "file": "scripts/precompact_hook.py",
-        "hook_event": "PreCompact",
-        "description": "Only fires on context compaction, not per-task as model expects",
-    },
     "mark_completed": {
-        "type": "claude_behavior",
-        "description": "Claude manually calls TaskUpdate(status=completed) - NO auto hook",
-        "gap": "Model expects hook automation but status change is manual",
+        "type": "hook_script",
+        "file": "scripts/task_sync_hook.py",
+        "hook_event": "PostToolUse(TaskUpdate)",
+        "description": "task_sync_hook auto-checkpoints on TaskUpdate(completed) - upserts session_state",
     },
     "check_feature": {
         "type": "mcp_tool",

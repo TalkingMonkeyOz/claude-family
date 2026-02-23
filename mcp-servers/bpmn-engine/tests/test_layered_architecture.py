@@ -187,8 +187,8 @@ class TestExtensionWrapping:
             "more_tools_needed": False,
         })
 
-        # L2: checkpoint after core completes
-        complete(wf, "checkpoint_task")
+        # L2: select next task (manual decision point)
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -203,7 +203,6 @@ class TestExtensionWrapping:
         assert "decompose_prompt" in names
         assert "sync_tasks_to_db" in names
         assert "select_next_task" in names
-        assert "checkpoint_task" in names
         assert "mark_completed" in names
 
         # Core-layer tasks (from nested subprocess)
@@ -242,7 +241,7 @@ class TestHookInjectionPoints:
             "needs_tool": False,
             "more_tools_needed": False,
         })
-        complete(wf, "checkpoint_task")
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -284,7 +283,7 @@ class TestHookInjectionPoints:
             "needs_tool": False,
             "more_tools_needed": False,
         })
-        complete(wf, "checkpoint_task")
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -329,7 +328,7 @@ class TestAnthropicUpdateSimulation:
             "needs_tool": False,
             "more_tools_needed": False,
         })
-        complete(wf, "checkpoint_task")
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -372,14 +371,15 @@ class TestAnthropicUpdateSimulation:
             "more_tools_needed": True,
         })
 
+        # L2: select next task
+        complete(wf, "select_next_task")
+
         # First tool call
         complete(wf, "execute_tool", {"more_tools_needed": True})
         # Second tool call
         complete(wf, "execute_tool", {"more_tools_needed": False})
 
-        # L2: checkpoint after core
-        complete(wf, "checkpoint_task")
-
+        # Auto-checkpoint + auto-close
         assert wf.is_completed()
         names = completed_names(wf)
 

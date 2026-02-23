@@ -12,7 +12,7 @@ Extension lifecycle:
     -> Prompt loop:
         receive_prompt -> session change check -> classify -> [RAG] -> inject context
         -> CallActivity(L2_task_work_cycle)
-            -> decompose -> for each task: [BPMN-first?] -> core -> checkpoint -> complete
+            -> decompose -> for each task: select -> [BPMN-first?] -> core -> auto-checkpoint -> complete
         -> post-sync
         -> action: continue/compact/end_auto/end_manual
 
@@ -139,11 +139,12 @@ class TestFreshAutoClose:
             "more_tools_needed": False,
         })
 
-        # Core subprocess auto-completes (conversation path has no userTasks)
-        # checkpoint_task is now READY
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # select_next_task is the manual pause point in L2
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
+        # Core auto-completes (conversation path has no userTasks)
+        # mark_completed + auto-checkpoint runs automatically
         # Post-sync and auto-close run as scriptTasks
         assert wf.is_completed()
 
@@ -190,9 +191,9 @@ class TestResumedManualClose:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         # Manual end path: write_summary should now be ready
         complete(wf, "write_summary")
@@ -236,10 +237,11 @@ class TestRAGForQuestion:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes (question path), then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
+        # Core auto-completes (question path), auto-checkpoint, auto-close
         assert wf.is_completed()
         names = completed_names(wf)
 
@@ -280,10 +282,11 @@ class TestRAGSkippedForAction:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes (action, no tool), then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
+        # Core auto-completes (action, no tool), auto-checkpoint, auto-close
         assert wf.is_completed()
         names = completed_names(wf)
 
@@ -322,9 +325,9 @@ class TestCoreCalledViaCallActivity:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -341,8 +344,6 @@ class TestCoreCalledViaCallActivity:
         assert "sync_tasks_to_db" in names
         assert "select_next_task" in names
         assert "mark_in_progress" in names
-        assert "checkpoint_task" in names
-        assert "sync_checkpoint" in names
         assert "mark_completed" in names
         assert "check_feature" in names
 
@@ -380,16 +381,16 @@ class TestToolCallThroughCore:
             "more_tools_needed": False,
         })
 
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
+
         # Core subprocess stops at execute_tool (userTask)
         assert not wf.is_completed()
         assert "execute_tool" in ready_names(wf)
-
         complete(wf, "execute_tool")
 
-        # After core completes, checkpoint_task is READY
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
-
+        # After core, auto-checkpoint, auto-close
         assert wf.is_completed()
         names = completed_names(wf)
 
@@ -434,9 +435,9 @@ class TestCompactPath:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         # After compact, precompact_inject and save_checkpoint should be done
         names = completed_names(wf)
@@ -465,8 +466,8 @@ class TestCompactPath:
             "more_tools_needed": False,
         })
 
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         assert wf.data.get("precompact_injected") is True
@@ -504,9 +505,9 @@ class TestContinuationDetection:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         names = completed_names(wf)
         assert "log_continuation" in names
@@ -533,8 +534,8 @@ class TestContinuationDetection:
             "more_tools_needed": False,
         })
 
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         assert wf.data.get("continuation_warning") is True
@@ -570,9 +571,9 @@ class TestSessionChangeResetsMap:
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
+        # L2 select next task
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)

@@ -25,10 +25,8 @@
                 -> Task Type?
                     [build] -> BPMN-First: Model + Test -> Execute Task Work
                     [simple/default] -> Execute Task Work
-                -> Checkpoint Task Context (decisions, files, progress)
-                -> Store Checkpoint
                 -> Task Outcome?
-                    [completed/default] -> Mark Completed -> Check Feature
+                    [completed/default] -> Mark Completed + Auto-Checkpoint -> Check Feature
                         -> More Tasks?
                             [yes] -> loop back
                             [no] -> All Tasks Complete (end)
@@ -89,13 +87,12 @@
          Task Loop: work through each task sequentially
          ============================================================ -->
 
-    <!-- Pick the next ready task (highest priority, lowest ID) -->
-    <bpmn:scriptTask id="select_next_task" name="[CLAUDE] Select Next Ready Task" scriptFormat="python">
+    <!-- Pick the next ready task (highest priority, lowest ID) - manual decision -->
+    <bpmn:userTask id="select_next_task" name="[CLAUDE] Select Next Ready Task">
       <bpmn:incoming>flow_has_tasks</bpmn:incoming>
       <bpmn:incoming>flow_more_tasks</bpmn:incoming>
       <bpmn:outgoing>f_select_progress</bpmn:outgoing>
-      <bpmn:script>task_selected = True</bpmn:script>
-    </bpmn:scriptTask>
+    </bpmn:userTask>
 
     <!-- TaskUpdate(in_progress) - task_sync_hook updates claude.todos -->
     <bpmn:scriptTask id="mark_in_progress" name="[HOOK] Mark Task In Progress" scriptFormat="python">
@@ -130,32 +127,15 @@
     <!-- Call core Claude to do the actual work (thinking, tool use, coding) -->
     <bpmn:callActivity id="call_core_claude" name="[CORE] Execute Task Work" calledElement="L1_core_claude">
       <bpmn:incoming>f_merge_core</bpmn:incoming>
-      <bpmn:outgoing>f_core_checkpoint</bpmn:outgoing>
+      <bpmn:outgoing>f_core_outcome</bpmn:outgoing>
     </bpmn:callActivity>
-
-    <!-- ============================================================
-         Checkpoint: capture task context for cross-session persistence
-         ============================================================ -->
-
-    <!-- Claude records what happened: decisions made, files touched, progress -->
-    <bpmn:userTask id="checkpoint_task" name="[CLAUDE] Checkpoint Task Context">
-      <bpmn:incoming>f_core_checkpoint</bpmn:incoming>
-      <bpmn:outgoing>f_checkpoint_sync</bpmn:outgoing>
-    </bpmn:userTask>
-
-    <!-- store_session_fact + save_checkpoint persist context to DB -->
-    <bpmn:scriptTask id="sync_checkpoint" name="[HOOK] Store Task Checkpoint" scriptFormat="python">
-      <bpmn:incoming>f_checkpoint_sync</bpmn:incoming>
-      <bpmn:outgoing>f_sync_outcome</bpmn:outgoing>
-      <bpmn:script>checkpoint_stored = True</bpmn:script>
-    </bpmn:scriptTask>
 
     <!-- ============================================================
          Task Outcome: what happened?
          ============================================================ -->
 
     <bpmn:exclusiveGateway id="task_outcome_gw" name="Task Outcome?" default="flow_completed">
-      <bpmn:incoming>f_sync_outcome</bpmn:incoming>
+      <bpmn:incoming>f_core_outcome</bpmn:incoming>
       <bpmn:outgoing>flow_completed</bpmn:outgoing>
       <bpmn:outgoing>flow_blocked</bpmn:outgoing>
       <bpmn:outgoing>flow_session_end</bpmn:outgoing>
@@ -165,11 +145,11 @@
          Path 1: Task Completed (default)
          ============================================================ -->
 
-    <!-- TaskUpdate(completed) - task_sync_hook updates todo + build_task -->
-    <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Task Completed" scriptFormat="python">
+    <!-- TaskUpdate(completed) - task_sync_hook updates todo + build_task + auto-checkpoint -->
+    <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Task Completed + Auto-Checkpoint" scriptFormat="python">
       <bpmn:incoming>flow_completed</bpmn:incoming>
       <bpmn:outgoing>f_completed_feature</bpmn:outgoing>
-      <bpmn:script>task_status = "completed"</bpmn:script>
+      <bpmn:script>task_status = "completed"; checkpoint_stored = True</bpmn:script>
     </bpmn:scriptTask>
 
     <!-- task_sync_hook checks if all sibling tasks for parent feature are done -->
@@ -256,10 +236,8 @@
     <bpmn:sequenceFlow id="f_bpmn_merge" sourceRef="bpmn_first_check" targetRef="task_type_merge"/>
     <bpmn:sequenceFlow id="f_merge_core" sourceRef="task_type_merge" targetRef="call_core_claude"/>
 
-    <!-- Post-core checkpoint -->
-    <bpmn:sequenceFlow id="f_core_checkpoint" sourceRef="call_core_claude" targetRef="checkpoint_task"/>
-    <bpmn:sequenceFlow id="f_checkpoint_sync" sourceRef="checkpoint_task" targetRef="sync_checkpoint"/>
-    <bpmn:sequenceFlow id="f_sync_outcome" sourceRef="sync_checkpoint" targetRef="task_outcome_gw"/>
+    <!-- Post-core → outcome -->
+    <bpmn:sequenceFlow id="f_core_outcome" sourceRef="call_core_claude" targetRef="task_outcome_gw"/>
 
     <!-- Outcome: completed (default) -->
     <bpmn:sequenceFlow id="flow_completed" sourceRef="task_outcome_gw" targetRef="mark_completed"/>

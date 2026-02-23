@@ -1,18 +1,19 @@
 """
 Tests for L2_task_work_cycle.bpmn - Task Work Cycle.
 
-Tests the multi-task decompose -> work -> checkpoint -> complete loop.
+Tests the multi-task decompose -> work -> auto-checkpoint -> complete loop.
 Loads L2_task_work_cycle.bpmn + L1_core_claude.bpmn (subprocess).
 
 The task work cycle models how Claude processes a user message:
   1. Decompose prompt into tasks (TaskCreate x N)
   2. For each task:
-     - Mark in_progress
+     - Select next ready task (manual decision point)
+     - Mark in_progress (auto hook)
      - [build] -> BPMN-first gate -> execute via core
      - [simple] -> execute via core directly
-     - Checkpoint task context (decisions, files, progress)
-     - Mark completed / blocked / session_end
-  3. Loop until all tasks done or session interrupted
+     - Mark completed + auto-checkpoint (auto hook)
+     - Check feature completion (auto hook)
+  3. Loop until all tasks done, blocked, or session interrupted
 
 Gateway seed data:
   has_tasks: True/False (default=False)
@@ -107,7 +108,7 @@ class TestNoTasksBlocked:
 
 
 class TestSingleSimpleTask:
-    """One simple task: decompose -> work -> checkpoint -> complete."""
+    """One simple task: decompose -> select -> work -> auto-checkpoint -> complete."""
 
     def test_single_task_happy_path(self):
         wf = load_workflow()
@@ -124,12 +125,14 @@ class TestSingleSimpleTask:
             "more_tools_needed": False,
         })
 
-        # Core subprocess auto-completes (conversation path)
-        # Then checkpoint is a userTask
-        assert "checkpoint_task" in ready_names(wf)
+        # select_next_task is the manual pause point
+        assert "select_next_task" in ready_names(wf)
+        complete(wf, "select_next_task")
 
-        complete(wf, "checkpoint_task")
-
+        # Core auto-completes (conversation path)
+        # mark_completed + auto-checkpoint runs automatically
+        # check_feature runs automatically
+        # more_tasks=False -> end
         assert wf.is_completed()
         names = completed_names(wf)
 
@@ -138,16 +141,14 @@ class TestSingleSimpleTask:
         assert "select_next_task" in names
         assert "mark_in_progress" in names
         assert "call_core_claude" in names
-        assert "checkpoint_task" in names
-        assert "sync_checkpoint" in names
         assert "mark_completed" in names
         assert "check_feature" in names
 
         # BPMN-first gate NOT triggered for simple tasks
         assert "bpmn_first_check" not in names
 
+        # Auto-checkpoint data set by mark_completed script
         assert wf.data.get("tasks_synced") is True
-        assert wf.data.get("task_selected") is True
         assert wf.data.get("checkpoint_stored") is True
         assert wf.data.get("feature_checked") is True
 
@@ -169,14 +170,14 @@ class TestBuildTaskBPMNFirst:
             "more_tools_needed": False,
         })
 
+        # Select task (manual)
+        complete(wf, "select_next_task")
+
         # BPMN-first gate is a userTask
         assert "bpmn_first_check" in ready_names(wf)
         complete(wf, "bpmn_first_check")
 
-        # Then core runs, then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
-
+        # Core auto-runs, mark_completed auto-runs, check_feature auto-runs
         assert wf.is_completed()
         names = completed_names(wf)
 
@@ -203,24 +204,25 @@ class TestMultipleTasksLoop:
             "more_tools_needed": False,
         })
 
-        # Task 1: checkpoint -> completed -> more_tasks=True -> loop
-        complete(wf, "checkpoint_task", {"more_tasks": True})
+        # Task 1: select -> core -> auto-checkpoint -> more_tasks=True -> loop
+        complete(wf, "select_next_task")
         assert not wf.is_completed()
 
-        # Task 2: checkpoint -> completed -> more_tasks=True -> loop
-        complete(wf, "checkpoint_task", {"more_tasks": True})
+        # Task 2: loop back to select_next_task
+        complete(wf, "select_next_task")
         assert not wf.is_completed()
 
-        # Task 3: checkpoint -> completed -> more_tasks=False -> end
-        complete(wf, "checkpoint_task", {"more_tasks": False})
+        # Task 3: set more_tasks=False -> completes after core
+        complete(wf, "select_next_task", {"more_tasks": False})
 
         assert wf.is_completed()
         names = completed_names(wf)
 
-        # select_next_task ran 3 times (once per task)
-        assert names.count("select_next_task") >= 1  # At least once visible
-        assert names.count("mark_completed") >= 1
-        assert names.count("checkpoint_task") >= 1
+        # Tasks executed at least once
+        assert "select_next_task" in names
+        assert "mark_in_progress" in names
+        assert "mark_completed" in names
+        assert wf.data.get("checkpoint_stored") is True
 
 
 class TestTaskBlocked:
@@ -240,8 +242,8 @@ class TestTaskBlocked:
             "more_tools_needed": False,
         })
 
-        # Checkpoint then outcome=blocked
-        complete(wf, "checkpoint_task", {"task_outcome": "blocked", "more_tasks": True})
+        # Task 1: select -> core -> outcome=blocked
+        complete(wf, "select_next_task")
 
         # Record blocker (userTask)
         assert "record_blocker" in ready_names(wf)
@@ -249,7 +251,7 @@ class TestTaskBlocked:
 
         # Loops back, next task completes normally
         assert not wf.is_completed()
-        complete(wf, "checkpoint_task", {
+        complete(wf, "select_next_task", {
             "task_outcome": "completed",
             "more_tasks": False,
         })
@@ -280,7 +282,7 @@ class TestBlockedNoMoreTasks:
             "more_tools_needed": False,
         })
 
-        complete(wf, "checkpoint_task", {"task_outcome": "blocked", "more_tasks": False})
+        complete(wf, "select_next_task")
         complete(wf, "record_blocker", {"more_tasks": False})
 
         assert wf.is_completed()
@@ -307,8 +309,8 @@ class TestSessionEndInterruption:
             "more_tools_needed": False,
         })
 
-        # Work on first task, then session_end during checkpoint
-        complete(wf, "checkpoint_task", {"task_outcome": "session_end"})
+        # Select task, core runs, then session_end outcome
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -338,7 +340,7 @@ class TestCoreSubprocessExecutes:
             "more_tools_needed": False,
         })
 
-        complete(wf, "checkpoint_task")
+        complete(wf, "select_next_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -368,26 +370,25 @@ class TestToolCallWithinTask:
             "more_tools_needed": False,
         })
 
+        # Select task
+        complete(wf, "select_next_task")
+
         # Core subprocess pauses at execute_tool (userTask)
         assert "execute_tool" in ready_names(wf)
         complete(wf, "execute_tool")
 
-        # Then checkpoint
-        assert "checkpoint_task" in ready_names(wf)
-        complete(wf, "checkpoint_task")
-
+        # Auto-completes: mark_completed + auto-checkpoint -> end
         assert wf.is_completed()
         names = completed_names(wf)
 
         assert "select_tool" in names
         assert "execute_tool" in names
         assert "evaluate_result" in names
-        assert "checkpoint_task" in names
         assert "mark_completed" in names
 
 
 class TestBuildTaskWithToolCall:
-    """Build task: BPMN-first -> core with tool call -> checkpoint -> complete."""
+    """Build task: BPMN-first -> core with tool call -> auto-checkpoint -> complete."""
 
     def test_build_task_full_flow(self):
         wf = load_workflow()
@@ -403,22 +404,22 @@ class TestBuildTaskWithToolCall:
             "more_tools_needed": False,
         })
 
+        # Select task
+        complete(wf, "select_next_task")
+
         # BPMN-first gate
         complete(wf, "bpmn_first_check")
 
         # Core tool execution
         complete(wf, "execute_tool")
 
-        # Checkpoint
-        complete(wf, "checkpoint_task")
-
+        # Auto-completes: mark_completed + auto-checkpoint + check_feature -> end
         assert wf.is_completed()
         names = completed_names(wf)
 
         assert "bpmn_first_check" in names
         assert "select_tool" in names
         assert "execute_tool" in names
-        assert "checkpoint_task" in names
         assert "mark_completed" in names
         assert "check_feature" in names
 
@@ -441,19 +442,46 @@ class TestMixedTaskTypes:
         })
 
         # Task 1: build -> BPMN-first gate
+        complete(wf, "select_next_task")
         complete(wf, "bpmn_first_check")
-        complete(wf, "checkpoint_task", {
-            "more_tasks": True,
-            "task_type": "simple",  # Next task is simple
-        })
 
+        # Core auto-runs, mark_completed auto-runs, loops back
         assert not wf.is_completed()
 
-        # Task 2: simple -> no BPMN gate
-        complete(wf, "checkpoint_task", {"more_tasks": False})
+        # Task 2: simple -> switch type, last task
+        complete(wf, "select_next_task", {
+            "more_tasks": False,
+            "task_type": "simple",
+        })
 
         assert wf.is_completed()
         names = completed_names(wf)
 
         assert "bpmn_first_check" in names
-        assert names.count("checkpoint_task") >= 2
+
+
+class TestAutoCheckpointData:
+    """Verify that mark_completed sets checkpoint_stored automatically."""
+
+    def test_checkpoint_stored_on_completion(self):
+        wf = load_workflow()
+
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
+            "intent_type": "conversation",
+            "complexity": "simple",
+            "needs_tool": False,
+            "more_tools_needed": False,
+        })
+
+        complete(wf, "select_next_task")
+
+        assert wf.is_completed()
+
+        # Auto-checkpoint data set by mark_completed script
+        assert wf.data.get("task_status") == "completed"
+        assert wf.data.get("checkpoint_stored") is True
+        assert wf.data.get("feature_checked") is True

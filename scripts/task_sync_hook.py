@@ -99,6 +99,29 @@ def get_db_connection():
         return None
 
 
+def _get_project_name(cwd: str) -> str:
+    """Derive project name from git root, falling back to cwd basename.
+
+    Claude Code may pass a subdirectory as cwd (e.g., mcp-servers/bpmn-engine/
+    instead of the project root). Using git root ensures we always get the
+    correct project name for task map lookup.
+    """
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--show-toplevel'],
+            capture_output=True, text=True, timeout=5,
+            cwd=cwd, stdin=subprocess.DEVNULL
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            git_root = result.stdout.strip().replace('/', os.sep)
+            return os.path.basename(git_root)
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    # Fallback to cwd basename
+    return os.path.basename(cwd.rstrip('/\\'))
+
+
 def get_task_map_path(project_name: str) -> Path:
     """Get path to the task→todo mapping file for this project."""
     return Path(tempfile.gettempdir()) / f"claude_task_map_{project_name}.json"
@@ -464,7 +487,38 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str) ->
 
         logger.info(f"TaskUpdate synced: task #{task_id} → {new_status}")
 
-        # NEW: Update build_task if bridged
+        # Auto-checkpoint on task completion (GAP 2 fix)
+        # Upserts claude.session_state with completed task context
+        if new_status == 'completed':
+            task_subject = map_entry.get('subject', f'Task #{task_id}') if isinstance(map_entry, dict) else f'Task #{task_id}'
+            checkpoint_focus = f"Completed: {task_subject}"
+            if bt_code:
+                checkpoint_focus = f"Completed: {bt_code} - {task_subject}"
+            try:
+                cur.execute("""
+                    INSERT INTO claude.session_state (project_name, current_focus, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (project_name) DO UPDATE SET
+                        current_focus = EXCLUDED.current_focus,
+                        updated_at = NOW()
+                """, (project_name, checkpoint_focus))
+
+                if session_id:
+                    cur.execute("""
+                        UPDATE claude.sessions
+                        SET session_metadata = COALESCE(session_metadata, '{}'::jsonb)
+                            || jsonb_build_object(
+                                'last_checkpoint', NOW()::text,
+                                'checkpoint_notes', %s
+                            )
+                        WHERE session_id = %s::uuid
+                    """, (checkpoint_focus, session_id))
+
+                logger.info(f"Auto-checkpoint saved: {checkpoint_focus}")
+            except Exception as cp_err:
+                logger.warning(f"Auto-checkpoint failed (non-fatal): {cp_err}")
+
+        # Update build_task if bridged
         if bt_task_id:
             if new_status == 'completed':
                 cur.execute("""
@@ -555,9 +609,9 @@ def main():
             print(json.dumps({}))
             return 0
 
-        # Get project name from cwd
+        # Get project name from git root (handles subdirectory cwd)
         cwd = hook_input.get('cwd', os.getcwd())
-        project_name = os.path.basename(cwd.rstrip('/\\'))
+        project_name = _get_project_name(cwd)
 
         # Pass session_id from hook_input for map file scoping
         hook_session_id = hook_input.get('session_id', '')
