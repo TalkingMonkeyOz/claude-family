@@ -52,7 +52,21 @@ def get_processes_dir() -> Path:
 
 
 def get_tests_dir() -> Path:
-    """Return the tests directory (always next to server.py)."""
+    """Return the tests directory.
+
+    Priority:
+    1. BPMN_TESTS_DIR env var (explicit override)
+    2. tests/ sibling to BPMN_PROCESSES_DIR (if overridden)
+    3. tests/ next to server.py (default for claude-family)
+    """
+    env_override = os.environ.get("BPMN_TESTS_DIR")
+    if env_override:
+        return Path(env_override)
+    # If processes dir is overridden, look for tests relative to it
+    if os.environ.get("BPMN_PROCESSES_DIR"):
+        candidate = Path(os.environ["BPMN_PROCESSES_DIR"]).parent / "tests"
+        if candidate.exists():
+            return candidate
     return _SERVER_DIR / "tests"
 
 
@@ -947,6 +961,178 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
         "type": "agent",
         "agent": "reviewer-sonnet",
         "description": "Spawned via orchestrator.spawn_agent",
+    },
+    # L2_task_work_cycle.bpmn elements
+    "decompose_prompt": {
+        "type": "claude_behavior",
+        "description": "CORE_PROTOCOL rule #1 enforced via rag_query_hook + task_discipline_hook gate",
+        "enforcement": "advisory (protocol) + blocking (discipline hook)",
+    },
+    "sync_tasks_to_db": {
+        "type": "hook_script",
+        "file": "scripts/task_sync_hook.py",
+        "hook_event": "PostToolUse(TaskCreate)",
+        "description": "Syncs TaskCreate calls to claude.todos via substring+fuzzy matching",
+    },
+    "gate_blocked": {
+        "type": "hook_script",
+        "file": "scripts/task_discipline_hook.py",
+        "hook_event": "PreToolUse",
+        "description": "Returns permissionDecision=deny when no tasks exist",
+    },
+    "select_next_task": {
+        "type": "claude_behavior",
+        "description": "Claude selects next task - NO automation or priority enforcement",
+        "gap": "No hook or tool enforces task selection order",
+    },
+    "mark_in_progress": {
+        "type": "claude_behavior",
+        "description": "Claude manually calls TaskUpdate(status=in_progress) - NO auto hook",
+        "gap": "Model expects hook automation but status change is manual",
+    },
+    "bpmn_first_check": {
+        "type": "rule_file",
+        "file": ".claude/rules/system-change-process.md",
+        "description": "Advisory rule for BPMN-first on hook/workflow changes - no enforcement",
+    },
+    "call_core_claude": {
+        "type": "bpmn_call_activity",
+        "calledElement": "L1_core_claude",
+        "description": "CallActivity to core Claude prompt processing model",
+    },
+    "checkpoint_task": {
+        "type": "mcp_tool",
+        "tool": "save_checkpoint",
+        "description": "MCP tool exists but NEVER called automatically per-task",
+        "gap": "Model expects per-task checkpoint but only PreCompact triggers it",
+    },
+    "sync_checkpoint": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "hook_event": "PreCompact",
+        "description": "Only fires on context compaction, not per-task as model expects",
+    },
+    "mark_completed": {
+        "type": "claude_behavior",
+        "description": "Claude manually calls TaskUpdate(status=completed) - NO auto hook",
+        "gap": "Model expects hook automation but status change is manual",
+    },
+    "check_feature": {
+        "type": "mcp_tool",
+        "tool": "complete_work",
+        "description": "complete_work() checks sibling tasks - but requires manual invocation",
+    },
+    "record_blocker": {
+        "type": "claude_behavior",
+        "description": "Claude freetext in task description - no structured blocker capture",
+    },
+    "snapshot_states": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "description": "PreCompact injects work items but no explicit per-session snapshot",
+        "gap": "Only fires on compaction, not on session end",
+    },
+    "store_session_context": {
+        "type": "mcp_tool",
+        "tool": "end_session",
+        "description": "MCP tool stores summary+next_steps - requires manual /session-end",
+        "also": ["scripts/session_end_hook.py"],
+    },
+    # L1_claude_family_extensions.bpmn elements
+    "hook_log_session": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "hook_event": "SessionStart",
+        "description": "Logs session to claude.sessions with 60s dedup guard",
+    },
+    "hook_init_task_map": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "description": "_reset_task_map() in session startup creates fresh task map",
+    },
+    "hook_archive_stale": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "description": "Archives stale todos from previous sessions during startup",
+    },
+    "hook_check_inbox": {
+        "type": "hook_script",
+        "file": "scripts/session_startup_hook_enhanced.py",
+        "description": "Checks orchestrator inbox during session startup (passive display)",
+    },
+    "restore_context": {
+        "type": "claude_behavior",
+        "description": "Claude uses /session-resume to restore prior session context",
+    },
+    "fresh_session": {
+        "type": "claude_behavior",
+        "description": "Default path when no prior state exists",
+    },
+    "receive_prompt": {
+        "type": "claude_behavior",
+        "description": "Claude receives user prompt - loop entry point",
+    },
+    "hook_check_session": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Session ID comparison - detects session change",
+    },
+    "hook_reset_task_map": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Resets task map when session ID changes",
+    },
+    "hook_classify_prompt": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Classifies prompt as action vs question for RAG gating",
+    },
+    "hook_query_rag": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "hook_event": "UserPromptSubmit",
+        "description": "Voyage AI semantic search over knowledge vault",
+    },
+    "hook_suggest_skills": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Skill content similarity search",
+    },
+    "hook_inject_context": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Injects RAG results + core protocol + skills into context",
+    },
+    "hook_post_sync": {
+        "type": "hook_script",
+        "file": "scripts/todo_sync_hook.py",
+        "hook_event": "PostToolUse",
+        "also": ["scripts/task_sync_hook.py", "scripts/mcp_usage_logger.py"],
+        "description": "Post-tool sync: todos, tasks, MCP usage logging",
+    },
+    "log_continuation": {
+        "type": "claude_behavior",
+        "description": "Claude logs warning when session ID changes mid-conversation",
+    },
+    "auto_close": {
+        "type": "hook_script",
+        "file": "scripts/session_end_hook.py",
+        "hook_event": "SessionEnd",
+        "description": "Auto-closes unclosed sessions (< 24h old)",
+    },
+    "write_summary": {
+        "type": "claude_behavior",
+        "description": "Claude writes session summary via /session-end skill",
+    },
+    "capture_knowledge": {
+        "type": "mcp_tool",
+        "tool": "store_knowledge / extract_insights",
+        "description": "Knowledge capture via project-tools MCP",
+    },
+    "manual_close": {
+        "type": "mcp_tool",
+        "tool": "end_session",
+        "description": "Closes session with summary in claude.sessions",
     },
 }
 

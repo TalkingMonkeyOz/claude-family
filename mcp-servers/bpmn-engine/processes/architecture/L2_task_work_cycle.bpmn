@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/L2-task-work-cycle"
+    id="Definitions_L2_TWC">
+
+  <!--
+    LEVEL 2: Task Work Cycle
+
+    Models how Claude processes a user message by decomposing it into tasks,
+    then working through each one with checkpoints and session boundary handling.
+
+    Called from L1_claude_family_extensions (replaces direct call_core_claude).
+    Internally calls L1_core_claude per task for the actual thinking/tool-use.
+
+    Flow:
+      Work Cycle Started
+        -> Decompose Prompt into Tasks (TaskCreate x N)
+        -> Sync Tasks to DB
+        -> Has Tasks?
+            [no] -> Discipline Gate Blocked -> end
+            [yes] -> Task Loop:
+                Select Next Ready Task
+                -> Mark In Progress
+                -> Task Type?
+                    [build] -> BPMN-First: Model + Test -> Execute Task Work
+                    [simple/default] -> Execute Task Work
+                -> Checkpoint Task Context (decisions, files, progress)
+                -> Store Checkpoint
+                -> Task Outcome?
+                    [completed/default] -> Mark Completed -> Check Feature
+                        -> More Tasks?
+                            [yes] -> loop back
+                            [no] -> All Tasks Complete (end)
+                    [blocked] -> Record Blocker -> Mark Blocked
+                        -> More Tasks?
+                            [yes] -> loop back (skip to next)
+                            [no] -> end
+                    [session_end] -> Snapshot All States -> Store Context -> end
+
+    Gateway variables (seed data):
+      has_tasks: True/False (default=False)
+      task_type: "build", default="simple"
+      task_outcome: "completed" (default), "blocked", "session_end"
+      more_tasks: True/False (default=False)
+  -->
+
+  <bpmn:process id="L2_task_work_cycle" name="L2: Task Work Cycle" isExecutable="true">
+
+    <!-- ============================================================
+         Entry: Work cycle begins after prompt received
+         ============================================================ -->
+
+    <bpmn:startEvent id="twc_start" name="Work Cycle Started">
+      <bpmn:outgoing>f_start_decompose</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Claude reads the user message and breaks it into discrete tasks -->
+    <bpmn:userTask id="decompose_prompt" name="[CLAUDE] Decompose Prompt into Tasks">
+      <bpmn:incoming>f_start_decompose</bpmn:incoming>
+      <bpmn:outgoing>f_decompose_sync</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- task_sync_hook.py fires on each TaskCreate, syncs to claude.todos -->
+    <bpmn:scriptTask id="sync_tasks_to_db" name="[HOOK] Sync Tasks to DB" scriptFormat="python">
+      <bpmn:incoming>f_decompose_sync</bpmn:incoming>
+      <bpmn:outgoing>f_sync_gate</bpmn:outgoing>
+      <bpmn:script>tasks_synced = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Discipline gate: task_discipline_hook blocks if no tasks created -->
+    <bpmn:exclusiveGateway id="discipline_gate_gw" name="Has Tasks?" default="flow_no_tasks">
+      <bpmn:incoming>f_sync_gate</bpmn:incoming>
+      <bpmn:outgoing>flow_has_tasks</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_tasks</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="gate_blocked" name="[HOOK] Discipline Gate Blocked" scriptFormat="python">
+      <bpmn:incoming>flow_no_tasks</bpmn:incoming>
+      <bpmn:outgoing>f_blocked_end</bpmn:outgoing>
+      <bpmn:script>gate_blocked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_no_tasks" name="Blocked: No Tasks Created">
+      <bpmn:incoming>f_blocked_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Task Loop: work through each task sequentially
+         ============================================================ -->
+
+    <!-- Pick the next ready task (highest priority, lowest ID) -->
+    <bpmn:scriptTask id="select_next_task" name="[CLAUDE] Select Next Ready Task" scriptFormat="python">
+      <bpmn:incoming>flow_has_tasks</bpmn:incoming>
+      <bpmn:incoming>flow_more_tasks</bpmn:incoming>
+      <bpmn:outgoing>f_select_progress</bpmn:outgoing>
+      <bpmn:script>task_selected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- TaskUpdate(in_progress) - task_sync_hook updates claude.todos -->
+    <bpmn:scriptTask id="mark_in_progress" name="[HOOK] Mark Task In Progress" scriptFormat="python">
+      <bpmn:incoming>f_select_progress</bpmn:incoming>
+      <bpmn:outgoing>f_progress_type</bpmn:outgoing>
+      <bpmn:script>task_status = "in_progress"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Task Type Gate: build tasks get BPMN-first treatment
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="task_type_gw" name="Task Type?" default="flow_simple_task">
+      <bpmn:incoming>f_progress_type</bpmn:incoming>
+      <bpmn:outgoing>flow_build_task</bpmn:outgoing>
+      <bpmn:outgoing>flow_simple_task</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Build task: BPMN-first gate - check/create model, write tests BEFORE coding -->
+    <bpmn:userTask id="bpmn_first_check" name="[CLAUDE] BPMN-First: Model + Test">
+      <bpmn:incoming>flow_build_task</bpmn:incoming>
+      <bpmn:outgoing>f_bpmn_merge</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Merge build and simple paths before core execution -->
+    <bpmn:exclusiveGateway id="task_type_merge" name="Task Type Merge">
+      <bpmn:incoming>f_bpmn_merge</bpmn:incoming>
+      <bpmn:incoming>flow_simple_task</bpmn:incoming>
+      <bpmn:outgoing>f_merge_core</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Call core Claude to do the actual work (thinking, tool use, coding) -->
+    <bpmn:callActivity id="call_core_claude" name="[CORE] Execute Task Work" calledElement="L1_core_claude">
+      <bpmn:incoming>f_merge_core</bpmn:incoming>
+      <bpmn:outgoing>f_core_checkpoint</bpmn:outgoing>
+    </bpmn:callActivity>
+
+    <!-- ============================================================
+         Checkpoint: capture task context for cross-session persistence
+         ============================================================ -->
+
+    <!-- Claude records what happened: decisions made, files touched, progress -->
+    <bpmn:userTask id="checkpoint_task" name="[CLAUDE] Checkpoint Task Context">
+      <bpmn:incoming>f_core_checkpoint</bpmn:incoming>
+      <bpmn:outgoing>f_checkpoint_sync</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- store_session_fact + save_checkpoint persist context to DB -->
+    <bpmn:scriptTask id="sync_checkpoint" name="[HOOK] Store Task Checkpoint" scriptFormat="python">
+      <bpmn:incoming>f_checkpoint_sync</bpmn:incoming>
+      <bpmn:outgoing>f_sync_outcome</bpmn:outgoing>
+      <bpmn:script>checkpoint_stored = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Task Outcome: what happened?
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="task_outcome_gw" name="Task Outcome?" default="flow_completed">
+      <bpmn:incoming>f_sync_outcome</bpmn:incoming>
+      <bpmn:outgoing>flow_completed</bpmn:outgoing>
+      <bpmn:outgoing>flow_blocked</bpmn:outgoing>
+      <bpmn:outgoing>flow_session_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         Path 1: Task Completed (default)
+         ============================================================ -->
+
+    <!-- TaskUpdate(completed) - task_sync_hook updates todo + build_task -->
+    <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Task Completed" scriptFormat="python">
+      <bpmn:incoming>flow_completed</bpmn:incoming>
+      <bpmn:outgoing>f_completed_feature</bpmn:outgoing>
+      <bpmn:script>task_status = "completed"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- task_sync_hook checks if all sibling tasks for parent feature are done -->
+    <bpmn:scriptTask id="check_feature" name="[HOOK] Check Feature Completion" scriptFormat="python">
+      <bpmn:incoming>f_completed_feature</bpmn:incoming>
+      <bpmn:outgoing>f_feature_more</bpmn:outgoing>
+      <bpmn:script>feature_checked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- More tasks to work on? -->
+    <bpmn:exclusiveGateway id="more_tasks_gw" name="More Tasks?" default="flow_no_more">
+      <bpmn:incoming>f_feature_more</bpmn:incoming>
+      <bpmn:incoming>f_blocked_more</bpmn:incoming>
+      <bpmn:outgoing>flow_more_tasks</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_more</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_all_complete" name="All Tasks Complete">
+      <bpmn:incoming>flow_no_more</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Path 2: Task Blocked
+         ============================================================ -->
+
+    <bpmn:userTask id="record_blocker" name="[CLAUDE] Record Blocker">
+      <bpmn:incoming>flow_blocked</bpmn:incoming>
+      <bpmn:outgoing>f_record_mark</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="mark_blocked" name="[HOOK] Mark Task Blocked" scriptFormat="python">
+      <bpmn:incoming>f_record_mark</bpmn:incoming>
+      <bpmn:outgoing>f_blocked_more</bpmn:outgoing>
+      <bpmn:script>task_status = "blocked"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         Path 3: Session End Requested (mid-work interruption)
+         ============================================================ -->
+
+    <!-- Snapshot ALL remaining task states with context -->
+    <bpmn:scriptTask id="snapshot_states" name="[HOOK] Snapshot All Task States" scriptFormat="python">
+      <bpmn:incoming>flow_session_end</bpmn:incoming>
+      <bpmn:outgoing>f_snapshot_store</bpmn:outgoing>
+      <bpmn:script>states_snapshot = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Store session context (decisions, progress, next steps) for resume -->
+    <bpmn:scriptTask id="store_session_context" name="[DB] Store Session Context" scriptFormat="python">
+      <bpmn:incoming>f_snapshot_store</bpmn:incoming>
+      <bpmn:outgoing>f_context_end</bpmn:outgoing>
+      <bpmn:script>session_context_stored = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_session_interrupted" name="Session Interrupted">
+      <bpmn:incoming>f_context_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Sequence Flows
+         ============================================================ -->
+
+    <!-- Entry -->
+    <bpmn:sequenceFlow id="f_start_decompose" sourceRef="twc_start" targetRef="decompose_prompt"/>
+    <bpmn:sequenceFlow id="f_decompose_sync" sourceRef="decompose_prompt" targetRef="sync_tasks_to_db"/>
+    <bpmn:sequenceFlow id="f_sync_gate" sourceRef="sync_tasks_to_db" targetRef="discipline_gate_gw"/>
+
+    <!-- Discipline gate -->
+    <bpmn:sequenceFlow id="flow_has_tasks" sourceRef="discipline_gate_gw" targetRef="select_next_task">
+      <bpmn:conditionExpression>has_tasks == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_tasks" sourceRef="discipline_gate_gw" targetRef="gate_blocked"/>
+    <bpmn:sequenceFlow id="f_blocked_end" sourceRef="gate_blocked" targetRef="end_no_tasks"/>
+
+    <!-- Task loop -->
+    <bpmn:sequenceFlow id="f_select_progress" sourceRef="select_next_task" targetRef="mark_in_progress"/>
+    <bpmn:sequenceFlow id="f_progress_type" sourceRef="mark_in_progress" targetRef="task_type_gw"/>
+
+    <!-- Task type branching -->
+    <bpmn:sequenceFlow id="flow_build_task" sourceRef="task_type_gw" targetRef="bpmn_first_check">
+      <bpmn:conditionExpression>task_type == "build"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_simple_task" sourceRef="task_type_gw" targetRef="task_type_merge"/>
+    <bpmn:sequenceFlow id="f_bpmn_merge" sourceRef="bpmn_first_check" targetRef="task_type_merge"/>
+    <bpmn:sequenceFlow id="f_merge_core" sourceRef="task_type_merge" targetRef="call_core_claude"/>
+
+    <!-- Post-core checkpoint -->
+    <bpmn:sequenceFlow id="f_core_checkpoint" sourceRef="call_core_claude" targetRef="checkpoint_task"/>
+    <bpmn:sequenceFlow id="f_checkpoint_sync" sourceRef="checkpoint_task" targetRef="sync_checkpoint"/>
+    <bpmn:sequenceFlow id="f_sync_outcome" sourceRef="sync_checkpoint" targetRef="task_outcome_gw"/>
+
+    <!-- Outcome: completed (default) -->
+    <bpmn:sequenceFlow id="flow_completed" sourceRef="task_outcome_gw" targetRef="mark_completed"/>
+    <bpmn:sequenceFlow id="f_completed_feature" sourceRef="mark_completed" targetRef="check_feature"/>
+    <bpmn:sequenceFlow id="f_feature_more" sourceRef="check_feature" targetRef="more_tasks_gw"/>
+
+    <!-- More tasks check -->
+    <bpmn:sequenceFlow id="flow_more_tasks" sourceRef="more_tasks_gw" targetRef="select_next_task">
+      <bpmn:conditionExpression>more_tasks == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_more" sourceRef="more_tasks_gw" targetRef="end_all_complete"/>
+
+    <!-- Outcome: blocked -->
+    <bpmn:sequenceFlow id="flow_blocked" sourceRef="task_outcome_gw" targetRef="record_blocker">
+      <bpmn:conditionExpression>task_outcome == "blocked"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_record_mark" sourceRef="record_blocker" targetRef="mark_blocked"/>
+    <bpmn:sequenceFlow id="f_blocked_more" sourceRef="mark_blocked" targetRef="more_tasks_gw"/>
+
+    <!-- Outcome: session end -->
+    <bpmn:sequenceFlow id="flow_session_end" sourceRef="task_outcome_gw" targetRef="snapshot_states">
+      <bpmn:conditionExpression>task_outcome == "session_end"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_snapshot_store" sourceRef="snapshot_states" targetRef="store_session_context"/>
+    <bpmn:sequenceFlow id="f_context_end" sourceRef="store_session_context" targetRef="end_session_interrupted"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

@@ -11,10 +11,11 @@
     session lifecycle including hooks, RAG, and session management. Wraps
     the core via CallActivity for each prompt cycle.
 
-    This lets us:
-      - Test extension config changes without touching the core model
-      - Update the core model when Anthropic changes Claude
-      - Give the manager app a clear model to display and configure against
+    Architecture (3-layer):
+      L1_claude_family_extensions (this) -> L2_task_work_cycle -> L1_core_claude
+      - Extensions: session lifecycle, hooks, RAG
+      - Task work cycle: decompose, BPMN-first gate, checkpoint, multi-task loop
+      - Core claude: single prompt-response thinking/tool-use
 
     Flow:
       Session Started
@@ -24,7 +25,10 @@
         |  -> [HOOK] Check Session Changed -> [changed] -> Reset Task Map
         |  -> [HOOK] Classify Prompt -> [needs_rag] -> Query RAG -> Suggest Skills
         |  -> [HOOK] Inject Context
-        |  -> [CORE] Process Prompt (CallActivity to L1_core_claude)
+        |  -> [CORE] Task Work Cycle (CallActivity to L2_task_work_cycle)
+        |      -> Decompose into tasks -> for each task:
+        |         [build] -> BPMN-first -> core -> checkpoint -> complete
+        |         [simple] -> core -> checkpoint -> complete
         |  -> [HOOK] Post-Processing Sync
         |  -> Action?
         |      [continue] -> loop back
@@ -167,10 +171,12 @@
     </bpmn:scriptTask>
 
     <!-- ============================================================
-         Phase 4: Core Processing (CallActivity to L1_core_claude)
+         Phase 4: Task Work Cycle (CallActivity to L2_task_work_cycle)
+         L2 decomposes into tasks, works each one (calling L1_core_claude
+         per task), with checkpoints and session boundary handling.
          ============================================================ -->
 
-    <bpmn:callActivity id="call_core_claude" name="[CORE] Process Prompt" calledElement="L1_core_claude">
+    <bpmn:callActivity id="call_core_claude" name="[CORE] Task Work Cycle" calledElement="L2_task_work_cycle">
       <bpmn:incoming>f_inject_core</bpmn:incoming>
       <bpmn:outgoing>f_core_post</bpmn:outgoing>
     </bpmn:callActivity>

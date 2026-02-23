@@ -1,17 +1,20 @@
 """
 Tests for L1_claude_family_extensions.bpmn - Claude Family Extension Wrapper.
 
-Tests extensions WITH the core subprocess - loads BOTH bpmn files.
-The extension model wraps L1_core_claude via CallActivity.
+Tests extensions WITH the core subprocess - loads ALL 3 bpmn files.
+The extension model wraps L2_task_work_cycle via CallActivity, which in turn
+calls L1_core_claude per task.
 
 Extension lifecycle:
   Session Started
-    → 4 startup hooks (log, init map, archive, inbox)
-    → Load state → [resume] Restore / [fresh] Fresh
-    → Prompt loop:
-        receive_prompt → session change check → classify → [RAG] → inject context
-        → CallActivity(L1_core_claude) → post-sync
-        → action: continue/compact/end_auto/end_manual
+    -> 4 startup hooks
+    -> Load state -> [resume] Restore / [fresh] Fresh
+    -> Prompt loop:
+        receive_prompt -> session change check -> classify -> [RAG] -> inject context
+        -> CallActivity(L2_task_work_cycle)
+            -> decompose -> for each task: [BPMN-first?] -> core -> checkpoint -> complete
+        -> post-sync
+        -> action: continue/compact/end_auto/end_manual
 
 Gateway seed data (extensions layer):
   prior_state: True/False (default=False)
@@ -20,7 +23,13 @@ Gateway seed data (extensions layer):
   action: "continue" (default), "compact", "end_auto", "end_manual"
   session_id_changed: True/False (default=False)
 
-Core subprocess seed data (passed through):
+L2 task work cycle seed data (passed to decompose_prompt):
+  has_tasks: True/False
+  task_type: "simple" (default), "build"
+  task_outcome: "completed" (default), "blocked", "session_end"
+  more_tasks: True/False (default=False)
+
+Core subprocess seed data (passed through decompose_prompt):
   intent_type, complexity, needs_tool, more_tools_needed
 """
 
@@ -34,6 +43,7 @@ ARCH_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "processes", "architecture")
 )
 EXTENSIONS_FILE = os.path.join(ARCH_DIR, "L1_claude_family_extensions.bpmn")
+TWC_FILE = os.path.join(ARCH_DIR, "L2_task_work_cycle.bpmn")
 CORE_FILE = os.path.join(ARCH_DIR, "L1_core_claude.bpmn")
 
 PROCESS_ID = "L1_claude_family_extensions"
@@ -45,9 +55,10 @@ PROCESS_ID = "L1_claude_family_extensions"
 
 
 def load_workflow() -> BpmnWorkflow:
-    """Parse extensions + core BPMN, return workflow with subprocess specs resolved."""
+    """Parse extensions + task work cycle + core BPMN, return workflow with all subspecs."""
     parser = BpmnParser()
     parser.add_bpmn_file(CORE_FILE)
+    parser.add_bpmn_file(TWC_FILE)
     parser.add_bpmn_file(EXTENSIONS_FILE)
     spec = parser.get_spec(PROCESS_ID)
     subspecs = parser.get_subprocess_specs(PROCESS_ID)
@@ -96,7 +107,7 @@ class TestSessionStartupHooks:
 
 
 class TestFreshAutoClose:
-    """Fresh session → one prompt → core processes → auto-close."""
+    """Fresh session -> one prompt -> task work cycle -> core processes -> auto-close."""
 
     def test_fresh_session_auto_close(self):
         wf = load_workflow()
@@ -108,11 +119,20 @@ class TestFreshAutoClose:
             "needs_rag": False,
         })
 
-        # Receive prompt with auto-close action
-        # Core subprocess needs seed data too
+        # Receive prompt: extensions-layer data only
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle starts - decompose_prompt is now READY
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
+            # Core subprocess seed data
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
@@ -120,6 +140,10 @@ class TestFreshAutoClose:
         })
 
         # Core subprocess auto-completes (conversation path has no userTasks)
+        # checkpoint_task is now READY
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
+
         # Post-sync and auto-close run as scriptTasks
         assert wf.is_completed()
 
@@ -132,7 +156,7 @@ class TestFreshAutoClose:
 
 
 class TestResumedManualClose:
-    """Resume prior state → prompt → manual /session-end."""
+    """Resume prior state -> prompt -> task work cycle -> manual /session-end."""
 
     def test_resumed_session_manual_close(self):
         wf = load_workflow()
@@ -151,13 +175,26 @@ class TestResumedManualClose:
         complete(wf, "receive_prompt", {
             "action": "end_manual",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle - decompose
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
 
-        # Core auto-completes, then manual end path
+        # Core auto-completes, then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
+
+        # Manual end path: write_summary should now be ready
         complete(wf, "write_summary")
 
         assert wf.is_completed()
@@ -184,11 +221,24 @@ class TestRAGForQuestion:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle - decompose
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "question",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # Core auto-completes (question path), then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -215,11 +265,24 @@ class TestRAGSkippedForAction:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle - decompose
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "action",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # Core auto-completes (action, no tool), then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -230,7 +293,7 @@ class TestRAGSkippedForAction:
 
 
 class TestCoreCalledViaCallActivity:
-    """Core subprocess executes via CallActivity and its tasks appear in completed."""
+    """Core subprocess executes via CallActivity chain and its tasks appear in completed."""
 
     def test_core_tasks_appear(self):
         wf = load_workflow()
@@ -244,11 +307,24 @@ class TestCoreCalledViaCallActivity:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 decompose - question path so core auto-completes
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "question",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # Core auto-completes, then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -260,9 +336,22 @@ class TestCoreCalledViaCallActivity:
         assert "compose_response" in names
         assert "deliver_response" in names
 
+        # L2 elements should also appear
+        assert "decompose_prompt" in names
+        assert "sync_tasks_to_db" in names
+        assert "select_next_task" in names
+        assert "mark_in_progress" in names
+        assert "checkpoint_task" in names
+        assert "sync_checkpoint" in names
+        assert "mark_completed" in names
+        assert "check_feature" in names
+
+        # call_core_claude element is still the ID in the extensions model
+        assert "call_core_claude" in names
+
 
 class TestToolCallThroughCore:
-    """Tool call within core subprocess: extension hooks wrap the core execution."""
+    """Tool call within core subprocess: extension hooks wrap the full call chain."""
 
     def test_tool_call_order(self):
         wf = load_workflow()
@@ -276,6 +365,15 @@ class TestToolCallThroughCore:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 decompose - action with tool so core pauses at execute_tool
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "action",
             "complexity": "simple",
             "needs_tool": True,
@@ -287,6 +385,10 @@ class TestToolCallThroughCore:
         assert "execute_tool" in ready_names(wf)
 
         complete(wf, "execute_tool")
+
+        # After core completes, checkpoint_task is READY
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -302,7 +404,7 @@ class TestToolCallThroughCore:
 
 
 class TestCompactPath:
-    """Compact → checkpoint → loop back to receive_prompt."""
+    """Compact -> checkpoint -> loop back to receive_prompt."""
 
     def test_compact_loops_back(self):
         wf = load_workflow()
@@ -317,29 +419,54 @@ class TestCompactPath:
         complete(wf, "receive_prompt", {
             "action": "compact",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle - decompose for first prompt
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
 
-        # After compact, should loop back to receive_prompt
+        # Core auto-completes, then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
+
+        # After compact, precompact_inject and save_checkpoint should be done
         names = completed_names(wf)
         assert "precompact_inject" in names
         assert "save_checkpoint" in names
 
-        # Should be waiting for next prompt (wf.data not populated until completion)
+        # Should be waiting for next prompt
         assert "receive_prompt" in ready_names(wf)
 
         # Second prompt: auto-close
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle for second prompt
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         assert wf.data.get("precompact_injected") is True
@@ -347,7 +474,7 @@ class TestCompactPath:
 
 
 class TestContinuationDetection:
-    """Compact with session ID change → continuation warning → loops back."""
+    """Compact with session ID change -> continuation warning -> loops back."""
 
     def test_continuation_warning_logged(self):
         wf = load_workflow()
@@ -358,37 +485,63 @@ class TestContinuationDetection:
             "needs_rag": False,
         })
 
-        # Compact with session_id change
+        # First prompt: compact with session_id change
         complete(wf, "receive_prompt", {
             "action": "compact",
             "session_id_changed": True,
+        })
+
+        # L2 task work cycle - decompose for first prompt
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # Core auto-completes, then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         names = completed_names(wf)
         assert "log_continuation" in names
 
-        # Loops back to receive_prompt (wf.data not populated until completion)
+        # Loops back to receive_prompt
         assert "receive_prompt" in ready_names(wf)
 
-        # Close out
+        # Close out with second prompt
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle for second prompt
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
+
         assert wf.is_completed()
         assert wf.data.get("continuation_warning") is True
 
 
 class TestSessionChangeResetsMap:
-    """New session detected → task map reset → continues normally."""
+    """New session detected -> task map reset -> continues normally."""
 
     def test_session_change_resets_task_map(self):
         wf = load_workflow()
@@ -402,11 +555,24 @@ class TestSessionChangeResetsMap:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle - decompose
+        assert "decompose_prompt" in ready_names(wf)
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # Core auto-completes, then checkpoint
+        assert "checkpoint_task" in ready_names(wf)
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)

@@ -1,14 +1,14 @@
 """
-Tests for the layered BPMN architecture: Core Claude + Claude Family Extensions.
+Tests for the 3-layer BPMN architecture:
+  L1_claude_family_extensions -> L2_task_work_cycle -> L1_core_claude
 
 Cross-layer integration tests that verify:
   1. Core runs in isolation without extension files
-  2. Extensions properly wrap core via CallActivity
+  2. Extensions properly wrap core via CallActivity (through L2 task work cycle)
   3. Hook injection points are correctly ordered relative to core
   4. "Anthropic update" simulation: changing core data doesn't break extensions
 
-These tests load BOTH L1_core_claude.bpmn and L1_claude_family_extensions.bpmn
-and verify the layering contract between them.
+These tests load ALL THREE layers and verify the layering contract between them.
 """
 
 import os
@@ -21,6 +21,7 @@ ARCH_DIR = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "processes", "architecture")
 )
 CORE_FILE = os.path.join(ARCH_DIR, "L1_core_claude.bpmn")
+TWC_FILE = os.path.join(ARCH_DIR, "L2_task_work_cycle.bpmn")
 EXTENSIONS_FILE = os.path.join(ARCH_DIR, "L1_claude_family_extensions.bpmn")
 
 
@@ -43,9 +44,10 @@ def load_core_only(initial_data: dict = None) -> BpmnWorkflow:
 
 
 def load_extensions_with_core() -> BpmnWorkflow:
-    """Load extensions + core for subprocess resolution."""
+    """Load all 3 layers: extensions + task work cycle + core."""
     parser = BpmnParser()
     parser.add_bpmn_file(CORE_FILE)
+    parser.add_bpmn_file(TWC_FILE)
     parser.add_bpmn_file(EXTENSIONS_FILE)
     spec = parser.get_spec("L1_claude_family_extensions")
     subspecs = parser.get_subprocess_specs("L1_claude_family_extensions")
@@ -145,18 +147,22 @@ class TestExtensionWrapping:
     """Parser resolves CallActivity and both layers' tasks appear."""
 
     def test_subprocess_spec_resolved(self):
-        """Parser resolves L1_core_claude as subprocess of extensions."""
+        """Parser resolves L2_task_work_cycle and L1_core_claude as subspecs."""
         parser = BpmnParser()
         parser.add_bpmn_file(CORE_FILE)
+        parser.add_bpmn_file(TWC_FILE)
         parser.add_bpmn_file(EXTENSIONS_FILE)
         subspecs = parser.get_subprocess_specs("L1_claude_family_extensions")
 
+        assert "L2_task_work_cycle" in subspecs, (
+            f"Expected L2_task_work_cycle in subspecs, got: {list(subspecs.keys())}"
+        )
         assert "L1_core_claude" in subspecs, (
             f"Expected L1_core_claude in subspecs, got: {list(subspecs.keys())}"
         )
 
-    def test_both_layers_tasks_appear(self):
-        """Extension + core tasks both appear in completed list."""
+    def test_all_layers_tasks_appear(self):
+        """Extension + L2 + core tasks all appear in completed list."""
         wf = load_extensions_with_core()
 
         complete(wf, "load_state", {
@@ -167,11 +173,22 @@ class TestExtensionWrapping:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2 task work cycle: decompose prompt
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "question",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+
+        # L2: checkpoint after core completes
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -182,7 +199,14 @@ class TestExtensionWrapping:
         assert "hook_post_sync" in names
         assert "auto_close" in names
 
-        # Core-layer tasks (from subprocess)
+        # L2 task work cycle tasks
+        assert "decompose_prompt" in names
+        assert "sync_tasks_to_db" in names
+        assert "select_next_task" in names
+        assert "checkpoint_task" in names
+        assert "mark_completed" in names
+
+        # Core-layer tasks (from nested subprocess)
         assert "load_context" in names
         assert "parse_intent" in names
         assert "formulate_answer" in names
@@ -205,11 +229,20 @@ class TestHookInjectionPoints:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2: decompose prompt seeds core data
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -238,11 +271,20 @@ class TestHookInjectionPoints:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2: decompose prompt seeds core data
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "conversation",
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -271,15 +313,23 @@ class TestAnthropicUpdateSimulation:
             "needs_rag": False,
         })
 
-        # Simulate unknown intent type: falls to default (conversation)
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2: decompose with unknown intent type -> core falls to default
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "unknown_new_type",  # Not question/action
             "complexity": "simple",
             "needs_tool": False,
             "more_tools_needed": False,
         })
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)
@@ -308,6 +358,14 @@ class TestAnthropicUpdateSimulation:
         complete(wf, "receive_prompt", {
             "action": "end_auto",
             "session_id_changed": False,
+        })
+
+        # L2: decompose with tool-using action
+        complete(wf, "decompose_prompt", {
+            "has_tasks": True,
+            "task_type": "simple",
+            "task_outcome": "completed",
+            "more_tasks": False,
             "intent_type": "action",
             "complexity": "simple",
             "needs_tool": True,
@@ -318,6 +376,9 @@ class TestAnthropicUpdateSimulation:
         complete(wf, "execute_tool", {"more_tools_needed": True})
         # Second tool call
         complete(wf, "execute_tool", {"more_tools_needed": False})
+
+        # L2: checkpoint after core
+        complete(wf, "checkpoint_task")
 
         assert wf.is_completed()
         names = completed_names(wf)

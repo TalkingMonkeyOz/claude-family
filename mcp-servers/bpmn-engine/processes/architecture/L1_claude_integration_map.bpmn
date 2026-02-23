@@ -1,0 +1,344 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    targetNamespace="http://claude-family/bpmn/L1-claude-integration-map"
+    id="Definitions_L1_CIM">
+
+  <!--
+    LEVEL 1: Claude Code Integration Point Map
+
+    Models every EXTERNAL interface point where the Claude Family can configure,
+    hook into, or extend Claude Code's behavior. This is NOT about internal
+    reasoning (see L1_core_claude) - it is about the integration surfaces we own.
+
+    Actor prefixes:
+      [CONFIG]  = static configuration files loaded at startup (we control)
+      [HOOK]    = dynamic hook scripts fired at lifecycle events (we control)
+      [BUILTIN] = Claude Code native features (Anthropic controls)
+      [MCP]     = MCP server tools (we control/configure)
+
+    Flow:
+      Claude Code Launched
+        -> BOOTSTRAP PHASE
+           -> [CONFIG] Load Settings (.claude/settings.local.json)
+           -> [CONFIG] Connect MCP Servers
+           -> [CONFIG] Load CLAUDE.md Global (~/.claude/CLAUDE.md)
+           -> [CONFIG] Load CLAUDE.md Project ({project}/CLAUDE.md)
+           -> [CONFIG] Load Rules (.claude/rules/*.md)
+           -> [CONFIG] Load Instructions (.claude/instructions/*.md)
+           -> [CONFIG] Load Skills (.claude/commands/, .claude/skills/)
+           -> [CONFIG] Load Auto Memory (memory/MEMORY.md)
+        -> SESSION INIT
+           -> [HOOK] Fire SessionStart Hooks
+        -> PROMPT LOOP (repeats until session ends)
+           -> [BUILTIN] Receive User Prompt
+           -> [HOOK] Fire UserPromptSubmit Hooks
+           -> [BUILTIN] Claude Processes Prompt
+           -> Needs Tools?
+               [no, default] -> merge
+               [yes]         -> TOOL LOOP
+                               -> [HOOK] Fire PreToolUse Hooks
+                               -> [BUILTIN] Execute Tool
+                               -> [HOOK] Fire PostToolUse Hooks
+                               -> More Tools?
+                                   [yes] -> loop back to PreToolUse
+                                   [no, default] -> merge
+           -> merge (tool_merge)
+           -> [BUILTIN] Deliver Response
+           -> Lifecycle Event?
+               [continue, default]  -> loop back to Receive User Prompt
+               [compact]            -> [HOOK] Fire PreCompact Hooks
+                                       -> loop back to Receive User Prompt
+               [end]                -> [HOOK] Fire SessionEnd Hooks
+                                       -> Session Complete
+
+    Gateway variables (seed data):
+      needs_tool:      True/False  (default=False)
+      more_tools:      True/False  (default=False)
+      lifecycle_event: "continue" (default), "compact", "end"
+      needs_rag:       True/False  (default=True)
+  -->
+
+  <bpmn:process id="L1_claude_integration_map" name="L1: Claude Code Integration Point Map" isExecutable="true">
+
+    <!-- ============================================================
+         Entry: Claude Code process launched
+         ============================================================ -->
+
+    <bpmn:startEvent id="cim_start" name="Claude Code Launched">
+      <bpmn:outgoing>f_start_settings</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ============================================================
+         BOOTSTRAP PHASE: Static config loaded at startup
+         All [CONFIG] tasks represent files we control that Claude
+         reads once on launch. Order matters - settings before MCPs,
+         global CLAUDE.md before project CLAUDE.md.
+         ============================================================ -->
+
+    <!-- Tool permissions, hook scripts, MCP server list, allowed paths -->
+    <bpmn:scriptTask id="load_settings" name="[CONFIG] Load Settings (.claude/settings.local.json)" scriptFormat="python">
+      <bpmn:incoming>f_start_settings</bpmn:incoming>
+      <bpmn:outgoing>f_settings_mcps</bpmn:outgoing>
+      <bpmn:script>settings_loaded = True; tool_permissions_set = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- MCP servers declared in settings; tools become available -->
+    <bpmn:scriptTask id="connect_mcps" name="[CONFIG] Connect MCP Servers" scriptFormat="python">
+      <bpmn:incoming>f_settings_mcps</bpmn:incoming>
+      <bpmn:outgoing>f_mcps_global</bpmn:outgoing>
+      <bpmn:script>mcp_servers_connected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Global identity, standards, cross-project rules from ~/.claude/CLAUDE.md -->
+    <bpmn:scriptTask id="load_claude_md_global" name="[CONFIG] Load CLAUDE.md Global (~/.claude/CLAUDE.md)" scriptFormat="python">
+      <bpmn:incoming>f_mcps_global</bpmn:incoming>
+      <bpmn:outgoing>f_global_project</bpmn:outgoing>
+      <bpmn:script>global_rules_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Project-specific constitution, architecture, current phase -->
+    <bpmn:scriptTask id="load_claude_md_project" name="[CONFIG] Load CLAUDE.md Project ({project}/CLAUDE.md)" scriptFormat="python">
+      <bpmn:incoming>f_global_project</bpmn:incoming>
+      <bpmn:outgoing>f_project_rules</bpmn:outgoing>
+      <bpmn:script>project_rules_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Always-active rules from .claude/rules/*.md (commit-rules, database-rules, etc.) -->
+    <bpmn:scriptTask id="load_rules" name="[CONFIG] Load Rules (.claude/rules/*.md)" scriptFormat="python">
+      <bpmn:incoming>f_project_rules</bpmn:incoming>
+      <bpmn:outgoing>f_rules_instructions</bpmn:outgoing>
+      <bpmn:script>rules_loaded = True; rules_always_active = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Pattern-matched coding standards from .claude/instructions/*.md -->
+    <bpmn:scriptTask id="load_instructions" name="[CONFIG] Load Instructions (.claude/instructions/*.md)" scriptFormat="python">
+      <bpmn:incoming>f_rules_instructions</bpmn:incoming>
+      <bpmn:outgoing>f_instructions_skills</bpmn:outgoing>
+      <bpmn:script>instructions_loaded = True; pattern_matching_active = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Slash commands and skill definitions from .claude/commands/, .claude/skills/ -->
+    <bpmn:scriptTask id="load_skills" name="[CONFIG] Load Skills (.claude/commands/, .claude/skills/)" scriptFormat="python">
+      <bpmn:incoming>f_instructions_skills</bpmn:incoming>
+      <bpmn:outgoing>f_skills_memory</bpmn:outgoing>
+      <bpmn:script>skills_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Auto-injected memory from memory/MEMORY.md (project facts, gotchas) -->
+    <bpmn:scriptTask id="load_memory" name="[CONFIG] Load Auto Memory (memory/MEMORY.md)" scriptFormat="python">
+      <bpmn:incoming>f_skills_memory</bpmn:incoming>
+      <bpmn:outgoing>f_memory_session_start</bpmn:outgoing>
+      <bpmn:script>memory_loaded = True; bootstrap_complete = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         SESSION INIT: Hook scripts fired once at session open
+         session_startup_hook_enhanced.py: log session, init task map,
+         archive stale todos, check orchestrator inbox.
+         ============================================================ -->
+
+    <bpmn:scriptTask id="fire_session_start" name="[HOOK] Fire SessionStart Hooks" scriptFormat="python">
+      <bpmn:incoming>f_memory_session_start</bpmn:incoming>
+      <bpmn:outgoing>f_session_start_prompt</bpmn:outgoing>
+      <bpmn:script>session_logged = True; task_map_initialized = True; stale_archived = True; inbox_checked = True; session_initialized = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         PROMPT LOOP: Repeats for every user message.
+         Loop entry points: initial start, lifecycle_gw continue,
+         and post-compact return.
+         ============================================================ -->
+
+    <!-- Native Claude Code UI - user types a message -->
+    <bpmn:userTask id="receive_prompt" name="[BUILTIN] Receive User Prompt">
+      <bpmn:incoming>f_session_start_prompt</bpmn:incoming>
+      <bpmn:incoming>flow_continue</bpmn:incoming>
+      <bpmn:incoming>flow_after_compact</bpmn:incoming>
+      <bpmn:outgoing>f_prompt_submit</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- rag_query_hook.py: classify prompt, query vault embeddings if needed,
+         inject core protocol (~30 tokens) and suggest relevant skills.
+         Runs on EVERY prompt via UserPromptSubmit hook event. -->
+    <bpmn:scriptTask id="fire_user_prompt_submit" name="[HOOK] Fire UserPromptSubmit Hooks" scriptFormat="python">
+      <bpmn:incoming>f_prompt_submit</bpmn:incoming>
+      <bpmn:outgoing>f_submit_process</bpmn:outgoing>
+      <bpmn:script>prompt_classified = True; rag_queried = needs_rag; protocol_injected = True; skills_suggested = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Claude's internal reasoning, context window synthesis, response planning.
+         Black box from integration perspective - Anthropic controls this fully. -->
+    <bpmn:scriptTask id="process_prompt" name="[BUILTIN] Claude Processes Prompt" scriptFormat="python">
+      <bpmn:incoming>f_submit_process</bpmn:incoming>
+      <bpmn:outgoing>f_process_tools_gw</bpmn:outgoing>
+      <bpmn:script>prompt_processed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Does Claude need to call any tools to answer this prompt? -->
+    <bpmn:exclusiveGateway id="needs_tools_gw" name="Needs Tools?" default="flow_no_tools">
+      <bpmn:incoming>f_process_tools_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_yes_tools</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_tools</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         TOOL LOOP: Fires for each tool call within a prompt turn.
+         PreToolUse: task_discipline_hook + context_injector_hook
+         PostToolUse: todo_sync_hook + task_sync_hook + mcp_usage_logger
+         ============================================================ -->
+
+    <!-- task_discipline_hook.py blocks gated tools (Write/Edit/Bash/Task)
+         if no tasks exist. context_injector_hook.py injects coding standards. -->
+    <bpmn:scriptTask id="fire_pre_tool_use" name="[HOOK] Fire PreToolUse Hooks" scriptFormat="python">
+      <bpmn:incoming>flow_yes_tools</bpmn:incoming>
+      <bpmn:incoming>flow_more_tools</bpmn:incoming>
+      <bpmn:outgoing>f_pre_execute</bpmn:outgoing>
+      <bpmn:script>discipline_checked = True; context_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Actual tool execution: Read/Write/Edit/Bash/MCP calls/etc.
+         Claude Code handles routing to the correct tool handler. -->
+    <bpmn:userTask id="execute_tool" name="[BUILTIN] Execute Tool">
+      <bpmn:incoming>f_pre_execute</bpmn:incoming>
+      <bpmn:outgoing>f_execute_post</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- todo_sync_hook.py syncs TodoWrite to DB. task_sync_hook.py syncs
+         TaskCreate/TaskUpdate to claude.todos. mcp_usage_logger.py logs
+         all mcp__ prefixed tool calls. -->
+    <bpmn:scriptTask id="fire_post_tool_use" name="[HOOK] Fire PostToolUse Hooks" scriptFormat="python">
+      <bpmn:incoming>f_execute_post</bpmn:incoming>
+      <bpmn:outgoing>f_post_more_gw</bpmn:outgoing>
+      <bpmn:script>todos_synced = True; tasks_synced = True; mcp_logged = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Does Claude need to call another tool before responding? -->
+    <bpmn:exclusiveGateway id="more_tools_gw" name="More Tools?" default="flow_tools_done">
+      <bpmn:incoming>f_post_more_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_more_tools</bpmn:outgoing>
+      <bpmn:outgoing>flow_tools_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============================================================
+         RESPONSE: Merge paths and deliver to user
+         ============================================================ -->
+
+    <!-- Merges no-tools path and tools-done path before response delivery -->
+    <bpmn:exclusiveGateway id="tool_merge" name="Tool Path Merge">
+      <bpmn:incoming>flow_no_tools</bpmn:incoming>
+      <bpmn:incoming>flow_tools_done</bpmn:incoming>
+      <bpmn:outgoing>f_merge_deliver</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Claude Code renders the response text to the user's terminal/UI -->
+    <bpmn:scriptTask id="deliver_response" name="[BUILTIN] Deliver Response" scriptFormat="python">
+      <bpmn:incoming>f_merge_deliver</bpmn:incoming>
+      <bpmn:outgoing>f_deliver_lifecycle</bpmn:outgoing>
+      <bpmn:script>response_delivered = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============================================================
+         LIFECYCLE EVENT: Determines what happens after each response.
+         Default: continue (user types next message - loop).
+         Compact: context window near limit - fire PreCompact hooks.
+         End: session terminating - fire SessionEnd hooks.
+         ============================================================ -->
+
+    <bpmn:exclusiveGateway id="lifecycle_gw" name="Lifecycle Event?" default="flow_continue">
+      <bpmn:incoming>f_deliver_lifecycle</bpmn:incoming>
+      <bpmn:outgoing>flow_continue</bpmn:outgoing>
+      <bpmn:outgoing>flow_compact</bpmn:outgoing>
+      <bpmn:outgoing>flow_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- precompact_hook.py injects active todos, features, session facts,
+         and session notes into context before Claude Code compacts the window.
+         This preserves working state across context boundaries. -->
+    <bpmn:scriptTask id="fire_pre_compact" name="[HOOK] Fire PreCompact Hooks" scriptFormat="python">
+      <bpmn:incoming>flow_compact</bpmn:incoming>
+      <bpmn:outgoing>flow_after_compact</bpmn:outgoing>
+      <bpmn:script>work_items_preserved = True; checkpoint_saved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- session_end_hook.py auto-closes the session in claude.sessions table.
+         Fires on both graceful exit (user closes terminal) and explicit /session-end. -->
+    <bpmn:scriptTask id="fire_session_end" name="[HOOK] Fire SessionEnd Hooks" scriptFormat="python">
+      <bpmn:incoming>flow_end</bpmn:incoming>
+      <bpmn:outgoing>f_session_end_close</bpmn:outgoing>
+      <bpmn:script>session_closed = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="cim_end" name="Session Complete">
+      <bpmn:incoming>f_session_end_close</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============================================================
+         Sequence Flows
+         ============================================================ -->
+
+    <!-- Entry -->
+    <bpmn:sequenceFlow id="f_start_settings" sourceRef="cim_start" targetRef="load_settings"/>
+
+    <!-- Bootstrap: linear chain through all config layers -->
+    <bpmn:sequenceFlow id="f_settings_mcps" sourceRef="load_settings" targetRef="connect_mcps"/>
+    <bpmn:sequenceFlow id="f_mcps_global" sourceRef="connect_mcps" targetRef="load_claude_md_global"/>
+    <bpmn:sequenceFlow id="f_global_project" sourceRef="load_claude_md_global" targetRef="load_claude_md_project"/>
+    <bpmn:sequenceFlow id="f_project_rules" sourceRef="load_claude_md_project" targetRef="load_rules"/>
+    <bpmn:sequenceFlow id="f_rules_instructions" sourceRef="load_rules" targetRef="load_instructions"/>
+    <bpmn:sequenceFlow id="f_instructions_skills" sourceRef="load_instructions" targetRef="load_skills"/>
+    <bpmn:sequenceFlow id="f_skills_memory" sourceRef="load_skills" targetRef="load_memory"/>
+
+    <!-- Bootstrap to session init -->
+    <bpmn:sequenceFlow id="f_memory_session_start" sourceRef="load_memory" targetRef="fire_session_start"/>
+
+    <!-- Session init to prompt loop -->
+    <bpmn:sequenceFlow id="f_session_start_prompt" sourceRef="fire_session_start" targetRef="receive_prompt"/>
+
+    <!-- Prompt loop: prompt → submit hook → process → gateway -->
+    <bpmn:sequenceFlow id="f_prompt_submit" sourceRef="receive_prompt" targetRef="fire_user_prompt_submit"/>
+    <bpmn:sequenceFlow id="f_submit_process" sourceRef="fire_user_prompt_submit" targetRef="process_prompt"/>
+    <bpmn:sequenceFlow id="f_process_tools_gw" sourceRef="process_prompt" targetRef="needs_tools_gw"/>
+
+    <!-- needs_tools_gw branches -->
+    <bpmn:sequenceFlow id="flow_yes_tools" sourceRef="needs_tools_gw" targetRef="fire_pre_tool_use">
+      <bpmn:conditionExpression>needs_tool == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_tools" sourceRef="needs_tools_gw" targetRef="tool_merge"/>
+
+    <!-- Tool loop -->
+    <bpmn:sequenceFlow id="f_pre_execute" sourceRef="fire_pre_tool_use" targetRef="execute_tool"/>
+    <bpmn:sequenceFlow id="f_execute_post" sourceRef="execute_tool" targetRef="fire_post_tool_use"/>
+    <bpmn:sequenceFlow id="f_post_more_gw" sourceRef="fire_post_tool_use" targetRef="more_tools_gw"/>
+
+    <!-- more_tools_gw branches -->
+    <bpmn:sequenceFlow id="flow_more_tools" sourceRef="more_tools_gw" targetRef="fire_pre_tool_use">
+      <bpmn:conditionExpression>more_tools == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_tools_done" sourceRef="more_tools_gw" targetRef="tool_merge"/>
+
+    <!-- Merge → deliver -->
+    <bpmn:sequenceFlow id="f_merge_deliver" sourceRef="tool_merge" targetRef="deliver_response"/>
+
+    <!-- Deliver → lifecycle gateway -->
+    <bpmn:sequenceFlow id="f_deliver_lifecycle" sourceRef="deliver_response" targetRef="lifecycle_gw"/>
+
+    <!-- lifecycle_gw branches -->
+    <bpmn:sequenceFlow id="flow_continue" sourceRef="lifecycle_gw" targetRef="receive_prompt"/>
+    <bpmn:sequenceFlow id="flow_compact" sourceRef="lifecycle_gw" targetRef="fire_pre_compact">
+      <bpmn:conditionExpression>lifecycle_event == "compact"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_end" sourceRef="lifecycle_gw" targetRef="fire_session_end">
+      <bpmn:conditionExpression>lifecycle_event == "end"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Post-compact loop back -->
+    <bpmn:sequenceFlow id="flow_after_compact" sourceRef="fire_pre_compact" targetRef="receive_prompt"/>
+
+    <!-- Session end → close -->
+    <bpmn:sequenceFlow id="f_session_end_close" sourceRef="fire_session_end" targetRef="cim_end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>
