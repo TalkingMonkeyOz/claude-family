@@ -18,6 +18,21 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+# PostgreSQL for file_alignment_gaps (dedup + feedback creation)
+_psycopg = None
+_PSYCOPG_VERSION = 0
+try:
+    import psycopg as _psycopg
+    from psycopg.rows import dict_row as _dict_row
+    _PSYCOPG_VERSION = 3
+except ImportError:
+    try:
+        import psycopg2 as _psycopg
+        from psycopg2.extras import RealDictCursor as _RealDictCursor
+        _PSYCOPG_VERSION = 2
+    except ImportError:
+        pass  # DB features unavailable - tool will return helpful error
+
 # ============================================================================
 # FastMCP Setup
 # ============================================================================
@@ -1155,6 +1170,19 @@ def _check_artifact_exists(artifact: dict, project_root: Path) -> dict:
         result["exists"] = True  # Agents are assumed available
         result["details"] = f"Agent: {artifact.get('agent', 'unknown')}"
 
+    elif artifact["type"] == "claude_behavior":
+        result["exists"] = True  # Manual Claude action, no code artifact
+        result["details"] = artifact.get("description", "Claude behavior")
+
+    elif artifact["type"] == "bpmn_call_activity":
+        result["exists"] = True  # CallActivity resolved by parser
+        result["details"] = f"CallActivity: {artifact.get('calledElement', 'unknown')}"
+
+    elif artifact["type"] == "rule_file":
+        filepath = project_root / artifact["file"]
+        result["exists"] = filepath.exists()
+        result["details"] = f"Rule: {artifact['file']}"
+
     return result
 
 
@@ -1282,6 +1310,255 @@ def _suggest_artifact(task_name: str) -> str:
         return "Agent orchestration - check orchestrator MCP"
 
     return "No suggestion - add to _ARTIFACT_REGISTRY"
+
+
+# ============================================================================
+# Alignment gap auto-filing
+# ============================================================================
+
+
+def _get_db_connection():
+    """Get PostgreSQL connection for alignment gap filing."""
+    if _psycopg is None:
+        raise RuntimeError(
+            "No PostgreSQL driver available. Install psycopg or psycopg2."
+        )
+    conn_string = os.environ.get("DATABASE_URI") or os.environ.get(
+        "POSTGRES_CONNECTION_STRING"
+    )
+    if not conn_string:
+        raise RuntimeError(
+            "DATABASE_URI or POSTGRES_CONNECTION_STRING environment variable required"
+        )
+    if _PSYCOPG_VERSION == 3:
+        return _psycopg.connect(conn_string, row_factory=_dict_row)
+    else:
+        return _psycopg.connect(conn_string, cursor_factory=_RealDictCursor)
+
+
+def _classify_gap(element: dict) -> Optional[dict]:
+    """Classify an alignment gap into a feedback item (or None to skip).
+
+    Implements the audit_findings_pipeline classification logic:
+    - [HOOK] unmapped → improvement/high
+    - [HOOK] mapped but file missing → bug/high
+    - [DB]/[MCP]/[TOOL] unmapped → improvement/medium
+    - [CLAUDE]/[CORE] → skip (not actionable)
+    - Other unmapped → improvement/low
+    """
+    name = element.get("element_name", "")
+    name_lower = name.lower()
+    element_id = element.get("element_id", "")
+    is_missing_artifact = element.get("artifact_exists") is False
+
+    # Skip non-actionable elements
+    if "[claude]" in name_lower:
+        return None
+    if "[core]" in name_lower:
+        return None
+    # Skip callActivity elements (resolved by parser)
+    if element.get("element_type") == "callActivity":
+        return None
+
+    if is_missing_artifact:
+        # Mapped but artifact file doesn't exist on disk
+        return {
+            "feedback_type": "bug",
+            "priority": "high",
+            "title": f"BPMN gap: missing artifact for {name}",
+            "description": (
+                f"BPMN element `{element_id}` ({name}) is mapped in _ARTIFACT_REGISTRY "
+                f"but the artifact does not exist on disk.\n\n"
+                f"Type: {element.get('artifact_type', 'unknown')}\n"
+                f"Details: {element.get('artifact_details', 'none')}"
+            ),
+        }
+
+    # Unmapped element - classify by actor prefix
+    if "[hook]" in name_lower:
+        return {
+            "feedback_type": "improvement",
+            "priority": "high",
+            "title": f"BPMN gap: unimplemented hook {name}",
+            "description": (
+                f"BPMN element `{element_id}` ({name}) represents a hook script "
+                f"but has no entry in _ARTIFACT_REGISTRY and no implementation.\n\n"
+                f"Suggestion: {element.get('suggestion', 'Add to registry')}"
+            ),
+        }
+
+    if any(tag in name_lower for tag in ("[db]", "[mcp]", "[tool]")):
+        return {
+            "feedback_type": "improvement",
+            "priority": "medium",
+            "title": f"BPMN gap: unmapped {name}",
+            "description": (
+                f"BPMN element `{element_id}` ({name}) is modeled but has no "
+                f"entry in _ARTIFACT_REGISTRY.\n\n"
+                f"Suggestion: {element.get('suggestion', 'Add to registry')}"
+            ),
+        }
+
+    # Other unmapped
+    return {
+        "feedback_type": "improvement",
+        "priority": "low",
+        "title": f"BPMN gap: unmapped {name}",
+        "description": (
+            f"BPMN element `{element_id}` ({name}) is modeled but has no "
+            f"entry in _ARTIFACT_REGISTRY.\n\n"
+            f"Type: {element.get('element_type', 'unknown')}\n"
+            f"Suggestion: {element.get('suggestion', 'Add to registry')}"
+        ),
+    }
+
+
+@mcp.tool()
+def file_alignment_gaps(process_id: str, project: str = "claude-family") -> dict:
+    """Run BPMN alignment check and auto-file feedback for gaps.
+
+    Implements the audit_findings_pipeline BPMN pattern: runs check_alignment,
+    classifies each gap, dedup-checks against existing open feedback, and
+    creates feedback items for new gaps.
+
+    Use when: you want to convert BPMN model gaps into tracked work items
+    automatically, instead of manually filing each one.
+
+    Returns: {success, process_id, coverage_pct, filed_count, skipped_count,
+              already_tracked, gaps_detail}
+    """
+    try:
+        # Step 1: Run alignment check
+        alignment = check_alignment(process_id)
+        if not alignment.get("success"):
+            return alignment
+
+        coverage = alignment["coverage_pct"]
+        gaps = alignment.get("unmapped", []) + alignment.get("missing_artifacts", [])
+
+        if not gaps:
+            return {
+                "success": True,
+                "process_id": process_id,
+                "coverage_pct": coverage,
+                "filed_count": 0,
+                "skipped_count": 0,
+                "already_tracked": 0,
+                "message": "No gaps found - model is fully aligned",
+                "gaps_detail": [],
+            }
+
+        # Step 2: Get DB connection + project_id
+        conn = _get_db_connection()
+        try:
+            cur = conn.cursor()
+
+            # Look up project_id
+            cur.execute(
+                """
+                SELECT p.project_id::text
+                FROM claude.projects p
+                JOIN claude.workspaces w ON p.project_id = w.project_id
+                WHERE w.project_name = %s OR p.project_name = %s
+                LIMIT 1
+                """,
+                (project, project),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {
+                    "success": False,
+                    "error": f"Project '{project}' not found in database",
+                }
+            project_id = row["project_id"]
+
+            filed_count = 0
+            skipped_count = 0
+            already_tracked = 0
+            gaps_detail = []
+
+            for gap in gaps:
+                # Step 3: Classify
+                classification = _classify_gap(gap)
+                if classification is None:
+                    skipped_count += 1
+                    gaps_detail.append({
+                        "element_id": gap.get("element_id"),
+                        "element_name": gap.get("element_name"),
+                        "action": "skipped",
+                        "reason": "not actionable",
+                    })
+                    continue
+
+                element_id = gap.get("element_id", "")
+
+                # Step 4: Dedup check
+                cur.execute(
+                    """
+                    SELECT COUNT(*) as cnt FROM claude.feedback
+                    WHERE project_id = %s::uuid
+                      AND status NOT IN ('resolved', 'wont_fix', 'duplicate')
+                      AND description LIKE %s
+                    """,
+                    (project_id, f"%{element_id}%"),
+                )
+                dup_row = cur.fetchone()
+                if dup_row and dup_row["cnt"] > 0:
+                    already_tracked += 1
+                    gaps_detail.append({
+                        "element_id": element_id,
+                        "element_name": gap.get("element_name"),
+                        "action": "already_tracked",
+                    })
+                    continue
+
+                # Step 5: Create feedback
+                cur.execute(
+                    """
+                    INSERT INTO claude.feedback
+                        (project_id, feedback_type, title, description, priority, status)
+                    VALUES (%s::uuid, %s, %s, %s, %s, 'new')
+                    RETURNING feedback_id::text,
+                              'FB' || short_code::text AS short_code
+                    """,
+                    (
+                        project_id,
+                        classification["feedback_type"],
+                        classification["title"][:200],
+                        f"[Auto-filed from BPMN alignment: {process_id}]\n\n"
+                        + classification["description"],
+                        classification["priority"],
+                    ),
+                )
+                new_row = cur.fetchone()
+                conn.commit()
+
+                filed_count += 1
+                gaps_detail.append({
+                    "element_id": element_id,
+                    "element_name": gap.get("element_name"),
+                    "action": "filed",
+                    "feedback_type": classification["feedback_type"],
+                    "priority": classification["priority"],
+                    "feedback_id": new_row["feedback_id"] if new_row else None,
+                })
+
+            return {
+                "success": True,
+                "process_id": process_id,
+                "coverage_pct": coverage,
+                "filed_count": filed_count,
+                "skipped_count": skipped_count,
+                "already_tracked": already_tracked,
+                "total_gaps": len(gaps),
+                "gaps_detail": gaps_detail,
+            }
+
+        finally:
+            conn.close()
+
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
 
 
 # ============================================================================

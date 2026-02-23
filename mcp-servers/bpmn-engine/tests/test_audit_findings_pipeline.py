@@ -12,9 +12,14 @@ Test scenarios:
   6. Feature path increments features_created counter
   7. Feedback path increments feedback_filed counter
   8. Knowledge path increments knowledge_stored counter
+  9. _classify_gap: classification rules match BPMN model
+  10. _check_artifact_exists: 3 new artifact types handled
 """
 
 import os
+import sys
+from pathlib import Path
+
 import pytest
 
 from SpiffWorkflow.bpmn.workflow import BpmnWorkflow
@@ -212,3 +217,135 @@ class TestSummaryReport:
         names = completed_spec_names(wf)
         assert "build_summary" in names
         assert wf.data.get("pipeline_complete") is True
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for _classify_gap and _check_artifact_exists
+# ---------------------------------------------------------------------------
+
+# Import from server module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from server import _classify_gap, _check_artifact_exists
+
+
+class TestClassifyGap:
+    """_classify_gap implements audit_findings_pipeline classification rules."""
+
+    def test_hook_unmapped_is_improvement_high(self):
+        gap = {"element_id": "run_hook", "element_name": "[HOOK] Run startup", "element_type": "scriptTask"}
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["feedback_type"] == "improvement"
+        assert result["priority"] == "high"
+
+    def test_hook_missing_artifact_is_bug_high(self):
+        gap = {
+            "element_id": "run_hook",
+            "element_name": "[HOOK] Run startup",
+            "element_type": "scriptTask",
+            "artifact_exists": False,
+            "artifact_type": "hook_script",
+            "artifact_details": "File: scripts/missing.py",
+        }
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["feedback_type"] == "bug"
+        assert result["priority"] == "high"
+
+    def test_db_unmapped_is_improvement_medium(self):
+        gap = {"element_id": "query_db", "element_name": "[DB] Query sessions", "element_type": "serviceTask"}
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["feedback_type"] == "improvement"
+        assert result["priority"] == "medium"
+
+    def test_mcp_unmapped_is_improvement_medium(self):
+        gap = {"element_id": "call_tool", "element_name": "[MCP] Store knowledge", "element_type": "serviceTask"}
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["feedback_type"] == "improvement"
+        assert result["priority"] == "medium"
+
+    def test_tool_unmapped_is_improvement_medium(self):
+        gap = {"element_id": "use_tool", "element_name": "[TOOL] Validate input", "element_type": "serviceTask"}
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["priority"] == "medium"
+
+    def test_claude_element_skipped(self):
+        gap = {"element_id": "decide", "element_name": "[CLAUDE] Decide next step", "element_type": "userTask"}
+        result = _classify_gap(gap)
+        assert result is None
+
+    def test_core_element_skipped(self):
+        gap = {"element_id": "core_init", "element_name": "[CORE] Initialize", "element_type": "task"}
+        result = _classify_gap(gap)
+        assert result is None
+
+    def test_call_activity_skipped(self):
+        gap = {"element_id": "sub_process", "element_name": "Run sub-process", "element_type": "callActivity"}
+        result = _classify_gap(gap)
+        assert result is None
+
+    def test_other_unmapped_is_improvement_low(self):
+        gap = {"element_id": "something", "element_name": "Do something", "element_type": "task"}
+        result = _classify_gap(gap)
+        assert result is not None
+        assert result["feedback_type"] == "improvement"
+        assert result["priority"] == "low"
+
+    def test_title_contains_element_name(self):
+        gap = {"element_id": "xyz", "element_name": "[HOOK] My hook", "element_type": "scriptTask"}
+        result = _classify_gap(gap)
+        assert "[HOOK] My hook" in result["title"]
+
+    def test_description_contains_element_id(self):
+        gap = {"element_id": "my_element_123", "element_name": "[DB] Query", "element_type": "serviceTask"}
+        result = _classify_gap(gap)
+        assert "my_element_123" in result["description"]
+
+
+class TestCheckArtifactExists:
+    """_check_artifact_exists handles all artifact types including 3 new ones."""
+
+    def test_claude_behavior_always_exists(self):
+        artifact = {"type": "claude_behavior", "description": "Claude decides"}
+        result = _check_artifact_exists(artifact, Path("."))
+        assert result["exists"] is True
+        assert "Claude decides" in result["details"]
+
+    def test_bpmn_call_activity_always_exists(self):
+        artifact = {"type": "bpmn_call_activity", "calledElement": "L2_session_start"}
+        result = _check_artifact_exists(artifact, Path("."))
+        assert result["exists"] is True
+        assert "CallActivity" in result["details"]
+        assert "L2_session_start" in result["details"]
+
+    def test_rule_file_exists(self, tmp_path):
+        rule_file = tmp_path / "rules" / "test.md"
+        rule_file.parent.mkdir(parents=True)
+        rule_file.write_text("rule content")
+        artifact = {"type": "rule_file", "file": "rules/test.md"}
+        result = _check_artifact_exists(artifact, tmp_path)
+        assert result["exists"] is True
+        assert "Rule" in result["details"]
+
+    def test_rule_file_missing(self, tmp_path):
+        artifact = {"type": "rule_file", "file": "rules/nonexistent.md"}
+        result = _check_artifact_exists(artifact, tmp_path)
+        assert result["exists"] is False
+
+    def test_mcp_tool_always_exists(self):
+        artifact = {"type": "mcp_tool", "tool": "start_session"}
+        result = _check_artifact_exists(artifact, Path("."))
+        assert result["exists"] is True
+
+    def test_hook_script_missing(self, tmp_path):
+        artifact = {"type": "hook_script", "file": "scripts/nonexistent.py"}
+        result = _check_artifact_exists(artifact, tmp_path)
+        assert result["exists"] is False
+
+    def test_unknown_type_defaults_false(self):
+        artifact = {"type": "totally_unknown"}
+        result = _check_artifact_exists(artifact, Path("."))
+        assert result["exists"] is False
