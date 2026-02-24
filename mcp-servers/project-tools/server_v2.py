@@ -4025,8 +4025,6 @@ def search_bpmn_processes(
             if where_clauses:
                 where_sql = "WHERE " + " AND ".join(where_clauses)
 
-            params.append(limit)
-
             cur.execute(f"""
                 SELECT bp.process_id, bp.process_name, bp.level, bp.category,
                        bp.project_name, bp.file_path, bp.description,
