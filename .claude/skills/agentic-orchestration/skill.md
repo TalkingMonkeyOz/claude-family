@@ -6,7 +6,7 @@ context: fork
 allowed-tools:
   - Read
   - Task
-  - mcp__orchestrator__*
+  - mcp__project-tools__*
 skill-inheritance:
   - messaging
 ---

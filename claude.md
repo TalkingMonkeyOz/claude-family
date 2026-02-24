@@ -53,7 +53,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
-- **MCP Servers**: orchestrator, postgres, project-tools, python-repl, sequential-thinking, bpmn-engine
+- **MCP Servers**: postgres, project-tools, python-repl, sequential-thinking, bpmn-engine
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
@@ -263,6 +263,7 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-02-24 | **Orchestrator retirement**: Messaging tools migrated to project-tools. Orchestrator MCP removed. BPMN model for messaging lifecycle added. |
 | 2026-02-11 | **v3 Application Layer**: 15 new tools (config ops, knowledge, conversations, books), 3 new tables, 40+ total tools |
 | 2026-02-10 | **v2 Application Layer**: WorkflowEngine state machine, 5 new tools, audit_log, trimmed context injection |
 | 2026-01-03 | **Infrastructure Audit**: Fixed broken session commands, added 10 DB indexes, removed redundant hooks |
@@ -274,7 +275,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-**Version**: 3.3 (Removed duplicate @ reference, SQL examples - use MCP tools instead)
+**Version**: 3.4 (Retired orchestrator MCP - messaging moved to project-tools)
 **Created**: 2025-10-21
-**Updated**: 2026-02-11
+**Updated**: 2026-02-24
 **Location**: C:\Projects\claude-family\CLAUDE.md

@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/messaging"
+    id="Definitions_Messaging">
+
+  <bpmn:process id="messaging" name="Inter-Claude Messaging Lifecycle" isExecutable="true">
+
+    <!--
+      Models the messaging lifecycle between Claude instances.
+      4 core operations: send_message, broadcast, check_inbox, acknowledge.
+      Also: reply_to, get_active_sessions, action_message, defer_message.
+
+      Table: claude.messages
+      Statuses: pending → read → acknowledged / actioned / deferred
+
+      Implementation: mcp-servers/project-tools/server_v2.py (after migration)
+      Previous home: mcp-servers/orchestrator/server.py
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Messaging Request">
+      <bpmn:outgoing>flow_start_to_intent</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: DETERMINE INTENT                                           -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="determine_intent" name="[CLAUDE] Determine Messaging Intent">
+      <bpmn:incoming>flow_start_to_intent</bpmn:incoming>
+      <bpmn:outgoing>flow_intent_to_gw</bpmn:outgoing>
+      <bpmn:documentation>Claude determines what messaging operation to perform.
+Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply"</bpmn:documentation>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="intent_gw" name="What Intent?" default="flow_check_inbox">
+      <bpmn:incoming>flow_intent_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_send</bpmn:outgoing>
+      <bpmn:outgoing>flow_broadcast</bpmn:outgoing>
+      <bpmn:outgoing>flow_check_inbox</bpmn:outgoing>
+      <bpmn:outgoing>flow_acknowledge</bpmn:outgoing>
+      <bpmn:outgoing>flow_reply</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH A: SEND MESSAGE                                              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="validate_send" name="[MCP] Validate Send Parameters" scriptFormat="python">
+      <bpmn:incoming>flow_send</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_send_gw</bpmn:outgoing>
+      <bpmn:script>
+# Validate: message_type and body are required
+# Optional: subject, to_project, to_session_id, priority, from_session_id
+has_required = bool(message_type) and bool(body)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="send_valid_gw" name="Valid?" default="flow_send_invalid">
+      <bpmn:incoming>flow_validate_to_send_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_send_valid</bpmn:outgoing>
+      <bpmn:outgoing>flow_send_invalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="insert_message" name="[DB] INSERT into claude.messages" scriptFormat="python">
+      <bpmn:incoming>flow_send_valid</bpmn:incoming>
+      <bpmn:incoming>flow_broadcast_to_insert</bpmn:incoming>
+      <bpmn:incoming>flow_reply_to_insert</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_end_sent</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.messages
+#   (from_session_id, to_session_id, to_project, message_type, priority, subject, body, metadata)
+# RETURNING message_id, created_at
+message_sent = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_sent" name="Message Sent">
+      <bpmn:incoming>flow_insert_to_end_sent</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_send_invalid" name="Send Invalid">
+      <bpmn:incoming>flow_send_invalid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH B: BROADCAST                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="prepare_broadcast" name="[MCP] Prepare Broadcast" scriptFormat="python">
+      <bpmn:incoming>flow_broadcast</bpmn:incoming>
+      <bpmn:outgoing>flow_broadcast_to_insert</bpmn:outgoing>
+      <bpmn:script>
+# Broadcast: set message_type = "broadcast", to_project = None, to_session_id = None
+# Requires: body. Optional: subject, from_session_id, priority
+message_type = "broadcast"
+to_project = None
+to_session_id = None
+broadcast_prepared = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH C: CHECK INBOX                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="build_inbox_query" name="[MCP] Build Inbox Query" scriptFormat="python">
+      <bpmn:incoming>flow_check_inbox</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_execute</bpmn:outgoing>
+      <bpmn:script>
+# Build WHERE clause from filters:
+#   project_name → to_project = %s
+#   session_id → to_session_id = %s
+#   include_broadcasts → (to_session_id IS NULL AND to_project IS NULL)
+#   include_read → status IN ('pending', 'read') vs status = 'pending'
+# ORDER BY priority (urgent first), created_at DESC
+# LIMIT 20
+query_built = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="execute_inbox_query" name="[DB] SELECT from claude.messages" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_execute</bpmn:incoming>
+      <bpmn:outgoing>flow_execute_to_has_messages</bpmn:outgoing>
+      <bpmn:script>
+# Execute parameterized query against claude.messages
+# Return: [{message_id, from_session_id, to_project, message_type,
+#           priority, subject, body, metadata, status, created_at}]
+messages = messages if messages is not None else []
+message_count = len(messages) if isinstance(messages, list) else 0
+has_messages = message_count > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_messages_gw" name="Has Messages?" default="flow_no_messages">
+      <bpmn:incoming>flow_execute_to_has_messages</bpmn:incoming>
+      <bpmn:outgoing>flow_has_messages</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_messages</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="format_messages" name="[MCP] Format Message Results" scriptFormat="python">
+      <bpmn:incoming>flow_has_messages</bpmn:incoming>
+      <bpmn:outgoing>flow_format_to_end_inbox</bpmn:outgoing>
+      <bpmn:script>
+# Convert datetime fields to ISO format
+# Return {count: N, messages: [...]}
+inbox_checked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_inbox" name="Inbox Retrieved">
+      <bpmn:incoming>flow_format_to_end_inbox</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_empty_inbox" name="Inbox Empty">
+      <bpmn:incoming>flow_no_messages</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH D: ACKNOWLEDGE                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="determine_ack_action" name="[CLAUDE] Determine Ack Action">
+      <bpmn:incoming>flow_acknowledge</bpmn:incoming>
+      <bpmn:outgoing>flow_ack_to_action_gw</bpmn:outgoing>
+      <bpmn:documentation>Claude chooses acknowledge action.
+Sets ack_action = "read" | "acknowledged" | "actioned" | "deferred"</bpmn:documentation>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="ack_action_gw" name="Ack Action?" default="flow_ack_read">
+      <bpmn:incoming>flow_ack_to_action_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_ack_read</bpmn:outgoing>
+      <bpmn:outgoing>flow_ack_acknowledged</bpmn:outgoing>
+      <bpmn:outgoing>flow_ack_actioned</bpmn:outgoing>
+      <bpmn:outgoing>flow_ack_deferred</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- D1: Mark as Read -->
+    <bpmn:scriptTask id="mark_read" name="[DB] UPDATE status='read'" scriptFormat="python">
+      <bpmn:incoming>flow_ack_read</bpmn:incoming>
+      <bpmn:outgoing>flow_read_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.messages SET status = 'read', read_at = NOW()
+# WHERE message_id = %s
+ack_complete = True
+new_status = "read"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- D2: Mark as Acknowledged -->
+    <bpmn:scriptTask id="mark_acknowledged" name="[DB] UPDATE status='acknowledged'" scriptFormat="python">
+      <bpmn:incoming>flow_ack_acknowledged</bpmn:incoming>
+      <bpmn:outgoing>flow_acknowledged_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.messages SET status = 'acknowledged', acknowledged_at = NOW()
+# WHERE message_id = %s
+ack_complete = True
+new_status = "acknowledged"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- D3: Action (convert to todo) -->
+    <bpmn:scriptTask id="fetch_message_for_action" name="[DB] Fetch Message Details" scriptFormat="python">
+      <bpmn:incoming>flow_ack_actioned</bpmn:incoming>
+      <bpmn:outgoing>flow_fetch_to_create_todo</bpmn:outgoing>
+      <bpmn:script>
+# SELECT subject, body, message_type FROM claude.messages WHERE message_id = %s
+message_fetched = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_todo_from_message" name="[DB] INSERT todo from message" scriptFormat="python">
+      <bpmn:incoming>flow_fetch_to_create_todo</bpmn:incoming>
+      <bpmn:outgoing>flow_todo_to_update_actioned</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.todos (project_id, content, active_form, status, priority, source_message_id)
+# UPDATE claude.messages SET status = 'actioned', acknowledged_at = NOW()
+todo_created = True
+ack_complete = True
+new_status = "actioned"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- D4: Defer -->
+    <bpmn:scriptTask id="defer_with_reason" name="[DB] UPDATE status='deferred'" scriptFormat="python">
+      <bpmn:incoming>flow_ack_deferred</bpmn:incoming>
+      <bpmn:outgoing>flow_deferred_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.messages
+# SET status = 'deferred', acknowledged_at = NOW(),
+#     metadata = metadata || jsonb_build_object('defer_reason', reason, 'deferred_at', NOW())
+# WHERE message_id = %s
+ack_complete = True
+new_status = "deferred"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Acknowledge merge + end -->
+    <bpmn:exclusiveGateway id="ack_end_merge" name="Ack Complete">
+      <bpmn:incoming>flow_read_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_acknowledged_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_todo_to_update_actioned</bpmn:incoming>
+      <bpmn:incoming>flow_deferred_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_ack_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_acknowledged" name="Message Acknowledged">
+      <bpmn:incoming>flow_ack_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH E: REPLY                                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="fetch_original_message" name="[DB] Fetch Original Message" scriptFormat="python">
+      <bpmn:incoming>flow_reply</bpmn:incoming>
+      <bpmn:outgoing>flow_fetch_orig_to_found_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from_session_id, to_project, subject FROM claude.messages
+# WHERE message_id = original_message_id
+original_found = original_found if original_found is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="original_found_gw" name="Original Found?" default="flow_original_not_found">
+      <bpmn:incoming>flow_fetch_orig_to_found_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_original_found</bpmn:outgoing>
+      <bpmn:outgoing>flow_original_not_found</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="prepare_reply" name="[MCP] Prepare Reply Message" scriptFormat="python">
+      <bpmn:incoming>flow_original_found</bpmn:incoming>
+      <bpmn:outgoing>flow_reply_to_insert</bpmn:outgoing>
+      <bpmn:script>
+# Set message_type = "notification"
+# Set to_session_id = original.from_session_id (reply to sender)
+# Set subject = "Re: " + original.subject
+# Set metadata = {"reply_to": original_message_id}
+message_type = "notification"
+reply_prepared = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_reply_not_found" name="Original Not Found">
+      <bpmn:incoming>flow_original_not_found</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1: Intent -->
+    <bpmn:sequenceFlow id="flow_start_to_intent" sourceRef="start" targetRef="determine_intent"/>
+    <bpmn:sequenceFlow id="flow_intent_to_gw" sourceRef="determine_intent" targetRef="intent_gw"/>
+
+    <!-- Intent gateway branches -->
+    <bpmn:sequenceFlow id="flow_send" sourceRef="intent_gw" targetRef="validate_send">
+      <bpmn:conditionExpression>intent == "send"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_broadcast" sourceRef="intent_gw" targetRef="prepare_broadcast">
+      <bpmn:conditionExpression>intent == "broadcast"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_check_inbox" sourceRef="intent_gw" targetRef="build_inbox_query"/>
+    <bpmn:sequenceFlow id="flow_acknowledge" sourceRef="intent_gw" targetRef="determine_ack_action">
+      <bpmn:conditionExpression>intent == "acknowledge"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_reply" sourceRef="intent_gw" targetRef="fetch_original_message">
+      <bpmn:conditionExpression>intent == "reply"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Branch A: Send -->
+    <bpmn:sequenceFlow id="flow_validate_to_send_gw" sourceRef="validate_send" targetRef="send_valid_gw"/>
+    <bpmn:sequenceFlow id="flow_send_valid" sourceRef="send_valid_gw" targetRef="insert_message">
+      <bpmn:conditionExpression>has_required == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_send_invalid" sourceRef="send_valid_gw" targetRef="end_send_invalid"/>
+    <bpmn:sequenceFlow id="flow_insert_to_end_sent" sourceRef="insert_message" targetRef="end_sent"/>
+
+    <!-- Branch B: Broadcast -->
+    <bpmn:sequenceFlow id="flow_broadcast_to_insert" sourceRef="prepare_broadcast" targetRef="insert_message"/>
+
+    <!-- Branch C: Check Inbox -->
+    <bpmn:sequenceFlow id="flow_query_to_execute" sourceRef="build_inbox_query" targetRef="execute_inbox_query"/>
+    <bpmn:sequenceFlow id="flow_execute_to_has_messages" sourceRef="execute_inbox_query" targetRef="has_messages_gw"/>
+    <bpmn:sequenceFlow id="flow_has_messages" sourceRef="has_messages_gw" targetRef="format_messages">
+      <bpmn:conditionExpression>has_messages == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_messages" sourceRef="has_messages_gw" targetRef="end_empty_inbox"/>
+    <bpmn:sequenceFlow id="flow_format_to_end_inbox" sourceRef="format_messages" targetRef="end_inbox"/>
+
+    <!-- Branch D: Acknowledge -->
+    <bpmn:sequenceFlow id="flow_ack_to_action_gw" sourceRef="determine_ack_action" targetRef="ack_action_gw"/>
+    <bpmn:sequenceFlow id="flow_ack_read" sourceRef="ack_action_gw" targetRef="mark_read"/>
+    <bpmn:sequenceFlow id="flow_ack_acknowledged" sourceRef="ack_action_gw" targetRef="mark_acknowledged">
+      <bpmn:conditionExpression>ack_action == "acknowledged"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_ack_actioned" sourceRef="ack_action_gw" targetRef="fetch_message_for_action">
+      <bpmn:conditionExpression>ack_action == "actioned"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_ack_deferred" sourceRef="ack_action_gw" targetRef="defer_with_reason">
+      <bpmn:conditionExpression>ack_action == "deferred"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_read_to_end" sourceRef="mark_read" targetRef="ack_end_merge"/>
+    <bpmn:sequenceFlow id="flow_acknowledged_to_end" sourceRef="mark_acknowledged" targetRef="ack_end_merge"/>
+    <bpmn:sequenceFlow id="flow_fetch_to_create_todo" sourceRef="fetch_message_for_action" targetRef="create_todo_from_message"/>
+    <bpmn:sequenceFlow id="flow_todo_to_update_actioned" sourceRef="create_todo_from_message" targetRef="ack_end_merge"/>
+    <bpmn:sequenceFlow id="flow_deferred_to_end" sourceRef="defer_with_reason" targetRef="ack_end_merge"/>
+    <bpmn:sequenceFlow id="flow_ack_to_end" sourceRef="ack_end_merge" targetRef="end_acknowledged"/>
+
+    <!-- Branch E: Reply -->
+    <bpmn:sequenceFlow id="flow_fetch_orig_to_found_gw" sourceRef="fetch_original_message" targetRef="original_found_gw"/>
+    <bpmn:sequenceFlow id="flow_original_found" sourceRef="original_found_gw" targetRef="prepare_reply">
+      <bpmn:conditionExpression>original_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_original_not_found" sourceRef="original_found_gw" targetRef="end_reply_not_found"/>
+    <bpmn:sequenceFlow id="flow_reply_to_insert" sourceRef="prepare_reply" targetRef="insert_message"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="messaging">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

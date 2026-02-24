@@ -3,7 +3,7 @@ name: messaging
 description: Inter-Claude messaging (inbox, broadcast, team status)
 model: sonnet
 allowed-tools:
-  - mcp__orchestrator__*
+  - mcp__project-tools__*
 ---
 
 # Messaging Skill
@@ -94,7 +94,7 @@ SUCCESS CRITERIA:
 ### Example Good Message
 
 ```python
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="claude-family-manager",
     message_type="task_request",
     subject="Implement user authentication flow",
@@ -131,7 +131,7 @@ SUCCESS CRITERIA:
 ### Example Bad Message (DON'T DO THIS)
 
 ```python
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="claude-family-manager",
     message_type="task_request",
     subject="Fix the login",
@@ -182,7 +182,7 @@ or
 ### Via MCP Tool
 
 ```python
-messages = mcp__orchestrator__check_inbox(
+messages = mcp__project-tools__check_inbox(
     project_name="claude-family",  # IMPORTANT: Required to see project messages
     session_id="your-session-id",  # Optional: for direct messages
     include_broadcasts=True,        # Default: true
@@ -212,7 +212,7 @@ for msg in messages['messages']:
 ### Direct Message (To Specific Session)
 
 ```python
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_session_id="target-session-id",
     message_type="task_request",
     subject="Please review authentication changes",
@@ -225,7 +225,7 @@ mcp__orchestrator__send_message(
 ### Project-Targeted Message
 
 ```python
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="nimbus-user-loader",  # Any Claude working on this project will see it
     message_type="notification",
     subject="Migration completed",
@@ -237,7 +237,7 @@ mcp__orchestrator__send_message(
 ### Broadcasting to All
 
 ```python
-mcp__orchestrator__broadcast(
+mcp__project-tools__broadcast(
     subject="New auto-apply instruction added",
     body="Added markdown.instructions.md for documentation standards. Affects all .md file edits.",
     priority="low",
@@ -267,7 +267,7 @@ task_id = mcp__orchestrator__spawn_agent_async(
     Research authentication best practices.
 
     IMPORTANT: When complete, send results:
-    mcp__orchestrator__send_message(
+    mcp__project-tools__send_message(
         to_project="claude-family",
         subject="Async Task Complete: {task_id}",
         body="<your findings here>"
@@ -277,7 +277,7 @@ task_id = mcp__orchestrator__spawn_agent_async(
 )
 
 # Later, check inbox for completion
-messages = mcp__orchestrator__check_inbox(project_name="claude-family")
+messages = mcp__project-tools__check_inbox(project_name="claude-family")
 for msg in messages:
     if task_id in msg['subject']:
         print("Agent completed!")
@@ -293,7 +293,7 @@ for msg in messages:
 For informational messages (status_update, notification, broadcast):
 
 ```python
-mcp__orchestrator__acknowledge(
+mcp__project-tools__acknowledge(
     message_id="message-uuid",
     action="read"
 )
@@ -304,7 +304,7 @@ mcp__orchestrator__acknowledge(
 For messages you've seen and understood but don't require further action:
 
 ```python
-mcp__orchestrator__acknowledge(
+mcp__project-tools__acknowledge(
     message_id="message-uuid",
     action="acknowledged"
 )
@@ -315,7 +315,7 @@ mcp__orchestrator__acknowledge(
 For actionable messages (task_request, question, handoff) that you want to convert to a persistent todo:
 
 ```python
-mcp__orchestrator__acknowledge(
+mcp__project-tools__acknowledge(
     message_id="message-uuid",
     action="actioned",
     project_id="project-uuid",  # Required
@@ -334,7 +334,7 @@ mcp__orchestrator__acknowledge(
 For messages you're choosing not to action, with a reason:
 
 ```python
-mcp__orchestrator__acknowledge(
+mcp__project-tools__acknowledge(
     message_id="message-uuid",
     action="deferred",
     defer_reason="Out of scope for current sprint - will revisit in Q2"  # Required
@@ -377,7 +377,7 @@ Is this message actionable?
 ## Replying to Messages
 
 ```python
-mcp__orchestrator__reply_to(
+mcp__project-tools__reply_to(
     original_message_id="message-uuid",
     body="I've reviewed the auth changes. Looks good! Just one suggestion: add rate limiting to login endpoint.",
     from_session_id="your-session-id"
@@ -399,7 +399,7 @@ See who's currently working:
 or
 
 ```python
-sessions = mcp__orchestrator__get_active_sessions()
+sessions = mcp__project-tools__get_active_sessions()
 
 for session in sessions['sessions']:
     print(f"{session['identity_name']}: {session['project_name']}")
@@ -473,7 +473,7 @@ ORDER BY created_at DESC;
 
 ```python
 # Claude instance A hands off work
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="nimbus-import",
     message_type="handoff",
     subject="Handing off nimbus-import work",
@@ -493,7 +493,7 @@ mcp__orchestrator__send_message(
 
 ```python
 # Ask for help with decision
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="claude-family",
     message_type="question",
     subject="Architecture decision: caching strategy",
@@ -515,7 +515,7 @@ mcp__orchestrator__send_message(
 
 ```python
 # Regular progress updates
-mcp__orchestrator__send_message(
+mcp__project-tools__send_message(
     to_project="claude-family",
     message_type="status_update",
     subject="Weekly progress: Authentication feature",
@@ -552,10 +552,10 @@ mcp__orchestrator__send_message(
 
 ```python
 # WRONG: Won't see project messages
-messages = mcp__orchestrator__check_inbox()
+messages = mcp__project-tools__check_inbox()
 
 # CORRECT: Sees project messages
-messages = mcp__orchestrator__check_inbox(project_name="claude-family")
+messages = mcp__project-tools__check_inbox(project_name="claude-family")
 ```
 
 ### 2. Not Acknowledging Messages
@@ -578,7 +578,7 @@ messages = mcp__orchestrator__check_inbox(project_name="claude-family")
 
 ---
 
-**Version**: 2.1 (Fixed message filtering - no longer returns all project messages)
+**Version**: 3.0 (Migrated from orchestrator to project-tools MCP)
 **Created**: 2025-12-26
-**Updated**: 2025-12-31
+**Updated**: 2026-02-24
 **Location**: .claude/skills/messaging/skill.md

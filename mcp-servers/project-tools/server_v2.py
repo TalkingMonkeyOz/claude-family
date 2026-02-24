@@ -4918,6 +4918,591 @@ def get_active_protocol(
 
 
 # ============================================================================
+# Messaging Tools (migrated from orchestrator MCP)
+# ============================================================================
+
+
+@mcp.tool()
+def check_inbox(
+    project_name: str = "",
+    session_id: str = "",
+    include_broadcasts: bool = True,
+    include_read: bool = False,
+) -> dict:
+    """Check for pending messages from other Claude instances. Returns unread messages addressed to you or broadcast to all. IMPORTANT: Pass project_name to see project-targeted messages!
+
+    Use when: Checking for messages from other Claude instances at session start
+    or periodically during work.
+    Returns: {count, messages: [{message_id, from_session_id, to_project, message_type,
+              priority, subject, body, metadata, status, created_at}]}.
+
+    Args:
+        project_name: Your project name to filter messages (IMPORTANT: required to see project-targeted messages).
+        session_id: Your session ID to filter direct messages.
+        include_broadcasts: Include broadcast messages (default: true).
+        include_read: Include already-read messages (default: false, only pending).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Status filter
+        if include_read:
+            status_condition = "status IN ('pending', 'read')"
+        else:
+            status_condition = "status = 'pending'"
+
+        conditions = [status_condition]
+        params = []
+
+        # Build WHERE clause for recipients
+        or_conditions = []
+        has_specific_recipient = False
+
+        if project_name:
+            or_conditions.append("to_project = %s")
+            params.append(project_name)
+            has_specific_recipient = True
+        if session_id:
+            or_conditions.append("to_session_id = %s")
+            params.append(session_id)
+            has_specific_recipient = True
+
+        if not has_specific_recipient:
+            or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
+        elif include_broadcasts:
+            or_conditions.append("(to_session_id IS NULL AND to_project IS NULL)")
+
+        conditions.append(f"({' OR '.join(or_conditions)})")
+
+        query = f"""
+            SELECT
+                message_id::text,
+                from_session_id::text,
+                to_project,
+                message_type,
+                priority,
+                subject,
+                body,
+                metadata,
+                status,
+                created_at
+            FROM claude.messages
+            WHERE {' AND '.join(conditions)}
+            ORDER BY
+                CASE priority
+                    WHEN 'urgent' THEN 1
+                    WHEN 'normal' THEN 2
+                    ELSE 3
+                END,
+                created_at DESC
+            LIMIT 20
+        """
+
+        cur.execute(query, params)
+        messages = cur.fetchall()
+        cur.close()
+
+        result_messages = []
+        for msg in messages:
+            msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+            if msg_dict.get('created_at'):
+                msg_dict['created_at'] = msg_dict['created_at'].isoformat()
+            result_messages.append(msg_dict)
+
+        return {"count": len(result_messages), "messages": result_messages}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def send_message(
+    message_type: Literal["task_request", "status_update", "question", "notification", "handoff", "broadcast"],
+    body: str,
+    subject: str = "",
+    to_project: str = "",
+    to_session_id: str = "",
+    priority: Literal["urgent", "normal", "low"] = "normal",
+    from_session_id: str = "",
+) -> dict:
+    """Send a message to another Claude instance or project.
+
+    Use when: Communicating with other Claude instances, requesting tasks,
+    sending status updates, or handing off work.
+    Returns: {success, message_id, created_at}.
+
+    Args:
+        message_type: Type of message.
+        body: Message content.
+        subject: Message subject/title.
+        to_project: Target project name.
+        to_session_id: Target session ID (for direct message).
+        priority: Message priority (default: normal).
+        from_session_id: Your session ID.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.messages
+            (from_session_id, to_session_id, to_project, message_type, priority, subject, body, metadata)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING message_id::text, created_at
+        """, (
+            from_session_id or None,
+            to_session_id or None,
+            to_project or None,
+            message_type,
+            priority,
+            subject or None,
+            body,
+            json.dumps({}),
+        ))
+        result = cur.fetchone()
+        cur.close()
+        conn.commit()
+
+        result_dict = dict(result) if not isinstance(result, dict) else result
+        return {
+            "success": True,
+            "message_id": result_dict['message_id'],
+            "created_at": result_dict['created_at'].isoformat(),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def broadcast(
+    body: str,
+    subject: str = "",
+    from_session_id: str = "",
+    priority: Literal["urgent", "normal", "low"] = "normal",
+) -> dict:
+    """Send a message to ALL active Claude instances.
+
+    Use when: Announcing something to all Claude instances (maintenance,
+    important updates, team-wide notifications).
+    Returns: {success, message_id, created_at}.
+
+    Args:
+        body: Message content.
+        subject: Message subject.
+        from_session_id: Your session ID.
+        priority: Message priority (default: normal).
+    """
+    return send_message(
+        message_type="broadcast",
+        body=body,
+        subject=subject,
+        priority=priority,
+        from_session_id=from_session_id,
+        to_project="",
+        to_session_id="",
+    )
+
+
+@mcp.tool()
+def acknowledge(
+    message_id: str,
+    action: Literal["read", "acknowledged", "actioned", "deferred"] = "read",
+    project_id: str = "",
+    defer_reason: str = "",
+    priority: int = 3,
+) -> dict:
+    """Mark a message as read, acknowledged, actioned (converted to todo), or deferred (explicitly skipped).
+
+    Use when: Processing messages from your inbox. 'read' marks as seen,
+    'acknowledged' confirms receipt, 'actioned' converts to a todo,
+    'deferred' skips with a reason.
+    Returns: {success, message_id, new_status} or {success, todo_id} for actioned.
+
+    Args:
+        message_id: ID of message to acknowledge.
+        action: Action to take.
+        project_id: Required if action='actioned' - UUID of project to create todo in.
+        defer_reason: Required if action='deferred' - Explanation for why message is being deferred.
+        priority: Optional priority for created todo (1-5, default 3). Only used if action='actioned'.
+    """
+    if action == "actioned":
+        if not project_id:
+            return {"success": False, "error": "project_id required for actioned messages"}
+        return _action_message(message_id, project_id, priority)
+
+    if action == "deferred":
+        if not defer_reason:
+            return {"success": False, "error": "defer_reason required for deferred messages"}
+        return _defer_message(message_id, defer_reason)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        if action == "read":
+            cur.execute("""
+                UPDATE claude.messages
+                SET status = 'read', read_at = NOW()
+                WHERE message_id = %s
+                RETURNING message_id::text
+            """, (message_id,))
+        else:  # acknowledged
+            cur.execute("""
+                UPDATE claude.messages
+                SET status = 'acknowledged', acknowledged_at = NOW()
+                WHERE message_id = %s
+                RETURNING message_id::text
+            """, (message_id,))
+
+        result = cur.fetchone()
+        cur.close()
+        conn.commit()
+
+        return {
+            "success": result is not None,
+            "message_id": message_id,
+            "new_status": action,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_active_sessions() -> dict:
+    """Get all currently active Claude sessions (who's online).
+
+    Use when: Checking who else is working, before sending messages.
+    Returns: {count, sessions: [{session_id, identity_name, project_name,
+              session_start, minutes_active}]}.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                sh.session_id::text,
+                i.identity_name,
+                sh.project_name,
+                sh.session_start,
+                EXTRACT(EPOCH FROM (NOW() - sh.session_start))/60 as minutes_active
+            FROM claude.sessions sh
+            JOIN claude.identities i ON sh.identity_id = i.identity_id
+            WHERE sh.session_end IS NULL
+            ORDER BY sh.session_start DESC
+        """)
+        sessions = cur.fetchall()
+        cur.close()
+
+        result_sessions = []
+        for s in sessions:
+            s_dict = dict(s) if not isinstance(s, dict) else s
+            if s_dict.get('session_start'):
+                s_dict['session_start'] = s_dict['session_start'].isoformat()
+            if s_dict.get('minutes_active'):
+                s_dict['minutes_active'] = float(s_dict['minutes_active'])
+            result_sessions.append(s_dict)
+
+        return {"count": len(result_sessions), "sessions": result_sessions}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def reply_to(
+    original_message_id: str,
+    body: str,
+    from_session_id: str = "",
+) -> dict:
+    """Reply to a specific message.
+
+    Use when: Responding to a message from another Claude instance.
+    Automatically addresses the reply to the original sender.
+    Returns: {success, message_id, created_at}.
+
+    Args:
+        original_message_id: ID of message to reply to.
+        body: Reply content.
+        from_session_id: Your session ID.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT from_session_id::text, to_project, subject
+            FROM claude.messages
+            WHERE message_id = %s
+        """, (original_message_id,))
+        original = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+
+    if not original:
+        return {"success": False, "error": "Original message not found"}
+
+    original_dict = dict(original) if not isinstance(original, dict) else original
+
+    return send_message(
+        message_type="notification",
+        body=body,
+        subject=f"Re: {original_dict['subject']}" if original_dict.get('subject') else "Reply",
+        to_session_id=original_dict.get('from_session_id') or "",
+        to_project=original_dict.get('to_project') or "",
+        from_session_id=from_session_id,
+    )
+
+
+@mcp.tool()
+def bulk_acknowledge(
+    message_ids: list[str],
+    action: Literal["read", "acknowledged"] = "read",
+) -> dict:
+    """Acknowledge multiple messages at once. Useful for clearing inbox after reviewing messages.
+
+    Use when: Processing multiple messages from inbox at once.
+    Returns: {success, acknowledged_count}.
+
+    Args:
+        message_ids: List of message UUIDs to acknowledge.
+        action: Action to apply: 'read' or 'acknowledged' (default: read).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        count = 0
+        for mid in message_ids:
+            if action == "read":
+                cur.execute("""
+                    UPDATE claude.messages SET status = 'read', read_at = NOW()
+                    WHERE message_id = %s AND status = 'pending'
+                """, (mid,))
+            else:
+                cur.execute("""
+                    UPDATE claude.messages SET status = 'acknowledged', acknowledged_at = NOW()
+                    WHERE message_id = %s
+                """, (mid,))
+            count += cur.rowcount
+        cur.close()
+        conn.commit()
+        return {"success": True, "acknowledged_count": count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_unactioned_messages(
+    project_name: str,
+) -> dict:
+    """Get actionable messages (task_request/question/handoff) that haven't been actioned or deferred for a project.
+
+    Use when: Checking for messages that need action during session start.
+    Returns: {count, messages: [...]}.
+
+    Args:
+        project_name: Name of the project to check for unactioned messages.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                message_id::text,
+                from_session_id::text,
+                message_type,
+                priority,
+                subject,
+                body,
+                status,
+                created_at
+            FROM claude.messages
+            WHERE to_project = %s
+              AND message_type IN ('task_request', 'question', 'handoff')
+              AND status NOT IN ('actioned', 'deferred')
+            ORDER BY
+                CASE priority WHEN 'urgent' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+                created_at DESC
+            LIMIT 20
+        """, (project_name,))
+        messages = cur.fetchall()
+        cur.close()
+
+        result = []
+        for msg in messages:
+            msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+            if msg_dict.get('created_at'):
+                msg_dict['created_at'] = msg_dict['created_at'].isoformat()
+            result.append(msg_dict)
+
+        return {"count": len(result), "messages": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_message_history(
+    project_name: str = "",
+    days: int = 7,
+    message_type: str = "",
+    include_sent: bool = True,
+    include_received: bool = True,
+    limit: int = 50,
+) -> dict:
+    """Get message history for a project with filtering options.
+
+    Use when: Reviewing past communications with other Claude instances.
+    Returns: {count, messages: [...]}.
+
+    Args:
+        project_name: Project name to get message history for.
+        days: Number of days to look back (default: 7).
+        message_type: Filter by message type (optional).
+        include_sent: Include messages sent by this project (default: true).
+        include_received: Include messages received by this project (default: true).
+        limit: Maximum messages to return (default: 50).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        conditions = [f"created_at > NOW() - INTERVAL '{min(days, 90)} days'"]
+        params = []
+
+        if project_name:
+            direction_conditions = []
+            if include_received:
+                direction_conditions.append("to_project = %s")
+                params.append(project_name)
+            if include_sent:
+                # Messages sent by sessions working on this project
+                direction_conditions.append("""
+                    from_session_id IN (
+                        SELECT session_id FROM claude.sessions WHERE project_name = %s
+                    )
+                """)
+                params.append(project_name)
+            if direction_conditions:
+                conditions.append(f"({' OR '.join(direction_conditions)})")
+
+        if message_type:
+            conditions.append("message_type = %s")
+            params.append(message_type)
+
+        query = f"""
+            SELECT
+                message_id::text, from_session_id::text, to_session_id::text,
+                to_project, message_type, priority, subject, body, status, created_at
+            FROM claude.messages
+            WHERE {' AND '.join(conditions)}
+            ORDER BY created_at DESC
+            LIMIT {min(limit, 100)}
+        """
+
+        cur.execute(query, params)
+        messages = cur.fetchall()
+        cur.close()
+
+        result = []
+        for msg in messages:
+            msg_dict = dict(msg) if not isinstance(msg, dict) else msg
+            if msg_dict.get('created_at'):
+                msg_dict['created_at'] = msg_dict['created_at'].isoformat()
+            result.append(msg_dict)
+
+        return {"count": len(result), "messages": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers for acknowledge sub-actions
+# ---------------------------------------------------------------------------
+
+def _action_message(message_id: str, project_id: str, priority: int = 3) -> dict:
+    """Convert a message into an actionable todo."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT subject, body, message_type
+            FROM claude.messages WHERE message_id = %s
+        """, (message_id,))
+        message = cur.fetchone()
+
+        if not message:
+            cur.close()
+            conn.close()
+            return {"success": False, "error": "Message not found"}
+
+        msg_dict = dict(message) if not isinstance(message, dict) else message
+        content = msg_dict.get('subject', 'Unnamed task')
+        active_form = f"Working on: {content}"
+
+        cur.execute("""
+            INSERT INTO claude.todos
+            (project_id, content, active_form, status, priority, source_message_id)
+            VALUES (%s, %s, %s, 'pending', %s, %s)
+            RETURNING todo_id::text
+        """, (project_id, content, active_form, priority, message_id))
+
+        todo_result = cur.fetchone()
+        todo_dict = dict(todo_result) if not isinstance(todo_result, dict) else todo_result
+
+        cur.execute("""
+            UPDATE claude.messages SET status = 'actioned', acknowledged_at = NOW()
+            WHERE message_id = %s
+        """, (message_id,))
+
+        cur.close()
+        conn.commit()
+        return {"success": True, "todo_id": todo_dict['todo_id'], "message": "Message converted to todo"}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+def _defer_message(message_id: str, reason: str) -> dict:
+    """Defer a message with a reason."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE claude.messages
+            SET status = 'deferred',
+                acknowledged_at = NOW(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('defer_reason', %s, 'deferred_at', NOW()::text)
+            WHERE message_id = %s
+            RETURNING message_id::text
+        """, (reason, message_id))
+
+        result = cur.fetchone()
+        cur.close()
+        conn.commit()
+
+        if not result:
+            return {"success": False, "error": "Message not found"}
+        return {"success": True, "message": "Message deferred", "reason": reason}
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

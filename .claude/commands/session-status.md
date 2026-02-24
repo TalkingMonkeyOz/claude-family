@@ -18,7 +18,7 @@ Use `mcp__project-tools__get_incomplete_todos` with the current project name.
 
 ### Step 3: Check Messages (MCP)
 
-Use `mcp__orchestrator__check_inbox` with `project_name` parameter.
+Use `mcp__project-tools__check_inbox` with `project_name` parameter.
 
 ### Step 4: Check Git Status
 
