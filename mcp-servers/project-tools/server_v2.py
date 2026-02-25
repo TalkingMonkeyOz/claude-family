@@ -3161,6 +3161,30 @@ def regenerate_settings(
 # Import existing tools from server.py for backward compatibility
 # ============================================================================
 
+# Load .env file BEFORE importing server.py (which captures VOYAGE_API_KEY at import time)
+# Encapsulation: the MCP server loads its own config. Callers don't pass credentials.
+_env_file = os.path.normpath(os.path.expanduser('~/OneDrive/Documents/AI_projects/ai-workspace/.env'))
+if os.path.exists(_env_file):
+    with open(_env_file, 'r') as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith('#') and '=' in _line:
+                _key, _value = _line.split('=', 1)
+                _key, _value = _key.strip(), _value.strip()
+                _existing = os.environ.get(_key, '')
+                # Force-set if missing or if caller passed unexpanded ${} placeholder
+                if not _existing or _existing.startswith('${'):
+                    os.environ[_key] = _value
+
+    # Build DATABASE_URI from individual POSTGRES_* vars if not already set
+    if not os.environ.get('DATABASE_URI') and os.environ.get('POSTGRES_PASSWORD'):
+        os.environ['DATABASE_URI'] = (
+            f"postgresql://{os.environ.get('POSTGRES_USER', 'postgres')}"
+            f":{os.environ['POSTGRES_PASSWORD']}"
+            f"@{os.environ.get('POSTGRES_HOST', 'localhost')}"
+            f"/{os.environ.get('POSTGRES_DATABASE', 'ai_company_foundation')}"
+        )
+
 # Import the old server module to get access to all existing tool implementations
 _old_server_dir = os.path.dirname(os.path.abspath(__file__))
 if _old_server_dir not in sys.path:

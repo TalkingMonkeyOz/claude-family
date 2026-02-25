@@ -166,22 +166,28 @@ def get_project_id(project_identifier: str) -> Optional[str]:
 # Embedding Helper
 # ============================================================================
 
-VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY')
 EMBEDDING_MODEL = "voyage-3"
+
+
+def _get_voyage_key() -> Optional[str]:
+    """Lazy-load Voyage API key from environment. Reads on each call so it works
+    regardless of when the .env file was loaded."""
+    return os.environ.get('VOYAGE_API_KEY')
 
 
 def generate_embedding(text: str) -> Optional[List[float]]:
     """Generate embedding for a single text using Voyage AI."""
     if not REQUESTS_AVAILABLE:
         return None
-    if not VOYAGE_API_KEY:
+    voyage_key = _get_voyage_key()
+    if not voyage_key:
         return None
 
     try:
         response = requests.post(
             "https://api.voyageai.com/v1/embeddings",
             headers={
-                "Authorization": f"Bearer {VOYAGE_API_KEY}",
+                "Authorization": f"Bearer {voyage_key}",
                 "Content-Type": "application/json"
             },
             json={
@@ -203,14 +209,15 @@ def generate_query_embedding(query: str) -> Optional[List[float]]:
     """Generate embedding for a query (uses query input_type for better retrieval)."""
     if not REQUESTS_AVAILABLE:
         return None
-    if not VOYAGE_API_KEY:
+    voyage_key = _get_voyage_key()
+    if not voyage_key:
         return None
 
     try:
         response = requests.post(
             "https://api.voyageai.com/v1/embeddings",
             headers={
-                "Authorization": f"Bearer {VOYAGE_API_KEY}",
+                "Authorization": f"Bearer {voyage_key}",
                 "Content-Type": "application/json"
             },
             json={
@@ -1009,8 +1016,8 @@ async def tool_recall_knowledge(
     date_range_days: Optional[int] = None
 ) -> Dict:
     """Semantic search over knowledge entries with structured filters."""
-    if not VOYAGE_API_KEY:
-        return {"error": "VOYAGE_API_KEY not set - cannot perform semantic search"}
+    if not _get_voyage_key():
+        return {"error": "Embedding service not configured — semantic search unavailable"}
 
     # Generate query embedding
     query_embedding = generate_query_embedding(query)
@@ -1124,8 +1131,8 @@ async def tool_graph_search(
     token_budget: int = 500,
 ) -> Dict:
     """Graph-aware knowledge search: pgvector seed + recursive CTE graph walk."""
-    if not VOYAGE_API_KEY:
-        return {"error": "VOYAGE_API_KEY not set - cannot perform semantic search"}
+    if not _get_voyage_key():
+        return {"error": "Embedding service not configured — semantic search unavailable"}
 
     query_embedding = generate_query_embedding(query)
     if not query_embedding:
@@ -1260,7 +1267,7 @@ async def tool_recall_memories(
     # Generate query embedding for mid/long tier search
     query_embedding = generate_query_embedding(query)
     if not query_embedding:
-        return {"error": "Failed to generate query embedding (VOYAGE_API_KEY set?)"}
+        return {"error": "Failed to generate query embedding — embedding service may be unavailable"}
 
     session_id = _resolve_session_id(project_name)
 
