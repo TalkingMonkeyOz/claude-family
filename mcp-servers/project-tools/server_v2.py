@@ -1005,9 +1005,20 @@ def end_session(
                 results["insights_extracted"] = 0
                 results["insights_error"] = str(insight_err)
 
+        # 6. F130: Phase 1 consolidation (short→mid promotion)
+        if closed_session_id:
+            try:
+                consolidation_result = _run_async(tool_consolidate_memories("session_end", project))
+                results["consolidation"] = {
+                    "promoted": consolidation_result.get("promoted_short_to_mid", 0),
+                }
+            except Exception as cons_err:
+                results["consolidation"] = {"error": str(cons_err)}
+
         knowledge_note = f", {results['knowledge_created']} knowledge entries created" if results.get("knowledge_created") else ""
         insights_note = f", {results['insights_extracted']} insights extracted" if results.get("insights_extracted") else ""
-        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}."
+        consolidation_note = f", {results.get('consolidation', {}).get('promoted', 0)} facts promoted" if results.get("consolidation", {}).get("promoted") else ""
+        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}{consolidation_note}."
         return results
 
     except Exception as e:
@@ -3170,6 +3181,8 @@ from server import (  # noqa: E402
     tool_todos_to_build_tasks,
     tool_store_knowledge,
     tool_recall_knowledge,
+    tool_graph_search,
+    tool_decay_knowledge,
     tool_link_knowledge,
     tool_get_related_knowledge,
     tool_mark_knowledge_applied,
@@ -3183,6 +3196,9 @@ from server import (  # noqa: E402
     validate_value,
     generate_embedding,
     generate_query_embedding,
+    tool_recall_memories,
+    tool_remember,
+    tool_consolidate_memories,
 )
 
 
@@ -3527,6 +3543,166 @@ def recall_knowledge(
         source_type or None,
         tags,
         date_range_days,
+    ))
+
+
+@mcp.tool()
+def graph_search(
+    query: str,
+    max_initial_hits: int = 5,
+    max_hops: int = 2,
+    min_edge_strength: float = 0.3,
+    min_similarity: float = 0.5,
+    token_budget: int = 500,
+) -> dict:
+    """Graph-aware knowledge search: pgvector similarity + relationship graph walk.
+
+    Finds knowledge via semantic similarity, then walks the knowledge_relations
+    graph to discover connected entries up to max_hops away. Returns both direct
+    hits and graph-discovered entries, ranked by composite relevance score.
+
+    Use when: You need richer context than recall_knowledge provides. This finds
+    not just similar entries but also related knowledge connected via typed
+    relationships (extends, contradicts, supports, etc.).
+    Returns: {query, result_count, direct_hits, graph_discovered, results:
+              [{knowledge_id, title, knowledge_type, description, source_type,
+              similarity, graph_depth, edge_path, relevance_score}]}.
+
+    Args:
+        query: Natural language search query.
+        max_initial_hits: Max pgvector seed results (default: 5).
+        max_hops: Max relationship hops from seed nodes (default: 2).
+        min_edge_strength: Minimum edge strength to traverse (default: 0.3).
+        min_similarity: Minimum pgvector similarity for seeds (default: 0.5).
+        token_budget: Approximate token budget for results (default: 500).
+    """
+    return _run_async(tool_graph_search(
+        query, max_initial_hits, max_hops,
+        min_edge_strength, min_similarity, token_budget,
+    ))
+
+
+@mcp.tool()
+def decay_knowledge(
+    min_strength: float = 0.05,
+    stale_days: int = 90,
+) -> dict:
+    """Apply decay to knowledge graph edges and find stale subgraphs.
+
+    Reduces edge strength over time based on access patterns. Knowledge that
+    hasn't been accessed loses edge strength gradually (0.95^days formula).
+    Also identifies stale knowledge entries (not accessed + low confidence).
+
+    Use when: Running periodic maintenance on the knowledge graph. Call this
+    during maintenance cycles to keep the graph healthy and identify knowledge
+    that should be reviewed or archived.
+    Returns: {success, decayed_edges, stale_entries, stale_knowledge_ids, message}.
+
+    Args:
+        min_strength: Floor for edge strength decay (default: 0.05).
+        stale_days: Days without access to consider knowledge stale (default: 90).
+    """
+    return _run_async(tool_decay_knowledge(min_strength, stale_days))
+
+
+# ============================================================================
+# Cognitive Memory Tools (F130)
+# ============================================================================
+
+@mcp.tool()
+def recall_memories(
+    query: str,
+    budget: int = 1000,
+    query_type: Literal["default", "task_specific", "exploration"] = "default",
+    project_name: str = "",
+) -> dict:
+    """Retrieve memories from all 3 tiers (short/mid/long) in a single call, budget-capped.
+
+    Queries SHORT (session facts), MID (working knowledge), and LONG (proven
+    knowledge + graph relations) tiers. Budget-capped at ~1000 tokens with
+    diversity guarantee (1+ per tier if available). Use query_type to shift
+    budget allocation between tiers.
+
+    Use when: You need contextual memories before starting work, making decisions,
+    or solving problems. This replaces separate calls to recall_knowledge,
+    list_session_facts, and graph_search with a single encapsulated operation.
+    Returns: {query, total_budget, token_count, memory_count, tier_counts,
+              memories: [{tier, title, content, memory_type, score}]}.
+
+    Args:
+        query: Natural language query describing what you need to remember.
+        budget: Token budget cap (default: 1000). Memories are filled greedily by score.
+        query_type: Budget profile - 'task_specific' (40% short, 40% mid, 20% long),
+                    'exploration' (10% short, 30% mid, 60% long),
+                    'default' (20% short, 40% mid, 40% long).
+        project_name: Project name (default: current directory).
+    """
+    return _run_async(tool_recall_memories(
+        query, budget,
+        query_type,
+        project_name or None,
+    ))
+
+
+@mcp.tool()
+def remember(
+    content: str,
+    context: str = "",
+    memory_type: Literal["learned", "pattern", "gotcha", "preference", "fact", "procedure",
+                          "credential", "config", "endpoint", "decision", "note", "data"] = "learned",
+    tier_hint: Literal["auto", "short", "mid", "long"] = "auto",
+    project_name: str = "",
+) -> dict:
+    """Store a memory with automatic tier classification, dedup/merge, and relation linking.
+
+    Routes to the right storage: credentials/configs/endpoints → session_facts (short tier),
+    learned/facts/decisions → knowledge table (mid tier), patterns/procedures/gotchas →
+    knowledge table (long tier). Automatically deduplicates (merges if >85% similar),
+    detects contradictions, and creates relation links to nearby knowledge.
+
+    Use when: You learn something worth remembering. Call this instead of separate
+    store_knowledge / store_session_fact — it auto-routes to the right place.
+    Returns: {success, memory_id, tier, action: 'created'|'merged'|'contradiction_flagged',
+              relations_created}.
+
+    Args:
+        content: The memory content to store.
+        context: Optional context about when/why this memory was captured.
+        memory_type: Type of memory (determines auto tier routing).
+        tier_hint: Override auto tier classification ('auto' uses memory_type rules).
+        project_name: Project name (default: current directory).
+    """
+    return _run_async(tool_remember(
+        content, context, memory_type,
+        tier_hint,
+        project_name or None,
+    ))
+
+
+@mcp.tool()
+def consolidate_memories(
+    trigger: Literal["session_end", "periodic", "manual"] = "session_end",
+    project_name: str = "",
+) -> dict:
+    """Run memory lifecycle management: promote, decay, and archive.
+
+    Three trigger modes control which phases run:
+    - session_end: Phase 1 only — promotes qualifying session facts (short→mid).
+    - periodic: Phase 2+3 — promotes proven mid→long, decays edges, archives stale.
+    - manual: Full cycle — all phases.
+
+    Use when: At session end (auto-called), periodically for maintenance, or
+    manually to force a full lifecycle pass.
+    Returns: {trigger, promoted_short_to_mid, promoted_mid_to_long,
+              decayed_edges, archived}.
+
+    Args:
+        trigger: Which phases to run.
+        project_name: Project name (default: current directory).
+    """
+    return _run_async(tool_consolidate_memories(
+        trigger,
+        project_name or None,
     ))
 
 

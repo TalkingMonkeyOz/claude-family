@@ -24,18 +24,43 @@ Output Format:
 # =============================================================================
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
-# This ensures Claude always has the input processing workflow fresh in context.
-# ~100 tokens - imperative protocol injected every prompt.
+# Source of truth: claude.protocol_versions table (is_active=true)
+# Deployed to: scripts/core_protocol.txt via deploy_project() or update_protocol()
+# Fallback: hardcoded DEFAULT_CORE_PROTOCOL below (in case file is missing)
 
-CORE_PROTOCOL = """
-STOP! Read the user's message fully.
-1. DECOMPOSE: Create a task (TaskCreate) for EVERY distinct directive BEFORE acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
-2. NOTEPAD: Use store_session_fact() to save credentials, decisions, endpoints, findings, progress. These survive compaction. Use list_session_facts() to review. recall_session_fact() works across sessions. This is your memory.
-3. DELEGATE: Tasks touching 3+ files = spawn an agent (coder-sonnet for complex, coder-haiku for simple). Don't bloat the main context. save_checkpoint() after completing each task.
+DEFAULT_CORE_PROTOCOL = """
+STOP!
+1. DECOMPOSE: Read all of the user input and break it down. Create a task (TaskCreate) for EVERY distinct directive BEFORE acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+2. Verify before claiming - read files, query DB. Never guess.
+3. NOTEPAD: Use store_session_fact() to save credentials, decisions, endpoints, findings, progress. These survive compaction. Use list_session_facts() to review. recall_session_fact() works across sessions. This is your memory.
 4. BPMN-FIRST: For any process or system change - model it in BPMN first, write tests, then implement code. Never code without a model.
-5. Verify before claiming - read files, query DB. Never guess.
-6. Check MCP tools first - project-tools has 40+ tools.
+5. DELEGATE: Tasks touching 3+ files = spawn an agent (coder-sonnet for complex, coder-haiku for simple). Don't bloat the main context. save_checkpoint() after completing each task.
+6. Check MCP tools first - project-tools has 40+ tools. They have descriptions, use them!
 """
+
+
+def _load_core_protocol():
+    """Load CORE_PROTOCOL from deployed file, fall back to hardcoded default."""
+    protocol_file = os.path.join(os.path.dirname(__file__), "core_protocol.txt")
+    try:
+        with open(protocol_file, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if content:
+                return content
+    except (FileNotFoundError, IOError):
+        pass
+    return DEFAULT_CORE_PROTOCOL.strip()
+
+
+# Loaded once per hook invocation (effectively per prompt)
+CORE_PROTOCOL = None  # Lazy-loaded in _get_core_protocol()
+
+
+def _get_core_protocol():
+    global CORE_PROTOCOL
+    if CORE_PROTOCOL is None:
+        CORE_PROTOCOL = _load_core_protocol()
+    return CORE_PROTOCOL
 
 import json
 import os
@@ -825,10 +850,12 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
                 code_example,
                 confidence_level,
                 times_applied,
-                1 - (embedding <=> %s::vector) as similarity_score
+                1 - (embedding <=> %s::vector) as similarity_score,
+                COALESCE(tier, 'mid') as tier
             FROM claude.knowledge
             WHERE embedding IS NOT NULL
               AND 1 - (embedding <=> %s::vector) >= %s
+              AND COALESCE(tier, 'mid') != 'archived'
               AND (
                   applies_to_projects IS NULL
                   OR cardinality(applies_to_projects) = 0
@@ -875,6 +902,7 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
                 confidence = r['confidence_level']
                 times_applied = r['times_applied']
                 similarity = round(r['similarity_score'], 3)
+                tier = r.get('tier', 'mid')
             else:
                 title = r[1]
                 description = r[2]
@@ -884,15 +912,17 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
                 confidence = r[6]
                 times_applied = r[7]
                 similarity = round(r[8], 3)
+                tier = r[9] if len(r) > 9 else 'mid'
 
-            # Format entry
+            # Format entry with tier label
+            tier_label = f"[{tier.upper()}]" if tier else "[MID]"
             type_info = knowledge_type or 'knowledge'
             if category:
                 type_info += f"/{category}"
             confidence_str = f"conf={confidence}%" if confidence else ""
             applied_str = f"used {times_applied}x" if times_applied else "never used"
 
-            context_lines.append(f"💡 {title} ({similarity} match, {type_info})")
+            context_lines.append(f"{tier_label} {title} ({similarity} match, {type_info})")
             context_lines.append(f"   {confidence_str} | {applied_str}")
             context_lines.append("")
             context_lines.append(description)
@@ -913,6 +943,129 @@ def query_knowledge(user_prompt: str, project_name: str, session_id: str = None,
     except Exception as e:
         logger.error(f"Knowledge query failed: {e}", exc_info=True)
         return None
+
+
+def query_knowledge_graph(user_prompt: str, project_name: str, session_id: str = None,
+                          max_initial_hits: int = 3, max_hops: int = 2,
+                          min_similarity: float = 0.55, token_budget: int = 400) -> Optional[str]:
+    """Graph-aware knowledge search: pgvector seed + recursive CTE graph walk.
+
+    Enhanced version of query_knowledge that also walks knowledge_relations
+    to discover connected entries. Falls back to query_knowledge on error.
+
+    Args:
+        user_prompt: The user's question/prompt
+        project_name: Current project name
+        session_id: Current session ID (for logging)
+        max_initial_hits: Max pgvector seed results
+        max_hops: Max relationship hops from seed nodes
+        min_similarity: Minimum similarity score (0-1)
+        token_budget: Approximate token budget for results
+
+    Returns:
+        Formatted context string or None if no results
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+
+        query_text = extract_query_from_prompt(user_prompt)
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+
+        # Call the graph-aware search SQL function (explicit casts for psycopg type matching)
+        cur.execute("""
+            SELECT * FROM claude.graph_aware_search(
+                %s::vector, %s::integer, %s::integer, 0.3::numeric, %s::numeric, %s::integer
+            )
+        """, (query_embedding, max_initial_hits, max_hops,
+              min_similarity, token_budget))
+
+        results = cur.fetchall()
+
+        if not results:
+            conn.close()
+            return None
+
+        # Update access stats via the bulk function
+        knowledge_ids = [r['knowledge_id'] if isinstance(r, dict) else r[0] for r in results]
+        cur.execute("SELECT claude.update_knowledge_access(%s)", (knowledge_ids,))
+        conn.commit()
+
+        latency_ms = int((time.time() - start_time) * 1000)
+        direct_count = sum(1 for r in results if (r['source_type'] if isinstance(r, dict) else r[6]) == 'direct')
+        graph_count = sum(1 for r in results if (r['source_type'] if isinstance(r, dict) else r[6]) == 'graph')
+
+        # Format results
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        label = f"KNOWLEDGE GRAPH ({len(results)} entries: {direct_count} direct + {graph_count} graph, {latency_ms}ms)"
+        context_lines.append(label)
+        context_lines.append("=" * 70)
+        context_lines.append("")
+
+        for r in results:
+            if isinstance(r, dict):
+                title = r['title']
+                description = r['description']
+                knowledge_type = r['knowledge_type']
+                category = r['knowledge_category']
+                confidence = r['confidence_level']
+                source_type = r['source_type']
+                similarity = round(r['similarity'], 3)
+                graph_depth = r['graph_depth']
+                edge_path = r['edge_path']
+                relevance = round(r['relevance_score'], 3)
+            else:
+                title = r[1]
+                description = r[4]
+                knowledge_type = r[2]
+                category = r[3]
+                confidence = r[5]
+                source_type = r[6]
+                similarity = round(r[7], 3)
+                graph_depth = r[8]
+                edge_path = r[9]
+                relevance = round(r[10], 3)
+
+            type_info = knowledge_type or 'knowledge'
+            if category:
+                type_info += f"/{category}"
+            confidence_str = f"conf={confidence}%" if confidence else ""
+
+            # Show source indicator
+            if source_type == 'graph':
+                source_label = f"graph:{edge_path}(depth={graph_depth})"
+            else:
+                source_label = f"direct(sim={similarity})"
+
+            context_lines.append(f"💡 {title} ({relevance} score, {type_info})")
+            context_lines.append(f"   {confidence_str} | {source_label}")
+            context_lines.append("")
+            context_lines.append(description)
+            context_lines.append("")
+            context_lines.append("-" * 70)
+            context_lines.append("")
+
+        logger.info(f"Graph knowledge query: {len(results)} entries ({direct_count}+{graph_count}g), {latency_ms}ms")
+        conn.close()
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Graph knowledge query failed, falling back: {e}", exc_info=True)
+        # Fall back to standard pgvector-only search
+        return query_knowledge(user_prompt, project_name, session_id,
+                               top_k=max_initial_hits, min_similarity=min_similarity)
 
 
 # =============================================================================
@@ -1463,7 +1616,7 @@ def main():
             result = {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": CORE_PROTOCOL
+                    "additionalContext": _get_core_protocol()
                 }
             }
             print(json.dumps(result))
@@ -1556,13 +1709,16 @@ def main():
         if needs_rag(user_prompt):
             logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
 
-            # Query KNOWLEDGE TABLE (learned patterns, gotchas, facts)
-            knowledge_context = query_knowledge(
+            # Query KNOWLEDGE GRAPH (pgvector seed + relationship walk)
+            # Note: Voyage-3 similarity scores are typically 0.3-0.5 for good matches
+            knowledge_context = query_knowledge_graph(
                 user_prompt=user_prompt,
                 project_name=project_name,
                 session_id=session_id,
-                top_k=2,
-                min_similarity=0.55
+                max_initial_hits=3,
+                max_hops=2,
+                min_similarity=0.35,
+                token_budget=400,
             )
 
             # Query RAG (vault knowledge - documentation)
@@ -1593,7 +1749,7 @@ def main():
         # 7. Nimbus context (if RAG enabled + Nimbus project)
         combined_context_parts = []
 
-        combined_context_parts.append(CORE_PROTOCOL)
+        combined_context_parts.append(_get_core_protocol())
 
         # PROCESS FAILURES: Surface pending auto-filed failures for self-improvement
         try:

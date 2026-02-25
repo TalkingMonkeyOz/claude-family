@@ -279,6 +279,77 @@ def _reset_task_map(project_name: str, session_id: str):
         pass  # Non-critical - discipline hook will just prompt for tasks
 
 
+def run_periodic_consolidation(conn):
+    """Run periodic memory consolidation if 24h+ since last run (F130).
+
+    Performs mid→long promotion, edge decay, and archival.
+    Uses file-based cooldown to avoid running too frequently.
+    """
+    state_dir = Path.home() / ".claude" / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / "consolidation_state.json"
+
+    # Check cooldown
+    try:
+        if state_file.exists():
+            with open(state_file, 'r') as f:
+                state = json.load(f)
+            last_run = datetime.fromisoformat(state.get('last_run', '2000-01-01'))
+            if (datetime.now() - last_run).total_seconds() < 86400:  # 24h
+                return None  # Too soon
+    except Exception:
+        pass  # Proceed if state file is corrupt
+
+    try:
+        cur = conn.cursor()
+
+        counts = {"promoted_mid_to_long": 0, "decayed_edges": 0, "archived": 0}
+
+        # Mid→Long promotion: applied 3+ times, confidence >= 80, accessed 5+ times
+        cur.execute("""
+            UPDATE claude.knowledge
+            SET tier = 'long'
+            WHERE tier = 'mid'
+              AND COALESCE(times_applied, 0) >= 3
+              AND confidence_level >= 80
+              AND COALESCE(access_count, 0) >= 5
+        """)
+        counts["promoted_mid_to_long"] = cur.rowcount
+
+        # Decay edges older than 7 days
+        cur.execute("""
+            UPDATE claude.knowledge_relations
+            SET strength = GREATEST(0.05, strength * POWER(0.95,
+                EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0
+            ))
+            WHERE strength > 0.05
+              AND created_at < NOW() - INTERVAL '7 days'
+        """)
+        counts["decayed_edges"] = cur.rowcount
+
+        # Archive: confidence < 30, not accessed in 90+ days
+        cur.execute("""
+            UPDATE claude.knowledge
+            SET tier = 'archived'
+            WHERE tier IN ('mid', 'long')
+              AND confidence_level < 30
+              AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '90 days'
+        """)
+        counts["archived"] = cur.rowcount
+
+        conn.commit()
+
+        # Update cooldown
+        with open(state_file, 'w') as f:
+            json.dump({"last_run": datetime.now().isoformat()}, f)
+
+        logger.info(f"Periodic consolidation: {counts}")
+        return counts
+    except Exception as e:
+        logger.warning(f"Periodic consolidation failed (non-fatal): {e}")
+        return None
+
+
 def main():
     """Run session startup with lean output."""
 
@@ -324,6 +395,17 @@ def main():
         if todo_count > 0:
             context_lines.append("")
             context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
+
+        # F130: Run periodic memory consolidation (24h cooldown)
+        try:
+            consolidation_conn = get_db_connection()
+            if consolidation_conn:
+                counts = run_periodic_consolidation(consolidation_conn)
+                if counts and any(v > 0 for v in counts.values()):
+                    context_lines.append(f"Memory consolidation: {counts['promoted_mid_to_long']} promoted, {counts['decayed_edges']} decayed, {counts['archived']} archived")
+                consolidation_conn.close()
+        except Exception as e:
+            logger.warning(f"Periodic consolidation skipped: {e}")
 
         # Clean task_map to prevent stale session errors from discipline hook
         if session_id:

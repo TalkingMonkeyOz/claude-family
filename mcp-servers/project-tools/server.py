@@ -1115,6 +1115,734 @@ async def tool_recall_knowledge(
         conn.close()
 
 
+async def tool_graph_search(
+    query: str,
+    max_initial_hits: int = 5,
+    max_hops: int = 2,
+    min_edge_strength: float = 0.3,
+    min_similarity: float = 0.5,
+    token_budget: int = 500,
+) -> Dict:
+    """Graph-aware knowledge search: pgvector seed + recursive CTE graph walk."""
+    if not VOYAGE_API_KEY:
+        return {"error": "VOYAGE_API_KEY not set - cannot perform semantic search"}
+
+    query_embedding = generate_query_embedding(query)
+    if not query_embedding:
+        return {"error": "Failed to generate query embedding"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Call the SQL function (explicit casts for psycopg type matching)
+        cur.execute("""
+            SELECT * FROM claude.graph_aware_search(
+                %s::vector, %s::integer, %s::integer, %s::numeric, %s::numeric, %s::integer
+            )
+        """, (query_embedding, max_initial_hits, max_hops,
+              min_edge_strength, min_similarity, token_budget))
+
+        results = []
+        knowledge_ids = []
+        for row in cur.fetchall():
+            knowledge_ids.append(row['knowledge_id'])
+            results.append({
+                "knowledge_id": str(row['knowledge_id']),
+                "title": row['title'],
+                "knowledge_type": row['knowledge_type'],
+                "knowledge_category": row['knowledge_category'],
+                "description": row['description'],
+                "confidence_level": row['confidence_level'],
+                "source_type": row['source_type'],
+                "similarity": round(float(row['similarity']), 4),
+                "graph_depth": row['graph_depth'],
+                "edge_path": row['edge_path'],
+                "relevance_score": round(float(row['relevance_score']), 4),
+            })
+
+        # Update access stats for all returned entries
+        if knowledge_ids:
+            cur.execute("""
+                SELECT claude.update_knowledge_access(%s)
+            """, (knowledge_ids,))
+
+        conn.commit()
+        cur.close()
+
+        direct_count = sum(1 for r in results if r['source_type'] == 'direct')
+        graph_count = sum(1 for r in results if r['source_type'] == 'graph')
+
+        return {
+            "query": query,
+            "result_count": len(results),
+            "direct_hits": direct_count,
+            "graph_discovered": graph_count,
+            "max_hops": max_hops,
+            "results": results,
+        }
+
+    except Exception as e:
+        return {"error": f"Graph search failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_decay_knowledge(
+    min_strength: float = 0.05,
+    stale_days: int = 90,
+) -> Dict:
+    """Apply decay to knowledge graph edges and find stale subgraphs."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT * FROM claude.decay_knowledge_graph(%s, %s)
+        """, (min_strength, stale_days))
+
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        stale_ids = row['stale_knowledge_ids'] or []
+
+        return {
+            "success": True,
+            "decayed_edges": row['decayed_count'],
+            "stale_entries": row['stale_count'],
+            "stale_knowledge_ids": [str(uid) for uid in stale_ids],
+            "message": (
+                f"Decayed {row['decayed_count']} edges. "
+                f"Found {row['stale_count']} stale knowledge entries."
+            ),
+        }
+
+    except Exception as e:
+        return {"error": f"Knowledge decay failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Cognitive Memory Tools (F130)
+# ============================================================================
+
+# Token estimation: ~4 chars per token for English text
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate for budget management."""
+    return max(1, len(text) // 4)
+
+
+async def tool_recall_memories(
+    query: str,
+    budget: int = 1000,
+    query_type: str = "default",
+    project_name: Optional[str] = None,
+) -> Dict:
+    """Encapsulated 3-tier memory retrieval capped at ~budget tokens.
+
+    Queries SHORT (session_facts), MID (working knowledge), and LONG (proven
+    knowledge + 1-hop graph walk) tiers. Returns budget-capped results with
+    diversity guarantee (1+ per tier if available).
+    """
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    # Budget profiles by query_type
+    profiles = {
+        "task_specific": {"short": 0.40, "mid": 0.40, "long": 0.20},
+        "exploration":   {"short": 0.10, "mid": 0.30, "long": 0.60},
+        "default":       {"short": 0.20, "mid": 0.40, "long": 0.40},
+    }
+    profile = profiles.get(query_type, profiles["default"])
+
+    # Generate query embedding for mid/long tier search
+    query_embedding = generate_query_embedding(query)
+    if not query_embedding:
+        return {"error": "Failed to generate query embedding (VOYAGE_API_KEY set?)"}
+
+    session_id = _resolve_session_id(project_name)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        memories = []
+
+        # --- SHORT TIER: session_facts ---
+        short_budget = int(budget * profile["short"])
+        if session_id:
+            cur.execute("""
+                SELECT fact_key, fact_value, fact_type, is_sensitive, created_at
+                FROM claude.session_facts
+                WHERE project_name = %s
+                  AND (session_id = %s::uuid OR session_id IS NULL)
+                  AND NOT COALESCE(is_sensitive, false)
+                ORDER BY
+                    CASE fact_type
+                        WHEN 'decision' THEN 1
+                        WHEN 'reference' THEN 2
+                        WHEN 'note' THEN 3
+                        WHEN 'config' THEN 4
+                        WHEN 'endpoint' THEN 5
+                        WHEN 'data' THEN 6
+                        ELSE 7
+                    END,
+                    created_at DESC
+                LIMIT 20
+            """, (project_name, session_id))
+        else:
+            cur.execute("""
+                SELECT fact_key, fact_value, fact_type, is_sensitive, created_at
+                FROM claude.session_facts
+                WHERE project_name = %s
+                  AND NOT COALESCE(is_sensitive, false)
+                ORDER BY created_at DESC
+                LIMIT 10
+            """, (project_name,))
+
+        short_tokens_used = 0
+        for row in cur.fetchall():
+            content = f"{row['fact_key']}: {row['fact_value']}"
+            tokens = _estimate_tokens(content)
+            if short_tokens_used + tokens > short_budget and short_tokens_used > 0:
+                break
+            memories.append({
+                "tier": "short",
+                "title": row['fact_key'],
+                "content": row['fact_value'],
+                "memory_type": row['fact_type'],
+                "score": 1.0 - (short_tokens_used / max(short_budget, 1)) * 0.1,
+            })
+            short_tokens_used += tokens
+
+        # --- MID TIER: knowledge WHERE tier='mid' ---
+        mid_budget = int(budget * profile["mid"])
+        cur.execute("""
+            SELECT
+                knowledge_id::text, title, description, knowledge_type,
+                confidence_level, times_applied,
+                1 - (embedding <=> %s::vector) as similarity,
+                EXTRACT(EPOCH FROM (NOW() - COALESCE(last_accessed_at, created_at))) / 86400.0 as days_since_access
+            FROM claude.knowledge
+            WHERE embedding IS NOT NULL
+              AND tier = 'mid'
+              AND 1 - (embedding <=> %s::vector) >= 0.4
+              AND (applies_to_projects IS NULL OR cardinality(applies_to_projects) = 0 OR %s = ANY(applies_to_projects))
+            ORDER BY embedding <=> %s::vector
+            LIMIT 10
+        """, (query_embedding, query_embedding, project_name, query_embedding))
+
+        mid_tokens_used = 0
+        mid_rows = cur.fetchall()
+        for row in mid_rows:
+            sim = float(row['similarity'])
+            days = float(row['days_since_access']) if row['days_since_access'] else 30
+            access_freq = min((row['times_applied'] or 0) / 10.0, 1.0)
+            conf = (row['confidence_level'] or 50) / 100.0
+            # Composite score: similarity 0.4, recency 0.3, access 0.2, confidence 0.1
+            recency = max(0, 1.0 - days / 90.0)
+            score = sim * 0.4 + recency * 0.3 + access_freq * 0.2 + conf * 0.1
+
+            content = row['description'] or row['title']
+            tokens = _estimate_tokens(f"{row['title']}: {content}")
+            if mid_tokens_used + tokens > mid_budget and mid_tokens_used > 0:
+                break
+            memories.append({
+                "tier": "mid",
+                "title": row['title'],
+                "content": content,
+                "memory_type": row['knowledge_type'],
+                "knowledge_id": row['knowledge_id'],
+                "score": round(score, 4),
+                "similarity": round(sim, 4),
+                "confidence": row['confidence_level'],
+            })
+            mid_tokens_used += tokens
+
+        # --- LONG TIER: knowledge WHERE tier='long' + 1-hop graph walk ---
+        long_budget = int(budget * profile["long"])
+        cur.execute("""
+            SELECT
+                k.knowledge_id::text, k.title, k.description, k.knowledge_type,
+                k.confidence_level, k.times_applied,
+                1 - (k.embedding <=> %s::vector) as similarity,
+                EXTRACT(EPOCH FROM (NOW() - COALESCE(k.last_accessed_at, k.created_at))) / 86400.0 as days_since_access
+            FROM claude.knowledge k
+            WHERE k.embedding IS NOT NULL
+              AND k.tier = 'long'
+              AND 1 - (k.embedding <=> %s::vector) >= 0.35
+              AND (k.applies_to_projects IS NULL OR cardinality(k.applies_to_projects) = 0 OR %s = ANY(k.applies_to_projects))
+            ORDER BY k.embedding <=> %s::vector
+            LIMIT 8
+        """, (query_embedding, query_embedding, project_name, query_embedding))
+
+        long_tokens_used = 0
+        long_seed_ids = []
+        for row in cur.fetchall():
+            sim = float(row['similarity'])
+            days = float(row['days_since_access']) if row['days_since_access'] else 60
+            access_freq = min((row['times_applied'] or 0) / 10.0, 1.0)
+            conf = (row['confidence_level'] or 70) / 100.0
+            recency = max(0, 1.0 - days / 180.0)
+            score = sim * 0.4 + recency * 0.2 + access_freq * 0.2 + conf * 0.2
+
+            content = row['description'] or row['title']
+            tokens = _estimate_tokens(f"{row['title']}: {content}")
+            if long_tokens_used + tokens > long_budget and long_tokens_used > 0:
+                break
+            memories.append({
+                "tier": "long",
+                "title": row['title'],
+                "content": content,
+                "memory_type": row['knowledge_type'],
+                "knowledge_id": row['knowledge_id'],
+                "score": round(score, 4),
+                "similarity": round(sim, 4),
+                "confidence": row['confidence_level'],
+            })
+            long_seed_ids.append(row['knowledge_id'])
+            long_tokens_used += tokens
+
+        # 1-hop graph walk from long-tier seeds
+        if long_seed_ids and long_tokens_used < long_budget:
+            seen_ids = set(m.get('knowledge_id') for m in memories if m.get('knowledge_id'))
+            cur.execute("""
+                SELECT DISTINCT
+                    k.knowledge_id::text, k.title, k.description, k.knowledge_type,
+                    k.confidence_level, kr.relation_type
+                FROM claude.knowledge_relations kr
+                JOIN claude.knowledge k ON (
+                    (kr.to_knowledge_id = k.knowledge_id AND kr.from_knowledge_id = ANY(%s::uuid[]))
+                    OR
+                    (kr.from_knowledge_id = k.knowledge_id AND kr.to_knowledge_id = ANY(%s::uuid[]))
+                )
+                WHERE k.tier IN ('mid', 'long')
+                  AND kr.strength >= 0.3
+                LIMIT 5
+            """, (long_seed_ids, long_seed_ids))
+
+            for row in cur.fetchall():
+                if row['knowledge_id'] in seen_ids:
+                    continue
+                content = row['description'] or row['title']
+                tokens = _estimate_tokens(f"{row['title']}: {content}")
+                if long_tokens_used + tokens > long_budget:
+                    break
+                memories.append({
+                    "tier": "long",
+                    "title": row['title'],
+                    "content": content,
+                    "memory_type": row['knowledge_type'],
+                    "knowledge_id": row['knowledge_id'],
+                    "score": 0.3,  # graph-discovered entries get lower score
+                    "relation": row['relation_type'],
+                    "confidence": row['confidence_level'],
+                })
+                long_tokens_used += tokens
+
+        # Update access stats for mid/long entries
+        accessed_ids = [m['knowledge_id'] for m in memories if m.get('knowledge_id')]
+        if accessed_ids:
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET last_accessed_at = NOW(),
+                    access_count = COALESCE(access_count, 0) + 1
+                WHERE knowledge_id = ANY(%s::uuid[])
+            """, (accessed_ids,))
+
+        conn.commit()
+        cur.close()
+
+        # Count by tier
+        tier_counts = {"short": 0, "mid": 0, "long": 0}
+        for m in memories:
+            tier_counts[m["tier"]] = tier_counts.get(m["tier"], 0) + 1
+
+        total_tokens = short_tokens_used + mid_tokens_used + long_tokens_used
+
+        return {
+            "query": query,
+            "query_type": query_type,
+            "total_budget": budget,
+            "token_count": total_tokens,
+            "memory_count": len(memories),
+            "tier_counts": tier_counts,
+            "memories": memories,
+        }
+
+    except Exception as e:
+        return {"error": f"recall_memories failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_remember(
+    content: str,
+    context: str = "",
+    memory_type: str = "learned",
+    tier_hint: str = "auto",
+    project_name: Optional[str] = None,
+) -> Dict:
+    """Encapsulated memory capture with auto tier classification, dedup/merge, and auto-linking.
+
+    SHORT path (credential/config/endpoint): delegates to session_facts.
+    MID/LONG path: generates embedding, checks for duplicates (merge if >0.85 similarity),
+    creates knowledge entry, auto-links to nearby entries.
+    """
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    # Classify tier
+    short_types = {"credential", "config", "endpoint"}
+    mid_types = {"learned", "fact", "decision", "note", "data"}
+    long_types = {"pattern", "procedure", "gotcha", "preference"}
+
+    if tier_hint != "auto":
+        tier = tier_hint
+    elif memory_type in short_types:
+        tier = "short"
+    elif memory_type in long_types:
+        tier = "long"
+    else:
+        tier = "mid"
+
+    # SHORT path: delegate to session_facts
+    if tier == "short":
+        # Extract a key from the content (first line or first 50 chars)
+        fact_key = content.split('\n')[0][:50].strip()
+        fact_key = re.sub(r'[^a-zA-Z0-9_\-\s]', '', fact_key).strip().replace(' ', '_')[:30]
+        if not fact_key:
+            fact_key = f"memory_{datetime.now().strftime('%H%M%S')}"
+
+        fact_type_map = {"credential": "credential", "config": "config", "endpoint": "endpoint"}
+        fact_type = fact_type_map.get(memory_type, "note")
+        is_sensitive = memory_type == "credential"
+
+        result = await tool_store_session_fact(
+            fact_key=fact_key,
+            fact_value=content,
+            fact_type=fact_type,
+            is_sensitive=is_sensitive,
+            project_name=project_name,
+        )
+        if result.get("success"):
+            return {
+                "success": True,
+                "memory_id": result.get("fact_id"),
+                "tier": "short",
+                "action": "created",
+                "relations_created": 0,
+                "message": f"Stored as session fact: {fact_key}",
+            }
+        return result
+
+    # MID/LONG path: knowledge table with embedding
+    # Build text for embedding
+    embed_text = content
+    if context:
+        embed_text = f"{context}\n\n{content}"
+
+    embedding = generate_embedding(embed_text)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Dedup check: find high-similarity existing entries in same tier
+        action = "created"
+        merged_id = None
+
+        if embedding:
+            cur.execute("""
+                SELECT
+                    knowledge_id::text, title, description, confidence_level,
+                    1 - (embedding <=> %s::vector) as similarity
+                FROM claude.knowledge
+                WHERE embedding IS NOT NULL
+                  AND tier = %s
+                  AND 1 - (embedding <=> %s::vector) > 0.85
+                ORDER BY similarity DESC
+                LIMIT 1
+            """, (embedding, tier, embedding))
+
+            dup = cur.fetchone()
+            if dup:
+                # Merge: boost confidence, keep longer description
+                existing_desc = dup['description'] or ''
+                new_desc = content if len(content) > len(existing_desc) else existing_desc
+                new_conf = min(100, (dup['confidence_level'] or 50) + 5)
+
+                cur.execute("""
+                    UPDATE claude.knowledge
+                    SET description = %s,
+                        confidence_level = %s,
+                        last_accessed_at = NOW(),
+                        access_count = COALESCE(access_count, 0) + 1
+                    WHERE knowledge_id = %s::uuid
+                """, (new_desc, new_conf, dup['knowledge_id']))
+
+                conn.commit()
+                cur.close()
+                return {
+                    "success": True,
+                    "memory_id": dup['knowledge_id'],
+                    "tier": tier,
+                    "action": "merged",
+                    "existing_similarity": round(float(dup['similarity']), 4),
+                    "new_confidence": new_conf,
+                    "relations_created": 0,
+                    "message": f"Merged with existing: {dup['title']} (sim={round(float(dup['similarity']), 3)})",
+                }
+
+        # Check for contradiction: high-similarity entries with divergent confidence
+        contradiction_flag = False
+        if embedding:
+            cur.execute("""
+                SELECT knowledge_id::text, title, confidence_level,
+                    1 - (embedding <=> %s::vector) as similarity
+                FROM claude.knowledge
+                WHERE embedding IS NOT NULL
+                  AND 1 - (embedding <=> %s::vector) > 0.75
+                  AND tier IN ('mid', 'long')
+                LIMIT 3
+            """, (embedding, embedding))
+
+            for row in cur.fetchall():
+                # If the new entry would be mid but existing is high-confidence long, flag
+                if tier == "mid" and (row['confidence_level'] or 50) >= 80:
+                    contradiction_flag = True
+                    break
+
+        # Create title from content (first line, max 80 chars)
+        title = content.split('\n')[0][:80].strip()
+        if not title:
+            title = f"Memory {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+        # Set confidence based on tier
+        confidence = 65 if tier == "mid" else 75
+
+        # Insert
+        if embedding:
+            cur.execute("""
+                INSERT INTO claude.knowledge
+                    (knowledge_id, title, description, knowledge_type, tier,
+                     confidence_level, source, embedding, created_at,
+                     applies_to_projects)
+                VALUES
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, 'remember', %s::vector, NOW(), %s)
+                RETURNING knowledge_id::text
+            """, (title, content, memory_type, tier, confidence, embedding,
+                  [project_name] if project_name else None))
+        else:
+            cur.execute("""
+                INSERT INTO claude.knowledge
+                    (knowledge_id, title, description, knowledge_type, tier,
+                     confidence_level, source, created_at,
+                     applies_to_projects)
+                VALUES
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, 'remember', NOW(), %s)
+                RETURNING knowledge_id::text
+            """, (title, content, memory_type, tier, confidence,
+                  [project_name] if project_name else None))
+
+        result = cur.fetchone()
+        new_id = result['knowledge_id']
+
+        # Auto-link: find nearby knowledge (0.5-0.85 similarity)
+        relations_created = 0
+        if embedding:
+            cur.execute("""
+                SELECT knowledge_id::text, title,
+                    1 - (embedding <=> %s::vector) as similarity
+                FROM claude.knowledge
+                WHERE embedding IS NOT NULL
+                  AND knowledge_id != %s::uuid
+                  AND 1 - (embedding <=> %s::vector) BETWEEN 0.5 AND 0.85
+                ORDER BY similarity DESC
+                LIMIT 3
+            """, (embedding, new_id, embedding))
+
+            for row in cur.fetchall():
+                cur.execute("""
+                    INSERT INTO claude.knowledge_relations
+                        (relation_id, from_knowledge_id, to_knowledge_id, relation_type, strength)
+                    VALUES (gen_random_uuid(), %s::uuid, %s::uuid, 'relates_to', %s)
+                    ON CONFLICT DO NOTHING
+                """, (new_id, row['knowledge_id'], round(float(row['similarity']), 3)))
+                relations_created += 1
+
+        conn.commit()
+        cur.close()
+
+        action = "contradiction_flagged" if contradiction_flag else "created"
+        return {
+            "success": True,
+            "memory_id": new_id,
+            "tier": tier,
+            "action": action,
+            "has_embedding": embedding is not None,
+            "relations_created": relations_created,
+            "message": f"Stored {tier}-tier memory: {title}" + (
+                " [CONTRADICTION FLAG: similar high-confidence entry exists]" if contradiction_flag else ""
+            ),
+        }
+
+    except Exception as e:
+        return {"error": f"remember failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_consolidate_memories(
+    trigger: str = "session_end",
+    project_name: Optional[str] = None,
+) -> Dict:
+    """Encapsulated memory lifecycle management: promote, decay, archive.
+
+    Triggers:
+    - session_end: Phase 1 only (short→mid promotion of qualifying session facts)
+    - periodic: Phase 2+3 (mid→long promotion, decay, archive)
+    - manual: Full cycle (all phases)
+    """
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    result = {
+        "trigger": trigger,
+        "promoted_short_to_mid": 0,
+        "promoted_mid_to_long": 0,
+        "decayed_edges": 0,
+        "archived": 0,
+    }
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # ---- PHASE 1: SHORT→MID (session_end or manual) ----
+        if trigger in ("session_end", "manual"):
+            # Find qualifying session facts from recent closed sessions
+            # Criteria: decision/pattern/reference type, length >= 50 chars
+            cur.execute("""
+                SELECT sf.fact_id, sf.fact_key, sf.fact_value, sf.fact_type, sf.project_name
+                FROM claude.session_facts sf
+                JOIN claude.sessions s ON sf.session_id = s.session_id
+                WHERE sf.project_name = %s
+                  AND sf.fact_type IN ('decision', 'reference', 'note', 'data')
+                  AND LENGTH(sf.fact_value) >= 50
+                  AND s.session_end IS NOT NULL
+                  AND s.session_end > NOW() - INTERVAL '7 days'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM claude.knowledge k
+                      WHERE k.title = sf.fact_key AND k.source = 'consolidation'
+                  )
+                LIMIT 10
+            """, (project_name,))
+
+            facts_to_promote = cur.fetchall()
+            for fact in facts_to_promote:
+                # Generate embedding for the fact
+                embed_text = f"{fact['fact_key']}: {fact['fact_value']}"
+                embedding = generate_embedding(embed_text)
+
+                # Dedup check against existing mid-tier
+                is_dup = False
+                if embedding:
+                    cur.execute("""
+                        SELECT knowledge_id::text, 1 - (embedding <=> %s::vector) as sim
+                        FROM claude.knowledge
+                        WHERE embedding IS NOT NULL AND 1 - (embedding <=> %s::vector) > 0.85
+                        LIMIT 1
+                    """, (embedding, embedding))
+                    if cur.fetchone():
+                        is_dup = True
+
+                if not is_dup:
+                    if embedding:
+                        cur.execute("""
+                            INSERT INTO claude.knowledge
+                                (knowledge_id, title, description, knowledge_type, tier,
+                                 confidence_level, source, embedding, created_at,
+                                 applies_to_projects)
+                            VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
+                                    %s::vector, NOW(), %s)
+                        """, (fact['fact_key'], fact['fact_value'],
+                              'learned' if fact['fact_type'] in ('note', 'data') else fact['fact_type'],
+                              embedding,
+                              [fact['project_name']] if fact['project_name'] else None))
+                    else:
+                        cur.execute("""
+                            INSERT INTO claude.knowledge
+                                (knowledge_id, title, description, knowledge_type, tier,
+                                 confidence_level, source, created_at,
+                                 applies_to_projects)
+                            VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
+                                    NOW(), %s)
+                        """, (fact['fact_key'], fact['fact_value'],
+                              'learned' if fact['fact_type'] in ('note', 'data') else fact['fact_type'],
+                              [fact['project_name']] if fact['project_name'] else None))
+                    result["promoted_short_to_mid"] += 1
+
+        # ---- PHASE 2: MID→LONG promotion (periodic or manual) ----
+        if trigger in ("periodic", "manual"):
+            # Promote mid-tier entries that have been applied 3+ times,
+            # confidence >= 80, and accessed across multiple sessions
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET tier = 'long'
+                WHERE tier = 'mid'
+                  AND COALESCE(times_applied, 0) >= 3
+                  AND confidence_level >= 80
+                  AND COALESCE(access_count, 0) >= 5
+                RETURNING knowledge_id
+            """)
+            result["promoted_mid_to_long"] = cur.rowcount
+
+        # ---- PHASE 3: DECAY + ARCHIVE (periodic or manual) ----
+        if trigger in ("periodic", "manual"):
+            # Decay edges: 0.95^days formula
+            cur.execute("""
+                UPDATE claude.knowledge_relations
+                SET strength = GREATEST(0.05, strength * POWER(0.95,
+                    EXTRACT(EPOCH FROM (NOW() - created_at)) / 86400.0
+                ))
+                WHERE strength > 0.05
+                  AND created_at < NOW() - INTERVAL '7 days'
+                RETURNING relation_id
+            """)
+            result["decayed_edges"] = cur.rowcount
+
+            # Archive: confidence < 30, not accessed in 90+ days
+            cur.execute("""
+                UPDATE claude.knowledge
+                SET tier = 'archived'
+                WHERE tier IN ('mid', 'long')
+                  AND confidence_level < 30
+                  AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '90 days'
+                RETURNING knowledge_id
+            """)
+            result["archived"] = cur.rowcount
+
+        conn.commit()
+        cur.close()
+
+        result["success"] = True
+        result["message"] = (
+            f"Consolidation ({trigger}): "
+            f"{result['promoted_short_to_mid']} short→mid, "
+            f"{result['promoted_mid_to_long']} mid→long, "
+            f"{result['decayed_edges']} edges decayed, "
+            f"{result['archived']} archived"
+        )
+        return result
+
+    except Exception as e:
+        return {"error": f"consolidate_memories failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
 async def tool_link_knowledge(
     from_knowledge_id: str,
     to_knowledge_id: str,

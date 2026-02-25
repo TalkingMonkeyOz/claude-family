@@ -132,6 +132,50 @@ def demote_in_progress_todos(project_name: str, conn):
         return 0
 
 
+def consolidate_session_facts(project_name: str, conn):
+    """Promote qualifying session facts to mid-tier knowledge (F130 Cognitive Memory).
+
+    Lightweight version: inserts into claude.knowledge WITHOUT Voyage AI embeddings.
+    Embeddings are added later by the MCP consolidate_memories() tool.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT sf.fact_id, sf.fact_key, sf.fact_value, sf.fact_type
+            FROM claude.session_facts sf
+            JOIN claude.sessions s ON sf.session_id = s.session_id
+            WHERE sf.project_name = %s
+              AND sf.fact_type IN ('decision', 'reference', 'note', 'data')
+              AND LENGTH(sf.fact_value) >= 50
+              AND s.session_end IS NOT NULL
+              AND s.session_end > NOW() - INTERVAL '7 days'
+              AND NOT EXISTS (
+                  SELECT 1 FROM claude.knowledge k
+                  WHERE k.title = sf.fact_key AND k.source = 'consolidation'
+              )
+            LIMIT 5
+        """, (project_name,))
+
+        facts = cur.fetchall()
+        promoted = 0
+        for fact in facts:
+            ktype = 'learned' if fact['fact_type'] in ('note', 'data') else fact['fact_type']
+            cur.execute("""
+                INSERT INTO claude.knowledge
+                    (knowledge_id, title, description, knowledge_type, tier,
+                     confidence_level, source, created_at, applies_to_projects)
+                VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
+                        NOW(), %s)
+            """, (fact['fact_key'], fact['fact_value'], ktype, [project_name]))
+            promoted += 1
+
+        if promoted > 0:
+            logger.info(f"Promoted {promoted} session fact(s) to mid-tier knowledge for {project_name}")
+        conn.commit()
+    except Exception as e:
+        logger.warning(f"Session fact consolidation failed (non-fatal): {e}")
+
+
 def auto_save_session(session_id: str, project_name: str):
     """Auto-save session state to database on exit.
 
@@ -160,6 +204,9 @@ def auto_save_session(session_id: str, project_name: str):
 
         # BPMN step: demote_to_pending - in_progress todos become pending
         demote_in_progress_todos(project_name, conn)
+
+        # F130: Promote qualifying session facts to mid-tier knowledge
+        consolidate_session_facts(project_name, conn)
 
         # Mark session end (only if not already closed)
         if session_id:
