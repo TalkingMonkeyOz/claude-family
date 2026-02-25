@@ -170,12 +170,15 @@ def extract_mcp_server(tool_name: str) -> str:
     Examples:
         mcp__postgres__execute_sql -> postgres
         mcp__filesystem__read_file -> filesystem
+        Skill -> skills
         Read -> builtin
     """
     if tool_name.startswith('mcp__'):
         parts = tool_name.split('__')
         if len(parts) >= 2:
             return parts[1]
+    if tool_name == 'Skill':
+        return 'skills'
     return 'builtin'
 
 
@@ -194,9 +197,10 @@ def main():
     # Read stdin once - required before any processing
     raw_input_str = sys.stdin.read()
 
-    # FAST PATH: Quick-check for mcp__ before full JSON parse.
+    # FAST PATH: Quick-check for mcp__ or Skill before full JSON parse.
     # PostToolUse input always contains "tool_name":"<name>" - check the raw string.
-    if '"mcp__' not in raw_input_str:
+    # FB140: Also track Skill tool invocations (built-in, not MCP)
+    if '"mcp__' not in raw_input_str and '"Skill"' not in raw_input_str:
         print(json.dumps({}))
         return 0
 
@@ -226,7 +230,9 @@ def main():
     tool_error = tool_response.get('error') if isinstance(tool_response, dict) else None
 
     # Definitive check after JSON parse (fast path might have false positives)
-    if not tool_name.startswith('mcp__'):
+    # FB140: Track Skill tool alongside MCP tools
+    is_skill_tool = tool_name == 'Skill'
+    if not tool_name.startswith('mcp__') and not is_skill_tool:
         print(json.dumps({}))
         return 0
 
@@ -245,6 +251,11 @@ def main():
 
     # Extract MCP server
     mcp_server = extract_mcp_server(tool_name)
+
+    # FB140: For Skill tool, use the skill name as the tool_name for better tracking
+    if is_skill_tool:
+        skill_name = tool_input.get('skill', 'unknown')
+        tool_name = f"Skill:{skill_name}"
 
     # Get session info - prefer hook input (per docs: session_id is passed directly)
     raw_session_id = hook_input.get('session_id') or os.environ.get('CLAUDE_SESSION_ID')

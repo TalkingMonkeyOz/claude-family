@@ -36,14 +36,16 @@ It handles design, configuration, documentation, testing, and deployment — wit
 
 ## Status
 
-- **Phase:** Brainstorm COMPLETE → second-pass review & cross-reference validation
+- **Phase:** DESIGN COMPLETE — ready for build
 - **All 9 areas:** BRAINSTORM-COMPLETE as of Feb 24, 2026
-- **Decisions:** 68 identified, 61 resolved (90%), 7 needing management
-- **Project code:** METIS (in project-tools DB). Vault folder still `Project-Metis/` (48 files, rename deferred to avoid breaking wiki-links)
-- **Key docs:** Product Definition (vault), Docs 1-6 (Claude.ai project), Decisions Tracker (vault)
-- **Vault tagging:** `scope: system | customer | engagement` applied to all area READMEs
+- **Gap review:** COMPLETE as of Feb 26 — 10 resolved, 9 deferred (clear targets), 1 parked (Claude Code building)
+- **Decisions:** 70+ identified, all resolved or explicitly deferred. 7 needing management.
+- **Feature catalogue:** 10 features defined with nimbus/Monash examples (Feb 26)
+- **Plan of attack:** Phase 0-3 defined. MVP at ~3 months. Full platform ~4-5 months. (Feb 26)
+- **Project code:** METIS (in project-tools DB). Vault folder: `Project-Metis/`
+- **Key docs:** Product Definition, Feature Catalogue, Plan of Attack, Gap Resolution Summary (vault), Docs 1-6 (Claude.ai project)
 - **Developer:** John de Vere (human) + Claude Family (AI)
-- **Next step:** Validate cross-references, second-pass gap review, then BPMN validation (Chat #11)
+- **Next step:** Management decisions (Monash go-ahead, Azure, API access), then Phase 0 build
 
 ## Level 0 Architecture
 

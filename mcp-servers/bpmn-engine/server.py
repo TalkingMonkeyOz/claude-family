@@ -1137,6 +1137,97 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
         "tool": "end_session",
         "description": "Closes session with summary in claude.sessions",
     },
+    # knowledge_graph_lifecycle.bpmn elements → SQL functions + MCP tools
+    "identify_action": {
+        "type": "mcp_tool",
+        "tool": "graph_search / decay_knowledge",
+        "description": "User selects graph action (sync/query/decay/review)",
+    },
+    "check_age_extension": {
+        "type": "sql_function",
+        "function": "pg_extension('age')",
+        "description": "Check if Apache AGE extension is installed",
+    },
+    "install_age": {
+        "type": "sql_command",
+        "description": "CREATE EXTENSION IF NOT EXISTS age",
+    },
+    "ensure_graph": {
+        "type": "sql_function",
+        "description": "Ensure knowledge graph exists in AGE/CTE system",
+    },
+    "load_knowledge_nodes": {
+        "type": "sql_function",
+        "function": "claude.graph_aware_search",
+        "description": "Load knowledge entries as graph nodes",
+    },
+    "load_relations_edges": {
+        "type": "db_table",
+        "table": "claude.knowledge_relations",
+        "description": "Load knowledge relations as graph edges",
+    },
+    "pgvector_search": {
+        "type": "sql_function",
+        "function": "claude.graph_aware_search",
+        "description": "pgvector similarity search (seed stage of graph search)",
+    },
+    "graph_walk": {
+        "type": "sql_function",
+        "function": "claude.graph_aware_search",
+        "description": "Recursive CTE graph walk from pgvector seeds",
+    },
+    "assemble_context": {
+        "type": "sql_function",
+        "function": "claude.graph_aware_search",
+        "description": "Score and rank results within token budget",
+    },
+    "update_access_stats": {
+        "type": "sql_function",
+        "function": "claude.update_knowledge_access",
+        "description": "Bump access_count and last_accessed_at",
+    },
+    "calculate_decay": {
+        "type": "sql_function",
+        "function": "claude.decay_knowledge_graph",
+        "description": "Calculate edge strength decay (0.95^days formula)",
+    },
+    "apply_decay": {
+        "type": "sql_function",
+        "function": "claude.decay_knowledge_graph",
+        "description": "Apply decayed strengths to knowledge_relations",
+    },
+    "find_stale_subgraphs": {
+        "type": "sql_function",
+        "function": "claude.decay_knowledge_graph",
+        "description": "Identify stale knowledge entries for review",
+    },
+    "archive_stale": {
+        "type": "mcp_tool",
+        "tool": "advance_status / manual review",
+        "description": "Archive stale knowledge entries",
+    },
+    "flag_contradictions": {
+        "type": "db_query",
+        "description": "Find knowledge_relations with type='contradicts'",
+    },
+    "review_flagged": {
+        "type": "claude_behavior",
+        "description": "Claude reviews flagged knowledge entries",
+    },
+    "keep_and_strengthen": {
+        "type": "mcp_tool",
+        "tool": "mark_knowledge_applied",
+        "description": "Keep knowledge and boost confidence",
+    },
+    "merge_duplicates": {
+        "type": "mcp_tool",
+        "tool": "link_knowledge(type=supersedes)",
+        "description": "Merge duplicate knowledge entries",
+    },
+    "delete_knowledge": {
+        "type": "sql_command",
+        "description": "DELETE from claude.knowledge for discarded entries",
+    },
 }
 
 

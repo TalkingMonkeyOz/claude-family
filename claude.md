@@ -134,6 +134,18 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
 | `regenerate_settings(project)` | Regenerate settings.local.json from DB |
 
+### Cognitive Memory Tools (F130)
+
+3-tier memory system: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns).
+
+| Tool | Use When |
+|------|----------|
+| `remember(content, memory_type)` | Learn something — auto-routes to right tier, dedup/merge, auto-link |
+| `recall_memories(query, budget)` | Load context before tasks — 3-tier retrieval, budget-capped |
+| `consolidate_memories(trigger)` | Lifecycle: promote short→mid, mid→long, decay, archive |
+
+**Prefer these over** `store_knowledge` / `recall_knowledge` (legacy, still available).
+
 ### Knowledge Tools (v3)
 
 | Tool | Use When |
@@ -223,8 +235,17 @@ Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 ## Knowledge System
 
 ```
-CAPTURE (Obsidian) ──> EMBED (Voyage AI) ──> SEARCH (RAG) ──> DELIVER (On-Demand)
+CAPTURE ──> EMBED (Voyage AI) ──> 3-TIER MEMORY ──> BUDGET-CAPPED RECALL
+  remember()          auto           short/mid/long       recall_memories()
 ```
+
+### Cognitive Memory (F130)
+
+3-tier system replaces unbounded knowledge graph dumps:
+- **SHORT**: Session facts (credentials, configs). Auto via `store_session_fact`.
+- **MID**: Working knowledge (decisions, learned facts). Default for `remember()`.
+- **LONG**: Proven patterns (gotchas, procedures). Auto-promoted or `remember(type='pattern')`.
+- **Lifecycle**: `consolidate_memories()` promotes/decays/archives. Auto on session end + 24h periodic.
 
 - **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter, Obsidian-compatible
 - **Embeddings**: Voyage AI (voyage-3, 1024 dimensions) → PostgreSQL pgvector
@@ -263,6 +284,7 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-02-26 | **F130 Cognitive Memory**: 3-tier memory (short/mid/long) with `remember()`, `recall_memories()`, `consolidate_memories()`. Core Protocol v8. |
 | 2026-02-24 | **Orchestrator retirement**: Messaging tools migrated to project-tools. Orchestrator MCP removed. BPMN model for messaging lifecycle added. |
 | 2026-02-11 | **v3 Application Layer**: 15 new tools (config ops, knowledge, conversations, books), 3 new tables, 40+ total tools |
 | 2026-02-10 | **v2 Application Layer**: WorkflowEngine state machine, 5 new tools, audit_log, trimmed context injection |
@@ -275,7 +297,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-**Version**: 3.4 (Retired orchestrator MCP - messaging moved to project-tools)
+**Version**: 3.5 (F130 Cognitive Memory System - 3-tier recall/remember/consolidate)
 **Created**: 2025-10-21
-**Updated**: 2026-02-24
+**Updated**: 2026-02-26
 **Location**: C:\Projects\claude-family\CLAUDE.md
