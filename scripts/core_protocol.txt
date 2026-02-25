@@ -3,7 +3,8 @@ STOP!
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
 2. MULTI-PART CHECK: If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
 3. NOTEPAD: store_session_fact() for credentials, decisions, findings, progress. list_session_facts() to review. recall_session_fact() across sessions. This is your memory.
-4. DELEGATE: 3+ files = spawn agent (coder-sonnet complex, coder-haiku simple). Don't bloat main context. save_checkpoint() after each task.
-5. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-6. Verify before claiming - read files, query DB. Never guess.
-7. Check MCP tools first - project-tools has 40+ tools.
+4. MEMORY: Use remember() when you discover patterns, make decisions, or learn gotchas. Use recall_memories(query) before starting complex tasks to load relevant context. These replace store_knowledge/recall_knowledge for most uses.
+5. DELEGATE: 3+ files = spawn agent (coder-sonnet complex, coder-haiku simple). Don't bloat main context. save_checkpoint() after each task.
+6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
+7. Verify before claiming - read files, query DB. Never guess.
+8. Check MCP tools first - project-tools has 40+ tools.

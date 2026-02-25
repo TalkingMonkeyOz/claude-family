@@ -972,10 +972,10 @@ def end_session(
                         INSERT INTO claude.knowledge (
                             knowledge_id, title, description, knowledge_type,
                             knowledge_category, source, confidence_level,
-                            applies_to_projects, embedding, created_at
+                            applies_to_projects, embedding, tier, created_at
                         ) VALUES (
                             gen_random_uuid(), %s, %s, 'learned', %s,
-                            %s, 85, %s, %s, NOW()
+                            %s, 85, %s, %s, 'mid', NOW()
                         )
                     """, (
                         learning[:100],
@@ -4942,7 +4942,7 @@ def update_protocol(
         change_reason: Why this change was made (for audit trail).
         protocol_name: Protocol to update (default: CORE_PROTOCOL).
     """
-    conn = _get_conn()
+    conn = get_db_connection()
     try:
         cur = conn.cursor()
 
@@ -5018,7 +5018,7 @@ def get_protocol_history(
         protocol_name: Protocol to get history for (default: CORE_PROTOCOL).
         limit: Maximum versions to return (default: 10).
     """
-    conn = _get_conn()
+    conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
@@ -5065,7 +5065,7 @@ def get_active_protocol(
     Args:
         protocol_name: Protocol to retrieve (default: CORE_PROTOCOL).
     """
-    conn = _get_conn()
+    conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute("""

@@ -959,9 +959,9 @@ async def tool_store_knowledge(
                 INSERT INTO claude.knowledge
                     (knowledge_id, title, description, knowledge_type, knowledge_category,
                      code_example, applies_to_projects, applies_to_platforms,
-                     confidence_level, source, embedding, created_at)
+                     confidence_level, source, embedding, tier, created_at)
                 VALUES
-                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, NOW())
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector, 'mid', NOW())
                 RETURNING knowledge_id::text
             """, (title, description, knowledge_type, knowledge_category, code_example,
                   applies_to_projects, applies_to_platforms, confidence_level, source,
@@ -972,9 +972,9 @@ async def tool_store_knowledge(
                 INSERT INTO claude.knowledge
                     (knowledge_id, title, description, knowledge_type, knowledge_category,
                      code_example, applies_to_projects, applies_to_platforms,
-                     confidence_level, source, created_at)
+                     confidence_level, source, tier, created_at)
                 VALUES
-                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    (gen_random_uuid(), %s, %s, %s, %s, %s, %s, %s, %s, %s, 'mid', NOW())
                 RETURNING knowledge_id::text
             """, (title, description, knowledge_type, knowledge_category, code_example,
                   applies_to_projects, applies_to_platforms, confidence_level, source))
