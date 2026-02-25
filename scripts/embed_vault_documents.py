@@ -65,7 +65,9 @@ except ImportError:
 
 # Configuration
 VAULT_PATH = Path("C:/Projects/claude-family/knowledge-vault")
-DB_CONNECTION = "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_database_uri
+DB_CONNECTION = get_database_uri()
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
 EMBEDDING_MODEL = "voyage-3"  # voyage-3 or voyage-3-lite
 CHUNK_SIZE = 1000  # Characters per chunk

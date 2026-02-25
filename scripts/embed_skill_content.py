@@ -8,9 +8,9 @@ One-time script to generate Voyage AI embeddings for all skill_content entries.
 import os
 import sys
 
-# Add ai-workspace for config
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-from config import POSTGRES_CONFIG
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_database_uri
 
 try:
     import voyageai
@@ -27,7 +27,7 @@ if not VOYAGE_API_KEY:
 
 def main():
     # Connect to database
-    conn_str = f"postgresql://{POSTGRES_CONFIG['user']}:{POSTGRES_CONFIG['password']}@{POSTGRES_CONFIG['host']}/{POSTGRES_CONFIG['database']}"
+    conn_str = get_database_uri()
     conn = psycopg.connect(conn_str, row_factory=dict_row)
     cur = conn.cursor()
 

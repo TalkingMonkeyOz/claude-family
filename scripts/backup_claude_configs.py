@@ -17,16 +17,9 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
-import psycopg2
-
-# Add scripts directory to path for config import
-sys.path.insert(0, str(Path(__file__).parent))
-from config import POSTGRES_CONFIG, CLAUDE_FAMILY_ROOT
-
-
-def get_db_connection():
-    """Get database connection."""
-    return psycopg2.connect(**POSTGRES_CONFIG)
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, CLAUDE_FAMILY_ROOT
 
 
 def get_active_projects(conn):

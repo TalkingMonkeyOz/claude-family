@@ -42,29 +42,8 @@ logger = logging.getLogger('failure_capture')
 FAILURE_LOG = Path.home() / ".claude" / "process_failures.jsonl"
 
 
-def _get_db_connection():
-    """Get PostgreSQL connection (reuses pattern from task_sync_hook)."""
-    try:
-        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-        from config import POSTGRES_CONFIG as _PG_CONFIG
-        conn_str = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-    except ImportError:
-        return None
-
-    try:
-        import psycopg
-        from psycopg.rows import dict_row
-        return psycopg.connect(conn_str, row_factory=dict_row)
-    except ImportError:
-        try:
-            import psycopg2 as psycopg
-            from psycopg2.extras import RealDictCursor
-            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-        except ImportError:
-            return None
-    except Exception as e:
-        logger.error(f"DB connection failed: {e}")
-        return None
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection as _get_db_connection
 
 
 def capture_failure(

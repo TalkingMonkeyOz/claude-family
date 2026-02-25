@@ -13,50 +13,10 @@ import sys
 import os
 from datetime import datetime
 
-# Try multiple ways to import psycopg
-PSYCOPG_VERSION = 0
-psycopg = None
-
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        from psycopg2.extras import RealDictCursor
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        print("ERROR: Neither psycopg nor psycopg2 installed.", file=sys.stderr)
-        sys.exit(1)
-
-
-def get_db_connection():
-    """Get PostgreSQL connection from environment."""
-    conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
-
-    if not conn_string:
-        # Try ai-workspace config as fallback
-        try:
-            sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-            from config import POSTGRES_CONFIG
-            # psycopg3 uses 'dbname' not 'database'
-            cfg = dict(POSTGRES_CONFIG)
-            if 'database' in cfg and 'dbname' not in cfg:
-                cfg['dbname'] = cfg.pop('database')
-            if PSYCOPG_VERSION == 3:
-                return psycopg.connect(**cfg, row_factory=dict_row)
-            else:
-                return psycopg.connect(**POSTGRES_CONFIG, cursor_factory=RealDictCursor)
-        except ImportError:
-            print("ERROR: No database connection configured.", file=sys.stderr)
-            print("Set DATABASE_URI or POSTGRES_CONNECTION_STRING environment variable.", file=sys.stderr)
-            sys.exit(1)
-
-    if PSYCOPG_VERSION == 3:
-        return psycopg.connect(conn_string, row_factory=dict_row)
-    else:
-        return psycopg.connect(conn_string, cursor_factory=RealDictCursor)
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+_, PSYCOPG_VERSION, _, _ = detect_psycopg()
 
 
 def main():
@@ -65,7 +25,7 @@ def main():
     print("FB134: Add Vault Embeddings Scheduled Job")
     print("=" * 70)
 
-    conn = get_db_connection()
+    conn = get_db_connection(strict=True)
     cur = conn.cursor()
 
     try:

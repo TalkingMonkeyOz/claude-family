@@ -37,33 +37,13 @@ def is_valid_uuid(val: str) -> bool:
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Database connection - secure config loading
-DEFAULT_CONN_STR = os.environ.get('DATABASE_URI')
-if not DEFAULT_CONN_STR:
-    try:
-        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-        from config import POSTGRES_CONFIG as _PG_CONFIG
-        DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-    except ImportError:
-        DEFAULT_CONN_STR = None  # No fallback - will gracefully fail
-DATABASE_URI = DEFAULT_CONN_STR
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
 
-try:
-    import psycopg2
-    HAS_DB = True
-except ImportError:
-    HAS_DB = False
-
-
-def get_db_connection():
-    """Get database connection."""
-    if not HAS_DB:
-        return None
-    try:
-        return psycopg2.connect(DATABASE_URI)
-    except Exception as e:
-        print(f"DB connection failed: {e}", file=sys.stderr)
-        return None
+# Initialize DB availability
+_psycopg_mod, _, _, _ = detect_psycopg()
+HAS_DB = _psycopg_mod is not None
 
 
 def ensure_session_exists(conn, session_id: str, project_name: Optional[str]) -> bool:

@@ -27,13 +27,10 @@ from datetime import datetime
 if sys.platform == 'win32':
     sys.stdout.reconfigure(encoding='utf-8')
 
-# Database connection (optional - for logging)
-DB_AVAILABLE = False
-try:
-    import psycopg2
-    DB_AVAILABLE = True
-except ImportError:
-    pass
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+DB_AVAILABLE = detect_psycopg()[0] is not None
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -96,16 +93,8 @@ def get_db_connection():
     """Get database connection for logging."""
     if not DB_AVAILABLE:
         return None
-    try:
-        return psycopg2.connect(
-            host="localhost",
-            database="ai_company_foundation",
-            user="postgres",
-            password=os.environ.get("POSTGRES_PASSWORD", "05OX79HNFCjQwhotDjVx")
-        )
-    except Exception as e:
-        print(f"[WARN] Database connection failed: {e}")
-        return None
+    from config import get_db_connection as _get_db_connection
+    return _get_db_connection()
 
 
 def log_deployment(project_name: str, component: str, status: str, details: str = None):

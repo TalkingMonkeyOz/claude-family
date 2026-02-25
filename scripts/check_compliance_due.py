@@ -19,32 +19,10 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 import uuid
 
-# Add config path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-
-try:
-    from config import POSTGRES_CONFIG
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    HAS_DB = True
-except ImportError:
-    HAS_DB = False
-    CONN_STR = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation'
-
-
-def get_db_connection():
-    """Get database connection."""
-    if HAS_DB:
-        try:
-            return psycopg2.connect(**POSTGRES_CONFIG, cursor_factory=RealDictCursor)
-        except Exception:
-            pass
-    # Fallback
-    try:
-        return psycopg2.connect(CONN_STR, cursor_factory=RealDictCursor)
-    except Exception as e:
-        print(f"Database connection failed: {e}")
-        return None
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+HAS_DB = detect_psycopg()[0] is not None
 
 
 def get_due_audits(conn) -> List[Dict]:

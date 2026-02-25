@@ -40,16 +40,12 @@ def is_valid_uuid(val: str) -> bool:
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Database connection - secure config loading
-DEFAULT_CONN_STR = os.environ.get('DATABASE_URI')
-if not DEFAULT_CONN_STR:
-    try:
-        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-        from config import POSTGRES_CONFIG as _PG_CONFIG
-        DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-    except ImportError:
-        DEFAULT_CONN_STR = None  # No fallback - will gracefully fail
-DATABASE_URI = DEFAULT_CONN_STR
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+
+psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
+HAS_DB = psycopg_mod is not None
 
 # Set up logging
 log_path = os.path.expanduser('~/.claude/hooks.log')
@@ -60,30 +56,10 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-PSYCOPG_VERSION = None
-try:
-    import psycopg
-    HAS_DB = True
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        HAS_DB = True
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        HAS_DB = False
-        logging.warning("No psycopg driver available - agent tracking disabled")
+if not HAS_DB:
+    logging.warning("No psycopg driver available - agent tracking disabled")
 
 
-def get_db_connection():
-    """Get database connection."""
-    if not HAS_DB:
-        return None
-    try:
-        return psycopg.connect(DATABASE_URI)
-    except Exception as e:
-        logging.error(f"DB connection failed: {e}")
-        return None
 
 
 def log_agent_spawn(

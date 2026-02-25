@@ -42,70 +42,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Try to import psycopg (v3) or psycopg2
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    PSYCOPG_VERSION = 3
-except ImportError:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    PSYCOPG_VERSION = 2
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg, get_database_uri
+_psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
+DATABASE_URL = get_database_uri()
 
 # Constants
 GLOBAL_CLAUDE_DIR = Path.home() / ".claude"
-
-# Database connection - try pgpass file first, then env var, then default
-def _get_pg_config():
-    """Read PostgreSQL config from pgpass file or Windows AppData."""
-    # Try Unix-style pgpass
-    pgpass_locations = [
-        Path.home() / ".pgpass",
-        Path.home() / "AppData" / "Roaming" / "postgresql" / "pgpass.conf"
-    ]
-
-    for pgpass_path in pgpass_locations:
-        if pgpass_path.exists():
-            try:
-                content = pgpass_path.read_text()
-                for line in content.strip().split('\n'):
-                    if 'ai_company_foundation' in line:
-                        parts = line.split(':')
-                        if len(parts) >= 5:
-                            return {
-                                'host': parts[0],
-                                'port': parts[1] or '5432',
-                                'database': parts[2],
-                                'user': parts[3],
-                                'password': parts[4]
-                            }
-            except Exception:
-                pass
-
-    # Default config matching other scripts in this project
-    return {
-        'host': 'localhost',
-        'port': '5432',
-        'database': 'ai_company_foundation',
-        'user': 'postgres',
-        'password': '05OX79HNFCjQwhotDjVx'  # Standard dev password
-    }
-
-_PG_CONFIG = _get_pg_config()
-DATABASE_URL = os.environ.get(
-    'DATABASE_URL',
-    f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}:{_PG_CONFIG['port']}/{_PG_CONFIG['database']}"
-)
-
-
-def get_db_connection():
-    """Get database connection."""
-    if PSYCOPG_VERSION == 3:
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
-    else:
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.cursor_factory = RealDictCursor
-        return conn
 
 
 def calculate_hash(content: str) -> str:

@@ -29,21 +29,11 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-# Database imports
-DB_AVAILABLE = False
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    DB_AVAILABLE = True
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        from psycopg2.extras import RealDictCursor
-        DB_AVAILABLE = True
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        DB_AVAILABLE = False
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+_psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
+DB_AVAILABLE = _psycopg_mod is not None
 
 
 # Configuration
@@ -56,14 +46,8 @@ PROJECT_TYPES = ['infrastructure', 'web-app', 'python-tool', 'csharp-desktop']
 
 def get_db_connection():
     """Get PostgreSQL connection."""
-    conn_str = 'postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation'
-    try:
-        if PSYCOPG_VERSION == 3:
-            return psycopg.connect(conn_str, row_factory=dict_row)
-        else:
-            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except:
-        return None
+    from config import get_db_connection as _get_db_connection
+    return _get_db_connection()
 
 
 def render_template(content: str, variables: dict) -> str:

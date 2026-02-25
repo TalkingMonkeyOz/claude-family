@@ -41,7 +41,9 @@ except ImportError:
     sys.exit(1)
 
 # Configuration
-DB_CONNECTION = "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_database_uri
+DB_CONNECTION = get_database_uri()
 VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
 EMBEDDING_MODEL = "voyage-3"
 

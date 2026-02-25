@@ -41,48 +41,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger('precompact')
 
-# Try to import psycopg
-DB_AVAILABLE = False
-PSYCOPG_VERSION = None
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    DB_AVAILABLE = True
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        from psycopg2.extras import RealDictCursor
-        DB_AVAILABLE = True
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        DB_AVAILABLE = False
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
 
-# Load config
-DEFAULT_CONN_STR = None
-try:
-    sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-    from config import POSTGRES_CONFIG as _PG_CONFIG
-    DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-except ImportError:
-    pass
-
-
-def get_db_connection():
-    """Get PostgreSQL connection."""
-    if not DB_AVAILABLE:
-        return None
-    conn_str = os.environ.get('DATABASE_URL', DEFAULT_CONN_STR)
-    if not conn_str:
-        return None
-    try:
-        if PSYCOPG_VERSION == 3:
-            return psycopg.connect(conn_str, row_factory=dict_row)
-        else:
-            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        return None
+psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
+DB_AVAILABLE = psycopg_mod is not None
 
 
 def get_session_state_for_compact(project_name: str) -> Optional[str]:

@@ -55,52 +55,16 @@ logger = logging.getLogger('context_injector')
 if hasattr(sys.stdout, 'buffer') and not isinstance(sys.stdout, io.TextIOWrapper):
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
-# Try to import psycopg for database access
-DB_AVAILABLE = False
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    DB_AVAILABLE = True
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        from psycopg2.extras import RealDictCursor
-        DB_AVAILABLE = True
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        DB_AVAILABLE = False
-
-# Default connection string
-DEFAULT_CONN_STR = None
-
-# Try to load from ai-workspace secure config
-try:
-    sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-    from config import POSTGRES_CONFIG as _PG_CONFIG
-    DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-except ImportError:
-    pass
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection, detect_psycopg
+DB_AVAILABLE, PSYCOPG_VERSION = detect_psycopg()[:2]
+DB_AVAILABLE = DB_AVAILABLE is not None
 
 # Standards file locations
 GLOBAL_STANDARDS_DIR = Path.home() / ".claude" / "standards"
 INSTRUCTIONS_DIR = Path.home() / ".claude" / "instructions"
 SKILLS_DIR = Path.home() / ".claude" / "skills"
-
-
-def get_db_connection():
-    """Get PostgreSQL connection."""
-    conn_str = os.environ.get('DATABASE_URL', DEFAULT_CONN_STR)
-    if not conn_str:
-        return None
-    try:
-        if PSYCOPG_VERSION == 3:
-            return psycopg.connect(conn_str, row_factory=dict_row)
-        else:
-            return psycopg.connect(conn_str, cursor_factory=RealDictCursor)
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        return None
 
 
 def extract_file_path(tool_name: str, tool_input: Dict[str, Any]) -> Optional[str]:

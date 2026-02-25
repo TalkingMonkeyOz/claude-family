@@ -43,22 +43,12 @@ except (ImportError, ValueError, FileNotFoundError):
             'password': os.environ.get('POSTGRES_PASSWORD')
         }
 
-# Try to import psycopg for database access
-DB_AVAILABLE = False
-PSYCOPG_VERSION = None
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    DB_AVAILABLE = True
-    PSYCOPG_VERSION = 3
-except ImportError:
-    try:
-        import psycopg2 as psycopg
-        from psycopg2.extras import RealDictCursor
-        DB_AVAILABLE = True
-        PSYCOPG_VERSION = 2
-    except ImportError:
-        DB_AVAILABLE = False
+# Shared credential loading (after early .env safety load above)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection as _config_get_db_connection, detect_psycopg
+
+psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
+DB_AVAILABLE = psycopg_mod is not None
 
 # Known identity mapping
 IDENTITY_MAP = {
@@ -133,41 +123,8 @@ def check_system_health() -> dict:
     return health
 
 def get_db_connection():
-    """Get PostgreSQL connection using central config or environment variables."""
-    # Try central config first
-    if POSTGRES_CONFIG:
-        try:
-            if PSYCOPG_VERSION == 3:
-                # psycopg3 uses 'dbname' not 'database'
-                config = POSTGRES_CONFIG.copy()
-                if 'database' in config and 'dbname' not in config:
-                    config['dbname'] = config.pop('database')
-                return psycopg.connect(**config, row_factory=dict_row)
-            else:
-                return psycopg.connect(**POSTGRES_CONFIG, cursor_factory=RealDictCursor)
-        except Exception:
-            pass
-
-    # Fall back to environment variables
-    conn_strings = [
-        os.environ.get('DATABASE_URI'),
-        os.environ.get('POSTGRES_CONNECTION_STRING'),
-    ]
-
-    last_error = None
-    for conn_string in conn_strings:
-        if not conn_string:
-            continue
-        try:
-            if PSYCOPG_VERSION == 3:
-                return psycopg.connect(conn_string, row_factory=dict_row)
-            else:
-                return psycopg.connect(conn_string, cursor_factory=RealDictCursor)
-        except Exception as e:
-            last_error = e
-            continue
-
-    raise last_error if last_error else Exception("No valid connection - set DATABASE_URI or POSTGRES_CONNECTION_STRING env var, or configure ai-workspace/config.py")
+    """Get PostgreSQL connection using shared config."""
+    return _config_get_db_connection(strict=False)
 
 def log_session_start(project_name: str, identity_id: str) -> tuple:
     """Log session start to database, return (session_id, error_msg).

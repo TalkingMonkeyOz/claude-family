@@ -18,17 +18,9 @@ from datetime import datetime, timedelta
 # Fix Windows encoding
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# Add ai-workspace to path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-from config import POSTGRES_CONFIG
-
-import psycopg2
-from psycopg2.extras import RealDictCursor
-
-
-def get_db_connection():
-    """Get database connection."""
-    return psycopg2.connect(**POSTGRES_CONFIG, cursor_factory=RealDictCursor)
+# Shared credential loading
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config import get_db_connection
 
 
 def check_recent_sessions(conn, hours=24):

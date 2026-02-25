@@ -294,23 +294,15 @@ def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool
 
     Returns True if active build_tasks exist for this project (created recently).
     """
+    import sys as _sys_import
+    _sys_import.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
-        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-        from config import POSTGRES_CONFIG as _PG_CONFIG
-        conn_str = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
+        from config import get_db_connection
     except ImportError:
         return False
 
-    try:
-        import psycopg
-        conn = psycopg.connect(conn_str)
-    except ImportError:
-        try:
-            import psycopg2 as psycopg
-            conn = psycopg.connect(conn_str)
-        except ImportError:
-            return False
-    except Exception:
+    conn = get_db_connection()
+    if not conn:
         return False
 
     try:
