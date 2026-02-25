@@ -20,37 +20,8 @@
               "icon": "lucide-file",
               "title": "Dynamic Skill System - BPMN Diagram"
             }
-          },
-          {
-            "id": "19ac0c8c16454fe9",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "Nimbus software functionality enhancements for contract rule comparisons.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "Nimbus software functionality enhancements for contract rule comparisons"
-            }
-          },
-          {
-            "id": "31ce395db1572d28",
-            "type": "leaf",
-            "state": {
-              "type": "markdown",
-              "state": {
-                "file": "John's Notes/Monash reports enhancments.md",
-                "mode": "source",
-                "source": false
-              },
-              "icon": "lucide-file",
-              "title": "Monash reports enhancments"
-            }
           }
-        ],
-        "currentTab": 2
+        ]
       }
     ],
     "direction": "vertical"
@@ -82,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": "tag:area/bpmn-sop-enforcement",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -107,7 +78,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 289.5
+    "width": 553.5
   },
   "right": {
     "id": "b19cbc385219a58f",
@@ -123,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "John's Notes/Monash reports enhancments.md",
+                "file": "30-Patterns/Dynamic Skill System - BPMN Diagram.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -133,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for Monash reports enhancments"
+              "title": "Backlinks for Dynamic Skill System - BPMN Diagram"
             }
           },
           {
@@ -211,43 +182,43 @@
       "bases:Create new base": false
     }
   },
-  "active": "31ce395db1572d28",
+  "active": "0a1e735fe9a416ce",
   "lastOpenFiles": [
-    "John's Notes/Monash Nimbus customer app.md",
-    "John's Notes/Monash reports enhancments.md",
-    "Nimbus software functionality enhancements for contract rule comparisons.md",
-    "Claude Family/Skill Catalog.md",
-    "20-Domains/Core Protocol Injection.md",
-    "John's Notes/Personal Finance Orig/ORM_COMPARISON.md",
-    "Claude Family/Auto-Apply Instructions.md",
-    "Claude Family/System Architecture.md",
-    "John's Notes/Monash Changing the user data.md",
-    "John's Notes/NIMBUS FEATURES TEMP.md",
-    "John's Notes/Copiliot awsome Git hub.md",
-    "20-Domains/Database Architecture.md",
-    "30-Patterns/gotchas/nimbus-knowledge MCP Location.md",
-    "20-Domains/Claude Code Hooks.md",
-    "20-Domains/APIs/nimbus-cache-strategy.md",
-    "20-Domains/APIs/nimbus-entity-creation-order.md",
-    "20-Domains/APIs/nimbus-idorfilter-patterns.md",
-    "20-Domains/APIs/nimbus-time-fields.md",
-    "20-Domains/APIs/nimbus-authentication.md",
-    "20-Domains/APIs/nimbus-activity-type-prefixes.md",
-    "10-Projects/ato-infrastructure/Azure Resources Overview.md",
-    "10-Projects/ato-infrastructure/Deployment Workflow.md",
-    "10-Projects/ato-infrastructure/DNS Configuration.md",
-    "10-Projects/ato-tax-agent/Functional Overview.md",
-    "10-Projects/Claude Family Manager.md",
-    "10-Projects/ato-tax-agent/Database Schema.md",
-    "Claude Family/System Architecture.md.tmp.59856.1767778657396",
-    "30-Patterns/comparison-module-pattern.md.tmp.54628.1767778597357",
-    "20-Domains/APIs/nimbus-cache-strategy.md.tmp.54628.1767778596265",
-    "20-Domains/APIs/nimbus-entity-creation-order.md.tmp.54628.1767778595190",
-    "20-Domains/APIs/nimbus-authentication.md.tmp.54628.1767778594154",
-    "40-Procedures/Session Quick Reference.md.tmp.59856.1767777656378",
-    "Claude Family/Auto-Apply Instructions.md.tmp.6036.1767514807598",
-    "Claude Family/Auto-Apply Instructions.md.tmp.6036.1767514799638",
-    "Claude Family/Orchestrator MCP.md.tmp.3140.1767432572110",
-    "Claude Family/Orchestrator MCP.md.tmp.3140.1767432564959"
+    "10-Projects/Project-Metis/system-product-definition.md",
+    "10-Projects/Project-Metis/support-defect-intel/README.md",
+    "10-Projects/Project-Metis/session-handoffs/setup-next-session-review-and-plan.md",
+    "10-Projects/Project-Metis/session-handoffs/setup-chat-session-memory-context.md",
+    "10-Projects/Project-Metis/session-handoffs/setup-chat-project-mgmt-lifecycle.md",
+    "10-Projects/Project-Metis/session-handoffs/setup-chat-context-assembly.md",
+    "10-Projects/Project-Metis/session-handoffs/setup-chat-consolidation-review.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-vault-consistency-fixes.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-vault-cleanup-cross-ref-complete.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-session-memory-context.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-project-mgmt-lifecycle.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-consolidation-area1-knowledge-graph.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-chat-8-revisit-orchestration.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-area-5-complete-all-areas-first-pass.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-area-2-5-sweep.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-24-area-2-5-sweep-continued.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-23-orchestration-build-specs.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-23-stocktake-reframe.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-23-knowledge-engine-deep-dive.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-23-design-systems.md",
+    "10-Projects/Project-Metis/session-handoffs/2026-02-23-bpmn-enforcement-brainstorm.md",
+    "10-Projects/Project-Metis/quality-compliance/README.md",
+    "10-Projects/Project-Metis/quality-compliance/brainstorm-quality-compliance.md",
+    "10-Projects/Project-Metis/ps-accelerator/README.md",
+    "10-Projects/Project-Metis/ps-accelerator/brainstorm-delivery-accelerator.md",
+    "10-Projects/Project-Metis/project-governance/README.md",
+    "10-Projects/Project-Metis/support-defect-intel",
+    "10-Projects/Project-Metis/session-handoffs",
+    "10-Projects/Project-Metis/quality-compliance",
+    "10-Projects/Project-Metis/ps-accelerator",
+    "10-Projects/Project-Metis/project-governance",
+    "10-Projects/Project-Metis/orchestration-infra",
+    "10-Projects/Project-Metis/integration-hub",
+    "10-Projects/Project-Metis/knowledge-engine",
+    "10-Projects/Project-Metis/decisions",
+    "10-Projects/Project-Metis/commercial"
   ]
 }
