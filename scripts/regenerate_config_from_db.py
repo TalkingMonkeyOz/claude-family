@@ -37,20 +37,14 @@ except ImportError:
     print("Error: psycopg2 not installed. Run: pip install psycopg2-binary")
     sys.exit(1)
 
-# Load config from local config.py or ai-workspace
+# Load config from scripts/config.py
 DEFAULT_CONN_STR = None
 try:
-    sys.path.insert(0, str(Path(__file__).parent))
-    from config import DATABASE_URI as _DB_URI
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from config import DATABASE_URI as _DB_URI, POSTGRES_CONFIG as _PG_CONFIG
     DEFAULT_CONN_STR = _DB_URI
 except ImportError:
-    # Fallback to ai-workspace config
-    try:
-        sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-        from config import POSTGRES_CONFIG as _PG_CONFIG
-        DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
-    except ImportError:
-        pass
+    pass
 
 
 class ConfigRegenerator:

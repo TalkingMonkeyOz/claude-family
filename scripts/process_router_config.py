@@ -18,8 +18,7 @@ Updated: 2025-12-09 - Use secure config from ai-workspace
 import os
 import sys
 
-# Add ai-workspace to path for secure config
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from config import ANTHROPIC_API_KEY as SECURE_API_KEY
 except ImportError:

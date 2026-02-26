@@ -16,7 +16,6 @@ import os
 import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
 
 from config import POSTGRES_CONFIG
 import psycopg2

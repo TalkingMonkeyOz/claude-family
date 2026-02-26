@@ -40,8 +40,7 @@ import argparse
 from decimal import Decimal
 import csv
 
-# Add ai-workspace to path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import POSTGRES_CONFIG
 
 # Terminal colors (Windows compatible)

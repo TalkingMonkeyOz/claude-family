@@ -35,10 +35,10 @@ except ImportError:
     print("Error: psycopg2 not installed. Run: pip install psycopg2-binary")
     sys.exit(1)
 
-# Default connection string - load from ai-workspace secure config
+# Default connection string - load from scripts/config.py
 DEFAULT_CONN_STR = None
 try:
-    sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from config import POSTGRES_CONFIG as _PG_CONFIG
     DEFAULT_CONN_STR = f"postgresql://{_PG_CONFIG['user']}:{_PG_CONFIG['password']}@{_PG_CONFIG['host']}/{_PG_CONFIG['database']}"
 except ImportError:

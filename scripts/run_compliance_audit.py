@@ -23,8 +23,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
 
-# Add config path
-sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
     from config import POSTGRES_CONFIG

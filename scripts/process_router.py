@@ -47,17 +47,8 @@ try:
     from psycopg2.extras import RealDictCursor
     HAS_DB = True
 except ImportError:
-    # Fallback to legacy path
-    sys.path.insert(0, r'c:\Users\johnd\OneDrive\Documents\AI_projects\ai-workspace')
-    try:
-        from config import POSTGRES_CONFIG
-        CONFIG_ANTHROPIC_KEY = None
-        import psycopg2
-        from psycopg2.extras import RealDictCursor
-        HAS_DB = True
-    except ImportError:
-        HAS_DB = False
-        CONFIG_ANTHROPIC_KEY = None
+    HAS_DB = False
+    CONFIG_ANTHROPIC_KEY = None
 
 # LLM Classifier imports (optional - graceful fallback if not available)
 try:
