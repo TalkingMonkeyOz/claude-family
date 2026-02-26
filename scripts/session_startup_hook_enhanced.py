@@ -12,40 +12,18 @@ Full context loading is deferred to start_session() MCP tool.
 """
 
 import json
+import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 
-# Try to load POSTGRES_CONFIG from central config or .env file
-POSTGRES_CONFIG = None
-try:
-    # First try to load .env file directly (in case config.py fails due to working directory)
-    config_dir = os.path.normpath(os.path.expanduser('~/OneDrive/Documents/AI_projects/ai-workspace'))
-    env_file = os.path.join(config_dir, '.env')
-    if os.path.exists(env_file):
-        with open(env_file, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ.setdefault(key.strip(), value.strip())  # Don't overwrite existing
-
-    # Now try to import config (which will use the env vars we just set)
-    sys.path.insert(0, config_dir)
-    from config import POSTGRES_CONFIG
-except (ImportError, ValueError, FileNotFoundError):
-    # Fall back to environment variables only
-    if os.environ.get('POSTGRES_PASSWORD'):
-        POSTGRES_CONFIG = {
-            'host': os.environ.get('POSTGRES_HOST', 'localhost'),
-            'database': os.environ.get('POSTGRES_DATABASE', 'ai_company_foundation'),
-            'user': os.environ.get('POSTGRES_USER', 'postgres'),
-            'password': os.environ.get('POSTGRES_PASSWORD')
-        }
-
-# Shared credential loading (after early .env safety load above)
+# Shared credential loading from scripts/config.py
+# (handles .env loading from all locations including legacy ai-workspace)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import get_db_connection as _config_get_db_connection, detect_psycopg
+from config import POSTGRES_CONFIG, get_db_connection as _config_get_db_connection, detect_psycopg
+
+logger = logging.getLogger(__name__)
 
 psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
 DB_AVAILABLE = psycopg_mod is not None
