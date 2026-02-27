@@ -2,17 +2,18 @@
 Tests for the Messaging BPMN process.
 
 Inter-Claude Messaging Lifecycle (messaging):
-  Models 5 messaging intents: send, broadcast, check_inbox, acknowledge, reply.
+  Models 6 messaging intents: send, broadcast, check_inbox, acknowledge, reply, discover.
 
   Key behaviors:
-    1. Send: Validate params → INSERT into claude.messages → end_sent
+    1. Send: Validate params (from_project, recipient) → INSERT into claude.messages → end_sent
     2. Broadcast: Prepare (set to_project=None) → INSERT → end_sent
-    3. Check Inbox: Build query → SELECT → format results → end_inbox / end_empty_inbox
+    3. Check Inbox: Build query → SELECT (incl from_project, threading) → format → end_inbox / end_empty_inbox
     4. Acknowledge: Determine action (read/acknowledged/actioned/deferred) → UPDATE/INSERT → end_acknowledged
-    5. Reply: Fetch original → prepare reply → INSERT → end_sent
+    5. Reply: Fetch original → route to from_project + set threading → INSERT → end_sent
+    6. Discover: Query valid recipients → format list → end_recipients
 
   Test paths:
-    1. Send valid message → end_sent
+    1. Send valid message (with from_project) → end_sent
     2. Send invalid (missing params) → end_send_invalid
     3. Broadcast → end_sent
     4. Check inbox with messages → end_inbox
@@ -21,10 +22,16 @@ Inter-Claude Messaging Lifecycle (messaging):
     7. Acknowledge: mark acknowledged → end_acknowledged
     8. Acknowledge: action (create todo) → end_acknowledged
     9. Acknowledge: defer → end_acknowledged
-   10. Reply: original found → end_sent
+   10. Reply: original found (with threading) → end_sent
    11. Reply: original not found → end_reply_not_found
+   12. Default intent (check_inbox) → end_empty_inbox
+   13. Discover recipients → end_recipients
+   14. Send with from_project resolved → end_sent
+   15. Send with invalid recipient → end_send_invalid
+   16. Reply sets threading (parent_message_id, thread_id) → end_sent
+   17. Reply routes to from_project → end_sent
 
-Implementation: mcp-servers/project-tools/server_v2.py (post-migration)
+Implementation: mcp-servers/project-tools/server_v2.py
 """
 
 import os
@@ -97,6 +104,7 @@ class TestSendMessage:
             "message_type": "notification",
             "body": "Hello from Claude A",
             "to_project": "claude-family",
+            "from_project": "nimbus-import",
         })
 
         assert wf.is_completed()
@@ -388,6 +396,7 @@ class TestReplyFound:
             "original_message_id": "msg-456",
             "body": "Thanks for the info!",
             "original_found": True,
+            "from_project": "nimbus-import",
         })
 
         assert wf.is_completed()
@@ -400,6 +409,8 @@ class TestReplyFound:
 
         assert wf.data.get("reply_prepared") is True
         assert wf.data.get("message_type") == "notification"
+        assert wf.data.get("parent_message_id") == "msg-456"
+        assert wf.data.get("thread_id") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -455,3 +466,175 @@ class TestDefaultIntent:
 
         # Should take the default (check_inbox) path
         assert "build_inbox_query" in names
+
+
+# ---------------------------------------------------------------------------
+# Test 13: Discover Recipients
+# ---------------------------------------------------------------------------
+
+class TestDiscoverRecipients:
+    """
+    intent="discover" → query_valid_recipients → format_recipients → end_recipients.
+
+    Expected path:
+      start → determine_intent → intent_gw (discover) →
+      query_valid_recipients → format_recipients → end_recipients
+    """
+
+    def test_discover_recipients(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "discover",
+            "recipients": [
+                {"project_name": "claude-family", "display_name": "Claude Family"},
+                {"project_name": "nimbus-import", "display_name": "Nimbus Import"},
+            ],
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "query_valid_recipients" in names
+        assert "format_recipients" in names
+        assert "end_recipients" in names
+        assert wf.data.get("recipients_listed") is True
+
+        # Should not hit other branches
+        assert "validate_send" not in names
+        assert "build_inbox_query" not in names
+        assert "determine_ack_action" not in names
+
+
+# ---------------------------------------------------------------------------
+# Test 14: Send with from_project Resolved
+# ---------------------------------------------------------------------------
+
+class TestSendWithFromProject:
+    """
+    intent="send", from_project set → validate resolves from_project → insert → end_sent.
+
+    Verifies that from_project_resolved is True when from_project is provided.
+    """
+
+    def test_send_with_from_project(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "send",
+            "message_type": "notification",
+            "body": "Status update from nimbus",
+            "to_project": "claude-family",
+            "from_project": "nimbus-import",
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "validate_send" in names
+        assert "insert_message" in names
+        assert "end_sent" in names
+        assert wf.data.get("from_project_resolved") is True
+        assert wf.data.get("from_project") == "nimbus-import"
+
+
+# ---------------------------------------------------------------------------
+# Test 15: Send with Invalid Recipient
+# ---------------------------------------------------------------------------
+
+class TestSendInvalidRecipient:
+    """
+    intent="send", recipient_valid=False → validate → send_valid_gw (False) → end_send_invalid.
+
+    When to_project doesn't match any workspace, the send is rejected.
+    """
+
+    def test_send_invalid_recipient(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "send",
+            "message_type": "notification",
+            "body": "Hello",
+            "to_project": "nonexistent-project",
+            "recipient_valid": False,  # Invalid recipient triggers default (invalid) path
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "validate_send" in names
+        assert "end_send_invalid" in names
+        assert "insert_message" not in names
+
+
+# ---------------------------------------------------------------------------
+# Test 16: Reply Sets Threading (parent_message_id, thread_id)
+# ---------------------------------------------------------------------------
+
+class TestReplyThreading:
+    """
+    intent="reply", original found → prepare_reply sets parent_message_id and thread_id.
+
+    Verifies the threading fields are populated on reply.
+    """
+
+    def test_reply_sets_threading(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "reply",
+            "original_message_id": "msg-789",
+            "body": "Got it, will do!",
+            "original_found": True,
+            "from_project": "claude-family",
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "prepare_reply" in names
+        assert "insert_message" in names
+        assert "end_sent" in names
+
+        # Threading fields must be set
+        assert wf.data.get("parent_message_id") == "msg-789"
+        assert wf.data.get("thread_id") == "msg-789"  # New thread started from original
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Reply Routes to from_project (Not from_session_id)
+# ---------------------------------------------------------------------------
+
+class TestReplyRoutesToFromProject:
+    """
+    intent="reply" → reply routes to original.from_project, not from_session_id.
+
+    This is the key fix: sessions are ephemeral, so replies must target projects.
+    """
+
+    def test_reply_routes_to_from_project(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "reply",
+            "original_message_id": "msg-abc",
+            "body": "Replying to your message",
+            "original_found": True,
+            # Simulate original message had from_project="nimbus-import"
+            "from_project": "nimbus-import",
+            "original_from_project": "nimbus-import",
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "fetch_original_message" in names
+        assert "prepare_reply" in names
+        assert "insert_message" in names
+        assert "end_sent" in names
+
+        # Reply should be prepared with project routing
+        assert wf.data.get("reply_prepared") is True
+        assert wf.data.get("message_type") == "notification"
+        assert wf.data.get("parent_message_id") == "msg-abc"

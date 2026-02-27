@@ -1228,6 +1228,65 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
         "type": "sql_command",
         "description": "DELETE from claude.knowledge for discarded entries",
     },
+    # messaging.bpmn elements → MCP tools (project-tools)
+    "validate_send": {
+        "type": "mcp_tool",
+        "tool": "send_message",
+        "description": "Validates params, resolves from_project, validates recipient against workspaces",
+    },
+    "insert_message": {
+        "type": "mcp_tool",
+        "tool": "send_message",
+        "description": "INSERT into claude.messages (from_project, parent_message_id, thread_id)",
+    },
+    "prepare_broadcast": {
+        "type": "mcp_tool",
+        "tool": "broadcast",
+        "description": "Sets to_project=None for all-instance delivery",
+    },
+    "build_inbox_query": {
+        "type": "mcp_tool",
+        "tool": "check_inbox",
+        "description": "Builds parameterized WHERE clause with from_project, threading fields",
+    },
+    "execute_inbox_query": {
+        "type": "mcp_tool",
+        "tool": "check_inbox",
+        "description": "SELECT from claude.messages with from_project, parent_message_id, thread_id",
+    },
+    "format_messages": {
+        "type": "mcp_tool",
+        "tool": "check_inbox",
+        "description": "Formats inbox results with ISO dates",
+    },
+    "fetch_original_message": {
+        "type": "mcp_tool",
+        "tool": "reply_to",
+        "description": "Fetches original message for reply (from_project, thread_id)",
+    },
+    "prepare_reply": {
+        "type": "mcp_tool",
+        "tool": "reply_to",
+        "description": "Routes reply to from_project, sets parent_message_id and thread_id",
+    },
+    "query_valid_recipients": {
+        "type": "mcp_tool",
+        "tool": "list_recipients",
+        "description": "Query workspaces+projects for valid messaging targets",
+    },
+    "format_recipients": {
+        "type": "mcp_tool",
+        "tool": "list_recipients",
+        "description": "Format recipient list with last_session timestamps",
+    },
+    "determine_intent": {
+        "type": "claude_behavior",
+        "description": "Claude selects messaging intent: send/broadcast/check_inbox/acknowledge/reply/discover",
+    },
+    "determine_ack_action": {
+        "type": "claude_behavior",
+        "description": "Claude selects acknowledge action: read/acknowledged/actioned/deferred",
+    },
 }
 
 

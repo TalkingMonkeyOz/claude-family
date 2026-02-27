@@ -10,13 +10,14 @@
 
     <!--
       Models the messaging lifecycle between Claude instances.
-      4 core operations: send_message, broadcast, check_inbox, acknowledge.
-      Also: reply_to, get_active_sessions, action_message, defer_message.
+      6 core operations: send_message, broadcast, check_inbox, acknowledge, reply, discover.
+      Also: get_active_sessions, action_message, defer_message.
 
       Table: claude.messages
+      Columns: from_project, parent_message_id, thread_id (added for sender identity + threading)
       Statuses: pending → read → acknowledged / actioned / deferred
 
-      Implementation: mcp-servers/project-tools/server_v2.py (after migration)
+      Implementation: mcp-servers/project-tools/server_v2.py
       Previous home: mcp-servers/orchestrator/server.py
     -->
 
@@ -35,7 +36,7 @@
       <bpmn:incoming>flow_start_to_intent</bpmn:incoming>
       <bpmn:outgoing>flow_intent_to_gw</bpmn:outgoing>
       <bpmn:documentation>Claude determines what messaging operation to perform.
-Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply"</bpmn:documentation>
+Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply" | "discover"</bpmn:documentation>
     </bpmn:userTask>
 
     <bpmn:exclusiveGateway id="intent_gw" name="What Intent?" default="flow_check_inbox">
@@ -45,6 +46,7 @@ Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply"</bp
       <bpmn:outgoing>flow_check_inbox</bpmn:outgoing>
       <bpmn:outgoing>flow_acknowledge</bpmn:outgoing>
       <bpmn:outgoing>flow_reply</bpmn:outgoing>
+      <bpmn:outgoing>flow_discover</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
     <!-- ================================================================== -->
@@ -56,8 +58,13 @@ Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply"</bp
       <bpmn:outgoing>flow_validate_to_send_gw</bpmn:outgoing>
       <bpmn:script>
 # Validate: message_type and body are required
-# Optional: subject, to_project, to_session_id, priority, from_session_id
+# Resolve from_project from cwd or session context
+# Validate to_project against claude.workspaces (fuzzy match + suggestions)
+# Optional: subject, to_project, to_session_id, priority, parent_message_id
 has_required = bool(message_type) and bool(body)
+_fp = locals().get('from_project', None)
+from_project_resolved = has_required and bool(_fp) if _fp else has_required
+recipient_valid = locals().get('recipient_valid', True)
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -74,7 +81,9 @@ has_required = bool(message_type) and bool(body)
       <bpmn:outgoing>flow_insert_to_end_sent</bpmn:outgoing>
       <bpmn:script>
 # INSERT INTO claude.messages
-#   (from_session_id, to_session_id, to_project, message_type, priority, subject, body, metadata)
+#   (from_session_id, from_project, to_session_id, to_project,
+#    message_type, priority, subject, body, metadata,
+#    parent_message_id, thread_id)
 # RETURNING message_id, created_at
 message_sent = True
       </bpmn:script>
@@ -129,8 +138,9 @@ query_built = True
       <bpmn:outgoing>flow_execute_to_has_messages</bpmn:outgoing>
       <bpmn:script>
 # Execute parameterized query against claude.messages
-# Return: [{message_id, from_session_id, to_project, message_type,
-#           priority, subject, body, metadata, status, created_at}]
+# Return: [{message_id, from_session_id, from_project, to_project, message_type,
+#           priority, subject, body, metadata, status, created_at,
+#           parent_message_id, thread_id}]
 messages = messages if messages is not None else []
 message_count = len(messages) if isinstance(messages, list) else 0
 has_messages = message_count > 0
@@ -261,8 +271,8 @@ new_status = "deferred"
       <bpmn:incoming>flow_reply</bpmn:incoming>
       <bpmn:outgoing>flow_fetch_orig_to_found_gw</bpmn:outgoing>
       <bpmn:script>
-# SELECT from_session_id, to_project, subject FROM claude.messages
-# WHERE message_id = original_message_id
+# SELECT from_session_id, from_project, to_project, subject, thread_id
+# FROM claude.messages WHERE message_id = original_message_id
 original_found = original_found if original_found is not None else True
       </bpmn:script>
     </bpmn:scriptTask>
@@ -277,17 +287,54 @@ original_found = original_found if original_found is not None else True
       <bpmn:incoming>flow_original_found</bpmn:incoming>
       <bpmn:outgoing>flow_reply_to_insert</bpmn:outgoing>
       <bpmn:script>
-# Set message_type = "notification"
-# Set to_session_id = original.from_session_id (reply to sender)
+# Route to from_project (NOT from_session_id — sessions are ephemeral)
+# Set to_project = original.from_project (fallback: session lookup)
+# Set parent_message_id = original_message_id
+# Set thread_id = original.thread_id or original_message_id (start new thread)
 # Set subject = "Re: " + original.subject
-# Set metadata = {"reply_to": original_message_id}
 message_type = "notification"
+_omid = locals().get('original_message_id', None)
+parent_message_id = _omid if _omid else None
+_tid = locals().get('thread_id', None)
+thread_id = _tid if _tid else parent_message_id
 reply_prepared = True
       </bpmn:script>
     </bpmn:scriptTask>
 
     <bpmn:endEvent id="end_reply_not_found" name="Original Not Found">
       <bpmn:incoming>flow_original_not_found</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- BRANCH F: DISCOVER RECIPIENTS                                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="query_valid_recipients" name="[DB] Query Valid Recipients" scriptFormat="python">
+      <bpmn:incoming>flow_discover</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_format_recipients</bpmn:outgoing>
+      <bpmn:script>
+# SELECT w.project_name, p.display_name, p.client_domain,
+#        (SELECT MAX(s.created_at) FROM claude.sessions s WHERE s.project_name = w.project_name) as last_session
+# FROM claude.workspaces w
+# JOIN claude.projects p ON p.project_name = w.project_name
+# WHERE w.active = true
+# ORDER BY last_session DESC NULLS LAST
+recipients = recipients if recipients is not None else []
+recipients_found = len(recipients) if isinstance(recipients, list) else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="format_recipients" name="[MCP] Format Recipients List" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_format_recipients</bpmn:incoming>
+      <bpmn:outgoing>flow_format_to_end_recipients</bpmn:outgoing>
+      <bpmn:script>
+# Format as {count: N, recipients: [{project_name, display_name, client_domain, last_session}]}
+recipients_listed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_recipients" name="Recipients Listed">
+      <bpmn:incoming>flow_format_to_end_recipients</bpmn:incoming>
     </bpmn:endEvent>
 
     <!-- ================================================================== -->
@@ -312,11 +359,14 @@ reply_prepared = True
     <bpmn:sequenceFlow id="flow_reply" sourceRef="intent_gw" targetRef="fetch_original_message">
       <bpmn:conditionExpression>intent == "reply"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_discover" sourceRef="intent_gw" targetRef="query_valid_recipients">
+      <bpmn:conditionExpression>intent == "discover"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
 
     <!-- Branch A: Send -->
     <bpmn:sequenceFlow id="flow_validate_to_send_gw" sourceRef="validate_send" targetRef="send_valid_gw"/>
     <bpmn:sequenceFlow id="flow_send_valid" sourceRef="send_valid_gw" targetRef="insert_message">
-      <bpmn:conditionExpression>has_required == True</bpmn:conditionExpression>
+      <bpmn:conditionExpression>has_required == True and recipient_valid == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_send_invalid" sourceRef="send_valid_gw" targetRef="end_send_invalid"/>
     <bpmn:sequenceFlow id="flow_insert_to_end_sent" sourceRef="insert_message" targetRef="end_sent"/>
@@ -359,6 +409,10 @@ reply_prepared = True
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_original_not_found" sourceRef="original_found_gw" targetRef="end_reply_not_found"/>
     <bpmn:sequenceFlow id="flow_reply_to_insert" sourceRef="prepare_reply" targetRef="insert_message"/>
+
+    <!-- Branch F: Discover -->
+    <bpmn:sequenceFlow id="flow_query_to_format_recipients" sourceRef="query_valid_recipients" targetRef="format_recipients"/>
+    <bpmn:sequenceFlow id="flow_format_to_end_recipients" sourceRef="format_recipients" targetRef="end_recipients"/>
 
   </bpmn:process>
 

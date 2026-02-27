@@ -40,6 +40,22 @@ Invoke this skill when:
 | `/broadcast` | Send to all active instances | All |
 | `/team-status` | View active Claude instances | - |
 
+### Recipient Discovery
+
+**Before sending**, discover valid recipients:
+
+```python
+recipients = mcp__project-tools__list_recipients()
+# Returns: {count, recipients: [{project_name, display_name, client_domain, last_session}]}
+```
+
+### Threading
+
+Messages now support threading via `parent_message_id` and `thread_id`:
+- **reply_to()** automatically sets both fields
+- **send_message()** accepts optional `parent_message_id` for explicit threading
+- Thread ID is inherited from parent, or the parent message becomes the thread root
+
 ---
 
 ## Message Types
@@ -190,11 +206,13 @@ messages = mcp__project-tools__check_inbox(
 )
 
 for msg in messages['messages']:
-    print(f"From: {msg['from_session_id']}")
+    print(f"From: {msg['from_project']}")  # Project name (not ephemeral session ID)
     print(f"Type: {msg['message_type']}")
     print(f"Subject: {msg['subject']}")
     print(f"Body: {msg['body']}")
     print(f"Priority: {msg['priority']}")
+    if msg.get('thread_id'):
+        print(f"Thread: {msg['thread_id']}")
 ```
 
 **CRITICAL**: Always pass `project_name` to see project-targeted messages!
@@ -230,6 +248,7 @@ mcp__project-tools__send_message(
     message_type="notification",
     subject="Migration completed",
     body="User data migration from legacy system complete. 1,234 users imported.",
+    from_project="claude-family",     # Identifies sender (auto-detected from session if empty)
     priority="normal"
 )
 ```
@@ -380,11 +399,13 @@ Is this message actionable?
 mcp__project-tools__reply_to(
     original_message_id="message-uuid",
     body="I've reviewed the auth changes. Looks good! Just one suggestion: add rate limiting to login endpoint.",
-    from_session_id="your-session-id"
+    from_session_id="your-session-id",
+    from_project="claude-family"       # Identifies sender
 )
 ```
 
-**Creates**: New message with `in_reply_to` link to original
+**Creates**: New message with `parent_message_id` and `thread_id` linking to original thread.
+**Routes to**: The original sender's `from_project` (not their ephemeral session ID).
 
 ---
 
@@ -576,9 +597,21 @@ messages = mcp__project-tools__check_inbox(project_name="claude-family")
 
 **Solution**: Include messaging instruction in agent task
 
+### 5. Unknown Recipient
+
+**Problem**: `send_message(to_project="wrong-name")` returns error
+
+**Solution**: Use `list_recipients()` first to discover valid targets. Send validates against workspaces and returns suggestions on mismatch.
+
+### 6. Reply Goes to Dead Session
+
+**Problem**: Old `reply_to()` routed to `from_session_id` which is ephemeral
+
+**Solution**: Fixed — `reply_to()` now routes to `from_project`. Falls back to session lookup for legacy messages.
+
 ---
 
-**Version**: 3.0 (Migrated from orchestrator to project-tools MCP)
+**Version**: 4.0 (Added list_recipients, from_project, threading, recipient validation)
 **Created**: 2025-12-26
-**Updated**: 2026-02-24
+**Updated**: 2026-02-28
 **Location**: .claude/skills/messaging/skill.md

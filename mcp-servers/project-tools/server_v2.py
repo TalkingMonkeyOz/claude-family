@@ -5121,6 +5121,47 @@ def get_active_protocol(
 
 
 @mcp.tool()
+def list_recipients() -> dict:
+    """List all valid messaging recipients (projects with active workspaces).
+
+    Use when: Discovering who you can send messages to. Shows project names,
+    display names, client domains, and when each project was last active.
+    Returns: {count, recipients: [{project_name, description, client_domain, last_session}]}.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                w.project_name,
+                COALESCE(p.description, w.project_name) as description,
+                p.client_domain,
+                (SELECT MAX(s.created_at)
+                 FROM claude.sessions s
+                 WHERE s.project_name = w.project_name) as last_session
+            FROM claude.workspaces w
+            LEFT JOIN claude.projects p ON p.project_name = w.project_name
+            WHERE w.is_active = true
+            ORDER BY last_session DESC NULLS LAST
+        """)
+        rows = cur.fetchall()
+        cur.close()
+
+        recipients = []
+        for row in rows:
+            row_dict = dict(row) if not isinstance(row, dict) else row
+            if row_dict.get('last_session'):
+                row_dict['last_session'] = row_dict['last_session'].isoformat()
+            recipients.append(row_dict)
+
+        return {"count": len(recipients), "recipients": recipients}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
 def check_inbox(
     project_name: str = "",
     session_id: str = "",
@@ -5131,8 +5172,8 @@ def check_inbox(
 
     Use when: Checking for messages from other Claude instances at session start
     or periodically during work.
-    Returns: {count, messages: [{message_id, from_session_id, to_project, message_type,
-              priority, subject, body, metadata, status, created_at}]}.
+    Returns: {count, messages: [{message_id, from_session_id, from_project, to_project, message_type,
+              priority, subject, body, metadata, status, created_at, parent_message_id, thread_id}]}.
 
     Args:
         project_name: Your project name to filter messages (IMPORTANT: required to see project-targeted messages).
@@ -5177,6 +5218,7 @@ def check_inbox(
             SELECT
                 message_id::text,
                 from_session_id::text,
+                from_project,
                 to_project,
                 message_type,
                 priority,
@@ -5184,7 +5226,9 @@ def check_inbox(
                 body,
                 metadata,
                 status,
-                created_at
+                created_at,
+                parent_message_id::text,
+                thread_id::text
             FROM claude.messages
             WHERE {' AND '.join(conditions)}
             ORDER BY
@@ -5224,32 +5268,93 @@ def send_message(
     to_session_id: str = "",
     priority: Literal["urgent", "normal", "low"] = "normal",
     from_session_id: str = "",
+    from_project: str = "",
+    parent_message_id: str = "",
 ) -> dict:
     """Send a message to another Claude instance or project.
 
     Use when: Communicating with other Claude instances, requesting tasks,
     sending status updates, or handing off work.
-    Returns: {success, message_id, created_at}.
+    Returns: {success, message_id, created_at, from_project}.
 
     Args:
         message_type: Type of message.
         body: Message content.
         subject: Message subject/title.
-        to_project: Target project name.
+        to_project: Target project name (validated against workspaces).
         to_session_id: Target session ID (for direct message).
         priority: Message priority (default: normal).
         from_session_id: Your session ID.
+        from_project: Sender project name (auto-detected from session if empty).
+        parent_message_id: ID of parent message for threading (optional).
     """
     conn = get_db_connection()
     try:
         cur = conn.cursor()
+
+        # Auto-detect from_project from session if not provided
+        resolved_from_project = from_project or None
+        if not resolved_from_project and from_session_id:
+            cur.execute(
+                "SELECT project_name FROM claude.sessions WHERE session_id = %s",
+                (from_session_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                row_dict = dict(row) if not isinstance(row, dict) else row
+                resolved_from_project = row_dict.get('project_name')
+
+        # Validate to_project against workspaces if specified
+        if to_project:
+            cur.execute(
+                "SELECT project_name FROM claude.workspaces WHERE project_name = %s",
+                (to_project,),
+            )
+            if not cur.fetchone():
+                # Fuzzy match: suggest similar project names
+                cur.execute(
+                    "SELECT project_name FROM claude.workspaces ORDER BY project_name",
+                )
+                all_projects = [dict(r)['project_name'] if not isinstance(r, dict) else r['project_name'] for r in cur.fetchall()]
+                suggestions = [p for p in all_projects if to_project.lower() in p.lower() or p.lower() in to_project.lower()]
+                if not suggestions:
+                    # Broader fuzzy: any partial word match
+                    words = to_project.lower().replace('-', ' ').split()
+                    suggestions = [p for p in all_projects if any(w in p.lower() for w in words)][:5]
+                cur.close()
+                conn.close()
+                return {
+                    "success": False,
+                    "error": f"Unknown recipient project: '{to_project}'",
+                    "suggestions": suggestions[:5],
+                    "hint": "Use list_recipients() to see valid targets",
+                }
+
+        # Resolve threading: inherit thread_id from parent, or start new thread
+        resolved_thread_id = None
+        resolved_parent_id = parent_message_id or None
+        if resolved_parent_id:
+            cur.execute(
+                "SELECT thread_id::text FROM claude.messages WHERE message_id = %s",
+                (resolved_parent_id,),
+            )
+            parent_row = cur.fetchone()
+            if parent_row:
+                parent_dict = dict(parent_row) if not isinstance(parent_row, dict) else parent_row
+                resolved_thread_id = parent_dict.get('thread_id') or resolved_parent_id
+            else:
+                resolved_thread_id = resolved_parent_id
+
         cur.execute("""
             INSERT INTO claude.messages
-            (from_session_id, to_session_id, to_project, message_type, priority, subject, body, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            (from_session_id, from_project, to_session_id, to_project,
+             message_type, priority, subject, body, metadata,
+             parent_message_id, thread_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING message_id::text, created_at
         """, (
             from_session_id or None,
+            resolved_from_project,
             to_session_id or None,
             to_project or None,
             message_type,
@@ -5257,6 +5362,8 @@ def send_message(
             subject or None,
             body,
             json.dumps({}),
+            resolved_parent_id,
+            resolved_thread_id,
         ))
         result = cur.fetchone()
         cur.close()
@@ -5267,11 +5374,13 @@ def send_message(
             "success": True,
             "message_id": result_dict['message_id'],
             "created_at": result_dict['created_at'].isoformat(),
+            "from_project": resolved_from_project,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
     finally:
-        conn.close()
+        if not conn.closed:
+            conn.close()
 
 
 @mcp.tool()
@@ -5279,18 +5388,20 @@ def broadcast(
     body: str,
     subject: str = "",
     from_session_id: str = "",
+    from_project: str = "",
     priority: Literal["urgent", "normal", "low"] = "normal",
 ) -> dict:
     """Send a message to ALL active Claude instances.
 
     Use when: Announcing something to all Claude instances (maintenance,
     important updates, team-wide notifications).
-    Returns: {success, message_id, created_at}.
+    Returns: {success, message_id, created_at, from_project}.
 
     Args:
         body: Message content.
         subject: Message subject.
         from_session_id: Your session ID.
+        from_project: Sender project name.
         priority: Message priority (default: normal).
     """
     return send_message(
@@ -5299,6 +5410,7 @@ def broadcast(
         subject=subject,
         priority=priority,
         from_session_id=from_session_id,
+        from_project=from_project,
         to_project="",
         to_session_id="",
     )
@@ -5416,23 +5528,26 @@ def reply_to(
     original_message_id: str,
     body: str,
     from_session_id: str = "",
+    from_project: str = "",
 ) -> dict:
-    """Reply to a specific message.
+    """Reply to a specific message. Routes to the sender's PROJECT (not session).
 
     Use when: Responding to a message from another Claude instance.
-    Automatically addresses the reply to the original sender.
-    Returns: {success, message_id, created_at}.
+    Automatically addresses the reply to the original sender's project
+    and sets threading (parent_message_id, thread_id).
+    Returns: {success, message_id, created_at, from_project}.
 
     Args:
         original_message_id: ID of message to reply to.
         body: Reply content.
         from_session_id: Your session ID.
+        from_project: Sender project name.
     """
     conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT from_session_id::text, to_project, subject
+            SELECT from_session_id::text, from_project, to_project, subject, thread_id::text
             FROM claude.messages
             WHERE message_id = %s
         """, (original_message_id,))
@@ -5446,13 +5561,33 @@ def reply_to(
 
     original_dict = dict(original) if not isinstance(original, dict) else original
 
+    # Route to from_project (preferred) or fall back to session lookup
+    reply_to_project = original_dict.get('from_project') or ""
+    if not reply_to_project and original_dict.get('from_session_id'):
+        # Legacy fallback: resolve project from session
+        conn2 = get_db_connection()
+        try:
+            cur2 = conn2.cursor()
+            cur2.execute(
+                "SELECT project_name FROM claude.sessions WHERE session_id = %s",
+                (original_dict['from_session_id'],),
+            )
+            row = cur2.fetchone()
+            if row:
+                row_dict = dict(row) if not isinstance(row, dict) else row
+                reply_to_project = row_dict.get('project_name') or ""
+            cur2.close()
+        finally:
+            conn2.close()
+
     return send_message(
         message_type="notification",
         body=body,
         subject=f"Re: {original_dict['subject']}" if original_dict.get('subject') else "Reply",
-        to_session_id=original_dict.get('from_session_id') or "",
-        to_project=original_dict.get('to_project') or "",
+        to_project=reply_to_project,
         from_session_id=from_session_id,
+        from_project=from_project,
+        parent_message_id=original_message_id,
     )
 
 
@@ -5514,12 +5649,15 @@ def get_unactioned_messages(
             SELECT
                 message_id::text,
                 from_session_id::text,
+                from_project,
                 message_type,
                 priority,
                 subject,
                 body,
                 status,
-                created_at
+                created_at,
+                parent_message_id::text,
+                thread_id::text
             FROM claude.messages
             WHERE to_project = %s
               AND message_type IN ('task_request', 'question', 'handoff')
@@ -5581,12 +5719,8 @@ def get_message_history(
                 direction_conditions.append("to_project = %s")
                 params.append(project_name)
             if include_sent:
-                # Messages sent by sessions working on this project
-                direction_conditions.append("""
-                    from_session_id IN (
-                        SELECT session_id FROM claude.sessions WHERE project_name = %s
-                    )
-                """)
+                # Use from_project directly (no fragile session subquery)
+                direction_conditions.append("from_project = %s")
                 params.append(project_name)
             if direction_conditions:
                 conditions.append(f"({' OR '.join(direction_conditions)})")
@@ -5597,8 +5731,10 @@ def get_message_history(
 
         query = f"""
             SELECT
-                message_id::text, from_session_id::text, to_session_id::text,
-                to_project, message_type, priority, subject, body, status, created_at
+                message_id::text, from_session_id::text, from_project,
+                to_session_id::text, to_project, message_type, priority,
+                subject, body, status, created_at,
+                parent_message_id::text, thread_id::text
             FROM claude.messages
             WHERE {' AND '.join(conditions)}
             ORDER BY created_at DESC
