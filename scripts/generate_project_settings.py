@@ -82,8 +82,15 @@ def deep_merge(base: Dict, override: Dict) -> Dict:
             # Recursively merge dictionaries
             result[key] = deep_merge(result[key], value)
         elif key in result and isinstance(result[key], list) and isinstance(value, list):
-            # For arrays, append (don't replace)
-            result[key] = result[key] + value
+            # For arrays, append new items only (deduplicate by JSON equality)
+            existing_json = {json.dumps(item, sort_keys=True) for item in result[key] if isinstance(item, dict)}
+            for item in value:
+                item_json = json.dumps(item, sort_keys=True) if isinstance(item, dict) else None
+                if item_json and item_json in existing_json:
+                    continue  # Skip duplicate
+                result[key].append(item)
+                if item_json:
+                    existing_json.add(item_json)
         else:
             # Override
             result[key] = value

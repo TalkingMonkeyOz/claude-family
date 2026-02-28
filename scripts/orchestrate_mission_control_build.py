@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Mission Control Build Orchestrator
+Mission Control Build Plan
 
-Uses orchestrator MCP to spawn specialized agents to build Mission Control in parallel.
+Documents the build plan for Mission Control using native Task tool agent delegation.
 
 Usage:
     python scripts/orchestrate_mission_control_build.py
 
-Requires:
-    - orchestrator MCP server running
-    - File access to C:/Projects/claude-mission-control
+Note: Orchestrator MCP was retired 2026-02-24. Agent spawning now uses the
+native Task tool in Claude Code sessions.
 
 Author: claude-code-unified
 Created: 2025-11-15
@@ -220,21 +219,20 @@ def print_header(text: str):
 
 def build_with_orchestrator():
     """
-    Execute build using orchestrator MCP to spawn agents.
+    Print the build plan for Mission Control.
 
     Note: This script documents the PLAN but cannot actually spawn agents
-    because we're running in a session without MCP access in the script.
+    because we're running outside a Claude Code session.
 
     To execute for real:
     1. Copy this task spec to Mission Control implementation plan
-    2. User manually spawns agents via orchestrator MCP
-    3. OR build a proper MCP client script
+    2. Spawn agents via the native Task tool in a Claude Code session
     """
 
-    print_header("Mission Control Build Plan - Orchestrator Strategy")
+    print_header("Mission Control Build Plan - Native Task Tool Strategy")
 
-    print("This script documents the build plan using orchestrator agents.")
-    print("To execute, spawn these agents manually:\n")
+    print("This script documents the build plan. To execute, spawn these agents")
+    print("using the native Task tool in a Claude Code session:\n")
 
     for i, task in enumerate(TASKS, 1):
         print(f"{i}. Agent: {task['agent']}")
@@ -244,12 +242,11 @@ def build_with_orchestrator():
         print(f"   ID: {task['id']}")
         print()
 
-    print("\nTo spawn an agent:")
-    print("  mcp__orchestrator__spawn_agent(")
-    print("      agent_type='coder-haiku',")
-    print("      task='<task_spec from TASKS[i]>',")
-    print("      workspace_dir='C:/Projects/claude-mission-control',")
-    print("      timeout=300")
+    print("\nTo spawn an agent (native Task tool in Claude Code):")
+    print("  Task(")
+    print("      subagent_type='coder-haiku',")
+    print("      description='<task name>',")
+    print("      prompt='<task_spec from TASKS[i]>'")
     print("  )")
 
     print("\nTask specifications saved to:")

@@ -38,12 +38,13 @@ Extract from command argument or prompt user if missing.
 
 ### 2. Research Codebase
 
-Spawn analyst-sonnet for comprehensive research:
+Spawn analyst-sonnet for comprehensive research using the native Task tool:
 
 ```python
-mcp__orchestrator__spawn_agent(
-    agent_type="analyst-sonnet",
-    task=f"""Research codebase for {feature_name}:
+Task(
+    subagent_type="analyst-sonnet",
+    description=f"Research codebase for {feature_name}",
+    prompt=f"""Research codebase for {feature_name}:
 
 1. Find existing patterns (similar features, architecture, testing)
 2. Identify key files and structure (entry points, components, state)
@@ -51,12 +52,11 @@ mcp__orchestrator__spawn_agent(
 4. Find code examples to follow
 5. Identify technology stack and conventions
 
-Provide comprehensive analysis with specific file paths and examples.""",
-    workspace_dir="C:/Projects/{project_name}"
+Provide comprehensive analysis with specific file paths and examples."""
 )
 ```
 
-**Why analyst-sonnet?** Database/vault access, cost-effective, thorough analysis.
+**Why analyst-sonnet?** Cost-effective, thorough analysis, good at research tasks.
 
 **Save the output** - used to populate plan sections.
 

@@ -39,9 +39,9 @@ If no argument provided, ask the user: "What feature would you like to plan? (e.
 
 ## Step 2: Research Codebase
 
-Use the **Task tool with Explore agent** OR **orchestrator's analyst-sonnet** to research the codebase:
+Use the **Task tool** to research the codebase. Choose the agent based on research depth needed:
 
-**Option A - Task Tool (Built-in, no MCP needed):**
+**Option A - Explore agent (fast, built-in):**
 ```python
 Task(
     subagent_type="Explore",
@@ -58,12 +58,12 @@ Thoroughness: "very thorough"
 )
 ```
 
-**Option B - Orchestrator MCP (for DB/vault access):**
+**Option B - analyst-sonnet (for deeper analysis):**
 ```python
-mcp__orchestrator__spawn_agent(
-    agent_type="analyst-sonnet",
-    task="Research codebase patterns for {feature-name}. Find existing patterns, architecture, dependencies, and relevant code examples.",
-    workspace_dir="C:/Projects/{project-name}"
+Task(
+    subagent_type="analyst-sonnet",
+    description="Research codebase patterns for {feature-name}",
+    prompt="Research codebase patterns for {feature-name}. Find existing patterns, architecture, dependencies, and relevant code examples."
 )
 ```
 

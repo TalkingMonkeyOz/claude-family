@@ -14,7 +14,7 @@ skill-inheritance:
 # Agentic Orchestration Skill
 
 **Status**: Active
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-02-28
 
 ---
 
@@ -24,10 +24,9 @@ Spawn and coordinate Claude agents using two complementary systems:
 
 | System | Mechanism | Best For |
 |--------|-----------|----------|
-| **Native Agents** (preferred) | `Task` tool + `.claude/agents/*.md` | In-session delegation, fast spawn, hooks work |
-| **Orchestrator MCP** (advanced) | `mcp__orchestrator__spawn_agent` | Print-mode isolation, DB tracking, cross-session |
+| **Native Agents** | `Task` tool + `.claude/agents/*.md` | In-session delegation, fast spawn, hooks work |
 
-**Default**: Use native agents via Task tool. Fall back to orchestrator for process isolation or DB tracking.
+**Default**: Use the native Task tool for all agent delegation.
 
 ---
 
@@ -103,46 +102,6 @@ Task(
 
 ---
 
-## Orchestrator MCP (Advanced)
-
-Use for: process isolation, DB-tracked sessions, cross-project messaging, print-mode agents.
-
-### Synchronous Spawn
-
-```python
-mcp__orchestrator__spawn_agent(
-    agent_type="reviewer-sonnet",
-    task="Review all staged changes for code quality and security",
-    workspace_dir="C:/Projects/myproject"
-)
-```
-
-### Asynchronous Spawn
-
-```python
-mcp__orchestrator__spawn_agent_async(
-    agent_type="analyst-sonnet",
-    task="Research and document API patterns",
-    workspace_dir="C:/Projects/myproject",
-    callback_project="claude-family"
-)
-# Check later:
-mcp__orchestrator__check_async_task(task_id=task_id)
-```
-
-### When to Use Orchestrator Over Native
-
-| Scenario | Use |
-|----------|-----|
-| Quick subtask in same session | Native Task |
-| Need DB tracking of agent work | Orchestrator |
-| Agent needs full MCP access | Orchestrator (print-mode) |
-| Cross-project agent work | Orchestrator |
-| Resume agent conversation | Native Task (resume param) |
-| Parallel independent queries | Native Task (faster spawn) |
-
----
-
 ## Agent Selection Guide
 
 ```
@@ -198,7 +157,7 @@ Task(subagent_type="tester-haiku", prompt="Add tests")
 ## Monitoring
 
 ```sql
--- Agent success rates (orchestrator-spawned only)
+-- Agent success rates
 SELECT agent_type, COUNT(*) as spawns,
     ROUND(AVG(CASE WHEN success THEN 100 ELSE 0 END), 1) as success_pct
 FROM claude.agent_sessions
@@ -211,13 +170,13 @@ GROUP BY agent_type ORDER BY spawns DESC;
 ## Key Gotchas
 
 1. **Wrong agent for task**: Using architect-opus ($0.83) for simple refactoring. Match agent to complexity.
-2. **Native agents don't have orchestrator MCP**: They use built-in tools only. Use orchestrator spawn for agents needing inter-agent messaging.
-3. **Hooks disabled in orchestrator agents**: Print-mode agents have `disableAllHooks: true`. No RAG, no auto-logging.
+2. **Spawned agents have hooks disabled**: Native Task agents have `disableAllHooks: true`. No RAG, no auto-logging in sub-agents.
+3. **Inter-agent messaging**: Use `mcp__project-tools__send_message`, `check_inbox`, `broadcast`, `acknowledge`, `reply_to` for Claude-to-Claude communication.
 4. **Agent definitions are DB-driven**: Edit `claude.agent_definitions` table, run `generate_agent_files.py --all` to deploy.
 
 ---
 
-**Version**: 2.0 (Rewritten for dual native+orchestrator approach)
+**Version**: 2.1 (Removed retired orchestrator MCP references)
 **Created**: 2025-12-26
-**Updated**: 2026-02-08
+**Updated**: 2026-02-28
 **Location**: .claude/skills/agentic-orchestration/skill.md
