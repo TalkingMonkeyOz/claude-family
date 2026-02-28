@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_cognitive_memory_consolidation"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="cognitive_memory_consolidation" name="Cognitive Memory: Tier Consolidation (Sleep Cycle)" isExecutable="true">
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Consolidation Trigger">
+      <bpmn:outgoing>to_trigger_type</bpmn:outgoing>
+      <!-- Required data: project_id (mandatory), trigger (session_end/periodic/manual)
+           All promotion, decay, and archive ops scoped to project_id -->
+    </bpmn:startEvent>
+
+    <bpmn:exclusiveGateway id="trigger_gw" name="Trigger Type?" default="flow_manual">
+      <bpmn:incoming>to_trigger_type</bpmn:incoming>
+      <bpmn:outgoing>flow_session_end</bpmn:outgoing>
+      <bpmn:outgoing>flow_periodic</bpmn:outgoing>
+      <bpmn:outgoing>flow_manual</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_trigger_type" sourceRef="start" targetRef="trigger_gw" />
+
+    <!-- Session end: promote short → mid -->
+    <bpmn:sequenceFlow id="flow_session_end" sourceRef="trigger_gw" targetRef="collect_short">
+      <bpmn:conditionExpression>trigger == "session_end"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <!-- Periodic: promote mid → long + decay -->
+    <bpmn:sequenceFlow id="flow_periodic" sourceRef="trigger_gw" targetRef="scan_mid">
+      <bpmn:conditionExpression>trigger == "periodic"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <!-- Manual: full cycle -->
+    <bpmn:sequenceFlow id="flow_manual" sourceRef="trigger_gw" targetRef="collect_short" />
+
+    <!-- ============ PHASE 1: SHORT → MID ============ -->
+    <bpmn:scriptTask id="collect_short" name="[KMS] Collect Short-Term Session Facts">
+      <bpmn:incoming>flow_session_end</bpmn:incoming>
+      <bpmn:incoming>flow_manual</bpmn:incoming>
+      <bpmn:outgoing>to_evaluate_short</bpmn:outgoing>
+      <bpmn:script>
+# Fetch session_facts from current/ending session WHERE project = project_id
+# Group by fact_type for batch evaluation
+short_facts = locals().get('short_facts', [])
+promotion_candidates = locals().get('promotion_candidates', [])
+expire_candidates = locals().get('expire_candidates', [])
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="evaluate_short" name="[KMS] Evaluate Short-Term for Promotion">
+      <bpmn:incoming>to_evaluate_short</bpmn:incoming>
+      <bpmn:outgoing>to_promote_short_gw</bpmn:outgoing>
+      <bpmn:script>
+# Promotion criteria (ANY of):
+# 1. Accessed >= 2 times during session
+# 2. fact_type in (decision, pattern, reference)
+# 3. Explicitly marked as important by user/Claude
+# 4. Content matches active feature/task context
+# Expire criteria:
+# - Single-use scratch notes
+# - Credentials (stay in short-term, re-captured next session)
+# - Superseded facts (newer version exists)
+promotion_candidates = locals().get('promotion_candidates', [])
+expire_candidates = locals().get('expire_candidates', [])
+has_promotions = locals().get('has_promotions', len(promotion_candidates) > 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_evaluate_short" sourceRef="collect_short" targetRef="evaluate_short" />
+
+    <bpmn:exclusiveGateway id="promote_short_gw" name="Promotions Found?" default="flow_skip_promote_short">
+      <bpmn:incoming>to_promote_short_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_promote_short</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_promote_short</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_promote_short_gw" sourceRef="evaluate_short" targetRef="promote_short_gw" />
+
+    <bpmn:scriptTask id="promote_to_mid" name="[DB] Promote to Mid-Term (generate embeddings)">
+      <bpmn:incoming>flow_do_promote_short</bpmn:incoming>
+      <bpmn:outgoing>to_check_manual_continues</bpmn:outgoing>
+      <bpmn:script>
+# For each promotion candidate:
+# 1. Generate Voyage AI embedding
+# 2. INSERT into claude.knowledge with tier='mid'
+# 3. Set initial confidence (60-70 range)
+# 4. Link to source session for provenance
+# 5. Run dedup check (may merge with existing mid-term)
+promoted_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_do_promote_short" sourceRef="promote_short_gw" targetRef="promote_to_mid">
+      <bpmn:conditionExpression>has_promotions == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_skip_promote_short" sourceRef="promote_short_gw" targetRef="check_continues" />
+
+    <!-- Check if we should continue to Phase 2 (manual trigger does both phases) -->
+    <bpmn:exclusiveGateway id="check_continues" name="Continue to Mid→Long?" default="flow_stop_after_short">
+      <bpmn:incoming>to_check_manual_continues</bpmn:incoming>
+      <bpmn:incoming>flow_skip_promote_short</bpmn:incoming>
+      <bpmn:outgoing>flow_continue_to_mid_eval</bpmn:outgoing>
+      <bpmn:outgoing>flow_stop_after_short</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_check_manual_continues" sourceRef="promote_to_mid" targetRef="check_continues" />
+
+    <bpmn:sequenceFlow id="flow_continue_to_mid_eval" sourceRef="check_continues" targetRef="scan_mid">
+      <bpmn:conditionExpression>trigger in ("periodic", "manual")</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_stop_after_short" sourceRef="check_continues" targetRef="end_merge" />
+
+    <!-- ============ PHASE 2: MID → LONG ============ -->
+    <bpmn:scriptTask id="scan_mid" name="[KMS] Scan Mid-Term Memories (age > 7 days)">
+      <bpmn:incoming>flow_continue_to_mid_eval</bpmn:incoming>
+      <bpmn:incoming>flow_periodic</bpmn:incoming>
+      <bpmn:outgoing>to_evaluate_mid</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.knowledge WHERE tier='mid' AND project_id = project_id
+#   AND created_at &lt; NOW() - 7 days
+# Also include: mid-term memories with high access_count regardless of age
+mid_memories = locals().get('mid_memories', [])
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="evaluate_mid" name="[KMS] Evaluate Mid-Term for Promotion or Decay">
+      <bpmn:incoming>to_evaluate_mid</bpmn:incoming>
+      <bpmn:outgoing>to_promote_mid_gw</bpmn:outgoing>
+      <bpmn:script>
+# Promotion to long-term criteria (ALL of):
+# 1. Applied successfully >= 3 times (mark_knowledge_applied feedback)
+# 2. Confidence >= 80
+# 3. Accessed in multiple sessions (cross-session validation)
+# 4. Not contradicted by newer knowledge
+# Decay criteria:
+# - Not accessed in 14+ days
+# - Confidence below 50
+# - Single-session-only usage
+promote_to_long = locals().get('promote_to_long', [])
+decay_list = locals().get('decay_list', [])
+keep_mid = locals().get('keep_mid', [])
+has_long_promotions = locals().get('has_long_promotions', len(promote_to_long) > 0)
+has_decays = locals().get('has_decays', len(decay_list) > 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_evaluate_mid" sourceRef="scan_mid" targetRef="evaluate_mid" />
+
+    <bpmn:exclusiveGateway id="promote_mid_gw" name="Long-Term Promotions?" default="flow_skip_promote_long">
+      <bpmn:incoming>to_promote_mid_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_do_promote_long</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_promote_long</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_promote_mid_gw" sourceRef="evaluate_mid" targetRef="promote_mid_gw" />
+
+    <bpmn:scriptTask id="promote_to_long" name="[DB] Promote to Long-Term (high confidence)">
+      <bpmn:incoming>flow_do_promote_long</bpmn:incoming>
+      <bpmn:outgoing>to_decay_phase</bpmn:outgoing>
+      <bpmn:script>
+# Update tier to 'long', boost confidence to 85+
+# Create 'supersedes' relation if replacing older version
+# Consider vault sync (long-term → markdown doc for human review?)
+promoted_long_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_do_promote_long" sourceRef="promote_mid_gw" targetRef="promote_to_long">
+      <bpmn:conditionExpression>has_long_promotions == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_promote_long" sourceRef="promote_mid_gw" targetRef="run_decay" />
+
+    <!-- ============ PHASE 3: DECAY ============ -->
+    <bpmn:scriptTask id="run_decay" name="[DB] Run Edge Decay (F129 decay_knowledge_graph)">
+      <bpmn:incoming>to_decay_phase</bpmn:incoming>
+      <bpmn:incoming>flow_skip_promote_long</bpmn:incoming>
+      <bpmn:outgoing>to_stale_check</bpmn:outgoing>
+      <bpmn:script>
+# Call decay_knowledge_graph() scoped to project_id
+# Reduces edge strength: weight * 0.95^days_since_access
+# Floor at min_strength (0.05)
+decayed_edges = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_decay_phase" sourceRef="promote_to_long" targetRef="run_decay" />
+
+    <bpmn:scriptTask id="find_stale" name="[DB] Identify Stale Entries for Archive">
+      <bpmn:incoming>to_stale_check</bpmn:incoming>
+      <bpmn:outgoing>to_stale_gw</bpmn:outgoing>
+      <bpmn:script>
+# Find: knowledge with confidence &lt; 30, not accessed in 90+ days
+# Also find: orphaned nodes (no relations, low access)
+stale_entries = locals().get('stale_entries', [])
+has_stale = locals().get('has_stale', len(stale_entries) > 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_stale_check" sourceRef="run_decay" targetRef="find_stale" />
+
+    <bpmn:exclusiveGateway id="stale_gw" name="Stale Found?" default="flow_no_stale">
+      <bpmn:incoming>to_stale_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_archive_stale</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_stale</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_stale_gw" sourceRef="find_stale" targetRef="stale_gw" />
+
+    <bpmn:scriptTask id="archive_stale" name="[DB] Archive Stale (soft delete, preserve for audit)">
+      <bpmn:incoming>flow_archive_stale</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_archive</bpmn:outgoing>
+      <bpmn:script>
+# Soft delete: set archived=True, archived_at=NOW()
+# Don't hard delete - may need for audit or contradiction resolution
+# Remove from active search indexes
+archived_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_archive_stale" sourceRef="stale_gw" targetRef="archive_stale">
+      <bpmn:conditionExpression>has_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- ============ END ============ -->
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>flow_stop_after_short</bpmn:incoming>
+      <bpmn:incoming>to_end_from_archive</bpmn:incoming>
+      <bpmn:incoming>flow_no_stale</bpmn:incoming>
+      <bpmn:outgoing>to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_end_from_archive" sourceRef="archive_stale" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_no_stale" sourceRef="stale_gw" targetRef="end_merge" />
+
+    <bpmn:endEvent id="end" name="Consolidation Complete">
+      <bpmn:incoming>to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+</bpmn:definitions>

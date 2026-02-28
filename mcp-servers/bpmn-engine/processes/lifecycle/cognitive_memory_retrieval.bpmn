@@ -1,0 +1,177 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_cognitive_memory_retrieval"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="cognitive_memory_retrieval" name="Cognitive Memory: Token-Budgeted Retrieval" isExecutable="true">
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Retrieval Request">
+      <bpmn:outgoing>to_parse_context</bpmn:outgoing>
+      <!-- Required data: project_id (mandatory), query
+           Output: working memory context (~1000 tokens)
+           NOTE: This feeds the WORKING MEMORY slot, NOT cached knowledge (120K+).
+           These are separate concerns at different scales. -->
+    </bpmn:startEvent>
+
+    <!-- Parse the query and current working context -->
+    <bpmn:scriptTask id="parse_context" name="[KMS] Parse Query + Working Context">
+      <bpmn:incoming>to_parse_context</bpmn:incoming>
+      <bpmn:outgoing>to_allocate_budget</bpmn:outgoing>
+      <bpmn:script>
+# Extract: query text, project_id (mandatory), active task, conversation topic
+# All tier searches scoped to project_id (project isolation enforced)
+query_embedding = [0.1, 0.2]
+context = {"project": "test", "query": "test"}
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_parse_context" sourceRef="start" targetRef="parse_context" />
+
+    <!-- Allocate token budget across tiers -->
+    <bpmn:scriptTask id="allocate_budget" name="[KMS] Allocate Token Budget Across Tiers">
+      <bpmn:incoming>to_allocate_budget</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_search</bpmn:outgoing>
+      <bpmn:script>
+# Total budget configurable (default 1000 tokens)
+# Allocation strategy based on query type:
+#   task_specific: short=300, mid=400, long=300
+#   exploration:   short=100, mid=300, long=600
+#   recall:        short=200, mid=500, long=300  (default)
+total_budget = 1000
+budget_short = 200
+budget_mid = 500
+budget_long = 300
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_allocate_budget" sourceRef="parse_context" targetRef="allocate_budget" />
+
+    <!-- === PARALLEL SEARCH ALL 3 TIERS === -->
+    <bpmn:parallelGateway id="parallel_search" name="Search All Tiers">
+      <bpmn:incoming>to_parallel_search</bpmn:incoming>
+      <bpmn:outgoing>to_search_short</bpmn:outgoing>
+      <bpmn:outgoing>to_search_mid</bpmn:outgoing>
+      <bpmn:outgoing>to_search_long</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:sequenceFlow id="to_parallel_search" sourceRef="allocate_budget" targetRef="parallel_search" />
+
+    <!-- SHORT-TERM: Session facts (fast, exact) -->
+    <bpmn:scriptTask id="search_short" name="[SHORT] Fetch Active Session Facts">
+      <bpmn:incoming>to_search_short</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_join_from_short</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.session_facts for current session WHERE project = project_id
+# Include: credentials, configs, endpoints, active decisions
+# All facts returned (small set), trimmed to budget_short tokens
+# Scoring: recency (last stored/accessed) + access_count
+short_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_search_short" sourceRef="parallel_search" targetRef="search_short" />
+
+    <!-- MID-TERM: Recent memories (semantic + recency) -->
+    <bpmn:scriptTask id="search_mid" name="[MID] Semantic Search Recent Memories (7-30 days)">
+      <bpmn:incoming>to_search_mid</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_join_from_mid</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.knowledge WHERE tier='mid' AND project_id = project_id
+#   AND created_at > NOW() - 30 days
+# pgvector similarity search using query_embedding
+# Score: similarity * 0.4 + recency * 0.3 + access_freq * 0.2 + confidence * 0.1
+# Trim to budget_mid tokens
+mid_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_search_mid" sourceRef="parallel_search" targetRef="search_mid" />
+
+    <!-- LONG-TERM: Semantic + graph walk (deep search) -->
+    <bpmn:scriptTask id="search_long" name="[LONG] Semantic Search + Graph Walk (pgvector + CTE)">
+      <bpmn:incoming>to_search_long</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_join_from_long</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.knowledge WHERE tier='long' AND project_id = project_id
+# pgvector similarity → recursive CTE graph walk (2 hops, edge weight >= 0.3)
+# Also search: vault embeddings, book references (same project scope)
+# Score: similarity * 0.5 + graph_depth_penalty * 0.2 + confidence * 0.2 + applied_success * 0.1
+# Trim to budget_long tokens
+long_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_search_long" sourceRef="parallel_search" targetRef="search_long" />
+
+    <!-- === PARALLEL JOIN === -->
+    <bpmn:parallelGateway id="parallel_join" name="Merge Tier Results">
+      <bpmn:incoming>to_parallel_join_from_short</bpmn:incoming>
+      <bpmn:incoming>to_parallel_join_from_mid</bpmn:incoming>
+      <bpmn:incoming>to_parallel_join_from_long</bpmn:incoming>
+      <bpmn:outgoing>to_rank</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:sequenceFlow id="to_parallel_join_from_short" sourceRef="search_short" targetRef="parallel_join" />
+    <bpmn:sequenceFlow id="to_parallel_join_from_mid" sourceRef="search_mid" targetRef="parallel_join" />
+    <bpmn:sequenceFlow id="to_parallel_join_from_long" sourceRef="search_long" targetRef="parallel_join" />
+
+    <!-- Rank all results across tiers -->
+    <bpmn:scriptTask id="rank_results" name="[KMS] Rank All Results (composite score)">
+      <bpmn:incoming>to_rank</bpmn:incoming>
+      <bpmn:outgoing>to_trim</bpmn:outgoing>
+      <bpmn:script>
+# Combine results from all 3 tiers
+# Apply cross-tier ranking:
+#   composite = (tier_weight * tier_score) + (relevance * query_match)
+# Tier weights: short=1.2 (boost active context), mid=1.0, long=0.8
+# Remove true duplicates across tiers
+all_results = []
+ranked = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_rank" sourceRef="parallel_join" targetRef="rank_results" />
+
+    <!-- Trim to total budget -->
+    <bpmn:scriptTask id="trim_to_budget" name="[KMS] Trim to Total Token Budget">
+      <bpmn:incoming>to_trim</bpmn:incoming>
+      <bpmn:outgoing>to_format</bpmn:outgoing>
+      <bpmn:script>
+# Greedy fill: take highest-ranked results until total_budget exhausted
+# Ensure at least 1 result per tier that had hits (diversity guarantee)
+# Track: tokens_used_short, tokens_used_mid, tokens_used_long
+final_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_trim" sourceRef="rank_results" targetRef="trim_to_budget" />
+
+    <!-- Format for context injection -->
+    <bpmn:scriptTask id="format_output" name="[KMS] Format for Context Injection">
+      <bpmn:incoming>to_format</bpmn:incoming>
+      <bpmn:outgoing>to_update_access</bpmn:outgoing>
+      <bpmn:script>
+# Structure output with tier labels:
+# [SHORT-TERM] key: value (facts)
+# [MID-TERM] title: description (recent memories)
+# [LONG-TERM] title: description (established knowledge)
+# Include source attribution and confidence indicators
+formatted = ""
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_format" sourceRef="trim_to_budget" targetRef="format_output" />
+
+    <!-- Update access stats for decay tracking -->
+    <bpmn:scriptTask id="update_access" name="[DB] Update Access Stats (decay tracking)">
+      <bpmn:incoming>to_update_access</bpmn:incoming>
+      <bpmn:outgoing>to_end</bpmn:outgoing>
+      <bpmn:script>
+# For each returned result: increment access_count, update last_accessed
+# For graph edges traversed: update edge.last_accessed, increment access_count
+# This feeds the decay algorithm (unused edges lose strength)
+access_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_update_access" sourceRef="format_output" targetRef="update_access" />
+
+    <!-- ============ END ============ -->
+    <bpmn:endEvent id="end" name="Working Memory Context Returned">
+      <bpmn:incoming>to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_end" sourceRef="update_access" targetRef="end" />
+
+  </bpmn:process>
+</bpmn:definitions>

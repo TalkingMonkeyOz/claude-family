@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_cognitive_memory_contradiction"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="cognitive_memory_contradiction" name="Cognitive Memory: Contradiction Resolution" isExecutable="true">
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="New Memory Stored">
+      <bpmn:outgoing>to_search_overlap</bpmn:outgoing>
+      <!-- Required data: project_id (mandatory), new_memory_id
+           Overlap search MUST be scoped to same project_id (no cross-project) -->
+    </bpmn:startEvent>
+
+    <!-- Search for semantic overlap with existing memories -->
+    <bpmn:scriptTask id="search_overlap" name="[KMS] Search for Semantic Overlap (similarity > 0.75)">
+      <bpmn:incoming>to_search_overlap</bpmn:incoming>
+      <bpmn:outgoing>to_overlap_gw</bpmn:outgoing>
+      <bpmn:script>
+# Use new memory's embedding to find existing memories with high similarity
+# Threshold: 0.75 (lower than dedup's 0.85 to catch near-misses)
+# Search within same project_id ONLY (project isolation enforced)
+overlapping = locals().get('overlapping', [])
+has_overlap = locals().get('has_overlap', len(overlapping) > 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_search_overlap" sourceRef="start" targetRef="search_overlap" />
+
+    <bpmn:exclusiveGateway id="overlap_gw" name="Overlap Found?" default="flow_no_overlap">
+      <bpmn:incoming>to_overlap_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_no_overlap</bpmn:outgoing>
+      <bpmn:outgoing>flow_has_overlap</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_overlap_gw" sourceRef="search_overlap" targetRef="overlap_gw" />
+
+    <!-- No overlap: clean insert, we're done -->
+    <bpmn:endEvent id="end_clean" name="No Conflict">
+      <bpmn:incoming>flow_no_overlap</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="flow_no_overlap" sourceRef="overlap_gw" targetRef="end_clean" />
+
+    <!-- Has overlap: classify the relationship -->
+    <bpmn:scriptTask id="classify_relationship" name="[KMS] Classify Relationship Type">
+      <bpmn:incoming>flow_has_overlap</bpmn:incoming>
+      <bpmn:outgoing>to_relationship_gw</bpmn:outgoing>
+      <bpmn:script>
+# Compare new memory vs each overlapping memory:
+# EXTENDS: new adds detail to existing (same topic, additional info)
+# REINFORCES: new confirms existing (same conclusion, different evidence)
+# CONTRADICTS: new disagrees with existing (opposite conclusions)
+# SUPERSEDES: new replaces existing (same topic, updated information)
+#
+# Classification heuristics:
+# - If same knowledge_type and similar content but different details → extends
+# - If same conclusion from different source/session → reinforces
+# - If opposite conclusion or conflicting facts → contradicts
+# - If same topic but newer with explicit "actually" / "correction" signals → supersedes
+existing_memory = {"id": "existing", "confidence": 70}
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_has_overlap" sourceRef="overlap_gw" targetRef="classify_relationship">
+      <bpmn:conditionExpression>has_overlap == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="relationship_gw" name="Relationship Type?" default="flow_supersedes">
+      <bpmn:incoming>to_relationship_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_extends</bpmn:outgoing>
+      <bpmn:outgoing>flow_reinforces</bpmn:outgoing>
+      <bpmn:outgoing>flow_contradicts</bpmn:outgoing>
+      <bpmn:outgoing>flow_supersedes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_relationship_gw" sourceRef="classify_relationship" targetRef="relationship_gw" />
+
+    <!-- === EXTENDS: Keep both, link === -->
+    <bpmn:scriptTask id="handle_extends" name="[DB] Link as 'extends' (keep both)">
+      <bpmn:incoming>flow_extends</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_extends</bpmn:outgoing>
+      <bpmn:script>
+# Both memories valuable - link them
+# New memory extends existing with additional detail
+linked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_extends" sourceRef="relationship_gw" targetRef="handle_extends">
+      <bpmn:conditionExpression>relationship_type == "extends"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- === REINFORCES: Boost existing confidence, link === -->
+    <bpmn:scriptTask id="handle_reinforces" name="[DB] Boost Confidence + Link 'supports'">
+      <bpmn:incoming>flow_reinforces</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_reinforces</bpmn:outgoing>
+      <bpmn:script>
+# Existing memory is validated by new evidence
+# Boost confidence of existing (cap at 95)
+# Link new as supporting evidence
+boosted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_reinforces" sourceRef="relationship_gw" targetRef="handle_reinforces">
+      <bpmn:conditionExpression>relationship_type == "reinforces"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- === CONTRADICTS: Complex resolution === -->
+    <bpmn:scriptTask id="compare_contradicting" name="[KMS] Compare Recency + Confidence + Source Authority">
+      <bpmn:incoming>flow_contradicts</bpmn:incoming>
+      <bpmn:outgoing>to_resolution_gw</bpmn:outgoing>
+      <bpmn:script>
+# Score both memories:
+# recency_score: newer = higher (exponential decay over days)
+# confidence_score: higher confidence = higher
+# authority_score: user-explicit > auto-detected > inferred
+# applied_score: more successful applications = higher
+#
+# Resolution threshold: if score difference > 0.3, clear winner
+# Otherwise: unclear, flag for review
+new_score = 0.5
+existing_score = 0.5
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_contradicts" sourceRef="relationship_gw" targetRef="compare_contradicting">
+      <bpmn:conditionExpression>relationship_type == "contradicts"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="resolution_gw" name="Resolution?" default="flow_unclear">
+      <bpmn:incoming>to_resolution_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_newer_wins</bpmn:outgoing>
+      <bpmn:outgoing>flow_older_wins</bpmn:outgoing>
+      <bpmn:outgoing>flow_unclear</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_resolution_gw" sourceRef="compare_contradicting" targetRef="resolution_gw" />
+
+    <bpmn:scriptTask id="newer_wins" name="[DB] New Supersedes Old (archive old)">
+      <bpmn:incoming>flow_newer_wins</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_newer</bpmn:outgoing>
+      <bpmn:script>
+# Archive old memory, link with 'supersedes'
+# Reduce old memory confidence, keep for audit trail
+archived = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_newer_wins" sourceRef="resolution_gw" targetRef="newer_wins">
+      <bpmn:conditionExpression>resolution == "newer_wins"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="older_wins" name="[DB] Keep Old, Reduce New Confidence">
+      <bpmn:incoming>flow_older_wins</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_older</bpmn:outgoing>
+      <bpmn:script>
+# Old memory is more authoritative
+# Reduce new memory confidence, link as contradicted
+reduced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_older_wins" sourceRef="resolution_gw" targetRef="older_wins">
+      <bpmn:conditionExpression>resolution == "older_wins"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="flag_review" name="[DB] Flag Both for Human Review">
+      <bpmn:incoming>flow_unclear</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_review</bpmn:outgoing>
+      <bpmn:script>
+# Neither clearly wins - flag for human review
+# Keep both active but linked with 'contradicts'
+# Create feedback item for attention
+flagged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_unclear" sourceRef="resolution_gw" targetRef="flag_review" />
+
+    <!-- === SUPERSEDES: Clear replacement === -->
+    <bpmn:scriptTask id="handle_supersedes" name="[DB] Archive Old + Link 'supersedes'">
+      <bpmn:incoming>flow_supersedes</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_supersedes</bpmn:outgoing>
+      <bpmn:script>
+# New explicitly replaces old (correction, update, newer version)
+# Archive old, create supersedes link
+# Transfer old's relations to new where applicable
+superseded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_supersedes" sourceRef="relationship_gw" targetRef="handle_supersedes" />
+
+    <!-- ============ END ============ -->
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>to_end_from_extends</bpmn:incoming>
+      <bpmn:incoming>to_end_from_reinforces</bpmn:incoming>
+      <bpmn:incoming>to_end_from_newer</bpmn:incoming>
+      <bpmn:incoming>to_end_from_older</bpmn:incoming>
+      <bpmn:incoming>to_end_from_review</bpmn:incoming>
+      <bpmn:incoming>to_end_from_supersedes</bpmn:incoming>
+      <bpmn:outgoing>to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="to_end_from_extends" sourceRef="handle_extends" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_reinforces" sourceRef="handle_reinforces" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_newer" sourceRef="newer_wins" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_older" sourceRef="older_wins" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_review" sourceRef="flag_review" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_supersedes" sourceRef="handle_supersedes" targetRef="end_merge" />
+
+    <bpmn:endEvent id="end" name="Contradiction Resolved">
+      <bpmn:incoming>to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+</bpmn:definitions>

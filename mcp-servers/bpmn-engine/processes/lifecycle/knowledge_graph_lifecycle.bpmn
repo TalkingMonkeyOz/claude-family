@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  id="Definitions_1"
+                  targetNamespace="http://claude-family.local/bpmn">
+
+  <!-- ============================================================
+       L2: Knowledge Graph Lifecycle (Apache AGE)
+
+       Manages the graph layer that sits on top of pgvector knowledge.
+       Four sub-processes:
+         1. Graph Sync    - Populate AGE graph from knowledge + relations
+         2. Graph Query   - Graph-aware RAG (pgvector + AGE walk)
+         3. Graph Decay   - Relevance decay and automated pruning
+         4. Graph Review  - Human review of flagged items
+       ============================================================ -->
+
+  <bpmn:process id="knowledge_graph_lifecycle" name="L2: Knowledge Graph Lifecycle (Apache AGE)" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="Graph Lifecycle Trigger">
+      <bpmn:outgoing>to_identify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="identify_action" name="[CLAUDE] Identify Graph Action">
+      <bpmn:incoming>to_identify</bpmn:incoming>
+      <bpmn:outgoing>to_action_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Graph Action?" default="to_sync">
+      <bpmn:incoming>to_action_gw</bpmn:incoming>
+      <bpmn:outgoing>to_sync</bpmn:outgoing>
+      <bpmn:outgoing>to_query</bpmn:outgoing>
+      <bpmn:outgoing>to_decay</bpmn:outgoing>
+      <bpmn:outgoing>to_review</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ==================== SUB-PROCESS 1: GRAPH SYNC ==================== -->
+
+    <bpmn:scriptTask id="check_age_extension" name="[DB] Verify AGE Extension Installed">
+      <bpmn:incoming>to_sync</bpmn:incoming>
+      <bpmn:outgoing>to_age_check_gw</bpmn:outgoing>
+      <bpmn:script>
+# Check if AGE extension is installed
+# SQL: SELECT extname FROM pg_extension WHERE extname = 'age';
+try:
+    if age_installed is None:
+        age_installed = True
+except NameError:
+    age_installed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="age_installed_gw" name="AGE Installed?" default="to_ensure_graph">
+      <bpmn:incoming>to_age_check_gw</bpmn:incoming>
+      <bpmn:outgoing>to_install_age</bpmn:outgoing>
+      <bpmn:outgoing>to_ensure_graph</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="install_age" name="[DB] Install AGE Extension">
+      <bpmn:incoming>to_install_age</bpmn:incoming>
+      <bpmn:outgoing>to_ensure_graph_from_install</bpmn:outgoing>
+      <bpmn:script>
+# SQL: CREATE EXTENSION IF NOT EXISTS age;
+# SQL: SET search_path = ag_catalog, claude, public;
+age_installed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="ensure_graph" name="[DB] Ensure Knowledge Graph Exists">
+      <bpmn:incoming>to_ensure_graph</bpmn:incoming>
+      <bpmn:incoming>to_ensure_graph_from_install</bpmn:incoming>
+      <bpmn:outgoing>to_load_knowledge</bpmn:outgoing>
+      <bpmn:script>
+# SQL: SELECT create_graph('knowledge_graph'); -- idempotent
+graph_name = "knowledge_graph"
+graph_ready = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="load_knowledge_nodes" name="[DB] Sync Knowledge Entries as Nodes">
+      <bpmn:incoming>to_load_knowledge</bpmn:incoming>
+      <bpmn:outgoing>to_load_relations</bpmn:outgoing>
+      <bpmn:script>
+# For each knowledge entry, MERGE as node in AGE graph
+# Cypher: MERGE (k:Knowledge {id: $id}) SET k.title=..., k.type=..., k.confidence=...
+nodes_synced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="load_relations_edges" name="[DB] Sync Knowledge Relations as Edges">
+      <bpmn:incoming>to_load_relations</bpmn:incoming>
+      <bpmn:outgoing>to_sync_complete</bpmn:outgoing>
+      <bpmn:script>
+# For each knowledge_relation, MERGE as edge in AGE graph
+# Edge types: EXTENDS, CONTRADICTS, SUPPORTS, SUPERSEDES,
+#             DEPENDS_ON, RELATES_TO, PART_OF, CAUSED_BY
+# Cypher: MATCH (a {id: $from}), (b {id: $to}) MERGE (a)-[r:TYPE]->(b)
+edges_synced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ==================== SUB-PROCESS 2: GRAPH-AWARE QUERY ==================== -->
+
+    <bpmn:scriptTask id="pgvector_search" name="[DB] pgvector Similarity Search">
+      <bpmn:incoming>to_query</bpmn:incoming>
+      <bpmn:outgoing>to_hits_check</bpmn:outgoing>
+      <bpmn:script>
+# Standard pgvector cosine similarity search
+# SQL: SELECT knowledge_id, title FROM claude.knowledge
+#      ORDER BY embedding &lt;=&gt; $query_embedding LIMIT 5;
+try:
+    if hits_count is None:
+        hits_count = 0
+except NameError:
+    hits_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="hits_found_gw" name="Hits Found?" default="to_no_hits_end">
+      <bpmn:incoming>to_hits_check</bpmn:incoming>
+      <bpmn:outgoing>to_graph_walk</bpmn:outgoing>
+      <bpmn:outgoing>to_no_hits_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="graph_walk" name="[AGE] Walk Graph from Hits (2-hop, weight >= 0.3)">
+      <bpmn:incoming>to_graph_walk</bpmn:incoming>
+      <bpmn:outgoing>to_assemble_context</bpmn:outgoing>
+      <bpmn:script>
+# For each pgvector hit, walk the graph 2 hops deep
+# Only follow edges with strength >= 0.3
+# Cypher: MATCH (start {id: $hit_id})-[r*1..2]-(connected)
+#         WHERE ALL(rel IN r WHERE rel.strength >= 0.3)
+#         RETURN connected.id, connected.title, connected.type
+graph_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="assemble_context" name="[LOGIC] Assemble Graph-Aware Context">
+      <bpmn:incoming>to_assemble_context</bpmn:incoming>
+      <bpmn:outgoing>to_update_access</bpmn:outgoing>
+      <bpmn:script>
+# Deduplicate nodes from all walks
+# Score: (pgvector_similarity * 0.6) + (graph_proximity * 0.2) + (confidence * 0.2)
+# Trim to token budget (default ~500 tokens)
+context_assembled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="update_access_stats" name="[AGE+DB] Update Access Stats (nodes + edges)">
+      <bpmn:incoming>to_update_access</bpmn:incoming>
+      <bpmn:outgoing>to_query_complete</bpmn:outgoing>
+      <bpmn:script>
+# Update last_accessed_at and access_count on used nodes and edges
+# SQL: UPDATE claude.knowledge SET last_accessed_at=now(), access_count=access_count+1
+# Cypher: SET r.last_accessed=now(), r.access_count=r.access_count+1
+stats_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ==================== SUB-PROCESS 3: DECAY / PRUNE ==================== -->
+
+    <bpmn:scriptTask id="calculate_decay" name="[AGE] Calculate Edge Decay Scores">
+      <bpmn:incoming>to_decay</bpmn:incoming>
+      <bpmn:outgoing>to_apply_decay</bpmn:outgoing>
+      <bpmn:script>
+# Decay formula: new_strength = strength * (0.95 ^ days_since_access)
+# Minimum strength floor: 0.05 (never fully forget)
+# Cypher: MATCH ()-[r]->() WHERE r.last_accessed &lt; threshold RETURN ...
+decay_calculated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="apply_decay" name="[AGE+DB] Apply Decay to Edges and Relations">
+      <bpmn:incoming>to_apply_decay</bpmn:incoming>
+      <bpmn:outgoing>to_find_stale</bpmn:outgoing>
+      <bpmn:script>
+# Apply calculated decay to AGE edges
+# Sync back to claude.knowledge_relations.strength
+decay_applied = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="find_stale_subgraphs" name="[AGE] Identify Stale Subgraphs">
+      <bpmn:incoming>to_find_stale</bpmn:incoming>
+      <bpmn:outgoing>to_stale_check</bpmn:outgoing>
+      <bpmn:script>
+# Find disconnected components where ALL edges have strength &lt; 0.1
+# AND all nodes have access_count = 0 in last 60 days
+# Also find CONTRADICTS edges with high strength for review
+try:
+    if stale_count is None:
+        stale_count = 0
+except NameError:
+    stale_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="stale_found_gw" name="Stale Items Found?" default="to_decay_complete_clean">
+      <bpmn:incoming>to_stale_check</bpmn:incoming>
+      <bpmn:outgoing>to_archive_stale</bpmn:outgoing>
+      <bpmn:outgoing>to_decay_complete_clean</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="archive_stale" name="[DB] Archive Stale Nodes (soft delete)">
+      <bpmn:incoming>to_archive_stale</bpmn:incoming>
+      <bpmn:outgoing>to_flag_contradictions</bpmn:outgoing>
+      <bpmn:script>
+# Soft-delete: SET archived=true, archived_at=now()
+# Remove from AGE graph but keep in knowledge table
+# Log to audit_log for reversibility
+archived = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="flag_contradictions" name="[DB] Flag Contradictions for Review">
+      <bpmn:incoming>to_flag_contradictions</bpmn:incoming>
+      <bpmn:outgoing>to_decay_complete</bpmn:outgoing>
+      <bpmn:script>
+# Create feedback items for CONTRADICTS edges with strength > 0.5
+# type='question', priority='medium'
+contradictions_flagged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ==================== SUB-PROCESS 4: GRAPH REVIEW ==================== -->
+
+    <bpmn:userTask id="review_flagged" name="[HUMAN] Review Flagged Items">
+      <bpmn:incoming>to_review</bpmn:incoming>
+      <bpmn:outgoing>to_review_decision</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="review_decision_gw" name="Review Decision?" default="to_keep">
+      <bpmn:incoming>to_review_decision</bpmn:incoming>
+      <bpmn:outgoing>to_keep</bpmn:outgoing>
+      <bpmn:outgoing>to_merge</bpmn:outgoing>
+      <bpmn:outgoing>to_delete</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="keep_and_strengthen" name="[AGE+DB] Keep and Strengthen Relationship">
+      <bpmn:incoming>to_keep</bpmn:incoming>
+      <bpmn:outgoing>to_review_merge</bpmn:outgoing>
+      <bpmn:script>
+# Set edge strength to 1.0, reset decay timer
+# Mark review as resolved
+review_result = "kept"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="merge_duplicates" name="[AGE+DB] Merge Duplicate Knowledge Nodes">
+      <bpmn:incoming>to_merge</bpmn:incoming>
+      <bpmn:outgoing>to_review_merge2</bpmn:outgoing>
+      <bpmn:script>
+# Merge two nodes: keep higher-confidence one
+# Transfer edges from deleted node to kept node
+# Soft-delete merged entry, log to audit_log
+review_result = "merged"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="delete_knowledge" name="[AGE+DB] Delete Stale Knowledge">
+      <bpmn:incoming>to_delete</bpmn:incoming>
+      <bpmn:outgoing>to_review_merge3</bpmn:outgoing>
+      <bpmn:script>
+# Remove node from AGE graph
+# Soft-delete from claude.knowledge
+# Remove orphaned edges, log to audit_log
+review_result = "deleted"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ==================== END EVENTS ==================== -->
+
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>to_sync_complete</bpmn:incoming>
+      <bpmn:incoming>to_query_complete</bpmn:incoming>
+      <bpmn:incoming>to_no_hits_end</bpmn:incoming>
+      <bpmn:incoming>to_decay_complete</bpmn:incoming>
+      <bpmn:incoming>to_decay_complete_clean</bpmn:incoming>
+      <bpmn:incoming>to_review_merge</bpmn:incoming>
+      <bpmn:incoming>to_review_merge2</bpmn:incoming>
+      <bpmn:incoming>to_review_merge3</bpmn:incoming>
+      <bpmn:outgoing>to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Graph Action Complete">
+      <bpmn:incoming>to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ==================== SEQUENCE FLOWS ==================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="to_identify" sourceRef="start" targetRef="identify_action" />
+    <bpmn:sequenceFlow id="to_action_gw" sourceRef="identify_action" targetRef="action_gw" />
+
+    <!-- Action Gateway (default = sync) -->
+    <bpmn:sequenceFlow id="to_sync" sourceRef="action_gw" targetRef="check_age_extension" />
+    <bpmn:sequenceFlow id="to_query" sourceRef="action_gw" targetRef="pgvector_search">
+      <bpmn:conditionExpression>action == "query"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_decay" sourceRef="action_gw" targetRef="calculate_decay">
+      <bpmn:conditionExpression>action == "decay"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_review" sourceRef="action_gw" targetRef="review_flagged">
+      <bpmn:conditionExpression>action == "review"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Sync Path -->
+    <bpmn:sequenceFlow id="to_age_check_gw" sourceRef="check_age_extension" targetRef="age_installed_gw" />
+    <bpmn:sequenceFlow id="to_install_age" sourceRef="age_installed_gw" targetRef="install_age">
+      <bpmn:conditionExpression>age_installed == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_ensure_graph" sourceRef="age_installed_gw" targetRef="ensure_graph" />
+    <bpmn:sequenceFlow id="to_ensure_graph_from_install" sourceRef="install_age" targetRef="ensure_graph" />
+    <bpmn:sequenceFlow id="to_load_knowledge" sourceRef="ensure_graph" targetRef="load_knowledge_nodes" />
+    <bpmn:sequenceFlow id="to_load_relations" sourceRef="load_knowledge_nodes" targetRef="load_relations_edges" />
+    <bpmn:sequenceFlow id="to_sync_complete" sourceRef="load_relations_edges" targetRef="end_merge" />
+
+    <!-- Query Path -->
+    <bpmn:sequenceFlow id="to_hits_check" sourceRef="pgvector_search" targetRef="hits_found_gw" />
+    <bpmn:sequenceFlow id="to_graph_walk" sourceRef="hits_found_gw" targetRef="graph_walk">
+      <bpmn:conditionExpression>hits_count > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_no_hits_end" sourceRef="hits_found_gw" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_assemble_context" sourceRef="graph_walk" targetRef="assemble_context" />
+    <bpmn:sequenceFlow id="to_update_access" sourceRef="assemble_context" targetRef="update_access_stats" />
+    <bpmn:sequenceFlow id="to_query_complete" sourceRef="update_access_stats" targetRef="end_merge" />
+
+    <!-- Decay Path -->
+    <bpmn:sequenceFlow id="to_apply_decay" sourceRef="calculate_decay" targetRef="apply_decay" />
+    <bpmn:sequenceFlow id="to_find_stale" sourceRef="apply_decay" targetRef="find_stale_subgraphs" />
+    <bpmn:sequenceFlow id="to_stale_check" sourceRef="find_stale_subgraphs" targetRef="stale_found_gw" />
+    <bpmn:sequenceFlow id="to_archive_stale" sourceRef="stale_found_gw" targetRef="archive_stale">
+      <bpmn:conditionExpression>stale_count > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_decay_complete_clean" sourceRef="stale_found_gw" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_flag_contradictions" sourceRef="archive_stale" targetRef="flag_contradictions" />
+    <bpmn:sequenceFlow id="to_decay_complete" sourceRef="flag_contradictions" targetRef="end_merge" />
+
+    <!-- Review Path -->
+    <bpmn:sequenceFlow id="to_review_decision" sourceRef="review_flagged" targetRef="review_decision_gw" />
+    <bpmn:sequenceFlow id="to_keep" sourceRef="review_decision_gw" targetRef="keep_and_strengthen" />
+    <bpmn:sequenceFlow id="to_merge" sourceRef="review_decision_gw" targetRef="merge_duplicates">
+      <bpmn:conditionExpression>decision == "merge"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_delete" sourceRef="review_decision_gw" targetRef="delete_knowledge">
+      <bpmn:conditionExpression>decision == "delete"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_review_merge" sourceRef="keep_and_strengthen" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_review_merge2" sourceRef="merge_duplicates" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_review_merge3" sourceRef="delete_knowledge" targetRef="end_merge" />
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+</bpmn:definitions>

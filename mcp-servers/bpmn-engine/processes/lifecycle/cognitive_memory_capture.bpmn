@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_cognitive_memory_capture"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="cognitive_memory_capture" name="Cognitive Memory: Capture Pipeline" isExecutable="true">
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Memory Input Detected">
+      <bpmn:outgoing>to_detect_source</bpmn:outgoing>
+      <!-- Required data: project_id (mandatory, enforces project isolation) -->
+    </bpmn:startEvent>
+
+    <!-- Identify how the memory arrived -->
+    <bpmn:exclusiveGateway id="source_gw" name="Capture Source?" default="flow_session_harvest">
+      <bpmn:incoming>to_detect_source</bpmn:incoming>
+      <bpmn:outgoing>flow_explicit</bpmn:outgoing>
+      <bpmn:outgoing>flow_auto_detect</bpmn:outgoing>
+      <bpmn:outgoing>flow_session_harvest</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="to_detect_source" sourceRef="start" targetRef="source_gw" />
+
+    <!-- === PATH 1: Explicit remember() call === -->
+    <bpmn:userTask id="formulate_memory" name="[CLAUDE] Formulate Memory Content">
+      <bpmn:incoming>flow_explicit</bpmn:incoming>
+      <bpmn:outgoing>to_classify_from_explicit</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="flow_explicit" sourceRef="source_gw" targetRef="formulate_memory">
+      <bpmn:conditionExpression>source == "explicit"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="to_classify_from_explicit" sourceRef="formulate_memory" targetRef="classify_tier" />
+
+    <!-- === PATH 2: Auto-detected from conversation === -->
+    <bpmn:scriptTask id="auto_extract" name="[HOOK] Extract Memory Candidate from Turn">
+      <bpmn:incoming>flow_auto_detect</bpmn:incoming>
+      <bpmn:outgoing>to_significance_check</bpmn:outgoing>
+      <bpmn:script>
+# Hook detects: credentials, endpoints, decisions, patterns, corrections
+# Extracts structured memory candidate from conversation turn
+# NOTE: Auto-detect is OPTIONAL mode. Default is explicit remember() calls.
+# High threshold (0.8) prevents noise - only clearly significant items pass.
+memory_candidate = {"content": "auto_extracted", "source": "auto_detect"}
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_auto_detect" sourceRef="source_gw" targetRef="auto_extract">
+      <bpmn:conditionExpression>source == "auto_detect"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="significance_gw" name="Significant Enough?" default="flow_not_significant">
+      <bpmn:incoming>to_significance_check</bpmn:incoming>
+      <bpmn:outgoing>flow_significant</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_significant</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_significance_check" sourceRef="auto_extract" targetRef="significance_gw" />
+    <bpmn:sequenceFlow id="flow_significant" sourceRef="significance_gw" targetRef="classify_tier">
+      <bpmn:conditionExpression>significance_score &gt;= 0.8</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_significant" sourceRef="significance_gw" targetRef="end_discard" />
+
+    <bpmn:endEvent id="end_discard" name="Discarded (Not Significant)">
+      <bpmn:incoming>flow_not_significant</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- === PATH 3: Session-end harvest === -->
+    <bpmn:scriptTask id="harvest_session" name="[HOOK] Harvest Session Facts for Promotion">
+      <bpmn:incoming>flow_session_harvest</bpmn:incoming>
+      <bpmn:outgoing>to_classify_from_harvest</bpmn:outgoing>
+      <bpmn:script>
+# At session end, collect all session_facts
+# Filter to those worth promoting (accessed > 1, or type in [decision, pattern])
+harvested_facts = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_session_harvest" sourceRef="source_gw" targetRef="harvest_session" />
+    <bpmn:sequenceFlow id="to_classify_from_harvest" sourceRef="harvest_session" targetRef="classify_tier" />
+
+    <!-- === SHARED: Classify into memory tier === -->
+    <bpmn:scriptTask id="classify_tier" name="[KMS] Classify Memory Tier">
+      <bpmn:incoming>to_classify_from_explicit</bpmn:incoming>
+      <bpmn:incoming>flow_significant</bpmn:incoming>
+      <bpmn:incoming>to_classify_from_harvest</bpmn:incoming>
+      <bpmn:outgoing>to_dedup_check</bpmn:outgoing>
+      <bpmn:script>
+# Classification rules (all scoped to project_id):
+# SHORT: credentials, endpoints, scratch notes, current-task-only context
+# MID: decisions, emerging patterns, session-spanning context, corrections
+# LONG: validated patterns (applied 3+ times), established facts, procedures
+tier = "mid"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check for duplicates via semantic similarity -->
+    <bpmn:scriptTask id="dedup_check" name="[KMS] Check Semantic Overlap (similarity > 0.85)">
+      <bpmn:incoming>to_dedup_check</bpmn:incoming>
+      <bpmn:outgoing>to_dedup_gw</bpmn:outgoing>
+      <bpmn:script>
+# Generate embedding for new memory
+# Search existing memories in same tier AND same project_id for similarity > 0.85
+# If found, mark as duplicate with reference to existing
+# Project isolation: NEVER match across projects
+embedding = [0.1, 0.2]
+existing_match = None if not is_duplicate else {"id": "existing"}
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_dedup_check" sourceRef="classify_tier" targetRef="dedup_check" />
+
+    <bpmn:exclusiveGateway id="dedup_gw" name="Duplicate?" default="flow_not_dup">
+      <bpmn:incoming>to_dedup_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_dup</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_dup</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_dedup_gw" sourceRef="dedup_check" targetRef="dedup_gw" />
+
+    <!-- Duplicate: merge into existing -->
+    <bpmn:scriptTask id="merge_existing" name="[DB] Merge into Existing Memory">
+      <bpmn:incoming>flow_is_dup</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_merge</bpmn:outgoing>
+      <bpmn:script>
+# Update existing memory: append new observations, bump confidence, update timestamp
+# Don't create a new entry
+merged = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_is_dup" sourceRef="dedup_gw" targetRef="merge_existing">
+      <bpmn:conditionExpression>is_duplicate == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Not duplicate: store new -->
+    <bpmn:scriptTask id="generate_embedding" name="[KMS] Generate Embedding (Voyage AI)">
+      <bpmn:incoming>flow_not_dup</bpmn:incoming>
+      <bpmn:outgoing>to_store</bpmn:outgoing>
+      <bpmn:script>
+# Use existing embedding from dedup_check if available
+# Otherwise generate new via Voyage AI voyage-3
+has_embedding = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_not_dup" sourceRef="dedup_gw" targetRef="generate_embedding" />
+
+    <bpmn:scriptTask id="store_memory" name="[DB] Store Memory with Tier + Embedding">
+      <bpmn:incoming>to_store</bpmn:incoming>
+      <bpmn:outgoing>to_relation_check</bpmn:outgoing>
+      <bpmn:script>
+# INSERT into claude.knowledge with:
+# - tier metadata (short/mid/long)
+# - embedding vector
+# - source (explicit/auto/harvest)
+# - confidence_level
+# - created_at, last_accessed
+stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_store" sourceRef="generate_embedding" targetRef="store_memory" />
+
+    <!-- Check if we should link to related knowledge -->
+    <bpmn:exclusiveGateway id="relation_gw" name="Link Relations?" default="flow_no_relations">
+      <bpmn:incoming>to_relation_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_relations</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_relations</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_relation_check" sourceRef="store_memory" targetRef="relation_gw" />
+
+    <bpmn:scriptTask id="link_relations" name="[DB] Create Knowledge Relations (extends/supports)">
+      <bpmn:incoming>flow_has_relations</bpmn:incoming>
+      <bpmn:outgoing>to_end_from_link</bpmn:outgoing>
+      <bpmn:script>
+# Find nearby knowledge (similarity 0.5-0.85) and create typed relations
+# Also trigger contradiction check subprocess
+linked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_has_relations" sourceRef="relation_gw" targetRef="link_relations">
+      <bpmn:conditionExpression>has_nearby_knowledge == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- === END === -->
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>to_end_from_merge</bpmn:incoming>
+      <bpmn:incoming>to_end_from_link</bpmn:incoming>
+      <bpmn:incoming>flow_no_relations</bpmn:incoming>
+      <bpmn:outgoing>to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="to_end_from_merge" sourceRef="merge_existing" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="to_end_from_link" sourceRef="link_relations" targetRef="end_merge" />
+    <bpmn:sequenceFlow id="flow_no_relations" sourceRef="relation_gw" targetRef="end_merge" />
+
+    <bpmn:endEvent id="end" name="Memory Captured">
+      <bpmn:incoming>to_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_end" sourceRef="end_merge" targetRef="end" />
+
+  </bpmn:process>
+</bpmn:definitions>
