@@ -156,7 +156,7 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
             reminders.append("""🔧 **When to use MCP tools** (ToolSearch first):
   - **User reports bug/idea?** → `project-tools.create_feedback` (NOT raw SQL)
   - **Planning 3+ file feature?** → `project-tools.create_feature` + `add_build_task`
-  - **Task too complex for me?** → `orchestrator.spawn_agent` (delegate to coder/analyst)
+  - **Task too complex for me?** → Native `Task` tool (delegate to coder/analyst agents)
   - **Need deep reasoning?** → `sequential-thinking` for multi-step analysis
   - **Processing Excel/CSV?** → `python-repl` (keep data in REPL, not context)
   - **Learned something useful?** → `project-tools.store_knowledge` (persists for future)""")
@@ -168,7 +168,7 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
   - Heavy tasks (BPMN, large files, multi-file refactor): ~800 tokens each
   - Medium tasks (single edit, test writing): ~400 tokens each
   - Light tasks (query, status, git): ~100 tokens each
-  - **3+ heavy tasks remaining?** DELEGATE to agents (spawn_agent)
+  - **3+ heavy tasks remaining?** DELEGATE to agents (native Task tool)
   - **Run save_checkpoint()** after each completed task to preserve progress
   - **Over budget?** Stop, save state, let next session continue""".format(count=count))
             state["last_budget_check"] = count
@@ -1275,6 +1275,114 @@ def query_nimbus_context(user_prompt: str, project_name: str, top_k: int = 3) ->
         return None
 
 
+# Schema-related keywords that trigger schema_registry search
+SCHEMA_KEYWORDS = [
+    'table', 'column', 'schema', 'database', 'db ', ' db', 'foreign key',
+    'constraint', 'which table', 'what table', 'where is', 'data model',
+    'stores ', 'stored in', 'tracks ', 'tracks ', 'registry',
+    'field', 'relation', 'index', 'primary key',
+]
+
+
+def needs_schema_search(user_prompt: str) -> bool:
+    """Detect if prompt would benefit from schema context."""
+    prompt_lower = user_prompt.lower()
+    return any(kw in prompt_lower for kw in SCHEMA_KEYWORDS)
+
+
+def query_schema_context(user_prompt: str, top_k: int = 3,
+                         min_similarity: float = 0.40) -> Optional[str]:
+    """Query schema_registry embeddings for relevant table context.
+
+    Returns formatted schema context or None if no results.
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+        query_text = extract_query_from_prompt(user_prompt)
+
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                table_name,
+                purpose,
+                column_descriptions,
+                fk_relationships,
+                row_count_actual,
+                1 - (embedding <=> %s::vector) as similarity
+            FROM claude.schema_registry
+            WHERE embedding IS NOT NULL
+              AND 1 - (embedding <=> %s::vector) >= %s
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, query_embedding, min_similarity,
+              query_embedding, top_k))
+
+        results = cur.fetchall()
+        conn.close()
+
+        if not results:
+            return None
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        context_lines = []
+        context_lines.append("")
+        context_lines.append("=" * 70)
+        context_lines.append(f"SCHEMA CONTEXT ({len(results)} relevant tables, {latency_ms}ms)")
+        context_lines.append("=" * 70)
+        context_lines.append("")
+
+        for r in results:
+            if isinstance(r, dict):
+                tbl = r['table_name']
+                purpose = r['purpose']
+                cols = r.get('column_descriptions') or {}
+                fks = r.get('fk_relationships') or []
+                rows = r.get('row_count_actual')
+                sim = round(r['similarity'], 3)
+            else:
+                tbl, purpose, cols, fks, rows, sim = r[0], r[1], r[2] or {}, r[3] or [], r[4], round(r[5], 3)
+
+            context_lines.append(f"[TABLE] claude.{tbl} ({sim} match)")
+            context_lines.append(f"  Purpose: {purpose}")
+
+            # Show key columns (limit to 8 to save tokens)
+            if isinstance(cols, dict):
+                col_list = list(cols.items())[:8]
+                if col_list:
+                    context_lines.append(f"  Columns: {', '.join(c[0] for c in col_list)}")
+
+            # Show relationships
+            if fks:
+                fk_list = fks if isinstance(fks, list) else []
+                for fk in fk_list[:3]:
+                    if isinstance(fk, dict):
+                        context_lines.append(f"  FK: {fk.get('column', '?')} -> {fk.get('references', '?')}")
+
+            if rows is not None:
+                context_lines.append(f"  Rows: ~{rows:,}")
+
+            context_lines.append("")
+
+        logger.info(f"Schema context: {len(results)} tables, latency={latency_ms}ms")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Schema context query failed: {e}", exc_info=True)
+        return None
+
+
 def query_vault_rag(user_prompt: str, project_name: str, session_id: str = None,
                     top_k: int = 3, min_similarity: float = 0.45) -> str:
     """Query vault embeddings and return formatted context.
@@ -1549,6 +1657,41 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
         return None
 
 
+def _load_design_map(project_name: str) -> Optional[str]:
+    """Load compressed design map if one exists for this project.
+
+    Checks for a design-map.md file in the vault under the project's folder.
+    Returns formatted context string or None if no map exists.
+    Lightweight: pure file read, no DB or embedding queries.
+    """
+    vault_root = Path("C:/Projects/claude-family/knowledge-vault")
+
+    # Check common locations for design map
+    candidates = [
+        vault_root / "10-Projects" / project_name / "design-map.md",
+        vault_root / "10-Projects" / f"Project-{project_name.capitalize()}" / "design-map.md",
+    ]
+
+    for map_path in candidates:
+        if map_path.exists():
+            try:
+                content = map_path.read_text(encoding="utf-8").strip()
+                if not content or len(content) < 50:
+                    continue
+                # Strip YAML frontmatter if present
+                if content.startswith("---"):
+                    end = content.find("---", 3)
+                    if end > 0:
+                        content = content[end + 3:].strip()
+                logger.info(f"Design map loaded: {map_path} ({len(content)} chars)")
+                return f"[DESIGN MAP]\n{content}\n"
+            except Exception as e:
+                logger.warning(f"Failed to read design map {map_path}: {e}")
+                continue
+
+    return None
+
+
 def main():
     """Main hook entry point.
 
@@ -1667,11 +1810,20 @@ def main():
             except Exception as e:
                 logger.warning(f"Skill suggestion query failed: {e}")
 
+        # DESIGN MAP: Inject compressed design map if project has one
+        # Lightweight file read (~500 tokens), gives instant design orientation
+        design_map_context = None
+        try:
+            design_map_context = _load_design_map(project_name)
+        except Exception as e:
+            logger.warning(f"Design map loading failed: {e}")
+
         # CONDITIONAL: Only query RAG/knowledge for questions and exploration
         # Action prompts ("implement X", "fix Y") don't benefit from documentation retrieval
         knowledge_context = None
         rag_context = None
         nimbus_context = None
+        schema_context = None
 
         if needs_rag(user_prompt):
             logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
@@ -1703,6 +1855,17 @@ def main():
                 project_name=project_name,
                 top_k=3
             )
+
+            # Query SCHEMA CONTEXT (when prompt mentions tables/schema/data model)
+            if needs_schema_search(user_prompt):
+                try:
+                    schema_context = query_schema_context(
+                        user_prompt=user_prompt,
+                        top_k=3,
+                        min_similarity=0.40
+                    )
+                except Exception as e:
+                    logger.warning(f"Schema context query failed: {e}")
         else:
             logger.info(f"RAG skipped for action prompt: {user_prompt[:50]}")
 
@@ -1714,6 +1877,7 @@ def main():
         # 5. Knowledge recall (if RAG enabled - questions only)
         # 6. Vault RAG (if RAG enabled - questions only)
         # 7. Nimbus context (if RAG enabled + Nimbus project)
+        # 8. Schema context (if schema keywords detected)
         combined_context_parts = []
 
         combined_context_parts.append(_get_core_protocol())
@@ -1740,8 +1904,12 @@ def main():
             combined_context_parts.append(rag_context)
         if nimbus_context:
             combined_context_parts.append(nimbus_context)
+        if schema_context:
+            combined_context_parts.append(schema_context)
         if skill_context:
             combined_context_parts.append(skill_context)
+        if design_map_context:
+            combined_context_parts.append(design_map_context)
 
         combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
 

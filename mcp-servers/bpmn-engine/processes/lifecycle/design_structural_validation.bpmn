@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_design_structural_validation"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="design_structural_validation" name="Design Structural Validation (L2 - Pattern 4)" isExecutable="true">
+
+    <!--
+      L2 subprocess: Automated structural validation of vault design documents.
+      Called by design_document_lifecycle after brainstorm sessions and during full validation.
+
+      Checks (no LLM needed):
+        1. Broken wiki-links
+        2. Missing YAML frontmatter
+        3. Missing version footers
+        4. Orphan files (no incoming links)
+        5. Terminology drift (custom rules)
+
+      Checks (requires concept index):
+        6. Stale cross-references (superseded decisions)
+        7. Area coverage (required sections)
+        8. Unindexed files (vault files not yet extracted)
+
+      Feature: F132 | Pattern: P4
+    -->
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Validation Triggered">
+      <bpmn:outgoing>to_discover</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Discover vault files to validate -->
+    <bpmn:scriptTask id="discover_files" name="[SCRIPT] Discover Vault Files for Project">
+      <bpmn:incoming>to_discover</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_checks</bpmn:outgoing>
+      <bpmn:script>
+# Walk project vault directory
+# Filter to .md files
+# Build file list with metadata (size, modified, has_frontmatter)
+files_discovered = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_discover" sourceRef="start" targetRef="discover_files" />
+
+    <!-- Run structural checks in parallel -->
+    <bpmn:parallelGateway id="parallel_start" name="Run Checks in Parallel">
+      <bpmn:incoming>to_parallel_checks</bpmn:incoming>
+      <bpmn:outgoing>to_link_check</bpmn:outgoing>
+      <bpmn:outgoing>to_frontmatter_check</bpmn:outgoing>
+      <bpmn:outgoing>to_footer_check</bpmn:outgoing>
+      <bpmn:outgoing>to_orphan_check</bpmn:outgoing>
+      <bpmn:outgoing>to_terminology_check</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:sequenceFlow id="to_parallel_checks" sourceRef="discover_files" targetRef="parallel_start" />
+
+    <!-- Check 1: Broken wiki-links -->
+    <bpmn:scriptTask id="check_links" name="[SCRIPT] Check Broken Wiki-Links">
+      <bpmn:incoming>to_link_check</bpmn:incoming>
+      <bpmn:outgoing>from_link_check</bpmn:outgoing>
+      <bpmn:script>
+# Regex: \[\[([^\]]+)\]\]
+# For each match, verify target file exists in vault
+# Report: broken_links = [{source_file, target, line_number}]
+broken_links = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_link_check" sourceRef="parallel_start" targetRef="check_links" />
+
+    <!-- Check 2: Missing YAML frontmatter -->
+    <bpmn:scriptTask id="check_frontmatter" name="[SCRIPT] Check YAML Frontmatter">
+      <bpmn:incoming>to_frontmatter_check</bpmn:incoming>
+      <bpmn:outgoing>from_frontmatter_check</bpmn:outgoing>
+      <bpmn:script>
+# Each vault .md file must start with ---\nyaml\n---
+# Required fields: tags (array), projects (array)
+# Optional: created, updated, synced
+missing_frontmatter = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_frontmatter_check" sourceRef="parallel_start" targetRef="check_frontmatter" />
+
+    <!-- Check 3: Missing version footers -->
+    <bpmn:scriptTask id="check_footers" name="[SCRIPT] Check Version Footers">
+      <bpmn:incoming>to_footer_check</bpmn:incoming>
+      <bpmn:outgoing>from_footer_check</bpmn:outgoing>
+      <bpmn:script>
+# Each .md file must end with:
+# ---
+# **Version**: X.Y
+# **Created**: YYYY-MM-DD
+# **Updated**: YYYY-MM-DD
+# **Location**: path/to/file.md
+missing_footers = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_footer_check" sourceRef="parallel_start" targetRef="check_footers" />
+
+    <!-- Check 4: Orphan files -->
+    <bpmn:scriptTask id="check_orphans" name="[SCRIPT] Detect Orphan Files (No Incoming Links)">
+      <bpmn:incoming>to_orphan_check</bpmn:incoming>
+      <bpmn:outgoing>from_orphan_check</bpmn:outgoing>
+      <bpmn:script>
+# Build incoming link map from all wiki-links
+# Files with zero incoming links = orphans
+# Exclude: README.md, index files, root docs
+orphan_files = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_orphan_check" sourceRef="parallel_start" targetRef="check_orphans" />
+
+    <!-- Check 5: Terminology drift -->
+    <bpmn:scriptTask id="check_terminology" name="[SCRIPT] Check Terminology Consistency">
+      <bpmn:incoming>to_terminology_check</bpmn:incoming>
+      <bpmn:outgoing>from_terminology_check</bpmn:outgoing>
+      <bpmn:script>
+# Load terminology rules from project config or vault file
+# e.g., {"canonical": "Knowledge Engine", "variants": ["Knowledge Base", "KE", "knowledge system"]}
+# Scan all files for variant usage, report non-canonical terms
+# Rules stored in: [project]/terminology-rules.yaml or DB
+terminology_issues = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_terminology_check" sourceRef="parallel_start" targetRef="check_terminology" />
+
+    <!-- Merge parallel results -->
+    <bpmn:parallelGateway id="parallel_end" name="Merge Check Results">
+      <bpmn:incoming>from_link_check</bpmn:incoming>
+      <bpmn:incoming>from_frontmatter_check</bpmn:incoming>
+      <bpmn:incoming>from_footer_check</bpmn:incoming>
+      <bpmn:incoming>from_orphan_check</bpmn:incoming>
+      <bpmn:incoming>from_terminology_check</bpmn:incoming>
+      <bpmn:outgoing>to_index_checks</bpmn:outgoing>
+    </bpmn:parallelGateway>
+    <bpmn:sequenceFlow id="from_link_check" sourceRef="check_links" targetRef="parallel_end" />
+    <bpmn:sequenceFlow id="from_frontmatter_check" sourceRef="check_frontmatter" targetRef="parallel_end" />
+    <bpmn:sequenceFlow id="from_footer_check" sourceRef="check_footers" targetRef="parallel_end" />
+    <bpmn:sequenceFlow id="from_orphan_check" sourceRef="check_orphans" targetRef="parallel_end" />
+    <bpmn:sequenceFlow id="from_terminology_check" sourceRef="check_terminology" targetRef="parallel_end" />
+
+    <!-- Index-dependent checks (require concept index to exist) -->
+    <bpmn:exclusiveGateway id="index_exists_gw" name="Concept Index Exists?" default="flow_skip_index_checks">
+      <bpmn:incoming>to_index_checks</bpmn:incoming>
+      <bpmn:outgoing>flow_run_index_checks</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_index_checks</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_index_checks" sourceRef="parallel_end" targetRef="index_exists_gw" />
+
+    <!-- Check 6-8: Index-dependent checks -->
+    <bpmn:scriptTask id="index_checks" name="[DB] Check Unindexed Files + Stale Refs + Coverage">
+      <bpmn:incoming>flow_run_index_checks</bpmn:incoming>
+      <bpmn:outgoing>from_index_checks</bpmn:outgoing>
+      <bpmn:script>
+# Check 6: Files modified since last extraction (compare file_hash)
+# Check 7: Area coverage (each area folder has minimum required concepts)
+# Check 8: Decision count consistency (tracker vs index)
+unindexed_files = []
+stale_refs = []
+coverage_gaps = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_run_index_checks" sourceRef="index_exists_gw" targetRef="index_checks">
+      <bpmn:conditionExpression>concept_index_count > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Merge to report -->
+    <bpmn:exclusiveGateway id="report_merge" name="Merge to Report">
+      <bpmn:incoming>from_index_checks</bpmn:incoming>
+      <bpmn:incoming>flow_skip_index_checks</bpmn:incoming>
+      <bpmn:outgoing>to_report</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="from_index_checks" sourceRef="index_checks" targetRef="report_merge" />
+    <bpmn:sequenceFlow id="flow_skip_index_checks" sourceRef="index_exists_gw" targetRef="report_merge" />
+
+    <!-- Generate validation report -->
+    <bpmn:scriptTask id="generate_report" name="[SCRIPT] Generate Validation Report">
+      <bpmn:incoming>to_report</bpmn:incoming>
+      <bpmn:outgoing>to_severity_check</bpmn:outgoing>
+      <bpmn:script>
+# Aggregate all check results
+# Group by severity: ERROR (broken links), WARNING (missing metadata), INFO (orphans)
+# Output structured report
+report = {"errors": [], "warnings": [], "info": [], "pass_rate": 0.0}
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_report" sourceRef="report_merge" targetRef="generate_report" />
+
+    <!-- Check if validation passed -->
+    <bpmn:exclusiveGateway id="severity_gw" name="Errors Found?" default="flow_passed">
+      <bpmn:incoming>to_severity_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_errors</bpmn:outgoing>
+      <bpmn:outgoing>flow_passed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_severity_check" sourceRef="generate_report" targetRef="severity_gw" />
+
+    <!-- File feedback for errors -->
+    <bpmn:scriptTask id="file_feedback" name="[DB] File Feedback for Validation Errors">
+      <bpmn:incoming>flow_has_errors</bpmn:incoming>
+      <bpmn:outgoing>to_end_with_errors</bpmn:outgoing>
+      <bpmn:script>
+# For each ERROR: create_feedback(type='bug', title='Broken link: ...')
+# For each WARNING: create_feedback(type='improvement', title='Missing frontmatter: ...')
+# Dedup against existing open feedback
+filed_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_has_errors" sourceRef="severity_gw" targetRef="file_feedback">
+      <bpmn:conditionExpression>error_count > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- End events -->
+    <bpmn:endEvent id="end_with_errors" name="Validation Failed — Feedback Filed">
+      <bpmn:incoming>to_end_with_errors</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_end_with_errors" sourceRef="file_feedback" targetRef="end_with_errors" />
+
+    <bpmn:endEvent id="end_passed" name="Validation Passed">
+      <bpmn:incoming>flow_passed</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="flow_passed" sourceRef="severity_gw" targetRef="end_passed" />
+
+  </bpmn:process>
+</bpmn:definitions>

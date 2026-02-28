@@ -1,0 +1,22 @@
+# Terminology rules for vault validation
+# Each rule: canonical term + non-canonical variants to flag
+# scope: "all" applies everywhere, "Project-Metis" applies only in that project folder
+rules:
+  - canonical: "Implementation Accelerator"
+    variants:
+      - "PS Accelerator"
+      - "Delivery Accelerator"
+      - "Professional Services Accelerator"
+    scope: "Project-Metis"
+
+  - canonical: "Knowledge Engine"
+    variants:
+      - "Knowledge System"
+      - "Knowledge Module"
+    scope: "Project-Metis"
+
+  - canonical: "claude schema"
+    variants:
+      - "claude_family schema"
+      - "claude_pm schema"
+    scope: "all"

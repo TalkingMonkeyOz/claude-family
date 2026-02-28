@@ -1,0 +1,280 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_design_document_lifecycle"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="design_document_lifecycle" name="Design Document Lifecycle (L1)" isExecutable="true">
+
+    <!--
+      L1 process for managing large-scale design projects across multiple sessions.
+      Covers the full brainstorm-to-handoff lifecycle.
+
+      4 patterns integrated:
+        P1: Concept Index (extract + cross-reference via knowledge DB)
+        P2: Compressed Design Map (auto-generated session orientation)
+        P3: Session-Aware Capture (remember() during brainstorms)
+        P4: Structural Validation (automated vault checks)
+
+      Division of labor:
+        Claude Desktop: Brainstorm, capture, report review, resolve decisions
+        Claude Code Console: Extract, validate, generate maps, BPMN maintenance
+
+      Feature: F132 | Feedback: FB164
+    -->
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Design Work Initiated">
+      <bpmn:outgoing>to_phase_check</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Determine which phase of the design lifecycle we're in -->
+    <bpmn:exclusiveGateway id="phase_gw" name="Design Phase?" default="flow_to_brainstorm">
+      <bpmn:incoming>to_phase_check</bpmn:incoming>
+      <bpmn:outgoing>flow_to_brainstorm</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_consolidation</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_validation</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_handoff</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_phase_check" sourceRef="start" targetRef="phase_gw" />
+
+    <!-- ============ PHASE A: BRAINSTORM + CAPTURE (P3) ============ -->
+
+    <!-- P2: Load design map at session start for orientation -->
+    <bpmn:scriptTask id="load_design_map" name="[HOOK] Load Design Map into Context">
+      <bpmn:incoming>flow_to_brainstorm</bpmn:incoming>
+      <bpmn:outgoing>to_brainstorm_work</bpmn:outgoing>
+      <bpmn:script>
+design_map_loaded = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_to_brainstorm" sourceRef="phase_gw" targetRef="load_design_map">
+      <bpmn:conditionExpression>phase == "brainstorm"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Main brainstorm work -->
+    <bpmn:userTask id="brainstorm_work" name="[CLAUDE+HUMAN] Brainstorm Design Topics">
+      <bpmn:incoming>to_brainstorm_work</bpmn:incoming>
+      <bpmn:outgoing>to_capture_concepts</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_brainstorm_work" sourceRef="load_design_map" targetRef="brainstorm_work" />
+
+    <!-- P3: Capture concepts -->
+    <bpmn:userTask id="capture_concepts" name="[CLAUDE] Capture Design Concepts via remember()">
+      <bpmn:incoming>to_capture_concepts</bpmn:incoming>
+      <bpmn:outgoing>to_write_vault</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_capture_concepts" sourceRef="brainstorm_work" targetRef="capture_concepts" />
+
+    <!-- Write vault files -->
+    <bpmn:userTask id="write_vault_files" name="[CLAUDE] Write Vault Files Incrementally">
+      <bpmn:incoming>to_write_vault</bpmn:incoming>
+      <bpmn:outgoing>to_session_handoff</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_write_vault" sourceRef="capture_concepts" targetRef="write_vault_files" />
+
+    <!-- Session handoff -->
+    <bpmn:userTask id="session_handoff" name="[CLAUDE] Write Session Handoff">
+      <bpmn:incoming>to_session_handoff</bpmn:incoming>
+      <bpmn:outgoing>to_post_brainstorm_validate</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_session_handoff" sourceRef="write_vault_files" targetRef="session_handoff" />
+
+    <!-- P4: Structural validation after brainstorm -->
+    <bpmn:callActivity id="post_brainstorm_validate" name="Structural Validation (P4)"
+                       calledElement="design_structural_validation">
+      <bpmn:incoming>to_post_brainstorm_validate</bpmn:incoming>
+      <bpmn:outgoing>to_needs_consolidation</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:sequenceFlow id="to_post_brainstorm_validate" sourceRef="session_handoff" targetRef="post_brainstorm_validate" />
+
+    <!-- Check if enough content for consolidation -->
+    <bpmn:exclusiveGateway id="consolidation_needed_gw" name="Consolidation Needed?" default="flow_back_to_brainstorm">
+      <bpmn:incoming>to_needs_consolidation</bpmn:incoming>
+      <bpmn:outgoing>flow_to_consolidation_from_brainstorm</bpmn:outgoing>
+      <bpmn:outgoing>flow_back_to_brainstorm</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_needs_consolidation" sourceRef="post_brainstorm_validate" targetRef="consolidation_needed_gw" />
+    <bpmn:sequenceFlow id="flow_to_consolidation_from_brainstorm" sourceRef="consolidation_needed_gw" targetRef="extract_concepts">
+      <bpmn:conditionExpression>areas_complete >= 3 and unindexed_files >= 5</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_back_to_brainstorm" sourceRef="consolidation_needed_gw" targetRef="end_continue_brainstorm" />
+
+    <bpmn:endEvent id="end_continue_brainstorm" name="Continue Brainstorming">
+      <bpmn:incoming>flow_back_to_brainstorm</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============ PHASE B: CONSOLIDATION (P1) ============ -->
+
+    <!-- Phase 1: EXTRACT -->
+    <bpmn:userTask id="extract_concepts" name="[CLAUDE] Extract Concepts from Vault Files (3-5/session)">
+      <bpmn:incoming>flow_to_consolidation</bpmn:incoming>
+      <bpmn:incoming>flow_to_consolidation_from_brainstorm</bpmn:incoming>
+      <bpmn:incoming>flow_more_to_extract</bpmn:incoming>
+      <bpmn:outgoing>to_all_extracted</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="flow_to_consolidation" sourceRef="phase_gw" targetRef="extract_concepts">
+      <bpmn:conditionExpression>phase == "consolidation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Check if all files extracted -->
+    <bpmn:exclusiveGateway id="all_extracted_gw" name="All Files Extracted?" default="flow_more_to_extract">
+      <bpmn:incoming>to_all_extracted</bpmn:incoming>
+      <bpmn:outgoing>flow_all_extracted</bpmn:outgoing>
+      <bpmn:outgoing>flow_more_to_extract</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_all_extracted" sourceRef="extract_concepts" targetRef="all_extracted_gw" />
+    <bpmn:sequenceFlow id="flow_more_to_extract" sourceRef="all_extracted_gw" targetRef="extract_concepts" />
+    <bpmn:sequenceFlow id="flow_all_extracted" sourceRef="all_extracted_gw" targetRef="map_concepts">
+      <bpmn:conditionExpression>unindexed_files == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Phase 2: MAP -->
+    <bpmn:userTask id="map_concepts" name="[CLAUDE] Map Cross-Area Overlaps and Gaps">
+      <bpmn:incoming>flow_all_extracted</bpmn:incoming>
+      <bpmn:outgoing>to_check</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Phase 3: CHECK -->
+    <bpmn:userTask id="check_conflicts" name="[CLAUDE] Check Flagged Overlaps (Pairwise Comparison)">
+      <bpmn:incoming>to_check</bpmn:incoming>
+      <bpmn:incoming>flow_recheck</bpmn:incoming>
+      <bpmn:outgoing>to_report</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_check" sourceRef="map_concepts" targetRef="check_conflicts" />
+
+    <!-- Phase 4: REPORT -->
+    <bpmn:userTask id="report_findings" name="[CLAUDE->HUMAN] Present Coherence Report">
+      <bpmn:incoming>to_report</bpmn:incoming>
+      <bpmn:outgoing>to_human_decision</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_report" sourceRef="check_conflicts" targetRef="report_findings" />
+
+    <!-- CRITICAL: Human decides — agent NEVER auto-resolves -->
+    <bpmn:exclusiveGateway id="human_decision_gw" name="Human Decision?" default="flow_accept">
+      <bpmn:incoming>to_human_decision</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve</bpmn:outgoing>
+      <bpmn:outgoing>flow_accept</bpmn:outgoing>
+      <bpmn:outgoing>flow_clean</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_human_decision" sourceRef="report_findings" targetRef="human_decision_gw" />
+
+    <!-- Phase 5: RESOLVE -->
+    <bpmn:userTask id="resolve_findings" name="[CLAUDE+HUMAN] Resolve Selected Findings">
+      <bpmn:incoming>flow_resolve</bpmn:incoming>
+      <bpmn:outgoing>flow_recheck</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="flow_resolve" sourceRef="human_decision_gw" targetRef="resolve_findings">
+      <bpmn:conditionExpression>decision == "resolve"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_recheck" sourceRef="resolve_findings" targetRef="check_conflicts" />
+
+    <!-- Accept as intentional -->
+    <bpmn:scriptTask id="accept_findings" name="[DB] Mark Findings as Intentional (wont_fix)">
+      <bpmn:incoming>flow_accept</bpmn:incoming>
+      <bpmn:outgoing>to_generate_map</bpmn:outgoing>
+      <bpmn:script>
+accepted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_accept" sourceRef="human_decision_gw" targetRef="accept_findings" />
+
+    <!-- All clean — no findings -->
+    <bpmn:sequenceFlow id="flow_clean" sourceRef="human_decision_gw" targetRef="generate_design_map">
+      <bpmn:conditionExpression>findings_count == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- P2: Generate design map after consolidation -->
+    <bpmn:scriptTask id="generate_design_map" name="[SCRIPT] Generate Compressed Design Map">
+      <bpmn:incoming>to_generate_map</bpmn:incoming>
+      <bpmn:incoming>flow_clean</bpmn:incoming>
+      <bpmn:outgoing>to_post_consolidation</bpmn:outgoing>
+      <bpmn:script>
+design_map_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_generate_map" sourceRef="accept_findings" targetRef="generate_design_map" />
+
+    <!-- Decide next step after consolidation -->
+    <bpmn:exclusiveGateway id="post_consolidation_gw" name="Next Phase?" default="flow_back_to_start">
+      <bpmn:incoming>to_post_consolidation</bpmn:incoming>
+      <bpmn:outgoing>flow_to_validation_from_con</bpmn:outgoing>
+      <bpmn:outgoing>flow_back_to_start</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_post_consolidation" sourceRef="generate_design_map" targetRef="post_consolidation_gw" />
+    <bpmn:sequenceFlow id="flow_to_validation_from_con" sourceRef="post_consolidation_gw" targetRef="structural_validation">
+      <bpmn:conditionExpression>ready_for_validation == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_back_to_start" sourceRef="post_consolidation_gw" targetRef="end_iteration_complete" />
+
+    <bpmn:endEvent id="end_iteration_complete" name="Iteration Complete">
+      <bpmn:incoming>flow_back_to_start</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============ PHASE C: FULL VALIDATION (P4 deep) ============ -->
+
+    <!-- Structural checks via callActivity -->
+    <bpmn:callActivity id="structural_validation" name="Structural Validation (P4)"
+                       calledElement="design_structural_validation">
+      <bpmn:incoming>flow_to_validation</bpmn:incoming>
+      <bpmn:incoming>flow_to_validation_from_con</bpmn:incoming>
+      <bpmn:outgoing>to_semantic</bpmn:outgoing>
+    </bpmn:callActivity>
+    <bpmn:sequenceFlow id="flow_to_validation" sourceRef="phase_gw" targetRef="structural_validation">
+      <bpmn:conditionExpression>phase == "validation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Semantic: coherence re-check -->
+    <bpmn:userTask id="semantic_validation" name="[CLAUDE] Final Coherence Check">
+      <bpmn:incoming>to_semantic</bpmn:incoming>
+      <bpmn:outgoing>to_bpmn_validate</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_semantic" sourceRef="structural_validation" targetRef="semantic_validation" />
+
+    <!-- BPMN schema validation -->
+    <bpmn:scriptTask id="bpmn_schema_validate" name="[MCP] validate_process_schema for Design Processes">
+      <bpmn:incoming>to_bpmn_validate</bpmn:incoming>
+      <bpmn:outgoing>to_val_report</bpmn:outgoing>
+      <bpmn:script>
+bpmn_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_bpmn_validate" sourceRef="semantic_validation" targetRef="bpmn_schema_validate" />
+
+    <!-- Validation report -->
+    <bpmn:userTask id="validation_report" name="[CLAUDE->HUMAN] Present Validation Report">
+      <bpmn:incoming>to_val_report</bpmn:incoming>
+      <bpmn:outgoing>to_package</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_val_report" sourceRef="bpmn_schema_validate" targetRef="validation_report" />
+
+    <!-- ============ PHASE D: HANDOFF ============ -->
+
+    <!-- Generate final design map -->
+    <bpmn:scriptTask id="final_design_map" name="[SCRIPT] Generate Final Design Map">
+      <bpmn:incoming>flow_to_handoff</bpmn:incoming>
+      <bpmn:outgoing>to_package_handoff</bpmn:outgoing>
+      <bpmn:script>
+final_map = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="flow_to_handoff" sourceRef="phase_gw" targetRef="final_design_map">
+      <bpmn:conditionExpression>phase == "handoff"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Package deliverables -->
+    <bpmn:userTask id="package_deliverables" name="[CLAUDE] Package Design Deliverables">
+      <bpmn:incoming>to_package</bpmn:incoming>
+      <bpmn:incoming>to_package_handoff</bpmn:incoming>
+      <bpmn:outgoing>to_final_end</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="to_package" sourceRef="validation_report" targetRef="package_deliverables" />
+    <bpmn:sequenceFlow id="to_package_handoff" sourceRef="final_design_map" targetRef="package_deliverables" />
+
+    <bpmn:endEvent id="end_complete" name="Design Lifecycle Complete">
+      <bpmn:incoming>to_final_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_final_end" sourceRef="package_deliverables" targetRef="end_complete" />
+
+  </bpmn:process>
+</bpmn:definitions>
