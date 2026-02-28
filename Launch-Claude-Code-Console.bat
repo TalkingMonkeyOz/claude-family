@@ -47,7 +47,9 @@ goto :WEZTERM
 echo.
 echo Launching in WezTerm...
 
-REM Sync configuration from database before launching
+REM Sync MCP configuration from database (generates .mcp.json)
+python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
+REM Sync settings configuration from database (generates settings.local.json)
 python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
 
 REM Launch WezTerm with Claude (use cmd /k to keep window open)
@@ -58,7 +60,9 @@ goto :END
 echo.
 echo Launching in Windows Terminal...
 
-REM Sync configuration from database before launching
+REM Sync MCP configuration from database (generates .mcp.json)
+python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
+REM Sync settings configuration from database (generates settings.local.json)
 python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
 
 REM Launch Windows Terminal with Claude
@@ -68,6 +72,9 @@ goto :END
 :DIRECT
 echo.
 echo Syncing configuration from database...
+REM Sync MCP configuration from database (generates .mcp.json)
+python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
+REM Sync settings configuration from database (generates settings.local.json)
 python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo Warning: Config sync had issues, continuing anyway...
