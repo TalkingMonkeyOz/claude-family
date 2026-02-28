@@ -30,12 +30,15 @@ Output Format:
 
 DEFAULT_CORE_PROTOCOL = """
 STOP!
-1. DECOMPOSE: Read all of the user input and break it down. Create a task (TaskCreate) for EVERY distinct directive BEFORE acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
-2. Verify before claiming - read files, query DB. Never guess.
-3. NOTEPAD: Use store_session_fact() to save credentials, decisions, endpoints, findings, progress. These survive compaction. Use list_session_facts() to review. recall_session_fact() works across sessions. This is your memory.
-4. BPMN-FIRST: For any process or system change - model it in BPMN first, write tests, then implement code. Never code without a model.
-5. DELEGATE: Tasks touching 3+ files = spawn an agent (coder-sonnet for complex, coder-haiku for simple). Don't bloat the main context. save_checkpoint() after completing each task.
-6. Check MCP tools first - project-tools has 40+ tools. They have descriptions, use them!
+1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+   TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
+2. MULTI-PART CHECK: If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
+3. NOTEPAD: store_session_fact() for credentials, decisions, findings, progress. list_session_facts() to review. recall_session_fact() across sessions. This is your memory.
+4. MEMORY: Use remember() when you discover patterns, make decisions, or learn gotchas. Use recall_memories(query) before starting complex tasks to load relevant context. These replace store_knowledge/recall_knowledge for most uses.
+5. DELEGATE: 3+ files = spawn agent (coder-sonnet complex, coder-haiku simple). Don't bloat main context. save_checkpoint() after each task.
+6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
+7. Verify before claiming - read files, query DB. Never guess.
+8. Check MCP tools first - project-tools has 40+ tools.
 """
 
 
@@ -135,7 +138,7 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
     # Check each interval
     if count > 0 and count % REMINDER_INTERVALS["inbox_check"] == 0:
         if count != state.get("last_inbox_check", 0):
-            reminders.append("📬 **Inbox Check**: Use `mcp__orchestrator__check_inbox` to see pending messages")
+            reminders.append("📬 **Inbox Check**: Use `mcp__project-tools__check_inbox` to see pending messages")
             state["last_inbox_check"] = count
 
     if count > 0 and count % REMINDER_INTERVALS["vault_refresh"] == 0:
