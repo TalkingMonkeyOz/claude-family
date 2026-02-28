@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Generate MCP Config - Database-Driven .mcp.json Generator
+Generate MCP Config - .mcp.json Resolver
 
-Reads MCP server configuration from PostgreSQL database and generates .mcp.json
-with automatic resolution of npx packages to direct node paths.
+Reads MCP server configuration from an existing .mcp.json file and resolves
+npx packages to direct node paths for faster startup.
 
 Architecture:
-    Database (Source of Truth: workspaces.startup_config.mcp_configs)
+    .mcp.json (Source of Truth - edit directly or via DB workspaces.startup_config)
         ↓
     generate_mcp_config.py (resolves npx → direct node paths)
         ↓
-    .mcp.json (Generated, self-healing)
+    .mcp.json (Updated in-place with resolved paths)
 
 Features:
     - Resolves npx packages to direct node paths (eliminates cmd.exe shim overhead)
@@ -31,9 +31,8 @@ import os
 import sys
 import logging
 import platform
-import subprocess
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 from copy import deepcopy
 
 # Setup logging
@@ -48,35 +47,38 @@ logging.basicConfig(
 )
 logger = logging.getLogger('mcp_config_generator')
 
-# Shared credential loading
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import get_db_connection, detect_psycopg
-_psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
-DB_AVAILABLE = _psycopg_mod is not None
+# No database dependency - reads directly from .mcp.json files
 
 
-def get_mcp_configs(conn, project_name: str) -> Optional[Dict]:
-    """Get MCP configs from workspaces.startup_config.mcp_configs."""
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT
-                startup_config->'mcp_configs' as mcp_configs,
-                startup_config->'enabledMcpjsonServers' as enabled_servers
-            FROM claude.workspaces
-            WHERE project_name = %s
-        """, (project_name,))
+def get_mcp_configs_from_file(project_path: str) -> Optional[Dict]:
+    """Read MCP configs from an existing .mcp.json file.
 
-        row = cur.fetchone()
-        if row:
-            data = dict(row) if PSYCOPG_VERSION == 3 else dict(row)
-            return {
-                'mcp_configs': data.get('mcp_configs') or {},
-                'enabled_servers': data.get('enabled_servers') or []
-            }
+    Args:
+        project_path: Path to the project directory
+
+    Returns:
+        Dict with 'mcp_configs' and 'enabled_servers' keys, or None if file missing
+    """
+    mcp_file = Path(project_path) / ".mcp.json"
+    if not mcp_file.exists():
+        logger.info(f"No .mcp.json found at {mcp_file}")
         return None
+
+    try:
+        with open(mcp_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        mcp_servers = data.get('mcpServers', {})
+        if not mcp_servers:
+            logger.info(f"No mcpServers in {mcp_file}")
+            return None
+
+        return {
+            'mcp_configs': mcp_servers,
+            'enabled_servers': []  # All servers enabled when reading from file
+        }
     except Exception as e:
-        logger.error(f"Failed to get MCP configs: {e}")
+        logger.error(f"Failed to read .mcp.json: {e}")
         return None
 
 
@@ -237,84 +239,68 @@ def resolve_server_command(server_name: str, server_config: Dict) -> Dict:
 
 
 def generate_mcp_json(project_name: str, project_path: str) -> Optional[Dict]:
-    """Generate .mcp.json content from database configs.
+    """Resolve npx commands in .mcp.json to direct node paths.
+
+    Reads the existing .mcp.json in the project directory and resolves any
+    npx-based server commands to direct node invocations for faster startup.
 
     Args:
-        project_name: Name of the project in workspaces table
+        project_name: Name of the project (for logging)
         project_path: Path to the project directory
 
     Returns:
-        Dict ready to be written as .mcp.json, or None if failed
+        Dict ready to be written as .mcp.json, or None if no .mcp.json found
     """
-    if not DB_AVAILABLE:
-        logger.error("Database not available - cannot generate MCP config")
+    logger.info(f"Resolving MCP config for project: {project_name}")
+
+    # Read from existing .mcp.json file
+    config_data = get_mcp_configs_from_file(project_path)
+    if not config_data:
+        logger.warning(f"No .mcp.json found for project '{project_name}'")
         return None
 
-    conn = get_db_connection()
-    if not conn:
-        logger.error("Failed to connect to database")
+    mcp_configs = config_data.get('mcp_configs', {})
+    enabled_servers = config_data.get('enabled_servers', [])
+
+    if not mcp_configs:
+        logger.info(f"Project '{project_name}' has no mcpServers defined")
         return None
 
+    # Build resolved mcpServers object
+    mcp_servers = {}
+
+    for server_name, server_config in mcp_configs.items():
+        # Only include enabled servers if a filter is specified
+        if enabled_servers and server_name not in enabled_servers:
+            logger.info(f"Skipping disabled server: {server_name}")
+            continue
+
+        # Resolve npx to direct node paths where possible
+        processed_config = resolve_server_command(server_name, deepcopy(server_config))
+
+        # Ensure type is set
+        if 'type' not in processed_config:
+            processed_config['type'] = 'stdio'
+
+        mcp_servers[server_name] = processed_config
+
+    if not mcp_servers:
+        logger.info(f"No enabled MCP servers for project '{project_name}'")
+        return None
+
+    # Preserve any top-level metadata from the original file, update mcpServers
+    original_file = Path(project_path) / ".mcp.json"
+    result = {}
     try:
-        logger.info(f"Generating MCP config for project: {project_name}")
+        with open(original_file, 'r', encoding='utf-8') as f:
+            result = json.load(f)
+    except Exception:
+        pass
 
-        # Get MCP configs from database
-        config_data = get_mcp_configs(conn, project_name)
-        if not config_data:
-            logger.warning(f"No MCP configs found for project '{project_name}'")
-            conn.close()
-            return None
+    result["mcpServers"] = mcp_servers
 
-        mcp_configs = config_data.get('mcp_configs', {})
-        enabled_servers = config_data.get('enabled_servers', [])
-
-        if not mcp_configs:
-            logger.info(f"Project '{project_name}' has no MCP configs defined")
-            conn.close()
-            return None
-
-        # Build mcpServers object
-        mcp_servers = {}
-
-        for server_name, server_config in mcp_configs.items():
-            # Only include enabled servers if enabledMcpjsonServers is specified
-            if enabled_servers and server_name not in enabled_servers:
-                logger.info(f"Skipping disabled server: {server_name}")
-                continue
-
-            # Resolve npx to direct node paths where possible
-            processed_config = resolve_server_command(server_name, deepcopy(server_config))
-
-            # Ensure type is set
-            if 'type' not in processed_config:
-                processed_config['type'] = 'stdio'
-
-            mcp_servers[server_name] = processed_config
-
-        if not mcp_servers:
-            logger.info(f"No enabled MCP servers for project '{project_name}'")
-            conn.close()
-            return None
-
-        # Build final structure
-        result = {
-            "_comment": f"Generated from database - DO NOT EDIT MANUALLY",
-            "_generated": True,
-            "_project": project_name,
-            "mcpServers": mcp_servers
-        }
-
-        logger.info(f"Generated MCP config with servers: {list(mcp_servers.keys())}")
-        conn.close()
-        return result
-
-    except Exception as e:
-        logger.error(f"Failed to generate MCP config: {e}", exc_info=True)
-        try:
-            conn.close()
-        except:
-            pass
-        return None
+    logger.info(f"Resolved MCP config with servers: {list(mcp_servers.keys())}")
+    return result
 
 
 def write_mcp_json(project_path: str, mcp_config: Dict) -> bool:
@@ -348,50 +334,19 @@ def resolve_project(arg: str) -> tuple[str, str]:
     """Resolve argument to project name and path.
 
     Args:
-        arg: Either a project name or a path
+        arg: Either a project directory path or a project name (uses cwd as path)
 
     Returns:
         Tuple of (project_name, project_path)
     """
-    # Check if arg is a path
+    # Check if arg is a path to an existing directory
     if os.path.isdir(arg):
         project_path = os.path.abspath(arg)
         project_name = os.path.basename(project_path)
         return project_name, project_path
 
-    # Check if arg looks like a project name - query database for path
-    if not DB_AVAILABLE:
-        # Assume it's a project name, use cwd
-        return arg, os.getcwd()
-
-    conn = get_db_connection()
-    if not conn:
-        return arg, os.getcwd()
-
-    try:
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT project_path FROM claude.workspaces
-            WHERE project_name = %s
-        """, (arg,))
-
-        row = cur.fetchone()
-        if row:
-            data = dict(row) if PSYCOPG_VERSION == 3 else dict(row)
-            project_path = data.get('project_path', os.getcwd())
-            conn.close()
-            return arg, project_path
-
-        conn.close()
-        return arg, os.getcwd()
-
-    except Exception as e:
-        logger.error(f"Failed to resolve project: {e}")
-        try:
-            conn.close()
-        except:
-            pass
-        return arg, os.getcwd()
+    # Treat as project name - use current working directory as path
+    return arg, os.getcwd()
 
 
 def main():
@@ -412,8 +367,8 @@ def main():
     mcp_config = generate_mcp_json(project_name, project_path)
 
     if not mcp_config:
-        print("[SKIP] No MCP config to generate (no mcp_configs in database)")
-        return 0  # Not an error - project just doesn't have MCP configs
+        print("[SKIP] No MCP config to resolve (no .mcp.json found in project directory)")
+        return 0  # Not an error - project just doesn't have .mcp.json yet
 
     # Write .mcp.json
     if write_mcp_json(project_path, mcp_config):

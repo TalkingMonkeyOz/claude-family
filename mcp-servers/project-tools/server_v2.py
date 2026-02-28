@@ -3192,17 +3192,12 @@ if _old_server_dir not in sys.path:
 
 # We import the tool implementations (not the MCP app) from the old server
 from server import (  # noqa: E402
-    tool_get_project_context,
-    tool_get_session_resume,
     tool_get_incomplete_todos,
-    tool_restore_session_todos,
     tool_create_feedback,
     tool_create_feature,
     tool_add_build_task,
     tool_get_ready_tasks,
     tool_update_work_status,
-    tool_find_skill,
-    tool_todos_to_build_tasks,
     tool_store_knowledge,
     tool_recall_knowledge,
     tool_graph_search,
@@ -3250,34 +3245,6 @@ def _run_async(coro):
         return asyncio.run(coro)
 
 
-@mcp.tool()
-def get_project_context(
-    project_path: str,
-) -> dict:
-    """DEPRECATED: Use start_session() instead.
-
-    Loads project context. start_session() returns everything this does plus todos,
-    work items, and messages in a single optimized call.
-
-    Args:
-        project_path: Project path or name (e.g., 'claude-family' or 'C:/Projects/claude-family').
-    """
-    return _run_async(tool_get_project_context(project_path))
-
-
-@mcp.tool()
-def get_session_resume(
-    project: str,
-) -> dict:
-    """DEPRECATED: Use start_session() instead.
-
-    Gets session resume context. start_session() returns everything this does plus
-    work items in a single optimized call.
-
-    Args:
-        project: Project name (defaults to current directory basename).
-    """
-    return _run_async(tool_get_session_resume(project))
 
 
 @mcp.tool()
@@ -3295,21 +3262,6 @@ def get_incomplete_todos(
     """
     return _run_async(tool_get_incomplete_todos(project))
 
-
-@mcp.tool()
-def restore_session_todos(
-    session_id: str,
-) -> dict:
-    """Get todos from a specific past session, formatted for TodoWrite.
-
-    Use when: Restoring work items from a crashed or resumed session. Used
-    internally by /session-resume. Returns data shaped for TodoWrite.
-    Returns: {todos: [{content, status, priority}], session_id}.
-
-    Args:
-        session_id: Session UUID to restore todos from.
-    """
-    return _run_async(tool_restore_session_todos(session_id))
 
 
 @mcp.tool()
@@ -3450,44 +3402,9 @@ def update_work_status(
     )
 
 
-@mcp.tool()
-def find_skill(
-    task_description: str,
-    limit: int = 5,
-) -> dict:
-    """Search skill_content by task description to find relevant skills/guidelines.
-
-    Use when: Looking for a skill or guideline that applies to your current task.
-    Searches skill_content table by keyword similarity.
-    Returns: {skills: [{skill_name, content, similarity}]}.
-
-    Args:
-        task_description: Description of what you're trying to do.
-        limit: Max results (default: 5).
-    """
-    return _run_async(tool_find_skill(task_description, limit))
 
 
-@mcp.tool()
-def todos_to_build_tasks(
-    feature_id: str,
-    project: str,
-    include_completed: bool = False,
-) -> dict:
-    """Convert session todos to persistent build_tasks linked to a feature.
-
-    Use when: Promoting ad-hoc session todos into tracked build_tasks on a
-    feature. Archives the converted todos after creating build_tasks.
-    Returns: {success, converted_count, feature_code, archived_todos}.
-
-    Args:
-        feature_id: Feature ID or short_code to link tasks to.
-        project: Project name or path.
-        include_completed: Include completed todos (default: false).
-    """
-    return _run_async(tool_todos_to_build_tasks(feature_id, project, include_completed))
-
-
+# LEGACY - F130 cognitive memory is preferred
 @mcp.tool()
 def store_knowledge(
     title: str,
@@ -3528,6 +3445,7 @@ def store_knowledge(
     ))
 
 
+# LEGACY - F130 cognitive memory is preferred
 @mcp.tool()
 def recall_knowledge(
     query: str,
@@ -3570,6 +3488,7 @@ def recall_knowledge(
     ))
 
 
+# LEGACY - F130 cognitive memory is preferred
 @mcp.tool()
 def graph_search(
     query: str,
@@ -4941,6 +4860,48 @@ def recover_session(
         return {"success": False, "error": f"Recovery failed: {str(e)}"}
     finally:
         conn.close()
+
+
+# ============================================================================
+# System Maintenance
+# ============================================================================
+
+
+@mcp.tool()
+def system_maintenance(
+    scope: str = "full",
+    auto_repair: bool = True,
+) -> dict:
+    """Run system maintenance: detect and repair staleness across 5 subsystems.
+
+    Implements the system_maintenance BPMN process. Detects staleness in schema registry,
+    vault embeddings, BPMN registry, memory embeddings, and column registry. Optionally
+    repairs stale subsystems.
+
+    Args:
+        scope: What to maintain. Options:
+            - "full": All 5 subsystems (default)
+            - "detect_only": Detection only, no repairs
+            - "schema": Schema registry + embeddings only
+            - "vault": Vault document embeddings only
+            - "bpmn": BPMN process registry only
+            - "memory": Knowledge memory embeddings only
+            - "column_registry": Column constraint registry only
+        auto_repair: If True, repair stale subsystems. If False, detect only.
+
+    Returns dict with:
+        - detection: Per-subsystem staleness results
+        - repairs: Per-subsystem repair results (empty if detect_only)
+        - summary: Human-readable report
+        - any_stale: Whether any staleness was detected
+        - any_repaired: Whether any repairs were performed
+    """
+    import importlib.util
+    scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+    spec = importlib.util.spec_from_file_location("system_maintenance_mod", os.path.join(scripts_dir, "system_maintenance.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.run_maintenance(scope=scope, auto_repair=auto_repair)
 
 
 # ============================================================================

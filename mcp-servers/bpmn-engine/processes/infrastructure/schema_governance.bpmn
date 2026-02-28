@@ -1,0 +1,344 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/schema-governance"
+    id="Definitions_SchemaGovernance">
+
+  <bpmn:process id="schema_governance" name="Schema Governance Pipeline" isExecutable="true">
+
+    <!--
+      3-layer schema governance pipeline: introspect, embed, validate.
+
+      Layer 1: schema_docs.py - COMMENT ON + registry sync (foundation)
+      Layer 2: embed_schema.py - Voyage AI embeddings for RAG search
+      Layer 3: validate_process_schema - BPMN data ref validation
+
+      Trigger: Manual (after schema changes) or periodic maintenance
+      Scope: claude.* schema (all tables)
+
+      Paths:
+        1. Full pipeline: Introspect -> Comment -> Sync -> Embed -> Validate -> Done
+        2. Incremental: Introspect -> No changes detected -> Skip embedding -> Done
+        3. Embed only: Skip L1 (comments current) -> Embed changed tables -> Done
+        4. Validate only: Skip L1+L2 -> Validate BPMN data refs -> Done
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Schema Governance Triggered">
+      <bpmn:outgoing>flow_start_mode</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Choose pipeline mode -->
+    <bpmn:exclusiveGateway id="mode_gw" name="Pipeline Mode?" default="flow_full">
+      <bpmn:incoming>flow_start_mode</bpmn:incoming>
+      <bpmn:outgoing>flow_full</bpmn:outgoing>
+      <bpmn:outgoing>flow_embed_only</bpmn:outgoing>
+      <bpmn:outgoing>flow_validate_only</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- LAYER 1: SCHEMA SELF-DOCUMENTATION                                  -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="introspect_schema" name="[DB] Introspect pg_catalog" scriptFormat="python">
+      <bpmn:incoming>flow_full</bpmn:incoming>
+      <bpmn:outgoing>flow_introspect_report</bpmn:outgoing>
+      <bpmn:script>
+# Query information_schema, pg_catalog, pg_description
+# Collect: tables, columns, types, FKs, CHECK constraints, existing comments
+# Output: table_count, column_count, tables_without_comments, columns_without_comments
+table_count = 100
+column_count = 1198
+tables_without_comments = 0
+columns_without_comments = 0
+tables_to_embed = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="generate_report" name="[TOOL] Generate Coverage Report" scriptFormat="python">
+      <bpmn:incoming>flow_introspect_report</bpmn:incoming>
+      <bpmn:outgoing>flow_report_comments</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --report
+# Output: table_comment_pct, column_comment_pct, registry_pct
+# Determines if comments need updating
+needs_comments = tables_without_comments > 0 or columns_without_comments > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="needs_comments_gw" name="Comments Needed?" default="flow_skip_comments">
+      <bpmn:incoming>flow_report_comments</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_comments</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_comments</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="generate_comments" name="[TOOL] Generate COMMENT ON SQL" scriptFormat="python">
+      <bpmn:incoming>flow_apply_comments</bpmn:incoming>
+      <bpmn:outgoing>flow_gen_apply</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --generate-comments
+# Infers descriptions from column names, types, FK relationships
+# Output: comment_sql (list of COMMENT ON statements)
+comments_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="apply_comments" name="[DB] Apply COMMENT ON Statements" scriptFormat="python">
+      <bpmn:incoming>flow_gen_apply</bpmn:incoming>
+      <bpmn:outgoing>flow_comments_sync</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --apply-comments
+# Executes COMMENT ON TABLE/COLUMN for all generated comments
+# Output: comments_applied_count
+comments_applied = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Sync registries (always after comments, or if comments skipped) -->
+    <bpmn:scriptTask id="sync_schema_registry" name="[DB] Sync schema_registry" scriptFormat="python">
+      <bpmn:incoming>flow_comments_sync</bpmn:incoming>
+      <bpmn:incoming>flow_skip_comments</bpmn:incoming>
+      <bpmn:outgoing>flow_sync_column</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --sync-registry
+# UPSERT into claude.schema_registry: table descriptions, column info, FK rels
+# Hash-based: only updates changed tables
+registry_synced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_column_registry" name="[DB] Sync column_registry from CHECK" scriptFormat="python">
+      <bpmn:incoming>flow_sync_column</bpmn:incoming>
+      <bpmn:outgoing>flow_l1_complete</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --sync-column-registry
+# Extracts CHECK constraint values -> claude.column_registry.valid_values (JSONB)
+# Output: constraints_synced_count
+column_registry_synced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- LAYER 2: SCHEMA EMBEDDINGS                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="build_embeddable_text" name="[TOOL] Build Embeddable Text Per Table" scriptFormat="python">
+      <bpmn:incoming>flow_l1_complete</bpmn:incoming>
+      <bpmn:incoming>flow_embed_only</bpmn:incoming>
+      <bpmn:outgoing>flow_build_hash</bpmn:outgoing>
+      <bpmn:script>
+# embed_schema.py: For each table, build rich text:
+# Table name, purpose (COMMENT ON), columns with types+descriptions,
+# FK relationships, CHECK constraints, row count
+# Output: embeddable_texts (dict: table_name -> text), maintains tables_to_embed
+texts_built = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_content_hash" name="[TOOL] Check Content Hashes" scriptFormat="python">
+      <bpmn:incoming>flow_build_hash</bpmn:incoming>
+      <bpmn:outgoing>flow_hash_embed</bpmn:outgoing>
+      <bpmn:script>
+# Compare SHA256 hash of each table's embeddable text vs stored content_hash
+# Output: tables_to_embed (list of changed tables), skip_count
+tables_changed = len(tables_to_embed) if tables_to_embed else 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_changes_gw" name="Tables Changed?" default="flow_no_embed_changes">
+      <bpmn:incoming>flow_hash_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_embed_tables</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_embed_changes</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="embed_tables" name="[TOOL] Generate Voyage AI Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_embed_tables</bpmn:incoming>
+      <bpmn:outgoing>flow_store_embeddings</bpmn:outgoing>
+      <bpmn:script>
+# embed_schema.py: Call Voyage AI API (voyage-3, 1024 dimensions)
+# Input: embeddable_texts for changed tables
+# Output: embeddings (dict: table_name -> vector)
+embeddings_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="store_embeddings" name="[DB] Store Embeddings in schema_registry" scriptFormat="python">
+      <bpmn:incoming>flow_store_embeddings</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_complete</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.schema_registry SET embedding = vector, content_hash = hash
+# WHERE table_name = ...
+# Output: embedded_count
+embeddings_stored = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- LAYER 3: BPMN-SCHEMA VALIDATION                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="extract_data_refs" name="[TOOL] Extract BPMN Data References" scriptFormat="python">
+      <bpmn:incoming>flow_l2_complete</bpmn:incoming>
+      <bpmn:incoming>flow_no_embed_changes</bpmn:incoming>
+      <bpmn:incoming>flow_validate_only</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_validate</bpmn:outgoing>
+      <bpmn:script>
+# _extract_data_references(process_el):
+# Sources: dataObjectReference, [DB] task prefix, claude.* in documentation
+# Output: data_refs (list of table references)
+refs_extracted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_refs" name="[DB] Validate Refs Against Live Schema" scriptFormat="python">
+      <bpmn:incoming>flow_extract_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_map</bpmn:outgoing>
+      <bpmn:script>
+# Check each data_ref exists in information_schema.tables
+# Output: valid_refs, invalid_refs, coverage_pct
+validation_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="update_process_data_map" name="[DB] Update process_data_map" scriptFormat="python">
+      <bpmn:incoming>flow_validate_map</bpmn:incoming>
+      <bpmn:outgoing>flow_l3_complete</bpmn:outgoing>
+      <bpmn:script>
+# UPSERT into claude.process_data_map:
+# process_id, table_name, access_type, element_id, element_name, source
+map_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END: PIPELINE COMPLETE                                              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="summarize_results" name="[TOOL] Summarize Pipeline Results" scriptFormat="python">
+      <bpmn:incoming>flow_l3_complete</bpmn:incoming>
+      <bpmn:outgoing>flow_end</bpmn:outgoing>
+      <bpmn:script>
+# Compile: L1 coverage, L2 embedded count, L3 validation coverage
+# Output: pipeline_summary
+pipeline_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_complete" name="Schema Governance Complete">
+      <bpmn:incoming>flow_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="flow_start_mode" sourceRef="start" targetRef="mode_gw"/>
+    <bpmn:sequenceFlow id="flow_full" sourceRef="mode_gw" targetRef="introspect_schema"/>
+    <bpmn:sequenceFlow id="flow_embed_only" sourceRef="mode_gw" targetRef="build_embeddable_text">
+      <bpmn:conditionExpression>pipeline_mode == 'embed_only'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_validate_only" sourceRef="mode_gw" targetRef="extract_data_refs">
+      <bpmn:conditionExpression>pipeline_mode == 'validate_only'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Layer 1 -->
+    <bpmn:sequenceFlow id="flow_introspect_report" sourceRef="introspect_schema" targetRef="generate_report"/>
+    <bpmn:sequenceFlow id="flow_report_comments" sourceRef="generate_report" targetRef="needs_comments_gw"/>
+    <bpmn:sequenceFlow id="flow_apply_comments" sourceRef="needs_comments_gw" targetRef="generate_comments">
+      <bpmn:conditionExpression>needs_comments == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_comments" sourceRef="needs_comments_gw" targetRef="sync_schema_registry"/>
+    <bpmn:sequenceFlow id="flow_gen_apply" sourceRef="generate_comments" targetRef="apply_comments"/>
+    <bpmn:sequenceFlow id="flow_comments_sync" sourceRef="apply_comments" targetRef="sync_schema_registry"/>
+    <bpmn:sequenceFlow id="flow_sync_column" sourceRef="sync_schema_registry" targetRef="sync_column_registry"/>
+    <bpmn:sequenceFlow id="flow_l1_complete" sourceRef="sync_column_registry" targetRef="build_embeddable_text"/>
+
+    <!-- Layer 2 -->
+    <bpmn:sequenceFlow id="flow_build_hash" sourceRef="build_embeddable_text" targetRef="check_content_hash"/>
+    <bpmn:sequenceFlow id="flow_hash_embed" sourceRef="check_content_hash" targetRef="has_changes_gw"/>
+    <bpmn:sequenceFlow id="flow_embed_tables" sourceRef="has_changes_gw" targetRef="embed_tables">
+      <bpmn:conditionExpression>tables_changed > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_embed_changes" sourceRef="has_changes_gw" targetRef="extract_data_refs"/>
+    <bpmn:sequenceFlow id="flow_store_embeddings" sourceRef="embed_tables" targetRef="store_embeddings"/>
+    <bpmn:sequenceFlow id="flow_l2_complete" sourceRef="store_embeddings" targetRef="extract_data_refs"/>
+
+    <!-- Layer 3 -->
+    <bpmn:sequenceFlow id="flow_extract_validate" sourceRef="extract_data_refs" targetRef="validate_refs"/>
+    <bpmn:sequenceFlow id="flow_validate_map" sourceRef="validate_refs" targetRef="update_process_data_map"/>
+    <bpmn:sequenceFlow id="flow_l3_complete" sourceRef="update_process_data_map" targetRef="summarize_results"/>
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="flow_end" sourceRef="summarize_results" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+  <!-- Diagram layout -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="schema_governance">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_mode" bpmnElement="mode_gw" isMarkerVisible="true">
+        <dc:Bounds x="140" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_introspect" bpmnElement="introspect_schema">
+        <dc:Bounds x="240" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_report" bpmnElement="generate_report">
+        <dc:Bounds x="450" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_needs_gw" bpmnElement="needs_comments_gw" isMarkerVisible="true">
+        <dc:Bounds x="660" y="193" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_gen_comments" bpmnElement="generate_comments">
+        <dc:Bounds x="760" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_apply" bpmnElement="apply_comments">
+        <dc:Bounds x="970" y="180" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_sync_reg" bpmnElement="sync_schema_registry">
+        <dc:Bounds x="970" y="320" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_sync_col" bpmnElement="sync_column_registry">
+        <dc:Bounds x="760" y="320" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_build" bpmnElement="build_embeddable_text">
+        <dc:Bounds x="240" y="460" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_hash" bpmnElement="check_content_hash">
+        <dc:Bounds x="470" y="460" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_changes_gw" bpmnElement="has_changes_gw" isMarkerVisible="true">
+        <dc:Bounds x="680" y="473" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_embed" bpmnElement="embed_tables">
+        <dc:Bounds x="780" y="460" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_store" bpmnElement="store_embeddings">
+        <dc:Bounds x="990" y="460" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_extract" bpmnElement="extract_data_refs">
+        <dc:Bounds x="240" y="600" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_validate" bpmnElement="validate_refs">
+        <dc:Bounds x="470" y="600" width="180" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_map" bpmnElement="update_process_data_map">
+        <dc:Bounds x="700" y="600" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_summary" bpmnElement="summarize_results">
+        <dc:Bounds x="910" y="600" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end" bpmnElement="end_complete">
+        <dc:Bounds x="1120" y="622" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

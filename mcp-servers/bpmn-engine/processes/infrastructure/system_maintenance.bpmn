@@ -1,0 +1,570 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/system-maintenance"
+    id="Definitions_SystemMaintenance">
+
+  <bpmn:process id="system_maintenance" name="System Maintenance: Automated Staleness Detection and Repair" isExecutable="true">
+
+    <!--
+      Automated pipeline that detects and fixes staleness across all subsystems.
+
+      Trigger:
+        - SessionStart (lightweight detect-only for fast path)
+        - On-demand via /maintenance command (full repair enabled)
+        - Post-commit (targeted repair after schema or vault changes)
+
+      Subsystems monitored (5):
+        1. Schema registry: claude.schema_registry vs information_schema.tables
+        2. Vault embeddings: claude.vault_documents vs knowledge-vault/ .md files
+        3. BPMN registry: claude.bpmn_processes vs processes/**/*.bpmn files
+        4. Memory embeddings: claude.knowledge tier='mid' entries missing embeddings
+        5. Column registry: claude.column_registry vs pg_catalog CHECK constraints
+
+      Phases:
+        1. Detect  - Parallel lightweight queries across all 5 subsystems
+        2. Decide  - Fast-path skip if nothing stale (critical for SessionStart)
+        3. Repair  - Parallel heavy repair for each stale subsystem
+        4. Summary - Compile report of what was stale, fixed, and any failures
+
+      Design principles:
+        - Detection MUST be fast (lightweight queries, no Voyage AI calls)
+        - Repair ONLY runs when staleness is detected
+        - All 5 checks run in parallel (independent, no ordering dependency)
+        - All applicable repairs run in parallel (independent)
+        - Each repair is individually conditional on its own staleness flag
+
+      Key tables:
+        - claude.schema_registry: Schema documentation + Voyage AI embeddings
+        - claude.vault_documents: Vault .md file tracking + embeddings
+        - claude.bpmn_processes: BPMN process registry
+        - claude.knowledge: Cognitive memory (short/mid/long tier)
+        - claude.column_registry: Valid values for constrained columns
+
+      Implementation:
+        * scripts/schema_docs.py (full pipeline for schema repair)
+        * scripts/embed_schema.py (schema embedding repair)
+        * scripts/embed_vault_documents.py (incremental vault repair)
+        * mcp_servers/project_tools/server_v2.py (sync_bpmn_processes, consolidate_memories)
+        * scripts/schema_docs.py (sync column registry for column registry repair)
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Maintenance Triggered">
+      <bpmn:outgoing>flow_start_to_detect_split</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: DETECT STALENESS (parallel across all 5 subsystems)       -->
+    <!-- ================================================================== -->
+
+    <!-- Fan out to all 5 staleness checks concurrently -->
+    <bpmn:parallelGateway id="detect_split" name="Parallel Staleness Checks">
+      <bpmn:incoming>flow_start_to_detect_split</bpmn:incoming>
+      <bpmn:outgoing>flow_split_to_schema</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_vault</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_bpmn</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_memory</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_column</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Check 1: Schema registry staleness -->
+    <bpmn:scriptTask id="check_schema" name="[DB] Check Schema Staleness" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_schema</bpmn:incoming>
+      <bpmn:outgoing>flow_schema_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Compare information_schema.tables count vs claude.schema_registry count
+# Flag tables missing from registry OR where content_hash differs
+# Lightweight: COUNT queries only, no file I/O, no Voyage AI
+#
+# SELECT COUNT(*) FROM information_schema.tables
+#   WHERE table_schema = 'claude' -> live_table_count
+# SELECT COUNT(*) FROM claude.schema_registry -> registry_count
+# SELECT COUNT(*) FROM information_schema.tables t
+#   LEFT JOIN claude.schema_registry r ON r.table_name = t.table_name
+#   WHERE t.table_schema = 'claude' AND r.table_name IS NULL -> schema_new_tables
+# Additional: hash spot-check on 5 random tables to detect changed_tables
+schema_new_tables = 0
+schema_changed_tables = 0
+schema_stale = (schema_new_tables + schema_changed_tables) > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 2: Vault embedding staleness -->
+    <bpmn:scriptTask id="check_vault" name="[DB] Check Vault Embedding Staleness" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_vault</bpmn:incoming>
+      <bpmn:outgoing>flow_vault_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Walk knowledge-vault/ for .md files, compute SHA256 per file
+# Compare vs claude.vault_documents.content_hash
+# Count files with no record in vault_documents (unembedded)
+# Lightweight: file hashes only, no Voyage AI calls
+#
+# vault_files = list .md files in knowledge-vault/
+# for each file: hash = sha256(read(file))
+# SELECT file_path, content_hash FROM claude.vault_documents
+# vault_unembedded_count = files with no matching DB record
+# vault_changed_count = files where hash differs from stored hash
+vault_unembedded_count = 0
+vault_changed_count = 0
+vault_stale = (vault_unembedded_count + vault_changed_count) > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 3: BPMN registry staleness -->
+    <bpmn:scriptTask id="check_bpmn" name="[DB] Check BPMN Registry Staleness" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_bpmn</bpmn:incoming>
+      <bpmn:outgoing>flow_bpmn_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Walk mcp-servers/bpmn-engine/processes/ for .bpmn files
+# Compare file modification times vs claude.bpmn_processes.updated_at
+# Count .bpmn files with no matching record in registry
+# Lightweight: mtime comparison only, no file parsing
+#
+# bpmn_files = list .bpmn files in processes/**/*.bpmn
+# SELECT process_file_path, updated_at FROM claude.bpmn_processes
+# bpmn_unsynced_count = files with no DB record OR mtime > updated_at
+bpmn_unsynced_count = 0
+bpmn_stale = bpmn_unsynced_count > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 4: Memory embedding staleness -->
+    <bpmn:scriptTask id="check_memory" name="[DB] Check Memory Embedding Staleness" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_memory</bpmn:incoming>
+      <bpmn:outgoing>flow_memory_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Count knowledge entries missing embeddings
+# Focus on mid tier (working knowledge, most actionable)
+# Lightweight: simple COUNT query
+#
+# SELECT COUNT(*) FROM claude.knowledge
+#   WHERE tier = 'mid' AND embedding IS NULL -> memory_unembedded_count
+memory_unembedded_count = 0
+memory_stale = memory_unembedded_count > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 5: Column registry staleness -->
+    <bpmn:scriptTask id="check_column_registry" name="[DB] Check Column Registry Staleness" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_column</bpmn:incoming>
+      <bpmn:outgoing>flow_column_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Extract CHECK constraints from pg_catalog, compare vs column_registry contents
+# Identify constrained columns missing from registry or with stale valid_values
+# Lightweight: pg_catalog query only
+#
+# SELECT tc.table_name, kcu.column_name, cc.check_clause
+#   FROM information_schema.table_constraints tc
+#   JOIN information_schema.check_constraints cc USING (constraint_name)
+#   JOIN information_schema.key_column_usage kcu USING (constraint_name)
+#   WHERE tc.table_schema = 'claude'
+# Compare vs SELECT table_name, column_name FROM claude.column_registry
+# column_registry_missing = check-constrained columns not in registry
+column_registry_missing = 0
+column_registry_stale = column_registry_missing > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Join: wait for all 5 checks to complete -->
+    <bpmn:parallelGateway id="detect_join" name="All Checks Complete">
+      <bpmn:incoming>flow_schema_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_vault_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_bpmn_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_memory_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_column_to_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_decide</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: DECIDE                                                     -->
+    <!-- ================================================================== -->
+
+    <!-- Fast path: skip repair if nothing is stale (critical for SessionStart) -->
+    <bpmn:exclusiveGateway id="any_stale_gw" name="Any Staleness Detected?" default="flow_nothing_stale">
+      <bpmn:incoming>flow_join_to_decide</bpmn:incoming>
+      <bpmn:outgoing>flow_has_staleness</bpmn:outgoing>
+      <bpmn:outgoing>flow_nothing_stale</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: REPAIR (conditional, parallel, only runs what's needed)   -->
+    <!-- ================================================================== -->
+
+    <!-- Fan out to all applicable repairs concurrently -->
+    <bpmn:parallelGateway id="repair_split" name="Parallel Repairs">
+      <bpmn:incoming>flow_has_staleness</bpmn:incoming>
+      <bpmn:outgoing>flow_repair_schema</bpmn:outgoing>
+      <bpmn:outgoing>flow_repair_vault</bpmn:outgoing>
+      <bpmn:outgoing>flow_repair_bpmn</bpmn:outgoing>
+      <bpmn:outgoing>flow_repair_memory</bpmn:outgoing>
+      <bpmn:outgoing>flow_repair_column</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Repair 1: Schema (conditional on schema_stale) -->
+    <bpmn:exclusiveGateway id="schema_stale_gw" name="Schema Stale?" default="flow_schema_skip">
+      <bpmn:incoming>flow_repair_schema</bpmn:incoming>
+      <bpmn:outgoing>flow_schema_do_repair</bpmn:outgoing>
+      <bpmn:outgoing>flow_schema_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="repair_schema_docs" name="[TOOL] Run schema_docs --all" scriptFormat="python">
+      <bpmn:incoming>flow_schema_do_repair</bpmn:incoming>
+      <bpmn:outgoing>flow_schema_docs_to_embed</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --all
+# Runs: --report, --generate-comments, --apply-comments,
+#        --sync-registry, --sync-column-registry
+# Introspects pg_catalog, generates COMMENT ON statements,
+# applies them, and upserts into schema_registry + column_registry
+schema_docs_complete = True
+schema_docs_updated_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="repair_schema_embed" name="[TOOL] Run embed_schema" scriptFormat="python">
+      <bpmn:incoming>flow_schema_docs_to_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_schema_repair_to_join</bpmn:outgoing>
+      <bpmn:script>
+# embed_schema.py
+# Builds rich text per table, checks content hashes,
+# calls Voyage AI (voyage-3, 1024d) for changed tables,
+# stores embeddings in claude.schema_registry.embedding
+schema_embed_complete = True
+schema_embedded_count = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Repair 2: Vault (conditional on vault_stale) -->
+    <bpmn:exclusiveGateway id="vault_stale_gw" name="Vault Stale?" default="flow_vault_skip">
+      <bpmn:incoming>flow_repair_vault</bpmn:incoming>
+      <bpmn:outgoing>flow_vault_do_repair</bpmn:outgoing>
+      <bpmn:outgoing>flow_vault_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="repair_vault_embed" name="[TOOL] Run embed_vault_documents (incremental)" scriptFormat="python">
+      <bpmn:incoming>flow_vault_do_repair</bpmn:incoming>
+      <bpmn:outgoing>flow_vault_repair_to_join</bpmn:outgoing>
+      <bpmn:script>
+# embed_vault_documents.py (incremental mode - only changed files)
+# Walks knowledge-vault/ for .md files
+# Chunks at CHUNK_SIZE=1000 chars with CHUNK_OVERLAP=200
+# Calls Voyage AI (voyage-3) for each chunk -> 1024d vector
+# Upserts into claude.vault_documents with updated content_hash
+vault_embed_complete = True
+vault_files_embedded = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Repair 3: BPMN registry (conditional on bpmn_stale) -->
+    <bpmn:exclusiveGateway id="bpmn_stale_gw" name="BPMN Stale?" default="flow_bpmn_skip">
+      <bpmn:incoming>flow_repair_bpmn</bpmn:incoming>
+      <bpmn:outgoing>flow_bpmn_do_repair</bpmn:outgoing>
+      <bpmn:outgoing>flow_bpmn_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="repair_bpmn_sync" name="[TOOL] Sync BPMN Processes to Registry" scriptFormat="python">
+      <bpmn:incoming>flow_bpmn_do_repair</bpmn:incoming>
+      <bpmn:outgoing>flow_bpmn_repair_to_join</bpmn:outgoing>
+      <bpmn:script>
+# sync_bpmn_processes(project) via project-tools MCP
+# Walks processes/**/*.bpmn, parses process metadata
+# UPSERTs into claude.bpmn_processes with Voyage AI embeddings
+# Updates process descriptions, tags, and updated_at timestamps
+bpmn_sync_complete = True
+bpmn_processes_synced = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Repair 4: Memory embeddings (conditional on memory_stale) -->
+    <bpmn:exclusiveGateway id="memory_stale_gw" name="Memory Stale?" default="flow_memory_skip">
+      <bpmn:incoming>flow_repair_memory</bpmn:incoming>
+      <bpmn:outgoing>flow_memory_do_repair</bpmn:outgoing>
+      <bpmn:outgoing>flow_memory_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="repair_memory_consolidate" name="[TOOL] Consolidate Memories (embed unembedded)" scriptFormat="python">
+      <bpmn:incoming>flow_memory_do_repair</bpmn:incoming>
+      <bpmn:outgoing>flow_memory_repair_to_join</bpmn:outgoing>
+      <bpmn:script>
+# consolidate_memories(trigger='maintenance') via project-tools MCP
+# Lifecycle operations: short->mid promotion, mid->long promotion,
+# decay confidence on stale entries, archive very low confidence
+# Specifically: generate Voyage AI embeddings for tier='mid' entries
+# where embedding IS NULL
+memory_consolidate_complete = True
+memory_entries_embedded = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Repair 5: Column registry (conditional on column_registry_stale) -->
+    <bpmn:exclusiveGateway id="column_stale_gw" name="Column Registry Stale?" default="flow_column_skip">
+      <bpmn:incoming>flow_repair_column</bpmn:incoming>
+      <bpmn:outgoing>flow_column_do_repair</bpmn:outgoing>
+      <bpmn:outgoing>flow_column_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="repair_column_registry" name="[TOOL] Sync column_registry from CHECK Constraints" scriptFormat="python">
+      <bpmn:incoming>flow_column_do_repair</bpmn:incoming>
+      <bpmn:outgoing>flow_column_repair_to_join</bpmn:outgoing>
+      <bpmn:script>
+# schema_docs.py --sync-column-registry
+# Extracts CHECK constraint values from pg_catalog
+# Parses valid values from constraint expressions
+# UPSERTs into claude.column_registry.valid_values (JSONB)
+# Output: constraints_synced_count
+column_registry_sync_complete = True
+column_registry_synced = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Join: wait for all 5 repairs to complete (each path either repaired or skipped) -->
+    <bpmn:parallelGateway id="repair_join" name="All Repairs Complete">
+      <bpmn:incoming>flow_schema_repair_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_schema_skip</bpmn:incoming>
+      <bpmn:incoming>flow_vault_repair_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_vault_skip</bpmn:incoming>
+      <bpmn:incoming>flow_bpmn_repair_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_bpmn_skip</bpmn:incoming>
+      <bpmn:incoming>flow_memory_repair_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_memory_skip</bpmn:incoming>
+      <bpmn:incoming>flow_column_repair_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_column_skip</bpmn:incoming>
+      <bpmn:outgoing>flow_repair_join_to_summary</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: SUMMARY                                                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="compile_report" name="[TOOL] Compile Maintenance Report" scriptFormat="python">
+      <bpmn:incoming>flow_repair_join_to_summary</bpmn:incoming>
+      <bpmn:incoming>flow_nothing_stale</bpmn:incoming>
+      <bpmn:outgoing>flow_report_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Compile summary of what was checked, what was stale, what was fixed
+# Format: {
+#   "checked_at": timestamp,
+#   "trigger": trigger_type (session_start|on_demand|post_commit),
+#   "subsystems": {
+#     "schema": {"stale": schema_stale, "fixed": schema_embed_complete,
+#                "new_tables": schema_new_tables, "embedded": schema_embedded_count},
+#     "vault": {"stale": vault_stale, "fixed": vault_embed_complete,
+#               "files_embedded": vault_files_embedded},
+#     "bpmn": {"stale": bpmn_stale, "fixed": bpmn_sync_complete,
+#              "processes_synced": bpmn_processes_synced},
+#     "memory": {"stale": memory_stale, "fixed": memory_consolidate_complete,
+#                "entries_embedded": memory_entries_embedded},
+#     "column_registry": {"stale": column_registry_stale, "fixed": column_registry_sync_complete,
+#                          "constraints_synced": column_registry_synced}
+#   },
+#   "failures": []
+# }
+maintenance_complete = True
+all_clean = not any([schema_stale, vault_stale, bpmn_stale,
+                     memory_stale, column_registry_stale])
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_complete" name="Maintenance Complete">
+      <bpmn:incoming>flow_report_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="flow_start_to_detect_split" sourceRef="start" targetRef="detect_split"/>
+
+    <!-- Phase 1: Fan out to all 5 checks -->
+    <bpmn:sequenceFlow id="flow_split_to_schema" sourceRef="detect_split" targetRef="check_schema"/>
+    <bpmn:sequenceFlow id="flow_split_to_vault" sourceRef="detect_split" targetRef="check_vault"/>
+    <bpmn:sequenceFlow id="flow_split_to_bpmn" sourceRef="detect_split" targetRef="check_bpmn"/>
+    <bpmn:sequenceFlow id="flow_split_to_memory" sourceRef="detect_split" targetRef="check_memory"/>
+    <bpmn:sequenceFlow id="flow_split_to_column" sourceRef="detect_split" targetRef="check_column_registry"/>
+
+    <!-- Phase 1: Converge all checks to join -->
+    <bpmn:sequenceFlow id="flow_schema_to_join" sourceRef="check_schema" targetRef="detect_join"/>
+    <bpmn:sequenceFlow id="flow_vault_to_join" sourceRef="check_vault" targetRef="detect_join"/>
+    <bpmn:sequenceFlow id="flow_bpmn_to_join" sourceRef="check_bpmn" targetRef="detect_join"/>
+    <bpmn:sequenceFlow id="flow_memory_to_join" sourceRef="check_memory" targetRef="detect_join"/>
+    <bpmn:sequenceFlow id="flow_column_to_join" sourceRef="check_column_registry" targetRef="detect_join"/>
+
+    <!-- Phase 2: Decide -->
+    <bpmn:sequenceFlow id="flow_join_to_decide" sourceRef="detect_join" targetRef="any_stale_gw"/>
+    <bpmn:sequenceFlow id="flow_has_staleness" sourceRef="any_stale_gw" targetRef="repair_split">
+      <bpmn:conditionExpression>any([schema_stale, vault_stale, bpmn_stale, memory_stale, column_registry_stale])</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_nothing_stale" sourceRef="any_stale_gw" targetRef="compile_report"/>
+
+    <!-- Phase 3: Fan out to 5 conditional repairs -->
+    <bpmn:sequenceFlow id="flow_repair_schema" sourceRef="repair_split" targetRef="schema_stale_gw"/>
+    <bpmn:sequenceFlow id="flow_repair_vault" sourceRef="repair_split" targetRef="vault_stale_gw"/>
+    <bpmn:sequenceFlow id="flow_repair_bpmn" sourceRef="repair_split" targetRef="bpmn_stale_gw"/>
+    <bpmn:sequenceFlow id="flow_repair_memory" sourceRef="repair_split" targetRef="memory_stale_gw"/>
+    <bpmn:sequenceFlow id="flow_repair_column" sourceRef="repair_split" targetRef="column_stale_gw"/>
+
+    <!-- Repair 1: Schema -->
+    <bpmn:sequenceFlow id="flow_schema_do_repair" sourceRef="schema_stale_gw" targetRef="repair_schema_docs">
+      <bpmn:conditionExpression>schema_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_schema_skip" sourceRef="schema_stale_gw" targetRef="repair_join"/>
+    <bpmn:sequenceFlow id="flow_schema_docs_to_embed" sourceRef="repair_schema_docs" targetRef="repair_schema_embed"/>
+    <bpmn:sequenceFlow id="flow_schema_repair_to_join" sourceRef="repair_schema_embed" targetRef="repair_join"/>
+
+    <!-- Repair 2: Vault -->
+    <bpmn:sequenceFlow id="flow_vault_do_repair" sourceRef="vault_stale_gw" targetRef="repair_vault_embed">
+      <bpmn:conditionExpression>vault_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_vault_skip" sourceRef="vault_stale_gw" targetRef="repair_join"/>
+    <bpmn:sequenceFlow id="flow_vault_repair_to_join" sourceRef="repair_vault_embed" targetRef="repair_join"/>
+
+    <!-- Repair 3: BPMN -->
+    <bpmn:sequenceFlow id="flow_bpmn_do_repair" sourceRef="bpmn_stale_gw" targetRef="repair_bpmn_sync">
+      <bpmn:conditionExpression>bpmn_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_bpmn_skip" sourceRef="bpmn_stale_gw" targetRef="repair_join"/>
+    <bpmn:sequenceFlow id="flow_bpmn_repair_to_join" sourceRef="repair_bpmn_sync" targetRef="repair_join"/>
+
+    <!-- Repair 4: Memory -->
+    <bpmn:sequenceFlow id="flow_memory_do_repair" sourceRef="memory_stale_gw" targetRef="repair_memory_consolidate">
+      <bpmn:conditionExpression>memory_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_memory_skip" sourceRef="memory_stale_gw" targetRef="repair_join"/>
+    <bpmn:sequenceFlow id="flow_memory_repair_to_join" sourceRef="repair_memory_consolidate" targetRef="repair_join"/>
+
+    <!-- Repair 5: Column registry -->
+    <bpmn:sequenceFlow id="flow_column_do_repair" sourceRef="column_stale_gw" targetRef="repair_column_registry">
+      <bpmn:conditionExpression>column_registry_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_column_skip" sourceRef="column_stale_gw" targetRef="repair_join"/>
+    <bpmn:sequenceFlow id="flow_column_repair_to_join" sourceRef="repair_column_registry" targetRef="repair_join"/>
+
+    <!-- Phase 4: Summary and end -->
+    <bpmn:sequenceFlow id="flow_repair_join_to_summary" sourceRef="repair_join" targetRef="compile_report"/>
+    <bpmn:sequenceFlow id="flow_report_to_end" sourceRef="compile_report" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- Diagram layout                                                      -->
+  <!--   Layout strategy:                                                  -->
+  <!--   x=50:   Start                                                     -->
+  <!--   x=150:  detect_split (parallel fork)                              -->
+  <!--   x=310:  5 check tasks (fan out vertically, y=80..480)            -->
+  <!--   x=530:  detect_join (parallel join)                               -->
+  <!--   x=640:  any_stale_gw (decision)                                   -->
+  <!--   x=760:  repair_split (parallel fork)                              -->
+  <!--   x=920:  5 staleness gateways (fan out vertically)                 -->
+  <!--   x=1060: repair tasks (schema has 2 sequential sub-steps)          -->
+  <!--   x=1280: repair_join (parallel join)                               -->
+  <!--   x=1420: compile_report                                            -->
+  <!--   x=1610: end_complete                                              -->
+  <!-- ================================================================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="system_maintenance">
+
+      <!-- Start -->
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="268" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 1: Parallel detect split -->
+      <bpmndi:BPMNShape id="s_detect_split" bpmnElement="detect_split">
+        <dc:Bounds x="148" y="261" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 1: 5 check tasks (spaced 100px apart vertically, centered on y=286) -->
+      <bpmndi:BPMNShape id="s_check_schema" bpmnElement="check_schema">
+        <dc:Bounds x="260" y="60" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_vault" bpmnElement="check_vault">
+        <dc:Bounds x="260" y="160" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_bpmn" bpmnElement="check_bpmn">
+        <dc:Bounds x="260" y="260" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_memory" bpmnElement="check_memory">
+        <dc:Bounds x="260" y="360" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_column" bpmnElement="check_column_registry">
+        <dc:Bounds x="260" y="460" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 1: Parallel detect join -->
+      <bpmndi:BPMNShape id="s_detect_join" bpmnElement="detect_join">
+        <dc:Bounds x="498" y="261" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 2: Decision gateway -->
+      <bpmndi:BPMNShape id="s_any_stale_gw" bpmnElement="any_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="608" y="261" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 3: Parallel repair split -->
+      <bpmndi:BPMNShape id="s_repair_split" bpmnElement="repair_split">
+        <dc:Bounds x="718" y="261" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 3: 5 staleness condition gateways -->
+      <bpmndi:BPMNShape id="s_schema_stale_gw" bpmnElement="schema_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="828" y="73" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_vault_stale_gw" bpmnElement="vault_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="828" y="173" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_bpmn_stale_gw" bpmnElement="bpmn_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="828" y="273" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_memory_stale_gw" bpmnElement="memory_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="828" y="373" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_column_stale_gw" bpmnElement="column_stale_gw" isMarkerVisible="true">
+        <dc:Bounds x="828" y="473" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 3: Repair tasks -->
+      <!-- Schema repair: 2 sequential steps -->
+      <bpmndi:BPMNShape id="s_repair_schema_docs" bpmnElement="repair_schema_docs">
+        <dc:Bounds x="940" y="60" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_repair_schema_embed" bpmnElement="repair_schema_embed">
+        <dc:Bounds x="1120" y="60" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Vault, BPMN, Memory, Column repairs: single steps -->
+      <bpmndi:BPMNShape id="s_repair_vault_embed" bpmnElement="repair_vault_embed">
+        <dc:Bounds x="940" y="160" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_repair_bpmn_sync" bpmnElement="repair_bpmn_sync">
+        <dc:Bounds x="940" y="260" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_repair_memory_consolidate" bpmnElement="repair_memory_consolidate">
+        <dc:Bounds x="940" y="360" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_repair_column_registry" bpmnElement="repair_column_registry">
+        <dc:Bounds x="940" y="460" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 3: Parallel repair join -->
+      <bpmndi:BPMNShape id="s_repair_join" bpmnElement="repair_join">
+        <dc:Bounds x="1348" y="261" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Phase 4: Summary and end -->
+      <bpmndi:BPMNShape id="s_compile_report" bpmnElement="compile_report">
+        <dc:Bounds x="1460" y="246" width="160" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_end" bpmnElement="end_complete">
+        <dc:Bounds x="1680" y="263" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

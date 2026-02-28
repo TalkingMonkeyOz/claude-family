@@ -16,6 +16,9 @@ Database is source of truth. Generated files are deployment artifacts.
 
 Author: Claude Family
 Date: 2026-02-08
+
+ARCHIVED: 2026-02-28 - agent_definitions table dropped; agents defined via
+          deploy_components.py with component_type='agent' in deployable_components
 """
 
 import json

@@ -22,6 +22,8 @@ Date: 2025-12-07
 Updated: 2025-12-07 - Added standards injection by task type
 Updated: 2025-12-08 - Added LLM classification fallback (TIER 2)
 Updated: 2025-12-08 - Added auto-TodoWrite injection for workflow steps
+
+ARCHIVED: 2026-02-28 - Replaced by rag_query_hook.py + skills system (ADR-005)
 """
 
 import sys

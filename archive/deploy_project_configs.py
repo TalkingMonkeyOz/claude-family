@@ -18,6 +18,8 @@ Usage:
 
 Author: Claude Family
 Date: 2025-12-21
+
+ARCHIVED: 2026-02-28 - Superseded by deploy_components.py (unified deployment system)
 """
 
 import sys

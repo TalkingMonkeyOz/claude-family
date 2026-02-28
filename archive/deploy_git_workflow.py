@@ -13,6 +13,8 @@ Usage:
     python scripts/deploy_git_workflow.py --dry-run          # Preview changes
 
 Logs deployments to claude.git_workflow_deployments table.
+
+ARCHIVED: 2026-02-28 - Superseded by deploy_components.py
 """
 
 import os

@@ -12,14 +12,9 @@ Determine which project you're in:
 pwd
 ```
 
-Map to project_id using the quick reference:
-- `claude-pm` → `a3097e59-7799-4114-86a7-308702115905`
-- `nimbus-user-loader` → `07206097-4caf-423b-9eb8-541d4c25da6c`
-- `ATO-Tax-Agent` → `7858ecf4-4550-456d-9509-caea0339ec0d`
-
 If not found, query:
 ```sql
-SELECT project_id FROM claude_pm.projects
+SELECT project_id FROM claude.projects
 WHERE project_code ILIKE '%keyword%';
 ```
 
@@ -30,10 +25,10 @@ WHERE project_code ILIKE '%keyword%';
 Use the AskUserQuestion tool to gather feedback details:
 
 **Question 1: What type of feedback?**
-- 🐛 Bug - Something broken or not working
-- 🎨 Design - UI/UX issue or design question
-- ❓ Question - Need clarification or information
-- 🔄 Change - Feature request or enhancement
+- Bug - Something broken or not working
+- Idea - Feature request, enhancement, or suggestion
+- Question - Need clarification or information
+- Change - Specific change request
 
 ---
 
@@ -53,7 +48,7 @@ Prompt user to provide detailed description. Encourage them to include:
 
 ```sql
 -- Insert new feedback
-INSERT INTO claude_pm.project_feedback (
+INSERT INTO claude.feedback (
     project_id,
     feedback_type,
     description,
@@ -61,7 +56,7 @@ INSERT INTO claude_pm.project_feedback (
 )
 VALUES (
     'PROJECT-ID'::uuid,
-    'bug',  -- or 'design', 'question', 'change'
+    'bug',  -- or 'idea', 'question', 'change'
     'User-provided description here',
     'new'
 )
@@ -74,19 +69,7 @@ RETURNING feedback_id, created_at;
 
 Ask user: "Would you like to add any additional notes or context?"
 
-If yes:
-```sql
-INSERT INTO claude_pm.project_feedback_comments (
-    feedback_id,
-    author,
-    content
-)
-VALUES (
-    'FEEDBACK-ID-FROM-STEP-4'::uuid,
-    'user',  -- or 'claude' if AI-generated
-    'Additional context here'
-);
-```
+If yes, add a note to the description or use `remember()` to capture additional context for this feedback item.
 
 ---
 
@@ -96,8 +79,8 @@ Inform user: "You can add screenshots by placing them in: `C:\Projects\{project}
 
 Then update:
 ```sql
-UPDATE claude_pm.project_feedback
-SET screenshot_path = '["feedback/{feedback_id}-1.png"]'
+UPDATE claude.feedback
+SET notes = 'Screenshot: feedback/{feedback_id}-1.png'
 WHERE feedback_id = 'FEEDBACK-ID'::uuid;
 ```
 
@@ -116,8 +99,7 @@ Description: [First 80 chars...]
 Created: timestamp
 
 Next Steps:
-- View all feedback: /feedback-check
-- Add comments: INSERT INTO claude_pm.project_feedback_comments...
+- View all feedback: /feedback
 - Add screenshots: Save to C:\Projects\{project}\feedback\{feedback_id}-N.png
 
 Full guide: C:\claude\shared\docs\feedback-system-guide.md
@@ -148,6 +130,12 @@ When user says: "The export button doesn't work"
 1. Detect project → nimbus-user-loader
 2. Ask type → Bug
 3. Expand description → "Export to Excel button throws NullReferenceException when clicked after filtering data. Error: 'Object reference not set to an instance of an object' in ExportService.cs line 89"
-4. Create feedback
-5. Offer to add comment with stack trace
-6. Confirm creation
+4. Create feedback via `claude.feedback` INSERT
+5. Confirm creation with feedback_id
+
+---
+
+**Version**: 1.1
+**Created**: 2025-10-21
+**Updated**: 2026-02-28
+**Location**: .claude/commands/feedback-create.md

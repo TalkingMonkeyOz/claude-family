@@ -3,7 +3,7 @@
 Anthropic Documentation Monitor
 
 Checks key Anthropic documentation pages for updates and new features.
-Stores hashes in PostgreSQL (claude.global_config) to detect changes between runs.
+Stores hashes in a local JSON file to detect changes between runs.
 
 Usage:
     python monitor_anthropic_docs.py
@@ -20,13 +20,6 @@ from typing import Dict, List, Optional
 
 import urllib.request
 import urllib.error
-
-try:
-    import psycopg2
-    from psycopg2.extras import Json
-    HAS_PSYCOPG2 = True
-except ImportError:
-    HAS_PSYCOPG2 = False
 
 # Documentation pages to monitor
 DOCS_TO_MONITOR = {
@@ -82,85 +75,29 @@ DOCS_TO_MONITOR = {
     }
 }
 
-# Fallback to JSON file if no database
-STATE_FILE = Path(__file__).parent / ".anthropic_docs_state.json"
-CONFIG_KEY = "anthropic_docs_monitor"
-
-
-def get_db_connection():
-    """Get database connection."""
-    if not HAS_PSYCOPG2:
-        return None
-    try:
-        return psycopg2.connect(
-            host=os.environ.get("PGHOST", "localhost"),
-            port=os.environ.get("PGPORT", "5432"),
-            database=os.environ.get("PGDATABASE", "ai_company_foundation"),
-            user=os.environ.get("PGUSER", "postgres"),
-            password=os.environ.get("PGPASSWORD", "")
-        )
-    except Exception as e:
-        print(f"  [WARN] Database connection failed: {e}")
-        return None
+# State persisted locally between runs
+STATE_FILE = Path(__file__).parent / ".doc_hashes.json"
 
 
 def load_state() -> Dict:
-    """Load previous state from database or file."""
-    # Try database first
-    conn = get_db_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT value FROM claude.global_config WHERE key = %s",
-                    (CONFIG_KEY,)
-                )
-                row = cur.fetchone()
-                if row:
-                    return row[0]
-        except Exception as e:
-            print(f"  [WARN] Database read failed: {e}")
-        finally:
-            conn.close()
-
-    # Fallback to JSON file
+    """Load previous state from local JSON file."""
     if STATE_FILE.exists():
-        with open(STATE_FILE, 'r') as f:
-            return json.load(f)
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"  [WARN] State file read failed: {e}")
 
     return {"hashes": {}, "last_check": None, "docs": DOCS_TO_MONITOR}
 
 
 def save_state(state: Dict):
-    """Save state to database and file."""
-    # Always save to file as backup
-    with open(STATE_FILE, 'w') as f:
-        json.dump(state, f, indent=2, default=str)
-
-    # Try database
-    conn = get_db_connection()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    UPDATE claude.global_config
-                    SET value = %s, updated_at = NOW()
-                    WHERE key = %s
-                """, (Json(state), CONFIG_KEY))
-
-                if cur.rowcount == 0:
-                    # Insert if doesn't exist
-                    cur.execute("""
-                        INSERT INTO claude.global_config (config_id, key, value, description, created_at, updated_at)
-                        VALUES (gen_random_uuid(), %s, %s, %s, NOW(), NOW())
-                    """, (CONFIG_KEY, Json(state), "Anthropic documentation monitor state"))
-
-                conn.commit()
-        except Exception as e:
-            print(f"  [WARN] Database write failed: {e}")
-            conn.rollback()
-        finally:
-            conn.close()
+    """Save state to local JSON file."""
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2, default=str)
+    except Exception as e:
+        print(f"  [WARN] State file write failed: {e}")
 
 
 def fetch_page_hash(url: str) -> Optional[str]:

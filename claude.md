@@ -52,8 +52,8 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 ## Architecture Overview
 
 Infrastructure for the Claude Family ecosystem:
-- **Database**: PostgreSQL `ai_company_foundation`, schema `claude`
-- **MCP Servers**: postgres, project-tools, python-repl, sequential-thinking, bpmn-engine
+- **Database**: PostgreSQL `ai_company_foundation`, schema `claude` (58 tables)
+- **MCP Servers**: postgres, project-tools (~60 tools), python-repl, sequential-thinking, bpmn-engine
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
@@ -284,6 +284,7 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-02-28 | **Pre-Metis Cleanup**: Dropped 43 dead tables (101→58), removed 5 deprecated MCP tools (65→60), consolidated 3 slash commands (23→20), archived orchestrator + process_router. Schema governance + reference map documented. |
 | 2026-02-26 | **F130 Cognitive Memory**: 3-tier memory (short/mid/long) with `remember()`, `recall_memories()`, `consolidate_memories()`. Core Protocol v8. |
 | 2026-02-24 | **Orchestrator retirement**: Messaging tools migrated to project-tools. Orchestrator MCP removed. BPMN model for messaging lifecycle added. |
 | 2026-02-11 | **v3 Application Layer**: 15 new tools (config ops, knowledge, conversations, books), 3 new tables, 40+ total tools |
@@ -297,7 +298,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-**Version**: 3.5 (F130 Cognitive Memory System - 3-tier recall/remember/consolidate)
+**Version**: 3.7 (Pre-Metis Cleanup - 58 tables, ~60 tools, 20 commands)
 **Created**: 2025-10-21
-**Updated**: 2026-02-26
+**Updated**: 2026-02-28
 **Location**: C:\Projects\claude-family\CLAUDE.md

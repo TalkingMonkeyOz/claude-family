@@ -6,11 +6,11 @@ Get instant visibility into project state. NO database writes, NO session loggin
 
 ## Execute These Steps
 
-### Step 1: Get Project Context (MCP)
+### Step 1: Get Work Context (MCP)
 
-Use `mcp__project-tools__get_project_context` with the current project name.
+Use `mcp__project-tools__get_work_context` with `scope="current"`.
 
-This returns: project info, phase, last session summary, active feature count, todo count.
+This returns: active feature, in-progress tasks, last session summary, todo count.
 
 ### Step 2: Get Active Todos (MCP)
 
@@ -56,7 +56,7 @@ git status --short
 
 ---
 
-**Version**: 3.0 (Simplified to use MCP tools instead of raw SQL)
+**Version**: 3.1 (Replaced deprecated get_project_context with get_work_context)
 **Created**: 2025-12-27
-**Updated**: 2026-02-08
+**Updated**: 2026-02-28
 **Location**: .claude/commands/session-status.md

@@ -7,16 +7,15 @@ Deploys all configuration components from database to file system:
 - Skills (from skills table)
 - Instructions (from instructions table)
 - Rules (from rules table)
-- Commands (from shared_commands table)
+- Commands (from deployable_components table)
 - Standards (from coding_standards table)
 
 Follows ADR-006: Database is source of truth, files are generated.
 
 Usage:
-    python scripts/deploy_components.py [project_name] [--import] [--dry-run]
+    python scripts/deploy_components.py [project_name] [--dry-run]
 
     project_name: Deploy for specific project (default: current directory)
-    --import: Import files to database instead of deploying
     --dry-run: Show what would be done without making changes
     --force: Deploy even if hashes match
     --component-type: Only deploy specific type (claude_md, skill, etc.)
@@ -357,150 +356,6 @@ def deploy_for_project(project_name: str, component_type: str = None,
         conn.close()
 
 
-def import_commands_from_files(dry_run: bool = False) -> Dict:
-    """Import command files to shared_commands table."""
-    results = {
-        'imported': [],
-        'skipped': [],
-        'errors': []
-    }
-
-    conn = get_db_connection()
-    try:
-        cur = conn.cursor()
-
-        # Import global commands
-        global_commands_dir = GLOBAL_CLAUDE_DIR / "commands"
-        if global_commands_dir.exists():
-            for cmd_file in global_commands_dir.glob("*.md"):
-                name = cmd_file.stem
-                content = cmd_file.read_text(encoding='utf-8')
-
-                # Extract description from first non-empty line after title
-                lines = content.split('\n')
-                description = None
-                for line in lines[1:]:  # Skip title
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        description = line[:200]  # First 200 chars
-                        break
-
-                if dry_run:
-                    results['imported'].append({
-                        'name': name,
-                        'scope': 'global',
-                        'path': str(cmd_file)
-                    })
-                    continue
-
-                # Check if exists
-                cur.execute("""
-                    SELECT command_id FROM claude.shared_commands
-                    WHERE command_name = %s AND scope = 'global'
-                """, (name,))
-
-                if cur.fetchone():
-                    # Update
-                    cur.execute("""
-                        UPDATE claude.shared_commands
-                        SET content = %s, description = %s, filename = %s, updated_at = NOW()
-                        WHERE command_name = %s AND scope = 'global'
-                    """, (content, description, cmd_file.name, name))
-                else:
-                    # Insert
-                    cur.execute("""
-                        INSERT INTO claude.shared_commands
-                        (command_name, filename, description, content, is_core, scope, version, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, true, 'global', 1, NOW(), NOW())
-                    """, (name, cmd_file.name, description, content))
-
-                results['imported'].append({
-                    'name': name,
-                    'scope': 'global',
-                    'path': str(cmd_file)
-                })
-
-        # Import project commands from all workspaces
-        cur.execute("""
-            SELECT project_id, project_name, project_path
-            FROM claude.workspaces
-            WHERE is_active = true AND project_path IS NOT NULL
-        """)
-
-        for workspace in cur.fetchall():
-            workspace = dict(workspace)
-            project_path = Path(workspace['project_path'])
-            commands_dir = project_path / ".claude" / "commands"
-
-            if not commands_dir.exists():
-                continue
-
-            for cmd_file in commands_dir.glob("*.md"):
-                name = cmd_file.stem
-                content = cmd_file.read_text(encoding='utf-8')
-
-                # Extract description
-                lines = content.split('\n')
-                description = None
-                for line in lines[1:]:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        description = line[:200]
-                        break
-
-                project_id = workspace['project_id']
-
-                if dry_run:
-                    results['imported'].append({
-                        'name': name,
-                        'scope': 'project',
-                        'project': workspace['project_name'],
-                        'path': str(cmd_file)
-                    })
-                    continue
-
-                # Check if exists
-                cur.execute("""
-                    SELECT command_id FROM claude.shared_commands
-                    WHERE command_name = %s AND scope = 'project' AND scope_ref = %s
-                """, (name, str(project_id) if project_id else workspace['project_name']))
-
-                if cur.fetchone():
-                    # Update
-                    cur.execute("""
-                        UPDATE claude.shared_commands
-                        SET content = %s, description = %s, filename = %s, updated_at = NOW()
-                        WHERE command_name = %s AND scope = 'project' AND scope_ref = %s
-                    """, (content, description, cmd_file.name, name,
-                          str(project_id) if project_id else workspace['project_name']))
-                else:
-                    # Insert
-                    cur.execute("""
-                        INSERT INTO claude.shared_commands
-                        (command_name, filename, description, content, is_core, scope, scope_ref, version, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, false, 'project', %s, 1, NOW(), NOW())
-                    """, (name, cmd_file.name, description, content,
-                          str(project_id) if project_id else workspace['project_name']))
-
-                results['imported'].append({
-                    'name': name,
-                    'scope': 'project',
-                    'project': workspace['project_name'],
-                    'path': str(cmd_file)
-                })
-
-        if not dry_run:
-            conn.commit()
-
-        return results
-
-    except Exception as e:
-        results['errors'].append(str(e))
-        return results
-    finally:
-        conn.close()
-
-
 def print_results(results: Dict, title: str):
     """Print deployment results in a formatted way."""
     print(f"\n{'=' * 60}")
@@ -511,13 +366,6 @@ def print_results(results: Dict, title: str):
         print(f"\n[OK] DEPLOYED ({len(results['deployed'])})")
         for item in results['deployed']:
             print(f"   {item.get('type', 'command'):12} | {item.get('name', item.get('name'))}")
-
-    if results.get('imported'):
-        print(f"\n[OK] IMPORTED ({len(results['imported'])})")
-        for item in results['imported']:
-            scope = item.get('scope', 'unknown')
-            project = f" ({item.get('project')})" if item.get('project') else ""
-            print(f"   {scope:12} | {item['name']}{project}")
 
     if results.get('skipped'):
         print(f"\n[--] SKIPPED ({len(results['skipped'])})")
@@ -544,8 +392,6 @@ def print_results(results: Dict, title: str):
 def main():
     parser = argparse.ArgumentParser(description='Deploy configuration components from database to files')
     parser.add_argument('project_name', nargs='?', help='Project name (default: current directory)')
-    parser.add_argument('--import', dest='do_import', action='store_true',
-                        help='Import files to database instead of deploying')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     parser.add_argument('--force', action='store_true', help='Deploy even if hashes match')
     parser.add_argument('--component-type', choices=['claude_md', 'skill', 'instruction', 'rule', 'command', 'standard', 'agent'],
@@ -558,30 +404,21 @@ def main():
     if not project_name:
         project_name = Path.cwd().name
 
-    if args.do_import:
-        # Import mode
-        print(f"\n>>> Importing commands to database...")
-        if args.dry_run:
-            print("   (DRY RUN - no changes will be made)\n")
+    # Deploy mode
+    print(f"\n>>> Deploying components for project: {project_name}")
+    if args.dry_run:
+        print("   (DRY RUN - no changes will be made)")
+    if args.force:
+        print("   (FORCE - ignoring hash matches)")
+    print()
 
-        results = import_commands_from_files(dry_run=args.dry_run)
-        print_results(results, "IMPORT RESULTS")
-    else:
-        # Deploy mode
-        print(f"\n>>> Deploying components for project: {project_name}")
-        if args.dry_run:
-            print("   (DRY RUN - no changes will be made)")
-        if args.force:
-            print("   (FORCE - ignoring hash matches)")
-        print()
-
-        results = deploy_for_project(
-            project_name,
-            component_type=args.component_type,
-            dry_run=args.dry_run,
-            force=args.force
-        )
-        print_results(results, f"DEPLOYMENT RESULTS - {project_name}")
+    results = deploy_for_project(
+        project_name,
+        component_type=args.component_type,
+        dry_run=args.dry_run,
+        force=args.force
+    )
+    print_results(results, f"DEPLOYMENT RESULTS - {project_name}")
 
 
 if __name__ == '__main__':
