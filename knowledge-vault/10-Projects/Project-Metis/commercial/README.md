@@ -120,7 +120,7 @@ With one client (Monash) at $4,000/month:
 ## Related
 
 - [[decisions/README|Open Decisions]] — commercial decisions tracked there too
-- [[ps-accelerator/README|PS Accelerator]] — the Monash POC that proves the model
+- [[ps-accelerator/README|Delivery Accelerator]] — the Monash POC that proves the model
 
 ---
 *Source: Doc 3 (all) | Meeting Handout Deck | Created: 2026-02-19*

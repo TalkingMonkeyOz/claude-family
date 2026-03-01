@@ -235,7 +235,7 @@ If any layer flags an issue, it feeds back before proceeding. BPMN identifies a 
 |------|-------------------|
 | Knowledge Engine (1) | Ontology layer extends knowledge relations. DMN tables may be stored as knowledge items. Event sourcing extends audit logging. |
 | Integration Hub (2) | BPMN defines connector deployment and validation workflows. DDD defines integration boundaries. |
-| PS Accelerator (3) | BPMN validates implementation pipeline. DMN codifies configuration decisions. Event sourcing tracks full implementation history. |
+| Delivery Accelerator (3) | BPMN validates implementation pipeline. DMN codifies configuration decisions. Event sourcing tracks full implementation history. |
 | Quality & Compliance (4) | DMN codifies Award rule logic for test scenario generation. Ontology identifies test coverage gaps. |
 | Support & Defect Intel (5) | DMN codifies triage routing. BPMN defines escalation workflows. Ontology identifies cross-client impact. |
 | Project Governance (6) | Event sourcing provides the data for project health dashboards. BPMN defines governance workflows. |

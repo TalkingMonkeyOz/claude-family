@@ -52,7 +52,7 @@ Remaining focused chats — all NOT STARTED:
 2. ~~Knowledge Engine Deep Dive~~ ✓ Done (Chat #2)
 3. Constrained Deployment Implementation
 4. Integration Hub Connectors
-5. PS Accelerator + Monash Technical
+5. Delivery Accelerator + Monash Technical
 6. Quality & Compliance Design
 7. Commercial & Management Prep
 8. Orchestration Build Specs

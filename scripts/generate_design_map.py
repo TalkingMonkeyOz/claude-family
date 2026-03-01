@@ -44,8 +44,8 @@ except ImportError:
 # Parsing helpers
 # ---------------------------------------------------------------------------
 
-_AREA_RE = re.compile(r'\bArea:\s*([^\n|,]+)', re.IGNORECASE)
-_TYPE_RE = re.compile(r'\bType:\s*([^\n|,]+)', re.IGNORECASE)
+_AREA_RE = re.compile(r'\bArea:\s*([^\n|,.]+)', re.IGNORECASE)
+_TYPE_RE = re.compile(r'\bType:\s*([^\n|,.]+)', re.IGNORECASE)
 
 
 def _parse_field(text: Optional[str], pattern: re.Pattern) -> str:

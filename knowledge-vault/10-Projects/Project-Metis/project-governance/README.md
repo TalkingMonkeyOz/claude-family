@@ -41,11 +41,13 @@ Two sub-areas:
 Platform builds its own work tracking. NOT GitHub Projects, NOT Azure Boards, NOT Jira. Rationale: BPMN enforcement at gates, agent-fast DB queries, no external dependency, full data model control. Integrates with customer tools (Azure DevOps, GitHub, GitLab) as connectors.
 
 ### Three Lifecycle Tiers — DECIDED
-- **Tier 1 (Free-flowing):** Knowledge queries, low risk, no gates
-- **Tier 2 (Structured with sign-off):** Customer deliverables, client approval is the gate, sign-off doc is what you invoice against
-- **Tier 3 (Rigid pipeline):** Code and deployment, five-layer validation stack applies
+- **Freeform:** Knowledge queries, low risk, no gates
+- **Structured:** Customer deliverables, client approval is the gate, sign-off doc is what you invoice against
+- **Pipeline:** Code and deployment, five-layer validation stack applies
 
-Tier 2 escalates to Tier 3 if work requires code changes.
+Structured escalates to Pipeline if work requires code changes.
+
+> **Note:** These are *lifecycle tiers* describing work item rigidity. Separate from *enforcement tiers* (Runtime-enforced/Checklist-validated/Convention-guided) used in BPMN & SOP Enforcement. See [[bpmn-sop-enforcement/README|BPMN & SOP Enforcement]].
 
 ### Work Breakdown — DECIDED
 Initiative → Features → Tasks. Database-backed. Parent rolls up from children. Tasks must be detailed (agents forget context).

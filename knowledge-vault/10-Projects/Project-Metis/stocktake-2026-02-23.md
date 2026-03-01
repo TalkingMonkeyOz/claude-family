@@ -54,7 +54,7 @@ synced: false
 | README.md (Level 0) | Overview | Mixed | ◐ Architecture diagram is generic, framing is nimbus |
 | knowledge-engine/README.md | Area 1 | Mixed | ◐ Engine concept generic, all examples are time2work |
 | integration-hub/README.md | Area 2 | nimbus-specific | ❌ All connectors are nimbus tools (Jira, Salesforce, time2work) |
-| ps-accelerator/README.md | Area 3 | nimbus-specific | ❌ Monash POC, time2work config, Award rules |
+| delivery-accelerator/README.md | Area 3 | nimbus-specific | ❌ Monash POC, time2work config, Award rules |
 | quality-compliance/README.md | Area 4 | Mixed | ◐ Testing engine concept generic, Award/Playwright detail nimbus |
 | support-defect-intel/README.md | Area 5 | nimbus-specific | ❌ nimbus support workflow, Jira instances |
 | project-governance/README.md | Area 6 | Mixed | ◐ Dashboard concept generic, Salesforce/Jira detail nimbus |
@@ -155,7 +155,7 @@ Things The System needs that aren't yet captured generically:
 |------|-------|-----------|
 | Knowledge Engine (Area 1) | DEEP | Architecture, taxonomy, build phases, risk analysis all solid. Needs generic relabelling. |
 | Integration Hub (Area 2) | MODERATE | Connector pattern generic. Specific connectors all nimbus. Needs generic catalogue. |
-| PS Accelerator (Area 3) | DEEP | Pipeline well-designed. Heavily nimbus/Monash. Needs "generic implementation accelerator" framing. |
+| Delivery Accelerator (Area 3) | DEEP | Pipeline well-designed. Heavily nimbus/Monash. Needs "generic delivery accelerator" framing. |
 | Quality & Compliance (Area 4) | MODERATE | Concepts solid. Playwright and Award specifics are nimbus. Needs generic testing framework. |
 | Support & Defect Intel (Area 5) | MODERATE | Triage and pattern detection generic. Jira-specific detail is nimbus. |
 | Project Governance (Area 6) | THIN | Mostly a wish list. Needs real design work. |

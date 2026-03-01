@@ -100,7 +100,7 @@ EXTRACT:
 - Assumptions about how areas interact (e.g., "Knowledge Engine provides retrieval for all other areas")
 - Constraints (e.g., "Australian data residency", "No core code modification")
 - Principles (e.g., "Build for nimbus first, generalise second")
-- Dependencies between areas (e.g., "PS Accelerator depends on Knowledge Engine API")
+- Dependencies between areas (e.g., "Delivery Accelerator depends on Knowledge Engine API")
 - Numbered/named decisions from decision trackers
 
 SKIP:
@@ -140,7 +140,7 @@ recall_knowledge(
 
 2. For each concept that appears in 2+ areas, note the overlap. These are the candidates for Phase 3 checking.
 
-3. Look for gaps: concepts referenced by one area but never defined. For example, if PS Accelerator references "Knowledge Engine API contract" but no knowledge entry defines what that API looks like.
+3. Look for gaps: concepts referenced by one area but never defined. For example, if Delivery Accelerator references "Knowledge Engine API contract" but no knowledge entry defines what that API looks like.
 
 4. Look for terminology drift: same concept called different things in different areas (e.g., "Implementation Accelerator" vs "PS Accelerator" vs "Delivery Accelerator").
 
@@ -190,7 +190,7 @@ store_session_fact(
 | Severity | Description | Example |
 |----------|-------------|---------|
 | **CONTRADICTION** | Two areas make incompatible claims | Area 1 says "JWT auth", Area 7 says "API key only" |
-| **GAP** | Concept referenced but never defined | PS Accelerator references "config generation API" — no spec exists |
+| **GAP** | Concept referenced but never defined | Delivery Accelerator references "config generation API" — no spec exists |
 | **ASSUMPTION CONFLICT** | Different areas assume different things about the same topic | Area 3 assumes Jira is primary tracker, Area 6 assumes Git-native |
 | **TERMINOLOGY DRIFT** | Same concept, different names | "PS Accelerator" / "Implementation Accelerator" / "Delivery Accelerator" |
 | **DUPLICATION** | Same decision/spec written in 2+ places (maintenance risk) | Auth model described in both Orchestration and Constrained Deployment docs |

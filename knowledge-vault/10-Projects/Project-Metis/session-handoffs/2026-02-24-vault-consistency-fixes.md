@@ -22,7 +22,7 @@ Systematic audit of entire vault, then fixed all identified gaps.
 
 1. **Decisions tracker rebuilt from scratch** (`decisions/README.md`). Was stale since Feb 19 with all checkboxes open. Now tracks 35 decisions: 28 resolved (80%), 3 partial, 7 needing management, 2 parked, 2 quick wins. Sectioned by category with wikilinks to relevant vault files. This is now the SINGLE SOURCE OF TRUTH for decisions.
 
-2. **PS Accelerator renamed to Delivery Accelerator** in README title + area tag. Vault folder still `ps-accelerator/` — rename when convenient.
+2. **Delivery Accelerator renamed from PS Accelerator** in README title + area tag. Vault folder still `ps-accelerator/` — rename when convenient.
 
 3. **Header conventions applied to all 8 area READMEs** that were missing them. Every area README now has: `scope: system` tag in frontmatter, design principles block in header. Files updated: knowledge-engine, integration-hub, orchestration-infra, ps-accelerator, quality-compliance, support-defect-intel, project-governance, commercial.
 

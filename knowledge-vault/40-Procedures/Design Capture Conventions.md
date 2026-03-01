@@ -20,7 +20,7 @@ Behavioral guidance for capturing design concepts during brainstorm sessions. Ap
 |------|--------|---------|
 | Decisions | `DECIDED:` | "Auth uses JWT + RBAC" |
 | Assumptions | `ASSUMED:` | "Jira is not required long-term" |
-| Dependencies | `DEPENDS:` | "PS Accelerator needs Knowledge Engine API" |
+| Dependencies | `DEPENDS:` | "Delivery Accelerator needs Knowledge Engine API" |
 | Constraints | `CONSTRAINT:` | "Australian data residency required" |
 | Principles | `PRINCIPLE:` | "Build for nimbus first, generalise second" |
 | Requirements | `REQUIRED:` | "Every alert must provide information for action" |
@@ -96,7 +96,7 @@ Use these canonical area names for consistency:
 | BPMN & SOP Enforcement | Process modeling, validation, compliance |
 | Quality & Compliance | Testing, audit trails, release gates |
 | Project Governance | PM lifecycle, client tracking, timelines |
-| Implementation Accelerator | Config generation, deployment automation |
+| Delivery Accelerator | Config generation, deployment automation |
 | Support & Defect Intel | Ticket analysis, pattern detection |
 | Commercial | Pricing, packaging, Monash model |
 

@@ -52,22 +52,24 @@ Key insight: LLMs are inherently bad at following fixed processes. They skip ste
   - Vault reference: [[20-Domains/SpiffWorkflow Usage Guide]]
 - **Other enforcement mechanisms** — MCP custom systems that constrain Claude behaviour, session management, conventions, logging
 
-## Enforcement Approach: B/C/E Hybrid (Three Tiers)
+## Enforcement Approach: B/C/E Hybrid (Three Enforcement Tiers)
 
 Not everything needs the same rigour. Match enforcement to stakes.
 
-### Tier 1 — SpiffWorkflow Runtime (High Stakes)
+> **Note:** These are *enforcement tiers* describing how tightly the runtime controls a process. Separate from *lifecycle tiers* (Freeform/Structured/Pipeline) used in Project Governance for work item rigidity. See [[project-governance/README|Project Governance]] for lifecycle tiers.
+
+### Runtime-Enforced (High Stakes)
 Full BPMN process with SpiffWorkflow tracking state. Claude is a **worker** within the workflow, not the controller. SpiffWorkflow decides what step comes next, Claude does the work for that step.
 
 **When to use:** Processes where skipping a step has real consequences — compliance, client data, deployments.
 
 **Candidates:**
-- Knowledge validation (Tier 2+ knowledge requiring human approval)
+- Knowledge validation (structured/pipeline-tier knowledge requiring human approval)
 - Deployment/release pipeline (UAT → production promotion)
 - Client configuration changes (touching live systems)
 - Pay scenario test cycle (compliance validation)
 
-### Tier 2 — Checklist + Validation (Structured, Lower Stakes)
+### Checklist-Validated (Medium Stakes)
 Database-backed checklist with validation gates. Each step has "done" criteria checked before the next step unlocks. Could be modelled as simple linear SpiffWorkflow or as standalone validation logic.
 
 **When to use:** Structured processes that are mostly linear with validation checkpoints.
@@ -78,7 +80,7 @@ Database-backed checklist with validation gates. Each step has "done" criteria c
 - Documentation generation from templates
 - Standard data imports
 
-### Tier 3 — Prompt + Conventions (Low Stakes)
+### Convention-Guided (Low Stakes)
 System prompt, CLAUDE.md, cached knowledge provide guidance. No external state machine. User evaluates output directly.
 
 **When to use:** Processes where enforcement overhead exceeds cost of occasional drift.

@@ -119,7 +119,7 @@ The Knowledge Engine captures, structures, and makes searchable everything nimbu
 
 - Requires [[orchestration-infra/README|Orchestration & Infrastructure]] — database, pgvector, auth
 - Feeds into [[integration-hub/README|Integration Hub]] — API knowledge used by connectors
-- Feeds into [[ps-accelerator/README|PS Accelerator]] — knowledge drives config generation
+- Feeds into [[ps-accelerator/README|Delivery Accelerator]] — knowledge drives config generation
 - Feeds into [[quality-compliance/README|Quality & Compliance]] — Award knowledge drives test scenarios
 - Feeds into [[support-defect-intel/README|Support & Defect Intelligence]] — knowledge lookup for triage
 

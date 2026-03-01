@@ -135,7 +135,7 @@ These are already paid for and should be enabled immediately:
 
 - Requires [[orchestration-infra/README|Orchestration & Infrastructure]] — credential storage, auth, environments
 - Feeds [[knowledge-engine/README|Knowledge Engine]] — API specs ingested as knowledge
-- Feeds [[ps-accelerator/README|PS Accelerator]] — connectors used for config generation and data import
+- Feeds [[ps-accelerator/README|Delivery Accelerator]] — connectors used for config generation and data import
 - Feeds [[support-defect-intel/README|Support & Defect Intelligence]] — Jira integration for triage
 
 ## Open Questions

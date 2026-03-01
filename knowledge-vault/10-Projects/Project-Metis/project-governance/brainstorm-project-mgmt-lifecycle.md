@@ -31,16 +31,18 @@ synced: false
 
 A spectrum of work types hitting different lifecycle stages depending on what they are. Some work exits after a KMS answer. Some goes all the way through to code deployment.
 
-### Three Rigidity Tiers
+### Three Lifecycle Tiers
 
-| Tier | Name | What Goes Here | Gates | Example |
-|------|------|---------------|-------|---------|
-| **Tier 1** | Free-flowing | Knowledge queries, consultant questions, internal lookups | None beyond "is answer good" | "What rule types support shift allowances?" |
-| **Tier 2** | Structured with sign-off | Customer deliverables, requirements analysis, sign-off docs | Client approval IS the gate. Sign-off doc is what you invoice against. | Requirements document, configuration specification |
-| **Tier 3** | Rigid pipeline | Code and deployment | Five-layer validation stack applies. No skipping tests or deploying without review. | New API endpoint, Award rule configuration change |
+| Lifecycle Tier | What Goes Here | Gates | Example |
+|----------------|---------------|-------|---------|
+| **Freeform** | Knowledge queries, consultant questions, internal lookups | None beyond "is answer good" | "What rule types support shift allowances?" |
+| **Structured** | Customer deliverables, requirements analysis, sign-off docs | Client approval IS the gate. Sign-off doc is what you invoice against. | Requirements document, configuration specification |
+| **Pipeline** | Code and deployment | Five-layer validation stack applies. No skipping tests or deploying without review. | New API endpoint, Award rule configuration change |
+
+> **Note:** These are *lifecycle tiers* (work item rigidity). Separate from *enforcement tiers* (Runtime-enforced/Checklist-validated/Convention-guided) in BPMN & SOP Enforcement.
 
 **Key decisions:**
-- Tier 2 **escalates to Tier 3** if signed-off work requires code changes (e.g., custom feature needs new API endpoint)
+- Structured **escalates to Pipeline** if signed-off work requires code changes (e.g., custom feature needs new API endpoint)
 - **Commercial call** determines paid vs included work. Platform doesn't make that call but needs to know outcome — affects lifecycle routing and traceability
 - Platform should be **source of truth for documentation**, generate/maintain docs from system state (living documentation), optionally push to Confluence as integration
 
@@ -101,16 +103,16 @@ Platform integrates with whatever customer uses:
 
 Eight default work types. List is **configurable/expandable** per deployment — not hardcoded. Each type has a default tier mapping but can be overridden.
 
-| Work Type | Description | Default Tier | Exits At |
-|-----------|-------------|-------------|----------|
-| **Knowledge query** | Someone asks a question, KMS answers | Tier 1 | Answer delivered |
-| **Bug / defect** | Something's broken | Tier 2 or 3 (depends if code fix needed) | Fix verified |
-| **Feature request** | New capability | Tier 3 | Deployed + tested |
-| **Configuration change** | Customer config adjustment | Tier 2 (escalates to 3 if code needed) | Validated + signed off |
-| **Documentation** | Create or update docs | Tier 1 or 2 (depends if client-facing) | Published |
-| **Client onboarding** | New customer setup | Tier 2 (composite — spawns child work) | Handover complete |
-| **Knowledge ingestion** | Feed new knowledge into the engine | Tier 1 or 2 (depends on knowledge tier) | Validated + searchable |
-| **Investigation** | Research or spike — answer unknown | Tier 1 | Findings documented |
+| Work Type | Description | Default Lifecycle | Exits At |
+|-----------|-------------|-------------------|----------|
+| **Knowledge query** | Someone asks a question, KMS answers | Freeform | Answer delivered |
+| **Bug / defect** | Something's broken | Structured or Pipeline (depends if code fix needed) | Fix verified |
+| **Feature request** | New capability | Pipeline | Deployed + tested |
+| **Configuration change** | Customer config adjustment | Structured (escalates to Pipeline if code needed) | Validated + signed off |
+| **Documentation** | Create or update docs | Freeform or Structured (depends if client-facing) | Published |
+| **Client onboarding** | New customer setup | Structured (composite — spawns child work) | Handover complete |
+| **Knowledge ingestion** | Feed new knowledge into the engine | Freeform or Structured (depends on knowledge tier) | Validated + searchable |
+| **Investigation** | Research or spike — answer unknown | Freeform | Findings documented |
 
 ## 6. Decisions-as-Objects
 
@@ -168,7 +170,7 @@ Cost offset argument: productivity increase + fewer complaints + increased sales
 | BPMN/SOP | Gate rejections → "fix before proceeding" items | Work item status for gate checks |
 | Project Governance | Tracking, lifecycle, audit trail | Work items from all areas |
 
-**Concrete example:** Sharon at Monash requests a new weekend casual allowance → KMS searches (partial match) → Governance creates Tier 2 work item → Delivery breaks into tasks → Quality generates pay scenarios → Integration Hub talks to time2work API → BPMN gates enforce sign-off before production → KMS learns the pattern for next time. One request, all areas, one audit trail.
+**Concrete example:** Sharon at Monash requests a new weekend casual allowance → KMS searches (partial match) → Governance creates Structured work item → Delivery breaks into tasks → Quality generates pay scenarios → Integration Hub talks to time2work API → BPMN gates enforce sign-off before production → KMS learns the pattern for next time. One request, all areas, one audit trail.
 
 ---
 *Source: Chat #9 sessions (Feb 24, 2026) | Session handoff: [[session-handoffs/2026-02-24-project-mgmt-lifecycle.md]]*
