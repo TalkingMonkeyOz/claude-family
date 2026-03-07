@@ -4,12 +4,14 @@ tags:
   - scope/system
   - type/feature-catalogue
 created: 2026-02-26
-updated: 2026-02-28
+updated: 2026-03-07
 ---
 
 # METIS Feature Catalogue
 
 10 user-facing features with concrete nimbus/Monash examples. Each feature describes: who uses it, what they see, what happens behind the scenes, and a real-world example.
+
+**Relationship to Gate Framework:** These features are inputs to Gate 1 (Process Inventory, Actor Map) and Gate 2 (BPMN, Journey Maps, Data Model). Each feature implies processes, actors, data entities, and business rules that must be captured in the gate deliverables. See `design-lifecycle.md` for the full gate framework (Gates 0-4, 31 deliverables).
 
 ## Feature 1: Ask the Knowledge Engine a Question
 

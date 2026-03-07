@@ -180,6 +180,158 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
         )
     return None
 
+
+# =============================================================================
+# CONTEXT HEALTH - Graduated urgency based on context window fullness
+# =============================================================================
+# Reads context_health.json written by StatusLine sensor script.
+# Falls back to prompt count heuristic when StatusLine data is stale/missing.
+# Returns (level, remaining_pct, message) for injection into context.
+
+CONTEXT_HEALTH_FILE = STATE_DIR / "context_health.json"
+CONTEXT_HEALTH_FRESHNESS_SECONDS = 120  # Data older than this triggers fallback
+
+# Prompt count fallback thresholds (when StatusLine data unavailable)
+FALLBACK_THRESHOLDS = {
+    "red": 70,     # 70+ prompts → likely <10% remaining
+    "orange": 55,  # 55+ prompts → likely 10-20% remaining
+    "yellow": 40,  # 40+ prompts → likely 20-30% remaining
+}
+
+CONTEXT_HEALTH_MESSAGES = {
+    "yellow": (
+        "**CONTEXT ADVISORY ({remaining}% remaining).** Consider saving cognitive state:\n"
+        "  - save_checkpoint(\"<current focus>\", \"<progress notes>\")\n"
+        "  - store_session_fact(\"current_task\", \"<what you're working on>\")"
+    ),
+    "orange": (
+        "**CONTEXT LOW ({remaining}% remaining).** Save cognitive state NOW:\n"
+        "1. store_session_fact(\"current_task\", \"<what you're working on>\")\n"
+        "2. store_session_fact(\"approach\", \"<strategy being used>\")\n"
+        "3. store_session_fact(\"progress\", \"<what's done, what remains>\")\n"
+        "4. save_checkpoint(\"<current focus>\", \"<progress summary>\")\n"
+        "Then continue your work."
+    ),
+    "red_ok": (
+        "**COMPACTION IMMINENT ({remaining}% remaining).** Checkpoint was recently saved (good).\n"
+        "Continue working but avoid starting large new tasks. Compaction may occur soon."
+    ),
+    "red_blocked": (
+        "**COMPACTION IMMINENT ({remaining}% remaining).** You MUST save state NOW:\n"
+        "1. store_session_fact(\"current_task\", \"<what you're working on>\")\n"
+        "2. store_session_fact(\"approach\", \"<strategy being used>\")\n"
+        "3. store_session_fact(\"progress\", \"<what's done, what remains>\")\n"
+        "4. store_session_notes(\"<progress narrative>\", section=\"progress\")\n"
+        "5. save_checkpoint(\"<current focus>\", \"<progress notes>\")\n"
+        "6. remember() any patterns or decisions from this session\n"
+        "Gated tools (Write/Edit/Bash/Task) are BLOCKED until checkpoint is saved."
+    ),
+}
+
+
+def _check_context_health(interaction_count: int = 0) -> tuple:
+    """Check context window health and return graduated urgency info.
+
+    Reads context_health.json from StatusLine sensor. Falls back to prompt
+    count heuristic when data is stale (>120s) or missing.
+
+    Args:
+        interaction_count: Current prompt count for fallback heuristic.
+
+    Returns:
+        (level, remaining_pct, message) where:
+        - level: "green", "yellow", "orange", "red"
+        - remaining_pct: Estimated remaining context percentage
+        - message: Formatted directive string, or None for green
+    """
+    remaining_pct = -1
+    used_fallback = False
+
+    # Try to read StatusLine sensor data
+    try:
+        if CONTEXT_HEALTH_FILE.exists():
+            import time as _time
+            file_age = _time.time() - CONTEXT_HEALTH_FILE.stat().st_mtime
+            if file_age < CONTEXT_HEALTH_FRESHNESS_SECONDS:
+                with open(CONTEXT_HEALTH_FILE, 'r', encoding='utf-8') as f:
+                    health_data = json.load(f)
+                    remaining_pct = health_data.get('remaining_pct', -1)
+    except (json.JSONDecodeError, IOError, OSError):
+        pass
+
+    # Fallback to prompt count heuristic
+    if remaining_pct < 0:
+        used_fallback = True
+        if interaction_count >= FALLBACK_THRESHOLDS["red"]:
+            remaining_pct = 5
+        elif interaction_count >= FALLBACK_THRESHOLDS["orange"]:
+            remaining_pct = 15
+        elif interaction_count >= FALLBACK_THRESHOLDS["yellow"]:
+            remaining_pct = 25
+        else:
+            remaining_pct = 50
+
+    # Compute urgency level
+    if remaining_pct > 30:
+        return ("green", remaining_pct, None)
+    elif remaining_pct > 20:
+        level = "yellow"
+    elif remaining_pct > 10:
+        level = "orange"
+    else:
+        level = "red"
+
+    # For red level, check if checkpoint is recent
+    if level == "red":
+        checkpoint_recent = _check_recent_checkpoint()
+        if checkpoint_recent:
+            msg = CONTEXT_HEALTH_MESSAGES["red_ok"].format(remaining=remaining_pct)
+        else:
+            msg = CONTEXT_HEALTH_MESSAGES["red_blocked"].format(remaining=remaining_pct)
+    else:
+        msg = CONTEXT_HEALTH_MESSAGES[level].format(remaining=remaining_pct)
+
+    source = "fallback" if used_fallback else "statusline"
+    return (level, remaining_pct, msg)
+
+
+def _check_recent_checkpoint(max_age_seconds: int = 120) -> bool:
+    """Check if a checkpoint was saved recently (within max_age_seconds).
+
+    Queries claude.session_state for the current project's updated_at timestamp.
+    Returns True if updated within the threshold.
+    """
+    try:
+        conn = get_db_connection()
+        if not conn:
+            return False
+
+        project_name = os.path.basename(os.getcwd())
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT updated_at FROM claude.session_state
+            WHERE project_name = %s
+        """, (project_name,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return False
+
+        updated_at = row['updated_at'] if isinstance(row, dict) else row[0]
+        if updated_at is None:
+            return False
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        age = (now - updated_at).total_seconds()
+        return age < max_age_seconds
+    except Exception:
+        return False
+
+
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
@@ -1869,7 +2021,24 @@ def main():
         else:
             logger.info(f"RAG skipped for action prompt: {user_prompt[:50]}")
 
+        # CONTEXT HEALTH: Check context window fullness (graduated urgency)
+        # Uses StatusLine sensor data or prompt count fallback
+        context_health_msg = None
+        try:
+            reminder_state = load_reminder_state()
+            reminder_state["interaction_count"] = reminder_state.get("interaction_count", 0) + 1
+            save_reminder_state(reminder_state)
+            interaction_count = reminder_state["interaction_count"]
+
+            ctx_level, ctx_remaining, ctx_msg = _check_context_health(interaction_count)
+            if ctx_msg:
+                context_health_msg = ctx_msg
+                logger.info(f"Context health: level={ctx_level}, remaining={ctx_remaining}%")
+        except Exception as e:
+            logger.warning(f"Context health check failed: {e}")
+
         # Combine contexts in priority order:
+        # 0. Context health warning (if yellow/orange/red - HIGHEST PRIORITY)
         # 1. Core protocol (ALWAYS - task discipline)
         # 2. Critical session facts (ALWAYS - lightweight notepad)
         # 3. Session context (if session keywords detected)
@@ -1879,6 +2048,10 @@ def main():
         # 7. Nimbus context (if RAG enabled + Nimbus project)
         # 8. Schema context (if schema keywords detected)
         combined_context_parts = []
+
+        # Context health warnings go FIRST (highest priority - must be seen)
+        if context_health_msg:
+            combined_context_parts.append(context_health_msg)
 
         combined_context_parts.append(_get_core_protocol())
 

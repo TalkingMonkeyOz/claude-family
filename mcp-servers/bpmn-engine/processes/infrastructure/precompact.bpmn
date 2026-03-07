@@ -114,7 +114,10 @@ notes_read = True
 # - ACTIVE FEATURES
 # - SESSION CONTEXT (decisions, user_intent)
 # - SESSION NOTES (progress, findings)
-# - POST-COMPACTION CHECKLIST (recall user_intent, re-read CLAUDE.md)
+# - POST-COMPACTION RECOVERY PROTOCOL:
+#   STEP 1: list_session_facts(), get_session_notes(), get_work_context('current')
+#   STEP 2: Re-read CLAUDE.md, recall_memories()
+#   STEP 3: Resume from task in session facts (don't start new work)
 state_injected = True
       </bpmn:script>
     </bpmn:scriptTask>

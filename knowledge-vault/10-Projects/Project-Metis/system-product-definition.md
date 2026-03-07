@@ -7,6 +7,7 @@ tags:
 projects:
   - Project-Metis
 created: 2026-02-23
+updated: 2026-03-07
 synced: false
 ---
 
@@ -86,19 +87,21 @@ The platform creates purpose-built AI assistants for each customer without build
 
 For internal staff: Layers 1-3 sufficient. For external/client-facing: all four layers.
 
-### 4.3 Five-Layer Validation Stack
+### 4.3 Seven-Perspective Design Notation Stack
 
-Every process, workflow, and deployment in the platform is validated through five complementary layers:
+Every process, workflow, and deployment in the platform is validated through seven complementary perspectives:
 
-| Layer | What It Validates | How |
-|-------|------------------|-----|
-| **DDD (Domain-Driven Design)** | Boundaries, bounded contexts, aggregates | Are we building the right things in the right places? |
+| Perspective | What It Validates | How |
+|-------------|------------------|-----|
 | **BPMN (Business Process Model & Notation)** | Process flow, stage gates, handoffs | Does the workflow make sense? Are approvals in the right places? |
 | **DMN (Decision Model & Notation)** | Decision logic, rules tables | Are the branching decisions correct and complete? |
-| **Ontology / Knowledge Graph** | Completeness, dependencies, relationships | Is anything missing? Do all the pieces connect? |
+| **DDD (Domain-Driven Design)** | Boundaries, bounded contexts, aggregates | Are we building the right things in the right places? |
+| **C4 Model (Mermaid)** | System context, containers, components | How does the system decompose? What connects to what? |
+| **User Journey Maps / Wireflows** | Actor interactions, paths through the system | How does each actor type experience the platform? |
 | **Event Sourcing** | Immutable lifecycle history | Can we trace every change, every decision, every outcome? |
+| **Ontology / Knowledge Graph** | Completeness, dependencies, relationships | Is anything missing? Do all the pieces connect? |
 
-Each layer feeds upward. DDD defines what exists. BPMN defines how it flows. DMN defines how decisions are made. Ontology checks completeness. Event sourcing provides the audit trail.
+DDD defines what exists. BPMN defines how it flows. DMN defines how decisions are made. C4 shows how the system decomposes. User journeys show how actors interact. Event sourcing provides the audit trail. Ontology checks completeness.
 
 ---
 
@@ -240,7 +243,21 @@ Full Monash-specific scope exists in Doc 2 (Monash POC Proposal).
 
 ---
 
-## 10. Infrastructure (Deferred)
+## 10. Design Principles / Ethos
+
+Rules that apply before anyone builds anything. These are Gate Zero requirements.
+
+- **Readable, expandable, and maintainable** — the system, like code, must be all three
+- **No eye candy** — all systems must add value. Reporting must be actionable, not decorative. If it's not a call to action, it's not in by default
+- **Everything adds value** — every feature, report, dashboard, and alert must provide actionable information
+- **Dual-lens principle** — the same gate framework applies to building METIS AND to what METIS enforces for client engagements. Eat our own cooking.
+- **Humans guide, AI executes** — humans at validation checkpoints, AI does the heavy lifting between them
+
+See `design-lifecycle.md` for the full gate framework (Gates 0-4, 31 deliverables).
+
+---
+
+## 11. Infrastructure (Deferred)
 
 Infrastructure decisions are deliberately deferred at this stage. The platform should be infrastructure-agnostic at the system level.
 
@@ -254,7 +271,7 @@ Infrastructure decisions are deliberately deferred at this stage. The platform s
 
 ---
 
-## 11. What This Document Does NOT Cover
+## 12. What This Document Does NOT Cover
 
 - nimbus-specific commercial terms (see Doc 3)
 - Monash engagement scope and timeline (see Doc 2)
@@ -264,7 +281,7 @@ Infrastructure decisions are deliberately deferred at this stage. The platform s
 
 ---
 
-## 12. Open Questions
+## 13. Open Questions
 
 - [ ] What is the commercial model for The System? (SaaS subscription? Per-seat? Licensing?)
 - [ ] Self-hosted vs managed vs hybrid deployment?
@@ -274,4 +291,4 @@ Infrastructure decisions are deliberately deferred at this stage. The platform s
 - [ ] What's the generic integration catalogue? (Standard connectors every customer needs)
 
 ---
-*Product Definition v0.1 | Created: 2026-02-23 | Next: Review, then continue area deep-dives with generic framing*
+*Product Definition v0.2 | Created: 2026-02-23 | Updated: 2026-03-07 — Added Ethos/Design Principles, updated notation stack to 7 perspectives, gate framework reference*

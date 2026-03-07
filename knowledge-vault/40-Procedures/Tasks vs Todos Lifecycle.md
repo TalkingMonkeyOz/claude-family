@@ -179,10 +179,24 @@ The task map file includes `_session_id` to prevent stale tasks from a previous 
 
 | Scenario | Map Session | Current Session | Result |
 |----------|-------------|-----------------|--------|
+| Shared list mode (any) | any | any | **Allow** (session check skipped) |
 | Same session | ABC | ABC | **Allow** |
 | New session, stale map | ABC | XYZ | **Deny** (stale) |
 | No map file | - | XYZ | **Deny** (no tasks) |
 | No session_id available | ABC | (empty) | **Allow** (edge case) |
+
+### Shared Task List Mode (Hybrid Persistence)
+
+When `CLAUDE_CODE_TASK_LIST_ID` env var is set, tasks persist across sessions natively:
+
+- **How it works**: All `claude` invocations with the same `CLAUDE_CODE_TASK_LIST_ID` share one task directory instead of getting session-scoped directories
+- **Env var must be set in TWO places** (same pattern as `DATABASE_URL`):
+  1. **`.env` file** — hooks detect it via `config.py → load_all_env_files()`
+  2. **Launcher .bat** — Claude Code process reads it before launch
+- **Discipline hook**: Skips session_id staleness check entirely when shared list active
+- **Startup hook**: `_reset_task_map()` preserves existing task entries, only updates `_session_id` and resets delegation tracking
+- **Completed tasks**: Deleted from disk by Claude Code, preserved in `claude.todos` (DB is only record of completions)
+- **DB enrichment**: `task_sync_hook.py` continues syncing to DB for audit trail — no changes needed
 
 ## Critical Implementation Details
 
@@ -229,7 +243,7 @@ completed_at TIMESTAMPTZ       -- Set when status → completed
 
 ---
 
-**Version**: 2.0 (Complete rewrite: reflects task_sync_hook.py, discipline enforcement, session scoping)
+**Version**: 2.1 (Added shared task list mode / hybrid persistence via CLAUDE_CODE_TASK_LIST_ID)
 **Created**: 2026-01-24
-**Updated**: 2026-02-09
+**Updated**: 2026-03-04
 **Location**: knowledge-vault/40-Procedures/Tasks vs Todos Lifecycle.md

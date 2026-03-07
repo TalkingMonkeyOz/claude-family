@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/context-preservation"
+    id="Definitions_CP">
+
+  <bpmn:process id="context_preservation" name="Context Preservation Pipeline" isExecutable="true">
+
+    <!--
+      Proactive context preservation pipeline with graduated urgency.
+
+      Detects context window fullness via StatusLine sensor (or prompt-count
+      fallback), computes urgency level, and takes graduated action:
+        - Green (>30%): No action
+        - Yellow (20-30%): Advisory message
+        - Orange (10-20%): Specific save directive
+        - Red (<10%): Block gated tools until checkpoint saved
+
+      Sensor: StatusLine script writes ~/.claude/state/context_health.json
+      Directive: RAG hook reads health file, injects graduated messages
+      Enforcement: Task discipline hook blocks at Red without recent checkpoint
+      Recovery: PreCompact hook provides structured recovery protocol
+
+      Implementation:
+        - scripts/context_monitor_statusline.sh (StatusLine sensor)
+        - scripts/rag_query_hook.py (_check_context_health)
+        - scripts/task_discipline_hook.py (check_context_health_gate)
+        - scripts/precompact_hook.py (enhanced recovery protocol)
+    -->
+
+    <bpmn:startEvent id="start" name="Prompt Received">
+      <bpmn:outgoing>flow_start_to_read</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="read_context_health" name="[FILE] Read context_health.json" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_read</bpmn:incoming>
+      <bpmn:outgoing>flow_read_to_freshness</bpmn:outgoing>
+      <bpmn:script>
+# Read ~/.claude/state/context_health.json written by StatusLine sensor
+# Sets: health_data (dict or None), data_age_seconds (int)
+try:
+    if health_data is None:
+        health_data = {}
+except NameError:
+    health_data = {}
+try:
+    if data_age_seconds is None:
+        data_age_seconds = 999
+except NameError:
+    data_age_seconds = 999
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="freshness_gw" name="Data Fresh?" default="flow_stale">
+      <bpmn:incoming>flow_read_to_freshness</bpmn:incoming>
+      <bpmn:outgoing>flow_fresh</bpmn:outgoing>
+      <bpmn:outgoing>flow_stale</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="fallback_heuristic" name="[HOOK] Estimate from Prompt Count" scriptFormat="python">
+      <bpmn:incoming>flow_stale</bpmn:incoming>
+      <bpmn:outgoing>flow_fallback_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Fallback: estimate context health from interaction_count
+# 40+ = yellow, 55+ = orange, 70+ = red
+try:
+    if interaction_count is None:
+        interaction_count = 0
+except NameError:
+    interaction_count = 0
+if interaction_count >= 70:
+    remaining_pct = 5
+elif interaction_count >= 55:
+    remaining_pct = 15
+elif interaction_count >= 40:
+    remaining_pct = 25
+else:
+    remaining_pct = 50
+used_fallback = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="use_statusline_data" name="[HOOK] Use StatusLine Metrics" scriptFormat="python">
+      <bpmn:incoming>flow_fresh</bpmn:incoming>
+      <bpmn:outgoing>flow_statusline_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Use real metrics from StatusLine sensor
+remaining_pct = health_data.get('remaining_pct', 50)
+used_fallback = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="merge_data" name="Merge Data Sources">
+      <bpmn:incoming>flow_fallback_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_statusline_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_compute</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="compute_level" name="[HOOK] Compute Urgency Level" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_compute</bpmn:incoming>
+      <bpmn:outgoing>flow_compute_to_level</bpmn:outgoing>
+      <bpmn:script>
+# Compute urgency level from remaining_pct
+if remaining_pct > 30:
+    level = "green"
+elif remaining_pct > 20:
+    level = "yellow"
+elif remaining_pct > 10:
+    level = "orange"
+else:
+    level = "red"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="level_gw" name="Urgency Level?" default="flow_green">
+      <bpmn:incoming>flow_compute_to_level</bpmn:incoming>
+      <bpmn:outgoing>flow_green</bpmn:outgoing>
+      <bpmn:outgoing>flow_yellow</bpmn:outgoing>
+      <bpmn:outgoing>flow_orange</bpmn:outgoing>
+      <bpmn:outgoing>flow_red</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- GREEN: No action -->
+    <bpmn:endEvent id="end_no_action" name="No Action Needed">
+      <bpmn:incoming>flow_green</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- YELLOW: Advisory -->
+    <bpmn:scriptTask id="inject_advisory" name="[HOOK] Inject Advisory Message" scriptFormat="python">
+      <bpmn:incoming>flow_yellow</bpmn:incoming>
+      <bpmn:outgoing>flow_advisory_to_end</bpmn:outgoing>
+      <bpmn:script>
+# "Consider checkpointing" advisory
+action_taken = "advisory"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_advisory" name="Advisory Injected">
+      <bpmn:incoming>flow_advisory_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ORANGE: Directive -->
+    <bpmn:scriptTask id="inject_directive" name="[HOOK] Inject Save Directive" scriptFormat="python">
+      <bpmn:incoming>flow_orange</bpmn:incoming>
+      <bpmn:outgoing>flow_directive_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Specific save instructions: store current_task, approach, progress
+action_taken = "directive"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_directive" name="Directive Injected">
+      <bpmn:incoming>flow_directive_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- RED: Check checkpoint freshness -->
+    <bpmn:scriptTask id="check_recent_checkpoint" name="[DB] Check session_state.updated_at" scriptFormat="python">
+      <bpmn:incoming>flow_red</bpmn:incoming>
+      <bpmn:outgoing>flow_checkpoint_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.session_state for updated_at
+# checkpoint_recent = True if updated in last 2 minutes
+try:
+    if checkpoint_recent is None:
+        checkpoint_recent = False
+except NameError:
+    checkpoint_recent = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="checkpoint_fresh_gw" name="Checkpoint Recent?" default="flow_no_checkpoint">
+      <bpmn:incoming>flow_checkpoint_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_has_checkpoint</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_checkpoint</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- RED + recent checkpoint: warn but allow -->
+    <bpmn:scriptTask id="inject_red_advisory" name="[HOOK] Inject Red Warning (checkpoint OK)" scriptFormat="python">
+      <bpmn:incoming>flow_has_checkpoint</bpmn:incoming>
+      <bpmn:outgoing>flow_red_ok_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Red level but checkpoint is recent - warn but don't block
+action_taken = "red_warning"
+tools_blocked = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_red_ok" name="Red Warning With Checkpoint">
+      <bpmn:incoming>flow_red_ok_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- RED + no checkpoint: block tools -->
+    <bpmn:scriptTask id="block_and_inject" name="[HOOK] Block Tools + Inject Mandatory Save" scriptFormat="python">
+      <bpmn:incoming>flow_no_checkpoint</bpmn:incoming>
+      <bpmn:outgoing>flow_blocked_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Block gated tools (Write/Edit/Bash/Task) until checkpoint saved
+# Inject mandatory save protocol
+action_taken = "blocked"
+tools_blocked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_blocked" name="Tools Blocked Until Checkpoint">
+      <bpmn:incoming>flow_blocked_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_start_to_read" sourceRef="start" targetRef="read_context_health"/>
+    <bpmn:sequenceFlow id="flow_read_to_freshness" sourceRef="read_context_health" targetRef="freshness_gw"/>
+    <bpmn:sequenceFlow id="flow_fresh" sourceRef="freshness_gw" targetRef="use_statusline_data">
+      <bpmn:conditionExpression>data_age_seconds &lt; 120</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_stale" sourceRef="freshness_gw" targetRef="fallback_heuristic"/>
+    <bpmn:sequenceFlow id="flow_fallback_to_merge" sourceRef="fallback_heuristic" targetRef="merge_data"/>
+    <bpmn:sequenceFlow id="flow_statusline_to_merge" sourceRef="use_statusline_data" targetRef="merge_data"/>
+    <bpmn:sequenceFlow id="flow_merge_to_compute" sourceRef="merge_data" targetRef="compute_level"/>
+    <bpmn:sequenceFlow id="flow_compute_to_level" sourceRef="compute_level" targetRef="level_gw"/>
+    <bpmn:sequenceFlow id="flow_green" sourceRef="level_gw" targetRef="end_no_action"/>
+    <bpmn:sequenceFlow id="flow_yellow" sourceRef="level_gw" targetRef="inject_advisory">
+      <bpmn:conditionExpression>level == "yellow"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_orange" sourceRef="level_gw" targetRef="inject_directive">
+      <bpmn:conditionExpression>level == "orange"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_red" sourceRef="level_gw" targetRef="check_recent_checkpoint">
+      <bpmn:conditionExpression>level == "red"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_checkpoint_check_to_gw" sourceRef="check_recent_checkpoint" targetRef="checkpoint_fresh_gw"/>
+    <bpmn:sequenceFlow id="flow_has_checkpoint" sourceRef="checkpoint_fresh_gw" targetRef="inject_red_advisory">
+      <bpmn:conditionExpression>checkpoint_recent == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_checkpoint" sourceRef="checkpoint_fresh_gw" targetRef="block_and_inject"/>
+    <bpmn:sequenceFlow id="flow_advisory_to_end" sourceRef="inject_advisory" targetRef="end_advisory"/>
+    <bpmn:sequenceFlow id="flow_directive_to_end" sourceRef="inject_directive" targetRef="end_directive"/>
+    <bpmn:sequenceFlow id="flow_red_ok_to_end" sourceRef="inject_red_advisory" targetRef="end_red_ok"/>
+    <bpmn:sequenceFlow id="flow_blocked_to_end" sourceRef="block_and_inject" targetRef="end_blocked"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="context_preservation">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

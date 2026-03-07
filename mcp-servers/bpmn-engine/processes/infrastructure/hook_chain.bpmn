@@ -112,9 +112,41 @@ context_injected = True
       <bpmn:outgoing>flow_no_tool</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
+    <!-- Context health gate: block gated tools when context critically low -->
+    <bpmn:scriptTask id="check_context_health" name="[HOOK] Check Context Health" scriptFormat="python">
+      <bpmn:incoming>flow_is_tool_call</bpmn:incoming>
+      <bpmn:outgoing>flow_context_to_context_gw</bpmn:outgoing>
+      <bpmn:script>
+# Read context_health.json from StatusLine sensor
+# If Red level + no recent checkpoint → block gated tools
+try:
+    if context_level is None:
+        context_level = "green"
+except NameError:
+    context_level = "green"
+context_blocked = (context_level == "red" and not checkpoint_recent)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="context_health_gw" name="Context Health OK?" default="flow_context_pass">
+      <bpmn:incoming>flow_context_to_context_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_context_blocked</bpmn:outgoing>
+      <bpmn:outgoing>flow_context_pass</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="mark_context_blocked" name="[HOOK] Deny Tool (Context Low)" scriptFormat="python">
+      <bpmn:incoming>flow_context_blocked</bpmn:incoming>
+      <bpmn:outgoing>flow_context_blocked_to_end</bpmn:outgoing>
+      <bpmn:script>
+blocked = True
+block_reason = "context_low"
+# Return permissionDecision: deny - save checkpoint first
+      </bpmn:script>
+    </bpmn:scriptTask>
+
     <!-- Task discipline reads the SAME task_map that RAG hook manages -->
     <bpmn:scriptTask id="check_discipline" name="[HOOK] Check Task Discipline" scriptFormat="python">
-      <bpmn:incoming>flow_is_tool_call</bpmn:incoming>
+      <bpmn:incoming>flow_context_pass</bpmn:incoming>
       <bpmn:outgoing>flow_discipline_to_result_gw</bpmn:outgoing>
       <bpmn:script>
 # Read task_map file (SHARED STATE with RAG hook)
@@ -137,6 +169,7 @@ discipline_blocked = is_gated and not has_tasks
       <bpmn:outgoing>flow_blocked_to_end</bpmn:outgoing>
       <bpmn:script>
 blocked = True
+block_reason = "no_tasks"
 # Return permissionDecision: deny with message
       </bpmn:script>
     </bpmn:scriptTask>
@@ -179,6 +212,10 @@ tool_synced = True
     </bpmn:scriptTask>
 
     <!-- End Events -->
+    <bpmn:endEvent id="end_context_blocked" name="Blocked (Context Low)">
+      <bpmn:incoming>flow_context_blocked_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
     <bpmn:endEvent id="end_blocked" name="Blocked (No Tasks)">
       <bpmn:incoming>flow_blocked_to_end</bpmn:incoming>
     </bpmn:endEvent>
@@ -211,12 +248,17 @@ tool_synced = True
     <bpmn:sequenceFlow id="flow_rag_to_skills" sourceRef="query_rag" targetRef="query_skill_suggestions"/>
     <bpmn:sequenceFlow id="flow_skills_to_inject" sourceRef="query_skill_suggestions" targetRef="inject_rag_context"/>
 
-    <!-- Phase 2: Discipline + context injection -->
+    <!-- Phase 2: Context health + Discipline + context injection -->
     <bpmn:sequenceFlow id="flow_inject_to_tool_gw" sourceRef="inject_rag_context" targetRef="is_tool_call_gw"/>
-    <bpmn:sequenceFlow id="flow_is_tool_call" sourceRef="is_tool_call_gw" targetRef="check_discipline">
+    <bpmn:sequenceFlow id="flow_is_tool_call" sourceRef="is_tool_call_gw" targetRef="check_context_health">
       <bpmn:conditionExpression>is_tool_call == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_no_tool" sourceRef="is_tool_call_gw" targetRef="generate_response"/>
+    <bpmn:sequenceFlow id="flow_context_to_context_gw" sourceRef="check_context_health" targetRef="context_health_gw"/>
+    <bpmn:sequenceFlow id="flow_context_blocked" sourceRef="context_health_gw" targetRef="mark_context_blocked">
+      <bpmn:conditionExpression>context_blocked == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_context_pass" sourceRef="context_health_gw" targetRef="check_discipline"/>
     <bpmn:sequenceFlow id="flow_discipline_to_result_gw" sourceRef="check_discipline" targetRef="discipline_result_gw"/>
     <bpmn:sequenceFlow id="flow_discipline_blocked" sourceRef="discipline_result_gw" targetRef="mark_blocked">
       <bpmn:conditionExpression>discipline_blocked == True</bpmn:conditionExpression>
@@ -227,6 +269,7 @@ tool_synced = True
     <!-- Phase 3: Post-tool -->
     <bpmn:sequenceFlow id="flow_execute_to_sync" sourceRef="execute_tool" targetRef="post_tool_sync"/>
     <bpmn:sequenceFlow id="flow_sync_to_end" sourceRef="post_tool_sync" targetRef="end_tool_complete"/>
+    <bpmn:sequenceFlow id="flow_context_blocked_to_end" sourceRef="mark_context_blocked" targetRef="end_context_blocked"/>
     <bpmn:sequenceFlow id="flow_blocked_to_end" sourceRef="mark_blocked" targetRef="end_blocked"/>
     <bpmn:sequenceFlow id="flow_response_to_end" sourceRef="generate_response" targetRef="end_response"/>
 

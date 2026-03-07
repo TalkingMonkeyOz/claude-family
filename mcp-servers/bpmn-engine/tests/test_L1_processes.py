@@ -175,9 +175,10 @@ class TestL1WorkTracking:
         complete(wf, "plan_feature")
 
         # CallActivity invokes task_lifecycle (L2) - walk through its user tasks
-        complete(wf, "create_task", {"has_tasks": True, "action": "complete"})
+        # has_more_tasks=False so multi-task loop exits immediately
+        complete(wf, "create_task", {"has_tasks": True, "has_more_tasks": False, "action": "complete"})
         complete(wf, "work_on_task", {"action": "complete"})
-        # task_lifecycle ends (mark_completed runs as script task)
+        # task_lifecycle ends (mark_completed + check_feature_completion run as script tasks)
 
         # Back in L1: assess if all tasks done
         complete(wf, "assess_task_completion", {"all_tasks_done": True})
@@ -192,29 +193,30 @@ class TestL1WorkTracking:
         complete(wf, "plan_feature")
 
         # First task via L2: not done yet
-        complete(wf, "create_task", {"has_tasks": True, "action": "complete"})
+        complete(wf, "create_task", {"has_tasks": True, "has_more_tasks": False, "action": "complete"})
         complete(wf, "work_on_task", {"action": "complete"})
         complete(wf, "assess_task_completion", {"all_tasks_done": False})
 
         # Second task via L2: now done
-        complete(wf, "create_task", {"has_tasks": True, "action": "complete"})
+        complete(wf, "create_task", {"has_tasks": True, "has_more_tasks": False, "action": "complete"})
         complete(wf, "work_on_task", {"action": "complete"})
         complete(wf, "assess_task_completion", {"all_tasks_done": True})
 
         assert wf.is_completed()
 
     def test_feature_l2_task_with_blocker(self):
-        """Feature task hits blocker in L2, resolves, then completes."""
+        """Feature task hits blocker in L2, resolves, then completes.
+        Note: resolve_blocker now flows to mark_completed (resolved = done)."""
         wf = load_l1("L1_work_tracking", extra_bpmn_files=[L2_FILES["task_lifecycle"]])
         complete(wf, "identify_work", {"work_type": "feature"})
         complete(wf, "plan_feature")
 
         # Task hits blocker during L2 execution
-        complete(wf, "create_task", {"has_tasks": True, "action": "block"})
+        complete(wf, "create_task", {"has_tasks": True, "has_more_tasks": False, "action": "block"})
         complete(wf, "work_on_task", {"action": "block"})
         complete(wf, "resolve_blocker")
-        # After resolving, back to work_on_task
-        complete(wf, "work_on_task", {"action": "complete"})
+        # After resolving, flows to mark_completed (resolved = done, no retry loop)
+        # mark_completed + check_feature_completion auto-run as script tasks
 
         # Back in L1: done
         complete(wf, "assess_task_completion", {"all_tasks_done": True})
@@ -466,7 +468,7 @@ class TestL0L1L2Integration:
         complete(wf, "plan_feature")
 
         # L2 task_lifecycle subprocess executes within L1_work_tracking
-        complete(wf, "create_task", {"has_tasks": True, "action": "complete"})
+        complete(wf, "create_task", {"has_tasks": True, "has_more_tasks": False, "action": "complete"})
         complete(wf, "work_on_task", {"action": "complete"})
         complete(wf, "assess_task_completion", {"all_tasks_done": True})
 

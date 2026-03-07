@@ -1,5 +1,5 @@
 """
-Tests for the Session Lifecycle BPMN process.
+Tests for the Session Lifecycle BPMN process (v3 - auto_archive, check_messages, rag_per_prompt, auto_close).
 
 Uses SpiffWorkflow 3.x API directly against the session_lifecycle.bpmn definition.
 No external database required - all assertions are on task.data values.
@@ -13,22 +13,26 @@ Key API notes (SpiffWorkflow 3.1.x):
   - workflow.data is populated from the last completed task's data on workflow completion
   - Gateway conditions are Python expressions eval'd against task.data
 
-Process flow summary (updated 2026-02-24 - display-only resume):
-  start_event -> session_start -> load_state -> has_prior_state_gateway
-    [prior_state==True] -> display_session_summary -> has_prior_tasks_gateway
-      [has_prior_tasks==True] -> display_prior_tasks -> prior_tasks_merge
-      [default]               -> prior_tasks_merge
-    -> work_merge_gateway
-    [default] -> fresh_start -> work_merge_gateway
-  -> do_work (user)
-  -> work_action_gateway
-    [action=="end_session"] -> save_summary -> close_session -> end_normal
-    [action=="compact"]     -> save_checkpoint -> do_work (loop)
-    [default]               -> do_work (loop, continue working)
+Process flow summary (v3 - 2026-03-07):
+  start_event -> auto_archive -> session_start -> check_messages -> load_state
+    -> has_prior_state_gateway
+      [prior_state==True] -> display_session_summary -> has_prior_tasks_gateway
+        [has_prior_tasks==True] -> display_prior_tasks -> prior_tasks_merge
+        [default]               -> prior_tasks_merge
+      [default] -> fresh_start
+    -> work_merge_gateway -> rag_per_prompt -> do_work
+    -> work_action_gateway
+      [action=="end_session"] -> save_summary -> close_session -> end_normal
+      [action=="compact"]     -> save_checkpoint -> do_work (loop)
+      [action=="auto_close"]  -> auto_close_session -> end_auto
+      [default]               -> do_work (loop, continue working)
 
-Key change: "Restore Context" replaced with display-only flow.
-Tasks are NOT restored via TaskCreate. Claude Code natively persists tasks
-in ~/.claude/tasks/. DB todo restoration was creating zombie tasks.
+New elements vs v2:
+  - auto_archive: fires before session_start to archive old sessions (>24h)
+  - check_messages: checks inbox before load_state
+  - rag_per_prompt: RAG + core protocol injection (per prompt, shown once at startup)
+  - auto_close_session / end_auto: SessionEnd hook auto-close path
+  - save_checkpoint renamed to include PreCompact detail
 """
 
 import os
@@ -56,6 +60,7 @@ def load_workflow() -> BpmnWorkflow:
     spec = parser.get_spec(PROCESS_ID)
     wf = BpmnWorkflow(spec)
     # Advance past any initial automated steps (script tasks, start event)
+    # auto_archive, session_start, check_messages all auto-run before load_state
     wf.do_engine_steps()
     return wf
 
@@ -97,12 +102,12 @@ def completed_spec_names(workflow: BpmnWorkflow) -> list:
 
 class TestFreshSession:
     """
-    No prior state -> fresh_start -> do_work -> end_session -> end_normal.
+    No prior state -> fresh_start -> rag_per_prompt -> do_work -> end_session -> end_normal.
 
     Flow:
-        start_event -> session_start -> load_state
+        start_event -> auto_archive -> session_start -> check_messages -> load_state
         -> has_prior_state_gateway [prior_state=False, default] -> fresh_start
-        -> work_merge_gateway -> do_work
+        -> work_merge_gateway -> rag_per_prompt -> do_work
         -> work_action_gateway [action="end_session"] -> save_summary
         -> close_session -> end_normal
     """
@@ -110,20 +115,30 @@ class TestFreshSession:
     def test_fresh_session_completes_normally(self):
         workflow = load_workflow()
 
-        # Engine has run session_start (script), stops at load_state (user task).
-        # Complete load_state with prior_state=False to take the fresh_start path.
+        # Engine has auto-run auto_archive, session_start, check_messages (all scriptTasks).
+        # Stops at load_state (first userTask).
         ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
         assert "load_state" in ready_names, (
-            f"Expected load_state to be READY. Got: {ready_names}"
+            f"Expected load_state to be READY after startup scripts. Got: {ready_names}"
         )
+
+        # Verify startup scripts ran before load_state
+        pre_load_names = completed_spec_names(workflow)
+        assert "auto_archive" in pre_load_names, "auto_archive must auto-run before load_state"
+        assert "session_start" in pre_load_names, "session_start must auto-run before load_state"
+        assert "check_messages" in pre_load_names, "check_messages must auto-run before load_state"
 
         complete_user_task(workflow, "load_state", {"state_loaded": True, "prior_state": False})
 
-        # fresh_start script auto-runs, merge gateway passes through, stops at do_work
+        # fresh_start, work_merge, rag_per_prompt all auto-run, stops at do_work
         ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
         assert "do_work" in ready_names, (
             f"Expected do_work to be READY after fresh start. Got: {ready_names}"
         )
+
+        # Verify rag_per_prompt ran on the path to do_work
+        mid_names = completed_spec_names(workflow)
+        assert "rag_per_prompt" in mid_names, "rag_per_prompt must run before first do_work"
 
         # Complete do_work with action="end_session" to end the session
         complete_user_task(workflow, "do_work", {"action": "end_session"})
@@ -131,9 +146,12 @@ class TestFreshSession:
         assert workflow.is_completed(), "Workflow should be completed after end_session"
 
         names = completed_spec_names(workflow)
+        assert "auto_archive" in names
         assert "session_start" in names, "session_start script must have run"
-        assert "load_state" in names, "load_state script must have run"
+        assert "check_messages" in names, "check_messages must have run"
+        assert "load_state" in names, "load_state must have run"
         assert "fresh_start" in names, "fresh_start script must have run"
+        assert "rag_per_prompt" in names, "rag_per_prompt must have run"
         assert "save_summary" in names, "save_summary script must have run"
         assert "close_session" in names, "close_session script must have run"
         assert "end_normal" in names, "end_normal end event must be reached"
@@ -146,10 +164,13 @@ class TestFreshSession:
             "display_prior_tasks must NOT run on fresh start"
         )
 
-        # Script tasks write flags into task.data; workflow.data contains the final state
+        # Script tasks write flags into task.data
+        assert workflow.data.get("auto_archived") is True
         assert workflow.data.get("session_started") is True
+        assert workflow.data.get("messages_checked") is True
         assert workflow.data.get("state_loaded") is True
         assert workflow.data.get("context") == "fresh"
+        assert workflow.data.get("rag_injected") is True
         assert workflow.data.get("summary_saved") is True
         assert workflow.data.get("session_closed") is True
 
@@ -157,11 +178,7 @@ class TestFreshSession:
 class TestResumedSession:
     """
     Prior state exists -> display_session_summary -> display_prior_tasks
-    -> do_work -> end_session -> end_normal.
-
-    Key change from old model: restore_context (which called TaskCreate to
-    restore zombie tasks) is replaced with display-only scriptTasks that
-    show the summary and prior tasks as informational text only.
+    -> rag_per_prompt -> do_work -> end_session -> end_normal.
     """
 
     def test_resumed_session_displays_context_with_tasks(self):
@@ -175,8 +192,7 @@ class TestResumedSession:
             "has_prior_tasks": True,
         })
 
-        # All scriptTasks auto-run (display_session_summary, gateway, display_prior_tasks)
-        # Engine should advance all the way to do_work
+        # All scriptTasks auto-run through to do_work
         ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
         assert "do_work" in ready_names, (
             f"Expected do_work to be READY after resume with tasks. Got: {ready_names}"
@@ -194,18 +210,15 @@ class TestResumedSession:
         assert "display_prior_tasks" in names, (
             "display_prior_tasks must run when has_prior_tasks=True"
         )
+        assert "rag_per_prompt" in names, "rag_per_prompt must run on resumed session"
         assert "fresh_start" not in names, "fresh_start must NOT run on resumed session"
         assert "save_summary" in names
         assert "close_session" in names
         assert "end_normal" in names
 
-        # Verify display flags were set (display-only, no task restoration)
-        assert workflow.data.get("context_displayed") is True, (
-            "display_session_summary should set context_displayed=True"
-        )
-        assert workflow.data.get("prior_tasks_displayed") is True, (
-            "display_prior_tasks should set prior_tasks_displayed=True"
-        )
+        assert workflow.data.get("context_displayed") is True
+        assert workflow.data.get("prior_tasks_displayed") is True
+        assert workflow.data.get("rag_injected") is True
         assert workflow.data.get("session_closed") is True
 
     def test_resumed_session_no_prior_tasks(self):
@@ -242,7 +255,7 @@ class TestResumedSession:
 
 class TestCompactAndContinue:
     """
-    do_work with action="compact" -> save_checkpoint -> loop back to do_work
+    do_work with action="compact" -> save_checkpoint (PreCompact hook) -> loop back to do_work
     -> action="end_session" -> end_normal.
     """
 
@@ -267,9 +280,11 @@ class TestCompactAndContinue:
             f"Expected do_work to be READY again after compact loop. Got: {ready_names}"
         )
 
-        # Verify checkpoint was saved
+        # Verify checkpoint (PreCompact hook) was saved
         comp_names = completed_spec_names(workflow)
-        assert "save_checkpoint" in comp_names
+        assert "save_checkpoint" in comp_names, (
+            "save_checkpoint (PreCompact hook) must run on compact action"
+        )
 
         # Second do_work pass: end session
         complete_user_task(workflow, "do_work", {"action": "end_session"})
@@ -311,12 +326,46 @@ class TestCompactAndContinue:
         assert "save_checkpoint" not in names
 
 
+class TestAutoClose:
+    """
+    do_work with action="auto_close" -> auto_close_session -> end_auto.
+    This models the SessionEnd hook firing (process exit) vs manual /session-end.
+    """
+
+    def test_auto_close_reaches_end_auto(self):
+        workflow = load_workflow()
+
+        complete_user_task(workflow, "load_state", {"state_loaded": True, "prior_state": False})
+
+        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
+        assert "do_work" in ready_names
+
+        # Trigger auto_close path (SessionEnd hook)
+        complete_user_task(workflow, "do_work", {"action": "auto_close"})
+
+        assert workflow.is_completed(), "Workflow should be completed after auto_close"
+
+        names = completed_spec_names(workflow)
+        assert "auto_close_session" in names, (
+            "auto_close_session must run on auto_close action"
+        )
+        assert "end_auto" in names, "end_auto must be reached on auto_close path"
+
+        # Manual session-end path should NOT run
+        assert "save_summary" not in names, (
+            "save_summary (manual /session-end) must NOT run on auto_close"
+        )
+        assert "end_normal" not in names, (
+            "end_normal (manual close) must NOT be reached on auto_close"
+        )
+
+        assert workflow.data.get("session_auto_closed") is True
+
+
 class TestNoTaskRestoration:
     """
     Explicitly verify that the old restore_context element is gone
     and that no TaskCreate-style restoration happens.
-
-    This is the key regression test for the zombie task fix.
     """
 
     def test_old_restore_context_element_does_not_exist(self):
@@ -335,8 +384,7 @@ class TestNoTaskRestoration:
     def test_resume_path_is_all_script_tasks(self):
         """
         The resume path should be all scriptTasks (automated), not userTasks.
-        This ensures no manual intervention (like TaskCreate) is needed
-        during the resume flow. The first userTask should be do_work.
+        The first userTask after load_state should be do_work.
         """
         workflow = load_workflow()
 
@@ -346,12 +394,21 @@ class TestNoTaskRestoration:
             "has_prior_tasks": True,
         })
 
-        # After load_state with prior_state=True, the engine should auto-run
-        # through all scriptTasks and stop at do_work (the first userTask).
-        # If any element in the resume path were a userTask, the engine
-        # would stop there instead.
         ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
         assert ready_names == ["do_work"], (
             f"After resume, only do_work should be READY (all resume steps are automated). "
             f"Got: {ready_names}"
         )
+
+    def test_new_elements_present(self):
+        """Verify all v3 elements exist in the model spec."""
+        parser = BpmnParser()
+        parser.add_bpmn_file(BPMN_FILE)
+        spec = parser.get_spec(PROCESS_ID)
+        task_spec_names = list(spec.task_specs.keys())
+
+        assert "auto_archive" in task_spec_names, "auto_archive scriptTask must exist"
+        assert "check_messages" in task_spec_names, "check_messages scriptTask must exist"
+        assert "rag_per_prompt" in task_spec_names, "rag_per_prompt scriptTask must exist"
+        assert "auto_close_session" in task_spec_names, "auto_close_session scriptTask must exist"
+        assert "end_auto" in task_spec_names, "end_auto endEvent must exist"

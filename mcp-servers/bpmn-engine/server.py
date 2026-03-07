@@ -1712,6 +1712,166 @@ def file_alignment_gaps(process_id: str, project: str = "claude-family") -> dict
 
 
 # ============================================================================
+# Schema validation - BPMN data annotations
+# ============================================================================
+
+# BPMN data object references map tasks to database tables.
+# Convention: Tasks with [DB] prefix or dataObjectReference elements
+# indicate which tables a process reads/writes.
+
+
+def _extract_data_references(process_el) -> list:
+    """Extract data object references from a BPMN process.
+
+    Looks for:
+    1. <bpmn:dataObjectReference> elements
+    2. Task names containing [DB] prefix with table references
+    3. Documentation annotations mentioning table names
+    """
+    refs = []
+
+    # 1. Check dataObjectReference elements
+    for dor in process_el.iter(f"{BPMN_TAG}dataObjectReference"):
+        name = dor.get("name", "")
+        doc_id = dor.get("id", "")
+        if name:
+            refs.append({
+                "source": "dataObjectReference",
+                "element_id": doc_id,
+                "table_ref": name.strip(),
+            })
+
+    # 2. Check task names for [DB] prefix pattern
+    actionable_types = {"userTask", "scriptTask", "serviceTask", "task"}
+    for tag_suffix in actionable_types:
+        for el in process_el.iter(f"{BPMN_TAG}{tag_suffix}"):
+            name = el.get("name", "")
+            el_id = el.get("id", "")
+            if "[DB]" in name.upper() or "[DATA]" in name.upper():
+                # Extract table name from patterns like "[DB] Write to feedback"
+                # or "[DB] claude.sessions"
+                table_ref = name.split("]", 1)[-1].strip()
+                # Clean common prefixes
+                for prefix in ("read from ", "write to ", "query ", "update ", "insert into ", "delete from "):
+                    if table_ref.lower().startswith(prefix):
+                        table_ref = table_ref[len(prefix):].strip()
+                refs.append({
+                    "source": "task_name",
+                    "element_id": el_id,
+                    "element_name": name,
+                    "table_ref": table_ref,
+                })
+
+    # 3. Check documentation elements for table references
+    for doc_el in process_el.iter(f"{BPMN_TAG}documentation"):
+        text = doc_el.text or ""
+        if "claude." in text:
+            import re
+            tables = re.findall(r"claude\.(\w+)", text)
+            parent = doc_el.getparent() if hasattr(doc_el, 'getparent') else None
+            parent_id = parent.get("id", "unknown") if parent is not None else "unknown"
+            for tbl in tables:
+                refs.append({
+                    "source": "documentation",
+                    "element_id": parent_id,
+                    "table_ref": tbl,
+                })
+
+    return refs
+
+
+@mcp.tool()
+def validate_process_schema(process_id: str) -> dict:
+    """Validate that BPMN data references match actual database schema.
+
+    Extracts data object references and [DB] task annotations from a BPMN
+    process, then checks each referenced table exists in the live database
+    schema (claude.*).
+
+    Use when: you want to verify that a BPMN model's data references
+    are valid — that referenced tables actually exist.
+
+    Returns: {process_id, total_refs, valid, invalid, coverage_pct, details}
+    """
+    try:
+        bpmn_path = _find_bpmn_file(process_id)
+        if bpmn_path is None:
+            return {
+                "success": False,
+                "error": f"Process '{process_id}' not found",
+            }
+
+        root = _parse_xml(bpmn_path)
+        target_process = None
+        for process_el in root.iter(f"{BPMN_TAG}process"):
+            if process_el.get("id") == process_id:
+                target_process = process_el
+                break
+
+        if target_process is None:
+            return {"success": False, "error": f"Process element not found"}
+
+        # Extract data references
+        data_refs = _extract_data_references(target_process)
+
+        if not data_refs:
+            return {
+                "success": True,
+                "process_id": process_id,
+                "total_refs": 0,
+                "message": "No data references found in process. Add [DB] task annotations or dataObjectReference elements.",
+            }
+
+        # Connect to database to validate
+        conn = _get_db_connection()
+        cur = conn.cursor()
+
+        # Get all actual tables
+        cur.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'claude' AND table_type = 'BASE TABLE'
+        """)
+        actual_tables = {r['table_name'] if isinstance(r, dict) else r[0]
+                        for r in cur.fetchall()}
+        conn.close()
+
+        # Validate each reference
+        valid = []
+        invalid = []
+        for ref in data_refs:
+            table_ref = ref["table_ref"]
+            # Normalize: strip "claude." prefix if present
+            clean_ref = table_ref.replace("claude.", "").strip().lower()
+
+            if clean_ref in actual_tables:
+                ref["status"] = "valid"
+                ref["resolved_table"] = f"claude.{clean_ref}"
+                valid.append(ref)
+            else:
+                ref["status"] = "invalid"
+                ref["error"] = f"Table '{clean_ref}' not found in claude schema"
+                invalid.append(ref)
+
+        total = len(data_refs)
+        coverage_pct = round((len(valid) / total * 100), 1) if total > 0 else 0.0
+
+        return {
+            "success": True,
+            "process_id": process_id,
+            "file": bpmn_path.name,
+            "total_refs": total,
+            "valid_count": len(valid),
+            "invalid_count": len(invalid),
+            "coverage_pct": coverage_pct,
+            "valid": valid,
+            "invalid": invalid,
+        }
+
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+# ============================================================================
 # Entry point
 # ============================================================================
 

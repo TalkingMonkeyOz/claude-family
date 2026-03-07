@@ -9,7 +9,8 @@ Also tracks unique files edited per session and issues a delegation advisory at 
 Hook Event: PreToolUse
 Matchers: Write, Edit, Task, Bash (registered separately per tool)
 
-How it works (4-way cascade - FB108 + FB109):
+How it works (5-way cascade - FB108 + FB109):
+0. Read-only Bash commands (git status, git log, etc.) bypass task check entirely
 1. Reads task map file written by task_sync_hook.py on TaskCreate
 2. Checks _session_id in map matches current session
 3. Decision cascade:
@@ -37,7 +38,7 @@ Response pattern: exit code 0 + JSON with permissionDecision: "deny" or "allow"
 
 Author: Claude Family
 Date: 2026-02-09
-Updated: 2026-02-21 (FB139 - delegation advisory at 3+ unique files edited)
+Updated: 2026-03-04 (whitelist read-only Bash commands like git status)
 """
 
 import json
@@ -69,6 +70,29 @@ logger = logging.getLogger('task_discipline')
 # Action tools + Bash (most investigation work goes through Bash).
 # Read/Grep/Glob are passive and ungated to allow initial exploration.
 GATED_TOOLS = {'Write', 'Edit', 'Task', 'Bash'}
+
+# Read-only Bash commands that are ungated (like Read/Grep/Glob).
+# These are investigation/orientation commands, not actions.
+SAFE_BASH_PREFIXES = (
+    'git status',
+    'git log',
+    'git diff',
+    'git branch',
+    'git show',
+    'git remote',
+    'git stash list',
+    'ls ',
+    'dir ',
+    'pwd',
+    'echo ',
+    'cat ',
+    'head ',
+    'tail ',
+    'wc ',
+    'which ',
+    'where ',
+    'type ',
+)
 
 
 def get_task_map_path(project_name: str) -> Path:
@@ -344,6 +368,114 @@ def _do_allow(tool_name: str, tool_input: dict, project_name: str, task_map: dic
         allow()
 
 
+# =============================================================================
+# CONTEXT HEALTH GATE - Block gated tools when context is critically low
+# =============================================================================
+# Reads context_health.json written by StatusLine sensor (or RAG hook fallback).
+# At Red level (<10% remaining) without a recent checkpoint, denies gated tools
+# to force Claude to save state before compaction occurs.
+
+CONTEXT_HEALTH_FILE = Path.home() / ".claude" / "state" / "context_health.json"
+CONTEXT_HEALTH_FRESHNESS = 120  # seconds
+
+
+def check_context_health_gate() -> str | None:
+    """Check if context health requires blocking gated tools.
+
+    Returns deny reason string if tools should be blocked, None otherwise.
+    Only blocks at Red level when no recent checkpoint exists.
+    """
+    try:
+        if not CONTEXT_HEALTH_FILE.exists():
+            return None
+
+        file_age = time.time() - CONTEXT_HEALTH_FILE.stat().st_mtime
+        if file_age > CONTEXT_HEALTH_FRESHNESS:
+            return None  # Stale data - don't block based on outdated info
+
+        with open(CONTEXT_HEALTH_FILE, 'r', encoding='utf-8') as f:
+            health = json.load(f)
+
+        level = health.get('level', 'green')
+        if level != 'red':
+            return None
+
+        remaining = health.get('remaining_pct', 50)
+
+        # Check if checkpoint was saved recently
+        if _has_recent_checkpoint():
+            logger.info(f"Context red ({remaining}%) but checkpoint recent - allowing")
+            return None
+
+        logger.warning(f"Context red ({remaining}%) with no recent checkpoint - blocking")
+        return (
+            f"Context critically low ({remaining}% remaining). "
+            f"Run save_checkpoint() or store_session_fact() before continuing. "
+            f"Gated tools are blocked until cognitive state is preserved."
+        )
+    except Exception as e:
+        logger.warning(f"Context health gate check failed: {e}")
+        return None  # Fail open
+
+
+def _has_recent_checkpoint(max_age_seconds: int = 120) -> bool:
+    """Check if a checkpoint was saved recently by querying session_state."""
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from config import get_db_connection
+    except ImportError:
+        return False
+
+    conn = get_db_connection()
+    if not conn:
+        return False
+
+    try:
+        import subprocess
+        cwd = os.getcwd()
+        try:
+            result = subprocess.run(
+                ['git', 'rev-parse', '--show-toplevel'],
+                capture_output=True, text=True, timeout=5,
+                cwd=cwd, stdin=subprocess.DEVNULL
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                project_name = os.path.basename(result.stdout.strip().replace('/', os.sep))
+            else:
+                project_name = os.path.basename(cwd)
+        except Exception:
+            project_name = os.path.basename(cwd)
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT updated_at FROM claude.session_state
+            WHERE project_name = %s
+        """, (project_name,))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return False
+
+        updated_at = row['updated_at'] if isinstance(row, dict) else row[0]
+        if updated_at is None:
+            return False
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        if hasattr(updated_at, 'tzinfo') and updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+        age = (now - updated_at).total_seconds()
+        return age < max_age_seconds
+    except Exception as e:
+        logger.warning(f"Checkpoint freshness check failed: {e}")
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return False
+
+
 def main():
     """Main entry point."""
     try:
@@ -357,6 +489,22 @@ def main():
     # Safety: only gate specific action tools (in case registered as catch-all)
     if tool_name not in GATED_TOOLS:
         allow()
+        return
+
+    # Allow read-only Bash commands without task requirement (like Read/Grep/Glob)
+    if tool_name == 'Bash':
+        command = hook_input.get('tool_input', {}).get('command', '').strip()
+        if any(command.startswith(prefix) for prefix in SAFE_BASH_PREFIXES):
+            logger.debug(f"Read-only Bash command allowed without tasks: {command[:60]}")
+            allow()
+            return
+
+    # CONTEXT HEALTH GATE: Block gated tools when context is critically low
+    # This fires BEFORE the task-existence cascade. At Red level without a
+    # recent checkpoint, tools are blocked to force state preservation.
+    context_deny = check_context_health_gate()
+    if context_deny:
+        deny(context_deny)
         return
 
     # Get project name from git root (not raw cwd - cwd may be a subdirectory)
@@ -379,6 +527,16 @@ def main():
         f"Discipline check: project={project_name}, tasks={len(task_entries)}, "
         f"map_session={map_session_id[:8] if map_session_id else 'NONE'}"
     )
+
+    # Shared task list mode: CLAUDE_CODE_TASK_LIST_ID set means tasks are
+    # intentionally cross-session. Skip session_id staleness check entirely.
+    shared_list = os.environ.get('CLAUDE_CODE_TASK_LIST_ID')
+    if shared_list and task_entries:
+        logger.debug(
+            f"Shared task list '{shared_list}': {len(task_entries)} tasks exist - allowing {tool_name}"
+        )
+        _do_allow(tool_name, tool_input, project_name, task_map)
+        return
 
     # Session scoping: tasks must be from THIS session
     if task_entries and map_session_id == current_session_id:

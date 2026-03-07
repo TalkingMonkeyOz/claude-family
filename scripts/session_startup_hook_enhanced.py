@@ -200,18 +200,49 @@ def get_outstanding_todo_count(project_name: str) -> tuple:
         return (0, 0)
 
 def _reset_task_map(project_name: str, session_id: str):
-    """Write a fresh task_map with new session_id and no task entries.
+    """Reset task_map with new session_id.
+
+    In shared task list mode (CLAUDE_CODE_TASK_LIST_ID set), preserves existing
+    task entries and only updates _session_id + resets delegation tracking.
+    In normal mode, writes a fresh map (previous behavior).
 
     This prevents the discipline hook from rejecting Write/Edit calls due to
     a stale task_map left over from a crashed or interrupted session.
     """
     import tempfile
     map_path = os.path.join(tempfile.gettempdir(), f"claude_task_map_{project_name}.json")
-    try:
-        with open(map_path, 'w') as f:
-            json.dump({"_session_id": session_id}, f)
-    except IOError:
-        pass  # Non-critical - discipline hook will just prompt for tasks
+
+    shared_list = os.environ.get('CLAUDE_CODE_TASK_LIST_ID')
+
+    if shared_list:
+        # Shared mode: preserve task entries, update session metadata only
+        try:
+            existing = {}
+            if os.path.exists(map_path):
+                with open(map_path, 'r') as f:
+                    existing = json.load(f)
+                    if not isinstance(existing, dict):
+                        existing = {}
+        except (json.JSONDecodeError, IOError):
+            existing = {}
+
+        # Update session_id and reset per-session tracking
+        existing['_session_id'] = session_id
+        existing['_delegation_advised'] = False
+        existing['_files_edited'] = []
+
+        try:
+            with open(map_path, 'w') as f:
+                json.dump(existing, f)
+        except IOError:
+            pass
+    else:
+        # Normal mode: fresh map (no task persistence across sessions)
+        try:
+            with open(map_path, 'w') as f:
+                json.dump({"_session_id": session_id}, f)
+        except IOError:
+            pass  # Non-critical - discipline hook will just prompt for tasks
 
 
 def run_periodic_consolidation(conn):
@@ -341,6 +372,16 @@ def main():
                 consolidation_conn.close()
         except Exception as e:
             logger.warning(f"Periodic consolidation skipped: {e}")
+
+        # System maintenance: detect staleness (fast, ~300ms)
+        try:
+            from system_maintenance import detect_all_staleness
+            staleness = detect_all_staleness(conn=None)  # opens its own connection
+            if staleness.get('any_stale'):
+                summary = staleness.get('summary', 'unknown subsystems')
+                context_lines.append(f"System staleness detected: {summary}. Run /maintenance to repair.")
+        except Exception as e:
+            logger.warning(f"Staleness detection skipped: {e}")
 
         # Clean task_map to prevent stale session errors from discipline hook
         if session_id:

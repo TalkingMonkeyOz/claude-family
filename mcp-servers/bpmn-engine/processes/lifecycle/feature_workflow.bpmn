@@ -9,6 +9,31 @@
 
   <bpmn:process id="feature_workflow" name="Feature Workflow" isExecutable="true">
 
+    <!--
+      Feature lifecycle from idea to completion.
+
+      Flow:
+        create_feature → set_draft → plan_feature [stores plan_data JSONB]
+          → set_planned → create_build_tasks → set_in_progress
+          → complexity_gateway
+              [complexity=="high"] → spawn_agents → implementation_merge
+              [default/simple]     → implement_directly
+                  → next_task_gw → start_task → implement_task → complete_task
+                  → more_tasks_gw → [yes: loop] / [no: implementation_merge]
+          → run_tests [SHOULD BE ENFORCED: stop hook checks 3+ file changes]
+          → tests_pass_gateway
+              [tests_passed==True] → review_code [SHOULD BE ENFORCED: spawn reviewer-sonnet]
+                  → review_result_gateway
+                      [review=="changes_requested"] → fix_issues_review → run_tests (loop)
+                      [default/approved]            → set_completed → end_completed
+              [default/fail]       → fix_issues → run_tests (loop)
+
+      Actors:
+        [CLAUDE] = userTask (decisions, implementation)
+        [DB]     = scriptTask (database status transitions)
+        [MCP]    = scriptTask (MCP tool calls)
+    -->
+
     <!-- Start Event -->
     <bpmn:startEvent id="start_event" name="Start">
       <bpmn:outgoing>flow_start_to_create</bpmn:outgoing>
@@ -31,18 +56,44 @@
     <bpmn:userTask id="plan_feature" name="Plan Feature">
       <bpmn:incoming>flow_set_draft_to_plan</bpmn:incoming>
       <bpmn:outgoing>flow_plan_to_set_planned</bpmn:outgoing>
+      <bpmn:documentation>Claude plans the feature and stores the plan.
+Outputs are stored as plan_data JSONB in claude.features.plan_data:
+  - requirements: list of acceptance criteria
+  - risks: identified risks and mitigations
+  - implementation_specs: step-by-step implementation details
+  - complexity: 'simple' or 'high' (drives complexity_gateway)
+Use create_linked_task to add build tasks after planning.</bpmn:documentation>
     </bpmn:userTask>
 
     <!-- Script Task: Set Planned -->
     <bpmn:scriptTask id="set_planned" name="Set Planned" scriptFormat="python">
       <bpmn:incoming>flow_plan_to_set_planned</bpmn:incoming>
-      <bpmn:outgoing>flow_set_planned_to_complexity</bpmn:outgoing>
+      <bpmn:outgoing>flow_set_planned_to_create_tasks</bpmn:outgoing>
       <bpmn:script>status = "planned"</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Create Build Tasks -->
+    <bpmn:userTask id="create_build_tasks" name="[CLAUDE] Create Build Tasks (create_linked_task)">
+      <bpmn:incoming>flow_set_planned_to_create_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_create_tasks_to_set_in_progress</bpmn:outgoing>
+      <bpmn:documentation>Claude creates build tasks using create_linked_task MCP tool.
+Each task should have: name, description, verification criteria, files_affected.
+Tasks are linked to the feature via feature_code (e.g., F42).
+After creation, tasks appear in claude.build_tasks with status='todo'.</bpmn:documentation>
+    </bpmn:userTask>
+
+    <!-- Script Task: Set In Progress -->
+    <bpmn:scriptTask id="set_in_progress" name="[DB] Set Feature In Progress" scriptFormat="python">
+      <bpmn:incoming>flow_create_tasks_to_set_in_progress</bpmn:incoming>
+      <bpmn:outgoing>flow_set_in_progress_to_complexity</bpmn:outgoing>
+      <bpmn:script>status = "in_progress"</bpmn:script>
+      <bpmn:documentation>Transitions feature status from 'planned' to 'in_progress' via WorkflowEngine.
+Uses advance_status MCP tool internally. Transition logged to claude.audit_log.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Exclusive Gateway: Complexity Check -->
     <bpmn:exclusiveGateway id="complexity_gateway" name="High Complexity?" default="flow_simple">
-      <bpmn:incoming>flow_set_planned_to_complexity</bpmn:incoming>
+      <bpmn:incoming>flow_set_in_progress_to_complexity</bpmn:incoming>
       <bpmn:outgoing>flow_high_complexity</bpmn:outgoing>
       <bpmn:outgoing>flow_simple</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -51,18 +102,68 @@
     <bpmn:userTask id="spawn_agents" name="Spawn Agents">
       <bpmn:incoming>flow_high_complexity</bpmn:incoming>
       <bpmn:outgoing>flow_spawn_to_merge</bpmn:outgoing>
+      <bpmn:documentation>For high-complexity features, Claude spawns sub-agents via native Task tool.
+Each agent handles a subset of build tasks. Agents use start_work / complete_work
+MCP tools to track progress. After all agents complete, implementation_merge
+gateway consolidates results into the test phase.</bpmn:documentation>
     </bpmn:userTask>
 
-    <!-- User Task: Implement Directly (simple path) -->
+    <!-- User Task: Implement Directly (simple path entry point) -->
     <bpmn:userTask id="implement_directly" name="Implement Directly">
       <bpmn:incoming>flow_simple</bpmn:incoming>
-      <bpmn:outgoing>flow_implement_to_merge</bpmn:outgoing>
+      <bpmn:outgoing>flow_implement_to_next_task</bpmn:outgoing>
+      <bpmn:documentation>For simple features, Claude implements directly without spawning agents.
+Execution proceeds through the per-task work loop (next_task_gw → start_task
+→ implement_task → complete_task → more_tasks_gw) for each build task.</bpmn:documentation>
     </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- PER-TASK WORK LOOP (simple path)                                    -->
+    <!-- ================================================================== -->
+
+    <!-- Gateway: Is there a next task to work on? -->
+    <bpmn:exclusiveGateway id="next_task_gw" name="Next Task?" default="flow_no_next_task">
+      <bpmn:incoming>flow_implement_to_next_task</bpmn:incoming>
+      <bpmn:incoming>flow_complete_task_loop</bpmn:incoming>
+      <bpmn:outgoing>flow_has_next_task</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_next_task</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Start the next build task -->
+    <bpmn:scriptTask id="start_task" name="[MCP] start_work(task_code)" scriptFormat="python">
+      <bpmn:incoming>flow_has_next_task</bpmn:incoming>
+      <bpmn:outgoing>flow_start_task_to_implement</bpmn:outgoing>
+      <bpmn:script>task_started = True</bpmn:script>
+      <bpmn:documentation>Calls start_work(task_code) MCP tool to transition build task
+from 'todo' to 'in_progress' via WorkflowEngine state machine.
+Loads plan_data context for the task into Claude's working memory.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- User Task: Implement the current task -->
+    <bpmn:userTask id="implement_task" name="[CLAUDE] Implement Task">
+      <bpmn:incoming>flow_start_task_to_implement</bpmn:incoming>
+      <bpmn:outgoing>flow_implement_task_to_complete</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Script Task: Complete the current task -->
+    <bpmn:scriptTask id="complete_task" name="[MCP] complete_work(task_code)" scriptFormat="python">
+      <bpmn:incoming>flow_implement_task_to_complete</bpmn:incoming>
+      <bpmn:outgoing>flow_complete_task_loop</bpmn:outgoing>
+      <bpmn:script>task_completed = True</bpmn:script>
+      <bpmn:documentation>Calls complete_work(task_code) MCP tool to transition build task
+from 'in_progress' to 'completed'. WorkflowEngine checks if all sibling tasks
+are done and auto-transitions the feature status if complete.
+Suggests the next pending task for Claude to pick up.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END OF PER-TASK LOOP                                               -->
+    <!-- ================================================================== -->
 
     <!-- Exclusive Gateway: Implementation Merge -->
     <bpmn:exclusiveGateway id="implementation_merge" name="Implementation Merge">
       <bpmn:incoming>flow_spawn_to_merge</bpmn:incoming>
-      <bpmn:incoming>flow_implement_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_no_next_task</bpmn:incoming>
       <bpmn:outgoing>flow_merge_to_run_tests</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
@@ -72,6 +173,10 @@
       <bpmn:incoming>flow_fix_to_run_tests</bpmn:incoming>
       <bpmn:incoming>flow_fix_review_to_run_tests</bpmn:incoming>
       <bpmn:outgoing>flow_run_tests_to_gateway</bpmn:outgoing>
+      <bpmn:documentation>SHOULD BE ENFORCED: Currently optional in practice.
+Stop hook checks 3+ file changes and reminds Claude to run tests.
+Use: pytest path/to/tests -v (Python), npm test (JS), dotnet test (C#).
+Coverage: happy path + edge cases for new code, regression test for fixes.</bpmn:documentation>
     </bpmn:userTask>
 
     <!-- Exclusive Gateway: Tests Pass? -->
@@ -91,6 +196,10 @@
     <bpmn:userTask id="review_code" name="Review Code">
       <bpmn:incoming>flow_tests_pass</bpmn:incoming>
       <bpmn:outgoing>flow_review_to_result_gateway</bpmn:outgoing>
+      <bpmn:documentation>SHOULD BE ENFORCED: Spawn reviewer-sonnet agent for code review.
+Currently advisory only - Claude may self-review or skip on simple changes.
+Reviewer checks: correctness, convention adherence, test coverage, security.
+Use Task tool to delegate: Task("reviewer-sonnet", "Review changes in ...")</bpmn:documentation>
     </bpmn:userTask>
 
     <!-- Exclusive Gateway: Review Result -->
@@ -123,7 +232,9 @@
     <bpmn:sequenceFlow id="flow_create_to_set_draft" sourceRef="create_feature" targetRef="set_draft"/>
     <bpmn:sequenceFlow id="flow_set_draft_to_plan" sourceRef="set_draft" targetRef="plan_feature"/>
     <bpmn:sequenceFlow id="flow_plan_to_set_planned" sourceRef="plan_feature" targetRef="set_planned"/>
-    <bpmn:sequenceFlow id="flow_set_planned_to_complexity" sourceRef="set_planned" targetRef="complexity_gateway"/>
+    <bpmn:sequenceFlow id="flow_set_planned_to_create_tasks" sourceRef="set_planned" targetRef="create_build_tasks"/>
+    <bpmn:sequenceFlow id="flow_create_tasks_to_set_in_progress" sourceRef="create_build_tasks" targetRef="set_in_progress"/>
+    <bpmn:sequenceFlow id="flow_set_in_progress_to_complexity" sourceRef="set_in_progress" targetRef="complexity_gateway"/>
 
     <bpmn:sequenceFlow id="flow_high_complexity" sourceRef="complexity_gateway" targetRef="spawn_agents">
       <bpmn:conditionExpression>complexity == "high"</bpmn:conditionExpression>
@@ -131,8 +242,21 @@
 
     <bpmn:sequenceFlow id="flow_simple" sourceRef="complexity_gateway" targetRef="implement_directly"/>
 
+    <!-- Simple path: implement_directly → per-task loop -->
+    <bpmn:sequenceFlow id="flow_implement_to_next_task" sourceRef="implement_directly" targetRef="next_task_gw"/>
+
+    <!-- Per-task loop flows -->
+    <bpmn:sequenceFlow id="flow_has_next_task" sourceRef="next_task_gw" targetRef="start_task">
+      <bpmn:conditionExpression>has_next_task == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_next_task" sourceRef="next_task_gw" targetRef="implementation_merge"/>
+    <bpmn:sequenceFlow id="flow_start_task_to_implement" sourceRef="start_task" targetRef="implement_task"/>
+    <bpmn:sequenceFlow id="flow_implement_task_to_complete" sourceRef="implement_task" targetRef="complete_task"/>
+    <bpmn:sequenceFlow id="flow_complete_task_loop" sourceRef="complete_task" targetRef="next_task_gw"/>
+
+    <!-- High complexity path: spawn_agents → merge -->
     <bpmn:sequenceFlow id="flow_spawn_to_merge" sourceRef="spawn_agents" targetRef="implementation_merge"/>
-    <bpmn:sequenceFlow id="flow_implement_to_merge" sourceRef="implement_directly" targetRef="implementation_merge"/>
+
     <bpmn:sequenceFlow id="flow_merge_to_run_tests" sourceRef="implementation_merge" targetRef="run_tests"/>
 
     <bpmn:sequenceFlow id="flow_run_tests_to_gateway" sourceRef="run_tests" targetRef="tests_pass_gateway"/>
@@ -162,194 +286,259 @@
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="feature_workflow">
 
-      <!-- Row 1: main happy path (y=200) -->
+      <!-- Row 1: main setup path (y=200) -->
       <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
-        <dc:Bounds x="80" y="200" width="36" height="36"/>
+        <dc:Bounds x="60" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_create_feature" bpmnElement="create_feature">
-        <dc:Bounds x="170" y="180" width="100" height="80"/>
+        <dc:Bounds x="150" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_set_draft" bpmnElement="set_draft">
-        <dc:Bounds x="330" y="180" width="100" height="80"/>
+        <dc:Bounds x="310" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_plan_feature" bpmnElement="plan_feature">
-        <dc:Bounds x="490" y="180" width="100" height="80"/>
+        <dc:Bounds x="470" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_set_planned" bpmnElement="set_planned">
-        <dc:Bounds x="650" y="180" width="100" height="80"/>
+        <dc:Bounds x="630" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_create_build_tasks" bpmnElement="create_build_tasks">
+        <dc:Bounds x="790" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_set_in_progress" bpmnElement="set_in_progress">
+        <dc:Bounds x="990" y="180" width="140" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_complexity_gateway" bpmnElement="complexity_gateway" isMarkerVisible="true">
-        <dc:Bounds x="810" y="193" width="50" height="50"/>
+        <dc:Bounds x="1190" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
-      <!-- Row 1 upper: spawn_agents (y=100) -->
+      <!-- Row 1 upper: spawn_agents (y=80) -->
       <bpmndi:BPMNShape id="shape_spawn_agents" bpmnElement="spawn_agents">
-        <dc:Bounds x="920" y="100" width="100" height="80"/>
+        <dc:Bounds x="1300" y="80" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
-      <!-- Row 1 lower: implement_directly (y=300) -->
+      <!-- Row 1 lower: implement_directly (y=330) -->
       <bpmndi:BPMNShape id="shape_implement_directly" bpmnElement="implement_directly">
-        <dc:Bounds x="920" y="300" width="100" height="80"/>
+        <dc:Bounds x="1300" y="330" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Per-task loop (y=490) -->
+      <bpmndi:BPMNShape id="shape_next_task_gw" bpmnElement="next_task_gw" isMarkerVisible="true">
+        <dc:Bounds x="1450" y="503" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_start_task" bpmnElement="start_task">
+        <dc:Bounds x="1560" y="490" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_implement_task" bpmnElement="implement_task">
+        <dc:Bounds x="1740" y="490" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_complete_task" bpmnElement="complete_task">
+        <dc:Bounds x="1920" y="490" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- implementation_merge gateway -->
       <bpmndi:BPMNShape id="shape_implementation_merge" bpmnElement="implementation_merge" isMarkerVisible="true">
-        <dc:Bounds x="1085" y="193" width="50" height="50"/>
+        <dc:Bounds x="2090" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <!-- run_tests task -->
       <bpmndi:BPMNShape id="shape_run_tests" bpmnElement="run_tests">
-        <dc:Bounds x="1195" y="180" width="100" height="80"/>
+        <dc:Bounds x="2200" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- tests_pass_gateway -->
       <bpmndi:BPMNShape id="shape_tests_pass_gateway" bpmnElement="tests_pass_gateway" isMarkerVisible="true">
-        <dc:Bounds x="1355" y="193" width="50" height="50"/>
+        <dc:Bounds x="2360" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <!-- fix_issues task (below, loops back to run_tests) -->
       <bpmndi:BPMNShape id="shape_fix_issues" bpmnElement="fix_issues">
-        <dc:Bounds x="1355" y="340" width="100" height="80"/>
+        <dc:Bounds x="2360" y="340" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- review_code task -->
       <bpmndi:BPMNShape id="shape_review_code" bpmnElement="review_code">
-        <dc:Bounds x="1465" y="180" width="100" height="80"/>
+        <dc:Bounds x="2470" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- review_result_gateway -->
       <bpmndi:BPMNShape id="shape_review_result_gateway" bpmnElement="review_result_gateway" isMarkerVisible="true">
-        <dc:Bounds x="1625" y="193" width="50" height="50"/>
+        <dc:Bounds x="2630" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <!-- fix_issues_review task (below, loops back to run_tests) -->
       <bpmndi:BPMNShape id="shape_fix_issues_review" bpmnElement="fix_issues_review">
-        <dc:Bounds x="1625" y="340" width="100" height="80"/>
+        <dc:Bounds x="2630" y="340" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- set_completed task -->
       <bpmndi:BPMNShape id="shape_set_completed" bpmnElement="set_completed">
-        <dc:Bounds x="1735" y="180" width="100" height="80"/>
+        <dc:Bounds x="2740" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <!-- end_completed event -->
       <bpmndi:BPMNShape id="shape_end_completed" bpmnElement="end_completed">
-        <dc:Bounds x="1895" y="200" width="36" height="36"/>
+        <dc:Bounds x="2900" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
-      <!-- Edges: main happy path -->
+      <!-- Edges: main setup path -->
       <bpmndi:BPMNEdge id="edge_flow_start_to_create" bpmnElement="flow_start_to_create">
-        <di:waypoint x="116" y="218"/>
-        <di:waypoint x="170" y="220"/>
+        <di:waypoint x="96" y="218"/>
+        <di:waypoint x="150" y="220"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_create_to_set_draft" bpmnElement="flow_create_to_set_draft">
-        <di:waypoint x="270" y="220"/>
-        <di:waypoint x="330" y="220"/>
+        <di:waypoint x="250" y="220"/>
+        <di:waypoint x="310" y="220"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_set_draft_to_plan" bpmnElement="flow_set_draft_to_plan">
-        <di:waypoint x="430" y="220"/>
-        <di:waypoint x="490" y="220"/>
+        <di:waypoint x="410" y="220"/>
+        <di:waypoint x="470" y="220"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_plan_to_set_planned" bpmnElement="flow_plan_to_set_planned">
-        <di:waypoint x="590" y="220"/>
-        <di:waypoint x="650" y="220"/>
+        <di:waypoint x="570" y="220"/>
+        <di:waypoint x="630" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_set_planned_to_complexity" bpmnElement="flow_set_planned_to_complexity">
-        <di:waypoint x="750" y="220"/>
-        <di:waypoint x="810" y="218"/>
+      <bpmndi:BPMNEdge id="edge_flow_set_planned_to_create_tasks" bpmnElement="flow_set_planned_to_create_tasks">
+        <di:waypoint x="730" y="220"/>
+        <di:waypoint x="790" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_create_tasks_to_set_in_progress" bpmnElement="flow_create_tasks_to_set_in_progress">
+        <di:waypoint x="930" y="220"/>
+        <di:waypoint x="990" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_set_in_progress_to_complexity" bpmnElement="flow_set_in_progress_to_complexity">
+        <di:waypoint x="1130" y="220"/>
+        <di:waypoint x="1190" y="218"/>
       </bpmndi:BPMNEdge>
 
       <!-- complexity gateway branches -->
       <bpmndi:BPMNEdge id="edge_flow_high_complexity" bpmnElement="flow_high_complexity">
-        <di:waypoint x="835" y="193"/>
-        <di:waypoint x="835" y="140"/>
-        <di:waypoint x="920" y="140"/>
+        <di:waypoint x="1215" y="193"/>
+        <di:waypoint x="1215" y="120"/>
+        <di:waypoint x="1300" y="120"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_simple" bpmnElement="flow_simple">
-        <di:waypoint x="835" y="243"/>
-        <di:waypoint x="835" y="340"/>
-        <di:waypoint x="920" y="340"/>
+        <di:waypoint x="1215" y="243"/>
+        <di:waypoint x="1215" y="370"/>
+        <di:waypoint x="1300" y="370"/>
       </bpmndi:BPMNEdge>
 
-      <!-- spawn_agents and implement_directly to merge -->
+      <!-- implement_directly → next_task_gw -->
+      <bpmndi:BPMNEdge id="edge_flow_implement_to_next_task" bpmnElement="flow_implement_to_next_task">
+        <di:waypoint x="1420" y="370"/>
+        <di:waypoint x="1475" y="370"/>
+        <di:waypoint x="1475" y="503"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Per-task loop edges -->
+      <bpmndi:BPMNEdge id="edge_flow_has_next_task" bpmnElement="flow_has_next_task">
+        <di:waypoint x="1500" y="528"/>
+        <di:waypoint x="1560" y="530"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_no_next_task" bpmnElement="flow_no_next_task">
+        <di:waypoint x="1475" y="503"/>
+        <di:waypoint x="1475" y="218"/>
+        <di:waypoint x="2090" y="218"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_start_task_to_implement" bpmnElement="flow_start_task_to_implement">
+        <di:waypoint x="1680" y="530"/>
+        <di:waypoint x="1740" y="530"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_implement_task_to_complete" bpmnElement="flow_implement_task_to_complete">
+        <di:waypoint x="1860" y="530"/>
+        <di:waypoint x="1920" y="530"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_complete_task_loop" bpmnElement="flow_complete_task_loop">
+        <di:waypoint x="1980" y="570"/>
+        <di:waypoint x="1980" y="620"/>
+        <di:waypoint x="1475" y="620"/>
+        <di:waypoint x="1475" y="553"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- spawn_agents to merge -->
       <bpmndi:BPMNEdge id="edge_flow_spawn_to_merge" bpmnElement="flow_spawn_to_merge">
-        <di:waypoint x="1020" y="140"/>
-        <di:waypoint x="1110" y="140"/>
-        <di:waypoint x="1110" y="193"/>
-      </bpmndi:BPMNEdge>
-
-      <bpmndi:BPMNEdge id="edge_flow_implement_to_merge" bpmnElement="flow_implement_to_merge">
-        <di:waypoint x="1020" y="340"/>
-        <di:waypoint x="1110" y="340"/>
-        <di:waypoint x="1110" y="243"/>
+        <di:waypoint x="1400" y="120"/>
+        <di:waypoint x="2115" y="120"/>
+        <di:waypoint x="2115" y="193"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_merge_to_run_tests" bpmnElement="flow_merge_to_run_tests">
-        <di:waypoint x="1135" y="218"/>
-        <di:waypoint x="1195" y="220"/>
+        <di:waypoint x="2140" y="218"/>
+        <di:waypoint x="2200" y="220"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_run_tests_to_gateway" bpmnElement="flow_run_tests_to_gateway">
-        <di:waypoint x="1295" y="220"/>
-        <di:waypoint x="1355" y="218"/>
+        <di:waypoint x="2300" y="220"/>
+        <di:waypoint x="2360" y="218"/>
       </bpmndi:BPMNEdge>
 
       <!-- tests_pass_gateway branches -->
       <bpmndi:BPMNEdge id="edge_flow_tests_pass" bpmnElement="flow_tests_pass">
-        <di:waypoint x="1405" y="218"/>
-        <di:waypoint x="1465" y="220"/>
+        <di:waypoint x="2410" y="218"/>
+        <di:waypoint x="2470" y="220"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_tests_fail" bpmnElement="flow_tests_fail">
-        <di:waypoint x="1380" y="243"/>
-        <di:waypoint x="1380" y="380"/>
-        <di:waypoint x="1355" y="380"/>
+        <di:waypoint x="2385" y="243"/>
+        <di:waypoint x="2385" y="380"/>
+        <di:waypoint x="2360" y="380"/>
       </bpmndi:BPMNEdge>
 
       <!-- fix_issues loop back to run_tests -->
       <bpmndi:BPMNEdge id="edge_flow_fix_to_run_tests" bpmnElement="flow_fix_to_run_tests">
-        <di:waypoint x="1355" y="380"/>
-        <di:waypoint x="1245" y="380"/>
-        <di:waypoint x="1245" y="260"/>
+        <di:waypoint x="2360" y="380"/>
+        <di:waypoint x="2250" y="380"/>
+        <di:waypoint x="2250" y="260"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_review_to_result_gateway" bpmnElement="flow_review_to_result_gateway">
-        <di:waypoint x="1565" y="220"/>
-        <di:waypoint x="1625" y="218"/>
+        <di:waypoint x="2570" y="220"/>
+        <di:waypoint x="2630" y="218"/>
       </bpmndi:BPMNEdge>
 
       <!-- review_result_gateway branches -->
       <bpmndi:BPMNEdge id="edge_flow_changes_requested" bpmnElement="flow_changes_requested">
-        <di:waypoint x="1650" y="243"/>
-        <di:waypoint x="1650" y="380"/>
-        <di:waypoint x="1625" y="380"/>
+        <di:waypoint x="2655" y="243"/>
+        <di:waypoint x="2655" y="380"/>
+        <di:waypoint x="2630" y="380"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_approved" bpmnElement="flow_approved">
-        <di:waypoint x="1675" y="218"/>
-        <di:waypoint x="1735" y="220"/>
+        <di:waypoint x="2680" y="218"/>
+        <di:waypoint x="2740" y="220"/>
       </bpmndi:BPMNEdge>
 
       <!-- fix_issues_review loop back to run_tests -->
       <bpmndi:BPMNEdge id="edge_flow_fix_review_to_run_tests" bpmnElement="flow_fix_review_to_run_tests">
-        <di:waypoint x="1625" y="380"/>
-        <di:waypoint x="1245" y="480"/>
-        <di:waypoint x="1245" y="260"/>
+        <di:waypoint x="2630" y="380"/>
+        <di:waypoint x="2250" y="480"/>
+        <di:waypoint x="2250" y="260"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_set_completed_to_end" bpmnElement="flow_set_completed_to_end">
-        <di:waypoint x="1835" y="220"/>
-        <di:waypoint x="1895" y="218"/>
+        <di:waypoint x="2840" y="220"/>
+        <di:waypoint x="2900" y="218"/>
       </bpmndi:BPMNEdge>
 
     </bpmndi:BPMNPlane>

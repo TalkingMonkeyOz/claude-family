@@ -1,10 +1,10 @@
-STOP!
+STOP STOP YOU MUST DO 1 BELOW!
 1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
-2. MULTI-PART CHECK: If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
+2. Verify before claiming - read files, query DB, do research. Never guess.
 3. NOTEPAD: store_session_fact() for credentials, decisions, findings, progress. list_session_facts() to review. recall_session_fact() across sessions. This is your memory.
 4. MEMORY: Use remember() when you discover patterns, make decisions, or learn gotchas. Use recall_memories(query) before starting complex tasks to load relevant context. These replace store_knowledge/recall_knowledge for most uses.
 5. DELEGATE: 3+ files = spawn agent (coder-sonnet complex, coder-haiku simple). Don't bloat main context. save_checkpoint() after each task.
 6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-7. Verify before claiming - read files, query DB. Never guess.
-8. Check MCP tools first - project-tools has 40+ tools.
+7. Check MCP tools first - project-tools has 40+ tools.

@@ -22,6 +22,10 @@ if "%~1"=="" (
 echo Project: %PROJECT_PATH%
 echo.
 
+REM Derive project name from path for shared task list persistence
+for %%I in ("%PROJECT_PATH%") do set "PROJECT_NAME=%%~nxI"
+set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%
+
 REM Check for terminal preference argument
 if "%~2"=="1" goto :WEZTERM
 if "%~2"=="2" goto :WINTERMINAL
@@ -50,7 +54,7 @@ echo Launching in WezTerm...
 REM Sync MCP configuration from database (generates .mcp.json)
 python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
 REM Sync settings configuration from database (generates settings.local.json)
-python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
+python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_NAME%" "%PROJECT_PATH%" --skip-change-detection 2>nul
 
 REM Launch WezTerm with Claude (use cmd /k to keep window open)
 start "" "C:\Program Files\WezTerm\wezterm-gui.exe" start --cwd "%PROJECT_PATH%" -- cmd /k claude
@@ -63,7 +67,7 @@ echo Launching in Windows Terminal...
 REM Sync MCP configuration from database (generates .mcp.json)
 python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
 REM Sync settings configuration from database (generates settings.local.json)
-python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
+python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_NAME%" "%PROJECT_PATH%" --skip-change-detection 2>nul
 
 REM Launch Windows Terminal with Claude
 start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_PATH%" cmd /k claude
@@ -75,7 +79,7 @@ echo Syncing configuration from database...
 REM Sync MCP configuration from database (generates .mcp.json)
 python "C:\Projects\claude-family\scripts\generate_mcp_config.py" "%PROJECT_PATH%" 2>nul
 REM Sync settings configuration from database (generates settings.local.json)
-python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_PATH%" 2>nul
+python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_NAME%" "%PROJECT_PATH%" --skip-change-detection 2>nul
 if %ERRORLEVEL% NEQ 0 (
     echo Warning: Config sync had issues, continuing anyway...
 )

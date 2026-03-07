@@ -105,9 +105,10 @@ generate_project_settings.py (deep_merge)
 **Fail-open**: Any script error → allow (never blocks workflow due to hook crash)
 **Response format**: Exit 0 + JSON `permissionDecision: "deny"` (NOT exit code 2)
 
-### 4-Way Decision Cascade (FB108 + FB109)
+### Decision Cascade (FB108 + FB109 + Shared List)
 
 ```
+0. CLAUDE_CODE_TASK_LIST_ID set + tasks exist → ALLOW (shared list, skip session check)
 1. Tasks exist + session match → ALLOW (normal case)
 2. Tasks exist + no session_id → ALLOW (edge case)
 3. Empty map but recently modified (< 30s) → ALLOW (race condition)
@@ -116,6 +117,7 @@ generate_project_settings.py (deep_merge)
 6. Otherwise → DENY
 ```
 
+**Shared list mode**: When `CLAUDE_CODE_TASK_LIST_ID` is set, tasks persist across sessions natively. The discipline hook skips session_id staleness entirely — tasks in a shared list are intentionally cross-session.
 **FB108 fix**: Continuation sessions get new session_id after compaction, but tasks from prior segment are still valid if map is fresh (< 2h).
 **FB109 fix**: MCP `create_linked_task` writes to DB only (not task_map file). DB fallback query catches this on the deny path only (no perf impact on normal flow).
 
@@ -173,7 +175,7 @@ Hooks and workflows are modeled in BPMN (SpiffWorkflow). See `mcp-servers/bpmn-e
 
 ---
 
-**Version**: 4.0 (Added FB108/FB109 decision cascade, failure capture system, BPMN coverage)
+**Version**: 4.1 (Added shared task list mode to decision cascade)
 **Created**: 2025-12-26
-**Updated**: 2026-02-20
+**Updated**: 2026-03-04
 **Location**: Claude Family/Claude Hooks.md
