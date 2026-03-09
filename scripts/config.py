@@ -211,6 +211,69 @@ def get_anthropic_key():
     return os.environ.get('ANTHROPIC_API_KEY')
 
 
+# --- Hook log rotation ---
+
+HOOK_LOG_PATH = Path.home() / ".claude" / "hooks.log"
+_HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_HOOK_LOG_BACKUP_COUNT = 3
+
+
+def rotate_hooks_log() -> bool:
+    """Rotate hooks.log if it exceeds 5 MB.
+
+    Keeps up to 3 backups: hooks.log.1, hooks.log.2, hooks.log.3.
+    The current log becomes hooks.log.1; hooks.log.3 is discarded.
+    Returns True if rotation occurred, False otherwise.
+    """
+    log_path = HOOK_LOG_PATH
+    try:
+        if not log_path.exists() or log_path.stat().st_size <= _HOOK_LOG_MAX_BYTES:
+            return False
+        # Rotate: hooks.log.2 → hooks.log.3, hooks.log.1 → hooks.log.2, hooks.log → hooks.log.1
+        for i in range(_HOOK_LOG_BACKUP_COUNT, 0, -1):
+            src = Path(f"{log_path}.{i - 1}") if i > 1 else log_path
+            dst = Path(f"{log_path}.{i}")
+            if src.exists():
+                src.replace(dst)
+        return True
+    except OSError:
+        return False
+
+
+def setup_hook_logging(logger_name: str = "hook"):
+    """Configure logging to hooks.log with RotatingFileHandler.
+
+    Safe to call multiple times — installs the handler only once per process
+    (guarded by checking root logger's existing handlers).
+
+    Args:
+        logger_name: Name for the returned logger.
+
+    Returns:
+        logging.Logger configured to write to ~/.claude/hooks.log.
+    """
+    import logging
+    import logging.handlers
+
+    root = logging.getLogger()
+    if not root.handlers:
+        HOOK_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            filename=str(HOOK_LOG_PATH),
+            maxBytes=_HOOK_LOG_MAX_BYTES,
+            backupCount=_HOOK_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(
+            fmt="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+
+    return logging.getLogger(logger_name)
+
+
 # Validation helpers
 def validate_postgres():
     """Check if postgres config is complete."""
@@ -248,4 +311,8 @@ __all__ = [
     'get_db_connection',
     'get_voyage_key',
     'get_anthropic_key',
+    # Hook log rotation
+    'HOOK_LOG_PATH',
+    'rotate_hooks_log',
+    'setup_hook_logging',
 ]

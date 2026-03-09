@@ -21,9 +21,17 @@ from pathlib import Path
 # Shared credential loading from scripts/config.py
 # (handles .env loading from all locations including legacy ai-workspace)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import POSTGRES_CONFIG, get_db_connection as _config_get_db_connection, detect_psycopg
+from config import (
+    POSTGRES_CONFIG,
+    get_db_connection as _config_get_db_connection,
+    detect_psycopg,
+    rotate_hooks_log,
+    setup_hook_logging,
+)
 
-logger = logging.getLogger(__name__)
+# Rotate hooks.log before configuring the handler so the new file starts fresh.
+rotate_hooks_log()
+logger = setup_hook_logging(__name__)
 
 psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
 DB_AVAILABLE = psycopg_mod is not None

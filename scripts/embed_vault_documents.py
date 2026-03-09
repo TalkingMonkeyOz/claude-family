@@ -14,6 +14,7 @@ Usage:
     python embed_vault_documents.py [--folder FOLDER] [--batch-size N] [--force]
     python embed_vault_documents.py --project PROJECT_NAME
     python embed_vault_documents.py --all-projects
+    python embed_vault_documents.py --cleanup-copilot
 
 Options:
     --folder FOLDER      Only process specific folder (e.g., 40-Procedures)
@@ -22,6 +23,13 @@ Options:
     --source SOURCE      Document source type: vault|project|global (default: auto-detect)
     --batch-size N       Number of docs to process per batch (default: 10)
     --force             Re-embed documents even if unchanged (ignores hash check)
+    --cleanup-copilot   Delete stale awesome-copilot embeddings from vault_embeddings
+
+Exclusions:
+    20-Domains/awesome-copilot-reference/ — GitHub Copilot agent definition files.
+    These are excluded from RAG queries in rag_query_hook.py (doc_path NOT LIKE
+    '%%awesome-copilot%%'), so embedding them wastes API calls and storage.
+    Cleanup SQL: DELETE FROM claude.vault_embeddings WHERE doc_path LIKE '%awesome-copilot%';
 """
 
 import os
@@ -379,6 +387,8 @@ def main():
                        help='Document source type')
     parser.add_argument('--batch-size', type=int, default=10, help='Batch size')
     parser.add_argument('--force', action='store_true', help='Re-embed existing documents')
+    parser.add_argument('--cleanup-copilot', action='store_true',
+                        help='Delete stale awesome-copilot-reference embeddings from vault_embeddings')
     args = parser.parse_args()
 
     # Connect to database
@@ -396,6 +406,20 @@ def main():
         sys.exit(1)
     else:
         logger.info(f"Voyage AI configured (model: {EMBEDDING_MODEL}, 1024 dimensions)")
+
+    # Handle cleanup of stale awesome-copilot embeddings
+    if args.cleanup_copilot:
+        logger.info("Cleaning up stale awesome-copilot-reference embeddings...")
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM claude.vault_embeddings WHERE doc_path LIKE %s",
+                ('%awesome-copilot%',)
+            )
+            deleted = cur.rowcount
+        conn.commit()
+        logger.info(f"Deleted {deleted} stale embedding rows for awesome-copilot-reference")
+        conn.close()
+        return
 
     total_chunks = 0
 
@@ -449,6 +473,14 @@ def main():
 
         # Process documents
         for idx, file_path in enumerate(md_files, 1):
+            # Skip awesome-copilot-reference: these files are excluded from RAG queries in
+            # rag_query_hook.py (doc_path NOT LIKE '%%awesome-copilot%%'), so embedding
+            # them wastes Voyage AI API calls and storage. Run --cleanup-copilot to remove
+            # any previously stored embeddings for this directory.
+            if 'awesome-copilot' in str(file_path):
+                logger.info(f"[{idx}/{len(md_files)}] Skipping (excluded from RAG): {file_path.relative_to(VAULT_PATH)}")
+                continue
+
             logger.info(f"[{idx}/{len(md_files)}] {file_path.relative_to(VAULT_PATH)}")
             try:
                 chunks_embedded = process_document(

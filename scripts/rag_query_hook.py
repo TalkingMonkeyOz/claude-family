@@ -77,6 +77,15 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
 # =============================================================================
+# CONTEXT BUDGET - Aggregate token ceiling for all injected blocks
+# =============================================================================
+# Without a ceiling, all 10+ blocks can fire simultaneously and approach
+# 5,000-8,000 tokens per prompt, compounding with the core protocol.
+# This constant is the hard cap for the combined additionalContext output.
+# Individual block logic is unchanged — only the final assembly is guarded.
+MAX_CONTEXT_TOKENS = 3000
+
+# =============================================================================
 # PERIODIC REMINDERS - Interval-based context injection
 # =============================================================================
 # Merged from stop_hook_enforcer.py - single injection point for all context.
@@ -671,6 +680,17 @@ def needs_rag(prompt: str) -> bool:
     first_word = prompt_lower.split()[0] if prompt_lower.split() else ''
     for indicator in ACTION_INDICATORS:
         if first_word == indicator or prompt_lower.startswith(indicator):
+            # Compound prompts may start with action verbs but contain embedded
+            # questions (e.g. "implement this but first explain the pattern").
+            # Override the skip when a question signal appears in a long prompt.
+            EMBEDDED_QUESTION_INDICATORS = [
+                '?', 'explain', 'how do', 'what is', 'why does',
+                'understand', 'describe', 'clarify', 'tell me about',
+            ]
+            if len(prompt_lower) > 50 and any(
+                q in prompt_lower for q in EMBEDDED_QUESTION_INDICATORS
+            ):
+                return True
             return False
 
     # Slash commands don't need RAG (they load their own context)
@@ -1844,6 +1864,50 @@ def _load_design_map(project_name: str) -> Optional[str]:
     return None
 
 
+def _apply_context_budget(
+    blocks: List[Tuple[int, str]],
+    max_tokens: int = MAX_CONTEXT_TOKENS,
+) -> str:
+    """Apply a token budget to a prioritised list of context blocks.
+
+    Budget system:
+    - Blocks are passed as (priority, text) tuples. Lower priority number = higher importance.
+    - Priority 0 blocks are ALWAYS included and never trimmed (core protocol, session facts,
+      context health warnings).
+    - Remaining blocks are included in ascending priority order until the budget is exhausted.
+    - Token estimation uses the cheap heuristic: len(text) / 4.
+    - Fail-open: if this function raises, the caller includes everything (current behaviour).
+
+    Args:
+        blocks: List of (priority, text) tuples. Text may be None or empty.
+        max_tokens: Approximate token ceiling for the combined output.
+
+    Returns:
+        Combined context string, trimmed to fit within the budget.
+    """
+    # Separate pinned (priority 0) from trimmable blocks
+    pinned = [text for (pri, text) in blocks if pri == 0 and text]
+    trimmable = [(pri, text) for (pri, text) in blocks if pri > 0 and text]
+
+    # Pinned blocks always go in; count their tokens
+    result_parts = list(pinned)
+    used_tokens = sum(len(t) // 4 for t in result_parts)
+
+    # Add trimmable blocks in ascending priority order until budget exhausted
+    for _pri, text in sorted(trimmable, key=lambda x: x[0]):
+        block_tokens = len(text) // 4
+        if used_tokens + block_tokens <= max_tokens:
+            result_parts.append(text)
+            used_tokens += block_tokens
+        else:
+            logger.info(
+                f"Context budget reached ({used_tokens} tokens used, limit={max_tokens}): "
+                f"dropping block starting with: {text[:60]!r}"
+            )
+
+    return "\n".join(result_parts)
+
+
 def main():
     """Main hook entry point.
 
@@ -2037,54 +2101,58 @@ def main():
         except Exception as e:
             logger.warning(f"Context health check failed: {e}")
 
-        # Combine contexts in priority order:
-        # 0. Context health warning (if yellow/orange/red - HIGHEST PRIORITY)
-        # 1. Core protocol (ALWAYS - task discipline)
-        # 2. Critical session facts (ALWAYS - lightweight notepad)
-        # 3. Session context (if session keywords detected)
-        # 4. Config warning (if config keywords detected)
-        # 5. Knowledge recall (if RAG enabled - questions only)
-        # 6. Vault RAG (if RAG enabled - questions only)
-        # 7. Nimbus context (if RAG enabled + Nimbus project)
-        # 8. Schema context (if schema keywords detected)
-        combined_context_parts = []
-
-        # Context health warnings go FIRST (highest priority - must be seen)
-        if context_health_msg:
-            combined_context_parts.append(context_health_msg)
-
-        combined_context_parts.append(_get_core_protocol())
-
         # PROCESS FAILURES: Surface pending auto-filed failures for self-improvement
+        failure_context = None
         try:
             from failure_capture import get_pending_failures, format_pending_failures
             pending_failures = get_pending_failures(project_name, max_age_hours=48)
             failure_context = format_pending_failures(pending_failures)
-            if failure_context:
-                combined_context_parts.append(failure_context)
         except Exception:
             pass  # Don't let failure surfacing break the hook
 
-        if critical_facts:
-            combined_context_parts.append(critical_facts)
-        if session_context:
-            combined_context_parts.append(session_context)
-        if config_warning:
-            combined_context_parts.append(config_warning)
-        if knowledge_context:
-            combined_context_parts.append(knowledge_context)
-        if rag_context:
-            combined_context_parts.append(rag_context)
-        if nimbus_context:
-            combined_context_parts.append(nimbus_context)
-        if schema_context:
-            combined_context_parts.append(schema_context)
-        if skill_context:
-            combined_context_parts.append(skill_context)
-        if design_map_context:
-            combined_context_parts.append(design_map_context)
+        # Assemble all context blocks as (priority, text) tuples, then apply
+        # the aggregate token budget via _apply_context_budget().
+        #
+        # Priority 0 = pinned (always included, never trimmed):
+        #   - Core protocol (task discipline — must always be seen)
+        #   - Session facts (credentials/decisions — must always be visible)
+        #   - Context health warnings (urgent directives — must always be seen)
+        #
+        # Priority 1-10 = trimmable (dropped lowest-priority-first when over budget):
+        #   1. Process failures  (self-improvement loop — high urgency)
+        #   2. Config warning    (conditional, but important when triggered)
+        #   3. Knowledge graph   (high-value learned patterns)
+        #   4. Vault RAG         (documentation retrieval)
+        #   5. Skill suggestions (discovery aid)
+        #   6. Schema context    (table/column context)
+        #   7. Design map        (project orientation)
+        #   8. Nimbus context    (project-specific, narrow audience)
+        #   9. Periodic reminders (lowest priority — informational only)
+        #
+        # Fail-open: if _apply_context_budget() errors, the except block below
+        # falls back to joining all non-None parts (previous behaviour).
+        budget_blocks: List[Tuple[int, str]] = [
+            (0, _get_core_protocol()),
+            (0, critical_facts or ""),
+            (0, context_health_msg or ""),
+            (1, failure_context or ""),
+            (2, config_warning or ""),
+            (3, knowledge_context or ""),
+            (4, rag_context or ""),
+            (5, skill_context or ""),
+            (6, schema_context or ""),
+            (7, design_map_context or ""),
+            (8, nimbus_context or ""),
+        ]
 
-        combined_context = "\n".join(combined_context_parts) if combined_context_parts else ""
+        try:
+            combined_context = _apply_context_budget(budget_blocks, MAX_CONTEXT_TOKENS)
+        except Exception as budget_err:
+            logger.warning(f"Context budget guard failed, including all blocks: {budget_err}")
+            # Fail-open: include everything (original behaviour)
+            combined_context = "\n".join(
+                text for (_pri, text) in budget_blocks if text
+            )
 
         # Build result (CORRECT format per Claude Code docs)
         result = {
