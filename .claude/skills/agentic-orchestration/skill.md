@@ -124,6 +124,36 @@ Task complexity → Agent choice:
 
 ---
 
+## Context-Safe Delegation (CRITICAL)
+
+**Problem**: Agent results flood parent context, causing premature compaction.
+
+**Rule**: Agents write detailed results to files or session notes. Parent gets 1-line summary only.
+
+### How to Instruct Agents
+
+Always include this in agent prompts:
+
+```
+"Write your detailed findings to store_session_notes(content, 'findings').
+Return ONLY a 1-line summary to me (the parent). Do NOT return full analysis."
+```
+
+For code agents:
+
+```
+"Write the code changes directly to files. Return ONLY a 1-line summary
+of what you changed (e.g., 'Updated 3 files: auth.ts, middleware.ts, types.ts')."
+```
+
+### After Agent Completes
+
+1. Read the 1-line summary (already in your context)
+2. Only read detailed results via `get_session_notes()` or `Read` tool if needed
+3. `save_checkpoint()` after each agent batch
+
+---
+
 ## Coordinator Patterns
 
 ### Pattern 1: Plan + Delegate
@@ -137,17 +167,17 @@ Task complexity → Agent choice:
 ### Pattern 2: Research Coordinator
 
 ```
-Task(subagent_type="analyst-sonnet", prompt="Research topic A")
-Task(subagent_type="analyst-sonnet", prompt="Research topic B")
-# Both run in parallel, synthesize results myself
+Task(subagent_type="analyst-sonnet", prompt="Research topic A. Write findings to store_session_notes(). Return 1-line summary.")
+Task(subagent_type="analyst-sonnet", prompt="Research topic B. Write findings to store_session_notes(). Return 1-line summary.")
+# Both run in parallel, read notes only if needed
 ```
 
 ### Pattern 3: Quality Gate
 
 ```
 # After writing code:
-Task(subagent_type="reviewer-sonnet", prompt="Review changes")
-Task(subagent_type="security-sonnet", prompt="Security scan")
+Task(subagent_type="reviewer-sonnet", prompt="Review changes. Return pass/fail + 1-line summary.")
+Task(subagent_type="security-sonnet", prompt="Security scan. Return pass/fail + 1-line summary.")
 Task(subagent_type="tester-haiku", prompt="Add tests")
 # Only commit if all pass
 ```
@@ -176,7 +206,7 @@ GROUP BY agent_type ORDER BY spawns DESC;
 
 ---
 
-**Version**: 2.1 (Removed retired orchestrator MCP references)
+**Version**: 2.2 (Added context-safe delegation pattern for agent results)
 **Created**: 2025-12-26
-**Updated**: 2026-02-28
+**Updated**: 2026-03-09
 **Location**: .claude/skills/agentic-orchestration/skill.md

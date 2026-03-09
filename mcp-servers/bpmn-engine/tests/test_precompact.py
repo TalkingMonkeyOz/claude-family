@@ -10,7 +10,7 @@ Output: systemMessage injected into post-compact context
 
 Test paths:
   1. DB available: get_project → connect_db → query_session_state → query_session_facts
-     → read_session_notes → build_message → end_injected
+     → read_session_notes → apply_budget_cap → build_message → end_injected
   2. DB unavailable: get_project → connect_db → fallback_message → end_injected
   3. Always connects: both paths complete get_project and connect_db
 
@@ -292,7 +292,7 @@ class TestSequentialFlow:
     """Verify tasks execute in correct order within each path."""
 
     def test_db_path_order_available(self):
-        """DB available path: state → facts → notes → message."""
+        """DB available path: state → facts → notes → budget_cap → message."""
         wf = load_workflow(initial_data={"db_available": True})
 
         names = completed_spec_names(wf)
@@ -301,6 +301,7 @@ class TestSequentialFlow:
         assert "query_session_state" in names
         assert "query_session_facts" in names
         assert "read_session_notes" in names
+        assert "apply_budget_cap" in names
         assert "build_message" in names
 
         # Get task objects to verify order
@@ -312,6 +313,7 @@ class TestSequentialFlow:
             "query_session_state",
             "query_session_facts",
             "read_session_notes",
+            "apply_budget_cap",
             "build_message"
         ])
 
@@ -345,7 +347,23 @@ class TestStatePreservation:
         assert wf.data.get("state_queried") is True
         assert wf.data.get("facts_queried") is True
         assert wf.data.get("notes_read") is True
+        assert wf.data.get("budget_applied") is True
         assert wf.data.get("state_injected") is True
+
+    def test_budget_cap_runs_after_notes(self):
+        """Budget cap step should run between notes and build_message."""
+        wf = load_workflow(initial_data={"db_available": True})
+
+        names = completed_spec_names(wf)
+        assert "read_session_notes" in names
+        assert "apply_budget_cap" in names
+        assert "build_message" in names
+
+    def test_budget_cap_not_run_when_unavailable(self):
+        """Budget cap should NOT run when DB unavailable (fallback path)."""
+        wf = load_workflow(initial_data={"db_available": False})
+
+        assert wf.data.get("budget_applied") is None
 
     def test_query_flags_not_set_when_unavailable(self):
         """Query flags should NOT be set when DB unavailable."""

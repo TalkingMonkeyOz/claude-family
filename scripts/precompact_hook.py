@@ -49,15 +49,71 @@ psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
 DB_AVAILABLE = psycopg_mod is not None
 
 
+MAX_PRECOMPACT_TOKENS = 2000  # ~8000 chars budget for preserved state
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: chars / 4."""
+    return len(text) // 4 if text else 0
+
+
+def _apply_precompact_budget(sections: list) -> str:
+    """Apply token budget to precompact sections, trimming lowest priority first.
+
+    Each section is a tuple of (priority, label, content_lines).
+    Priority 0 = highest (always kept), higher = trim first.
+    """
+    # Sort by priority (lowest number = highest importance)
+    sections.sort(key=lambda s: s[0])
+
+    # Build from highest priority, stop when budget exceeded
+    kept = []
+    total_tokens = 0
+    trimmed_labels = []
+
+    for priority, label, content_lines in sections:
+        section_text = "\n".join(content_lines)
+        section_tokens = _estimate_tokens(section_text)
+
+        if total_tokens + section_tokens <= MAX_PRECOMPACT_TOKENS:
+            kept.extend(content_lines)
+            total_tokens += section_tokens
+        else:
+            # Try to fit partial section
+            remaining_budget = MAX_PRECOMPACT_TOKENS - total_tokens
+            if remaining_budget > 50:  # At least 200 chars worth
+                partial_chars = remaining_budget * 4
+                partial_text = section_text[:partial_chars]
+                # Cut at last newline to avoid mid-line truncation
+                last_nl = partial_text.rfind("\n")
+                if last_nl > 0:
+                    partial_text = partial_text[:last_nl]
+                kept.append(partial_text)
+                kept.append(f"  ... ({label} truncated, use list_session_facts() for full)")
+                total_tokens += _estimate_tokens(partial_text)
+            trimmed_labels.append(label)
+
+    if trimmed_labels:
+        logger.info(f"PreCompact budget: {total_tokens} tokens, trimmed: {', '.join(trimmed_labels)}")
+    else:
+        logger.info(f"PreCompact budget: {total_tokens} tokens, all sections fit")
+
+    return "\n".join(kept)
+
+
 def get_session_state_for_compact(project_name: str) -> Optional[str]:
-    """Query active work items and session state to preserve across compaction."""
+    """Query active work items and session state to preserve across compaction.
+
+    Uses priority-based budget capping to keep injection under ~2000 tokens.
+    Priority: P0=in_progress todos, P1=focus/next_steps, P2=features, P3=facts, P4=notes
+    """
     conn = get_db_connection()
     if not conn:
         return None
 
     try:
         cur = conn.cursor()
-        lines = []
+        sections = []  # List of (priority, label, lines)
 
         # Get project_id
         cur.execute("SELECT project_id::text FROM claude.projects WHERE project_name = %s", (project_name,))
@@ -67,26 +123,25 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
             return None
         project_id = row['project_id'] if isinstance(row, dict) else row[0]
 
-        # Get active todos
+        # P0: In-progress todos only (highest priority - what you're actively doing)
         cur.execute("""
             SELECT content, status, priority
             FROM claude.todos
             WHERE project_id = %s::uuid AND is_deleted = false
-              AND status IN ('pending', 'in_progress')
-            ORDER BY CASE status WHEN 'in_progress' THEN 1 ELSE 2 END, priority ASC
-            LIMIT 10
+              AND status = 'in_progress'
+            ORDER BY priority ASC
+            LIMIT 5
         """, (project_id,))
         todos = cur.fetchall()
 
         if todos:
-            lines.append("ACTIVE TODOS (preserved from pre-compaction):")
+            todo_lines = ["IN-PROGRESS WORK (preserved from pre-compaction):"]
             for t in todos:
                 content = t['content'] if isinstance(t, dict) else t[0]
-                status = t['status'] if isinstance(t, dict) else t[1]
-                marker = "[>]" if status == 'in_progress' else "[ ]"
-                lines.append(f"  {marker} {content}")
+                todo_lines.append(f"  [>] {content}")
+            sections.append((0, "in_progress_todos", todo_lines))
 
-        # Get session state (focus, next_steps)
+        # P1: Session state (focus, next_steps)
         cur.execute("""
             SELECT current_focus, next_steps
             FROM claude.session_state
@@ -95,52 +150,40 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
         state = cur.fetchone()
 
         if state:
+            focus_lines = []
             focus = state['current_focus'] if isinstance(state, dict) else state[0]
             next_steps = state['next_steps'] if isinstance(state, dict) else state[1]
             if focus:
-                lines.append(f"\nCURRENT FOCUS: {focus}")
+                focus_lines.append(f"\nCURRENT FOCUS: {focus}")
             if next_steps and isinstance(next_steps, list):
-                lines.append("\nNEXT STEPS:")
+                focus_lines.append("NEXT STEPS:")
                 for step in next_steps[:3]:
                     step_text = step.get('step', str(step)) if isinstance(step, dict) else str(step)
-                    lines.append(f"  - {step_text}")
+                    focus_lines.append(f"  - {step_text}")
+            if focus_lines:
+                sections.append((1, "focus", focus_lines))
 
-        # Get active features/build_tasks
+        # P2: Active features (in_progress only)
         cur.execute("""
-            SELECT f.feature_name, f.status,
+            SELECT f.feature_name, f.short_code,
                    (SELECT COUNT(*) FROM claude.build_tasks bt
                     WHERE bt.feature_id = f.feature_id AND bt.status = 'in_progress') as active_tasks
             FROM claude.features f
-            WHERE f.project_id = %s::uuid AND f.status IN ('in_progress', 'planned')
+            WHERE f.project_id = %s::uuid AND f.status = 'in_progress'
             ORDER BY f.updated_at DESC LIMIT 3
         """, (project_id,))
         features = cur.fetchall()
 
         if features:
-            lines.append("\nACTIVE FEATURES:")
+            feat_lines = ["\nACTIVE FEATURES:"]
             for f in features:
                 name = f['feature_name'] if isinstance(f, dict) else f[0]
-                status = f['status'] if isinstance(f, dict) else f[1]
+                code = f['short_code'] if isinstance(f, dict) else f[1]
                 active = f['active_tasks'] if isinstance(f, dict) else f[2]
-                lines.append(f"  - {name} ({status}, {active} active tasks)")
+                feat_lines.append(f"  - [{code}] {name} ({active} active tasks)")
+            sections.append((2, "features", feat_lines))
 
-        # Get session facts (user intent, decisions, key references)
-        # These preserve the narrative/context that structured data alone misses
-        # FB137 fix: First count total facts to log what gets dropped
-        cur.execute("""
-            SELECT COUNT(*)
-            FROM claude.session_facts
-            WHERE session_id = (
-                SELECT session_id FROM claude.sessions
-                WHERE project_name = %s AND session_end IS NULL
-                ORDER BY session_start DESC LIMIT 1
-            )
-            AND fact_type IN ('decision', 'reference', 'note')
-            AND NOT is_sensitive
-        """, (project_name,))
-        total_facts = cur.fetchone()
-        total_facts = total_facts[0] if total_facts else 0
-
+        # P3: Session facts (user intent, decisions)
         cur.execute("""
             SELECT fact_key, fact_value, fact_type
             FROM claude.session_facts
@@ -156,31 +199,20 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
         facts = cur.fetchall()
 
         if facts:
-            # FB137: Log dropped facts for audit
-            if total_facts > 5:
-                logger.warning(
-                    f"PreCompact: {total_facts} facts exist, only injecting 5. "
-                    f"{total_facts - 5} facts will be lost after compaction."
-                )
-                lines.append(f"\nSESSION CONTEXT (decisions & intent) - WARNING: {total_facts - 5} older facts truncated:")
-            else:
-                lines.append("\nSESSION CONTEXT (decisions & intent):")
-            truncated_count = 0
+            fact_lines = ["\nSESSION CONTEXT (decisions & intent):"]
             for f in facts:
                 key = f['fact_key'] if isinstance(f, dict) else f[0]
                 value = f['fact_value'] if isinstance(f, dict) else f[1]
-                # Truncate long values
-                if len(value) > 200:
-                    display = value[:200] + "..."
-                    truncated_count += 1
-                else:
-                    display = value
-                lines.append(f"  [{key}]: {display}")
-            if truncated_count > 0:
-                logger.info(f"PreCompact: {truncated_count} fact values truncated at 200 chars")
+                display = value[:150] + "..." if len(value) > 150 else value
+                fact_lines.append(f"  [{key}]: {display}")
+            sections.append((3, "facts", fact_lines))
 
         conn.close()
-        return "\n".join(lines) if lines else None
+
+        if not sections:
+            return None
+
+        return _apply_precompact_budget(sections)
 
     except Exception as e:
         logger.error(f"Failed to get session state for compact: {e}")
@@ -208,43 +240,29 @@ def build_refresh_message(hook_input: Dict) -> str:
         parts.append("")
         parts.append(session_state)
 
-    # Also inject session notes if they exist
-    notes_path = Path.home() / ".claude" / "session_notes.md"
-    if notes_path.exists():
-        try:
-            notes_content = notes_path.read_text(encoding='utf-8').strip()
-            if notes_content and len(notes_content) > 20:
-                # Truncate to avoid bloating context
-                if len(notes_content) > 500:
-                    notes_content = notes_content[:500] + "\n  ... (truncated, use get_session_notes() for full)"
-                parts.append("")
-                parts.append("SESSION NOTES (from this session):")
-                parts.append(notes_content)
-        except Exception:
-            pass
+    # Session notes: only inject if state section was small enough
+    state_tokens = _estimate_tokens("\n".join(parts))
+    remaining_budget = MAX_PRECOMPACT_TOKENS - state_tokens
+    if remaining_budget > 100:
+        notes_path = Path.home() / ".claude" / "session_notes.md"
+        if notes_path.exists():
+            try:
+                notes_content = notes_path.read_text(encoding='utf-8').strip()
+                if notes_content and len(notes_content) > 20:
+                    max_chars = min(remaining_budget * 4, 400)
+                    if len(notes_content) > max_chars:
+                        notes_content = notes_content[:max_chars] + "\n  ... (use get_session_notes() for full)"
+                    parts.append("")
+                    parts.append("SESSION NOTES:")
+                    parts.append(notes_content)
+            except Exception:
+                pass
 
     parts.extend([
         "",
-        "=" * 60,
-        "POST-COMPACTION RECOVERY PROTOCOL:",
-        "",
-        "You just went through context compaction. Your state has been preserved above.",
-        "",
-        "STEP 1 - RESTORE CONTEXT:",
-        "  list_session_facts()           -> Your notepad (decisions, progress, current task)",
-        "  get_session_notes()            -> Detailed progress narrative",
-        "  get_work_context('current')    -> Active task and feature",
-        "",
-        "STEP 2 - ORIENT:",
-        "  Re-read CLAUDE.md if project rules were lost",
-        "  recall_memories('<what you were working on>') -> Load relevant knowledge",
-        "",
-        "STEP 3 - RESUME:",
-        "  Continue from the task described in your session facts",
-        "  Do NOT start new work - pick up where you left off",
-        "",
-        "MCP TOOLS: project-tools (work tracking, knowledge, session facts, messaging),",
-        "  sequential-thinking (complex analysis). Database is source of truth for config.",
+        "=" * 40,
+        "RECOVERY: list_session_facts() | get_session_notes() | get_work_context('current')",
+        "Then recall_memories('<what you were working on>') and resume from session facts.",
     ])
 
     return "\n".join(parts)
