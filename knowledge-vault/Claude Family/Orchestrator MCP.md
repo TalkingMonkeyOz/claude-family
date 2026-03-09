@@ -12,9 +12,21 @@ tags:
 
 # Orchestrator MCP
 
+> **RETIRED — 2026-02-24**
+>
+> The orchestrator MCP has been decommissioned. Do not configure it for new projects.
+>
+> **Replacements:**
+> - **Agent spawning**: Use the native `Task` tool (built into Claude Code)
+> - **Messaging** (`check_inbox`, `send_message`, `broadcast`, `acknowledge`, `reply_to`): Use `mcp__project-tools__*` equivalents
+>
+> This document is preserved as a historical reference only.
+
+---
+
 Custom MCP for spawning specialized agents and inter-Claude messaging.
 
-**Location**: `mcp-servers/orchestrator/server.py`
+**Location**: `mcp-servers/orchestrator/server.py` (archived)
 **Tokens**: ~9k
 **Agent Specs**: `agent_specs.json`
 
@@ -288,7 +300,7 @@ Each agent has isolated MCP access (built-in Read/Write/Edit/Glob/Grep always av
 
 ---
 
-**Version**: 5.1 (Updated agent count to 19, fixed MCP access list, removed vault-rag/filesystem refs)
+**Version**: 5.2 (Added RETIRED notice at top; preserved content as historical reference)
 **Created**: 2025-12-26
-**Updated**: 2026-02-07
+**Updated**: 2026-03-09
 **Location**: Claude Family/Orchestrator MCP.md

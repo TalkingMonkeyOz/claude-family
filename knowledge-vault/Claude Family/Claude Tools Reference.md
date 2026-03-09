@@ -21,18 +21,23 @@ See **[[MCP Registry]]** for complete documentation.
 | Server | Tokens | Purpose | Scope |
 |--------|--------|---------|-------|
 | postgres | ~6k | Database access | Global |
-| orchestrator | ~9k | Agent spawning | Global |
+| project-tools | ~12k | Work tracking, knowledge, messaging, config ops (40+ tools) | Global |
 | sequential-thinking | ~2k | Complex reasoning | Global |
 | python-repl | ~2k | Python execution | Global |
-| filesystem | ~9k | File operations | claude-family only |
-| memory | ~6k | Persistent graph | claude-family only |
-| mui-mcp | ~2k | MUI X docs | nimbus, ATO only |
+| bpmn-engine | ~4k | BPMN process navigation, search, validation | Global |
+| nimbus-knowledge | ~3k | Nimbus API domain knowledge | Nimbus projects only |
+| mui-mcp | ~2k | MUI X docs | nimbus-mui, ATO only |
+
+**Retired MCPs** (no longer available):
+- `orchestrator` — **RETIRED 2026-02-24**. Replaced by native `Task` tool (agent spawning) and `project-tools` (messaging)
+- `filesystem` — Retired Jan 2026. Replaced by built-in Read/Write/Edit/Glob/Grep tools
+- `memory` — Retired Jan 2026. Replaced by `project-tools` cognitive memory (`remember`, `recall_memories`)
 
 ---
 
-## Orchestrator Agents
+## Agent Types (via Native Task Tool)
 
-See **[[Orchestrator MCP]]** for full agent documentation and tools.
+> **Note**: The orchestrator MCP was retired 2026-02-24. Agent spawning now uses the native `Task` tool in Claude Code. See **[[Orchestrator MCP]]** for the historical agent list and capabilities (preserved as reference).
 
 ### Fast (Haiku $0.01-0.08/task)
 
@@ -67,13 +72,17 @@ See **[[Orchestrator MCP]]** for full agent documentation and tools.
 
 ## Skills
 
-| Skill | Location | Purpose |
-|-------|----------|---------|
-| database-operations | `.claude/skills/database/` | Data Gateway patterns |
-| testing-patterns | `.claude/skills/testing/` | Test level guidance |
-| feature-workflow | `.claude/skills/feature-workflow/` | Feature tracking |
-| doc-keeper | `.claude/skills/doc-keeper/` | Documentation maintenance |
-| nimbus-api | `.claude/skills/nimbus-api/` | Nimbus API patterns |
+| Skill | Purpose |
+|-------|---------|
+| database-operations | SQL validation, column_registry checks, Data Gateway patterns |
+| work-item-routing | Feedback, features, build_tasks routing |
+| session-management | Session lifecycle (start/end/resume) |
+| code-review | Pre-commit review, testing |
+| project-ops | Project init, retrofit, phases |
+| messaging | Inter-Claude communication, inbox |
+| agentic-orchestration | Agent spawning (native Task tool), parallel work |
+| testing-patterns | Test writing and execution |
+| bpmn-modeling | BPMN-first process design, query/model/test workflows |
 
 ---
 
@@ -108,13 +117,14 @@ See **[[Orchestrator MCP]]** for full agent documentation and tools.
 ## Related Docs
 
 - [[MCP Registry]] - All MCPs with install guidelines
-- [[Orchestrator MCP]] - Agent spawning and messaging
+- [[Orchestrator MCP]] - RETIRED system (historical reference only)
 - [[MCP configuration]] - How MCPs are configured
 - [[Setting's File]] - Settings file locations
 - [[Claude Hooks]] - Process enforcement
+
 ---
 
-**Version**: 1.0
+**Version**: 2.0 (Updated to current MCP list; marked orchestrator/filesystem/memory retired; updated skills to ADR-005 list)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-03-09
 **Location**: Claude Family/Claude Tools Reference.md

@@ -75,7 +75,7 @@ Use the Data Gateway pattern:
 -- 1. Check valid feedback types
 SELECT valid_values FROM claude.column_registry
 WHERE table_name = 'feedback' AND column_name = 'feedback_type';
--- Result: ['bug', 'design', 'question', 'change']
+-- Result: ['bug', 'design', 'question', 'change', 'idea', 'improvement']
 
 -- 2. Check valid statuses
 SELECT valid_values FROM claude.column_registry
@@ -161,13 +161,13 @@ INSERT INTO claude.build_tasks (
     'Update AuthService error mapping',
     'Map auth errors to user-friendly messages',
     'claude-code-unified',
-    'pending',
+    'todo',  -- Valid: todo, in_progress, blocked, completed, cancelled (NEVER 'pending')
     2,
     NOW()
 );
 ```
 
-**Status values**: `pending`, `in_progress`, `completed`, `blocked`
+**Status values**: `todo`, `in_progress`, `completed`, `blocked`, `cancelled`
 
 ---
 
@@ -263,6 +263,7 @@ related_feedback_ids = ARRAY['uuid1', 'uuid2']::uuid[]
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Fix invalid build_tasks status 'pending'→'todo', fix feedback_type column_registry comment to include idea/improvement)
 **Created**: 2025-12-26
+**Updated**: 2026-03-09
 **Location**: .claude/skills/work-item-routing/skill.md

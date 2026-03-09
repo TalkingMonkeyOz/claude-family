@@ -57,14 +57,18 @@ The Claude Family manages coordination across multiple Claude instances with sha
 
 ## Current Projects
 
-- [[Project - Claude Family]] - Infrastructure
-- [[Project - ATO-tax-agent]] - Tax agent
-- [[Project - Mission Control Web]] - Dashboard UI
+- [[Project - Claude Family]] - Infrastructure (`infrastructure` domain)
+- [[Project - ATO-tax-agent]] - Tax agent (`ato` domain)
+- [[Project - Mission Control Web]] - Dashboard UI (`claude-tools` domain)
+- [[Project - Metis]] - Next-generation platform (`infrastructure` domain)
+- [[Project - Trading Intelligence]] - Finance intelligence system (`finance` domain)
 
 ---
 
-**Version**: 2.2
-**Updated**: 2025-12-29
+**Version**: 2.3
+**Created**: 2025-12-20
+**Updated**: 2026-03-09
+**Location**: knowledge-vault/Claude Family/Purpose.md
 **Changelog**:
-- Added [[Claude Desktop Setup]] documentation
-- Integrated Desktop as full Family member
+- 2.3: Added Project-Metis and Trading Intelligence to current projects list
+- 2.2: Added [[Claude Desktop Setup]] documentation; integrated Desktop as full Family member

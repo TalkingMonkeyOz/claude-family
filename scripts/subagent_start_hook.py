@@ -119,37 +119,46 @@ def main():
     """Main entry point for SubagentStart hook."""
     logging.info("SubagentStart hook invoked")
 
-    # Read hook input from stdin
     try:
-        raw_input = sys.stdin.read()
-        hook_input = json.loads(raw_input) if raw_input.strip() else {}
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON decode error: {e}")
-        print(json.dumps({}))
-        return 0
+        # Read hook input from stdin
+        try:
+            raw_input = sys.stdin.read()
+            hook_input = json.loads(raw_input) if raw_input.strip() else {}
+        except json.JSONDecodeError as e:
+            logging.error(f"JSON decode error: {e}")
+            print(json.dumps({}))
+            return 0
 
-    # Extract subagent info (per Claude Code v2.0.43+ docs)
-    subagent_id = hook_input.get('subagent_id', '')
-    subagent_type = hook_input.get('subagent_type', 'unknown')
-    task_prompt = hook_input.get('task_prompt', '')
-    parent_session_id = hook_input.get('session_id')  # Parent's session
+        # Extract subagent info (per Claude Code v2.0.43+ docs)
+        subagent_id = hook_input.get('subagent_id', '')
+        subagent_type = hook_input.get('subagent_type', 'unknown')
+        task_prompt = hook_input.get('task_prompt', '')
+        parent_session_id = hook_input.get('session_id')  # Parent's session
 
-    # Get workspace directory from hook input or cwd
-    workspace_dir = hook_input.get('workspace_dir') or hook_input.get('cwd', 'unknown')
+        # Get workspace directory from hook input or cwd
+        workspace_dir = hook_input.get('workspace_dir') or hook_input.get('cwd', 'unknown')
 
-    logging.info(f"Agent spawned: type={subagent_type}, id={subagent_id[:8] if subagent_id else 'N/A'}..., parent={parent_session_id[:8] if parent_session_id else 'N/A'}...")
+        logging.info(f"Agent spawned: type={subagent_type}, id={subagent_id[:8] if subagent_id else 'N/A'}..., parent={parent_session_id[:8] if parent_session_id else 'N/A'}...")
 
-    # Log to database
-    if subagent_id:
-        log_agent_spawn(
-            subagent_id=subagent_id,
-            subagent_type=subagent_type,
-            task_prompt=task_prompt,
-            parent_session_id=parent_session_id,
-            workspace_dir=workspace_dir
-        )
+        # Log to database
+        if subagent_id:
+            log_agent_spawn(
+                subagent_id=subagent_id,
+                subagent_type=subagent_type,
+                task_prompt=task_prompt,
+                parent_session_id=parent_session_id,
+                workspace_dir=workspace_dir
+            )
 
-    # Return empty response (allow spawn to proceed)
+    except Exception as e:
+        logging.error(f"SubagentStart hook failed: {e}", exc_info=True)
+        try:
+            from failure_capture import capture_failure
+            capture_failure("subagent_start_hook", str(e), "scripts/subagent_start_hook.py")
+        except Exception:
+            pass
+
+    # Always return empty response (allow spawn to proceed - fail-open)
     print(json.dumps({}))
     return 0
 

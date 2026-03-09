@@ -8,7 +8,6 @@ allowed-tools:
   - Edit
   - Glob
   - Grep
-  - mcp__filesystem__*
   - mcp__postgres__execute_sql
 ---
 
@@ -29,10 +28,10 @@ Check `knowledge-vault/Claude Family/MCP Registry.md` against:
 
 ### 2. Agent Spec Verification
 
-Check `mcp-servers/orchestrator/agent_specs.json` for:
-- All agent_types have corresponding config in configs/
-- Removed agents list is accurate
-- Token costs are reasonable estimates
+Check `.claude/agents/` directory for:
+- All agent_types have a corresponding `.md` agent file
+- Agent files are current and reference valid tools
+- Note: `mcp-servers/orchestrator/` has been retired (2026-02-24). Agent definitions are now in `.claude/agents/`.
 
 ### 3. Skill Path Verification
 
@@ -49,13 +48,15 @@ Check knowledge-vault entries for:
 
 ## Verification Workflow
 
+Use built-in Read/Glob/Grep tools (filesystem MCP retired Jan 2026):
+
 ```
 1. Read MCP Registry.md
 2. Read ~/.claude.json mcpServers section
-3. List all .mcp.json files in C:\Projects\
+3. Glob("**/.mcp.json", path="C:/Projects/") to list project MCP configs
 4. Compare and flag discrepancies
-5. Check agent_specs.json
-6. Verify skill paths
+5. Glob(".claude/agents/*.md") to list current agent definitions
+6. Verify skill paths with Glob(".claude/skills/*/skill.md")
 7. Output findings
 ```
 
@@ -66,8 +67,8 @@ Check knowledge-vault entries for:
 
 ### MCP Registry
 - [x] postgres: matches
-- [ ] filesystem: STALE - now project-specific only
-- [x] orchestrator: matches
+- [x] project-tools: matches
+- [ ] bpmn-engine: MISSING from global config
 
 ### Agent Specs
 - [x] 14 agents in spec
@@ -91,5 +92,12 @@ Check knowledge-vault entries for:
 ## Related
 
 - MCP Registry: `knowledge-vault/Claude Family/MCP Registry.md`
-- Agent Specs: `mcp-servers/orchestrator/agent_specs.json`
+- Agent Definitions: `.claude/agents/` (orchestrator retired 2026-02-24)
 - Skills: `.claude/skills/`
+
+---
+
+**Version**: 1.1 (Fix retired refs: mcp__filesystem__*→built-in tools, orchestrator agent_specs.json→.claude/agents/)
+**Created**: 2026-01-08
+**Updated**: 2026-03-09
+**Location**: .claude/skills/doc-keeper/skill.md

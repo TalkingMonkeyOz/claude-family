@@ -108,7 +108,18 @@ await control.InvokeAsync(() => label1.Text = "Updated!");
 
 ## Spawn Agent
 
-For complex WinForms tasks, spawn:
+For complex WinForms tasks, use the native Task tool:
+```python
+Task(
+    subagent_type="winforms-coder-haiku",
+    description="<task description>",
+    prompt="<detailed task prompt>"
+)
 ```
-mcp__orchestrator__spawn_agent(agent_type="winforms-coder-haiku", task="...")
-```
+
+---
+
+**Version**: 1.1 (Fix stale tool ref: mcp__orchestrator__spawn_agent→native Task tool)
+**Created**: 2025-12-26
+**Updated**: 2026-03-09
+**Location**: .claude/skills/winforms/skill.md

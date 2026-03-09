@@ -79,13 +79,16 @@ Available across all projects (varies by platform):
 | Server | Code | Desktop | Purpose |
 |--------|------|---------|---------|
 | postgres | ✅ | ✅ | Database access, session logging |
-| project-tools | ✅ | ❌ | Work tracking, knowledge, todos |
-| orchestrator | ✅ | ❌ | Agent spawning, messaging |
+| project-tools | ✅ | ❌ | Work tracking, knowledge, messaging, todos (40+ tools) |
 | sequential-thinking | ✅ | ✅ | Complex problem solving |
+| bpmn-engine | ✅ | ❌ | BPMN process navigation, search, validation |
+| python-repl | ✅ | ❌ | Python code execution, data processing |
 
-**Deprecated MCPs** (Jan 2026):
-- `memory` - Replaced by `project-tools` knowledge functions
-- `vault-rag` - Replaced by automatic RAG via UserPromptSubmit hook
+**Deprecated MCPs**:
+- `orchestrator` - **RETIRED 2026-02-24**. Messaging tools (`check_inbox`, `send_message`, `broadcast`, `acknowledge`, `reply_to`) migrated to `project-tools`. Agent spawning now uses the native `Task` tool. See [[Orchestrator MCP]] for historical reference.
+- `memory` - Retired Jan 2026. Replaced by `project-tools` cognitive memory (`remember`, `recall_memories`)
+- `vault-rag` - Retired Jan 2026. Replaced by automatic RAG via UserPromptSubmit hook
+- `filesystem` - Retired Jan 2026. Replaced by built-in Read/Write/Edit/Glob/Grep tools
 
 **Note**: Desktop cannot spawn agents or execute code. RAG is automatic via hooks.
 
@@ -104,11 +107,12 @@ Available across all projects (varies by platform):
 
 ---
 
-**Version**: 1.4
+**Version**: 1.5
 **Created**: 2025-12-20
-**Updated**: 2026-02-10
+**Updated**: 2026-03-09
 **Location**: knowledge-vault/40-Procedures/Family Rules.md
 **Changelog**:
+- 1.5: Marked orchestrator RETIRED (2026-02-24); updated MCP table to current servers; added filesystem to deprecated list
 - 1.4: Verified deprecated MCP servers removed (memory, vault-rag, filesystem)
 - 1.3: Fixed shared_knowledge→knowledge, updated MCP servers (removed deprecated)
 - 1.2: Added Desktop platform to MCP servers table

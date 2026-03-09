@@ -43,13 +43,26 @@ IDEA → FEEDBACK → FEATURE → TASKS → IMPLEMENTATION → REVIEW → DEPLOY
 
 ### 1. Capture Idea
 
+**Preferred**: Use the MCP tool to bypass raw SQL and let WorkflowEngine handle state:
+
+```python
+mcp__project-tools__create_feedback(
+    project_id="project-uuid-here",
+    feedback_type="idea",  # Valid: bug, design, question, change, idea, improvement
+    description="Description of the idea",
+    priority=3  # 1=critical, 5=backlog
+)
+```
+
+**Alternative** (raw SQL — use only when MCP unavailable):
+
 ```sql
 INSERT INTO claude.feedback (
     feedback_id, project_id, feedback_type, description, priority, status
 ) VALUES (
     gen_random_uuid(),
     'project-uuid-here',
-    'idea',  -- or 'design', 'question', 'change'
+    'idea',  -- Valid: bug, design, question, change, idea, improvement
     'Description of the idea',
     3,  -- 1=critical, 5=backlog
     'new'
@@ -82,13 +95,27 @@ WHERE feedback_id = 'feedback-uuid';
 
 ### 3. Break Into Tasks
 
+**Preferred**: Use the MCP tool to route through WorkflowEngine:
+
+```python
+mcp__project-tools__create_linked_task(
+    feature_code="F1",  # Feature short code
+    name="Create API endpoint",
+    description="...",
+    verification="...",
+    files=[]
+)
+```
+
+**Alternative** (raw SQL — valid `status` values: `todo`, `in_progress`, `blocked`, `completed`, `cancelled`):
+
 ```sql
 INSERT INTO claude.build_tasks (
     task_id, feature_id, task_name, description, status
-) VALUES 
-    (gen_random_uuid(), 'feature-uuid', 'Create API endpoint', '...', 'pending'),
-    (gen_random_uuid(), 'feature-uuid', 'Add database table', '...', 'pending'),
-    (gen_random_uuid(), 'feature-uuid', 'Write unit tests', '...', 'pending');
+) VALUES
+    (gen_random_uuid(), 'feature-uuid', 'Create API endpoint', '...', 'todo'),
+    (gen_random_uuid(), 'feature-uuid', 'Add database table', '...', 'todo'),
+    (gen_random_uuid(), 'feature-uuid', 'Write unit tests', '...', 'todo');
 ```
 
 ### 4. Track Progress
@@ -120,10 +147,11 @@ Use TodoWrite for session-level tracking:
 - `cancelled` - Not going forward
 
 ### Task Status
-- `pending` - Not started
+- `todo` - Not started (NOT `pending` — constraint violation)
 - `in_progress` - Active work
 - `completed` - Done
 - `blocked` - Waiting on dependency
+- `cancelled` - Will not be implemented
 
 ---
 
@@ -209,4 +237,7 @@ How to verify it works?
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Fix invalid status 'pending'→'todo', add MCP tool alternatives, clarify valid feedback_type values)
+**Created**: 2026-01-08
+**Updated**: 2026-03-09
+**Location**: .claude/skills/feature-workflow/skill.md

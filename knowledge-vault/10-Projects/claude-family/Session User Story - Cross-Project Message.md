@@ -25,13 +25,13 @@ See [[Session User Stories - Overview]]
 
 **Scenario**: Claude working on claude-family needs ATO-tax-agent to run its test suite.
 
-**Claude Decision**: Use orchestrator messaging system
+**Claude Decision**: Use `project-tools` messaging system (orchestrator was retired 2026-02-24)
 
 ---
 
 ### 2. Claude Sends Message
 
-**MCP Tool**: `mcp__orchestrator__send_message`
+**MCP Tool**: `mcp__project-tools__send_message`
 
 ```json
 {
@@ -46,11 +46,11 @@ See [[Session User Stories - Overview]]
 
 ---
 
-### 3. Orchestrator Creates Message Record
+### 3. project-tools Creates Message Record
 
-**File**: `mcp-servers/orchestrator/server.py`
+**File**: `mcp-servers/project-tools/server_v2.py`
 
-**Handler**: `handle_send_message()`
+**Handler**: `send_message()` tool
 
 ```python
 message_id = str(uuid.uuid4())
@@ -181,7 +181,7 @@ Failed tests:
 
 ### 8. Claude Marks Message as Read
 
-**MCP Tool**: `mcp__orchestrator__acknowledge`
+**MCP Tool**: `mcp__project-tools__acknowledge`
 
 ```json
 {
@@ -201,7 +201,7 @@ read_at: 2025-12-26 15:30:00
 
 ### 9. Claude Sends Reply
 
-**MCP Tool**: `mcp__orchestrator__reply_to`
+**MCP Tool**: `mcp__project-tools__reply_to`
 
 ```json
 {
@@ -263,8 +263,8 @@ Both failures are due to schema changes in deductions table. Fixing now.
 
 | File | Purpose |
 |------|---------|
-| `mcp-servers/orchestrator/server.py` | Handles send_message, reply_to, acknowledge |
-| `session_startup_hook.py` | Checks for pending messages at session start |
+| `mcp-servers/project-tools/server_v2.py` | Handles send_message, reply_to, acknowledge (project-tools MCP) |
+| `scripts/session_startup_hook_enhanced.py` | Checks for pending messages at session start |
 
 ---
 
@@ -279,7 +279,7 @@ Both failures are due to schema changes in deductions table. Fixing now.
 
 ---
 
-**Version**: 2.0
+**Version**: 3.0 (Updated all mcp__orchestrator__* tool refs to mcp__project-tools__*; orchestrator retired 2026-02-24)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-03-09
 **Location**: knowledge-vault/10-Projects/claude-family/Session User Story - Cross-Project Message.md

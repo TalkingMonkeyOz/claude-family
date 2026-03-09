@@ -276,13 +276,16 @@ mcp__project-tools__broadcast(
 
 ### Async Agent Pattern
 
-When spawning async agents, have them message results:
+When spawning async agents, use the native Task tool with `run_in_background=true` and instruct the agent to message results on completion:
 
 ```python
-# Spawn agent async
-task_id = mcp__orchestrator__spawn_agent_async(
-    agent_type="researcher-opus",
-    task=f"""
+# Spawn agent in background using native Task tool
+task_id = "researcher-auth-<timestamp>"  # Use a unique ID you can track
+
+Task(
+    subagent_type="researcher-opus",
+    description="Research authentication best practices",
+    prompt=f"""
     Research authentication best practices.
 
     IMPORTANT: When complete, send results:
@@ -292,7 +295,7 @@ task_id = mcp__orchestrator__spawn_agent_async(
         body="<your findings here>"
     )
     """,
-    workspace_dir="C:/Projects/claude-family"
+    run_in_background=True
 )
 
 # Later, check inbox for completion
@@ -611,7 +614,7 @@ messages = mcp__project-tools__check_inbox(project_name="claude-family")
 
 ---
 
-**Version**: 4.0 (Added list_recipients, from_project, threading, recipient validation)
+**Version**: 4.1 (Fix stale tool ref: mcp__orchestrator__spawn_agent_async→native Task tool with run_in_background=true)
 **Created**: 2025-12-26
-**Updated**: 2026-02-28
+**Updated**: 2026-03-09
 **Location**: .claude/skills/messaging/skill.md

@@ -7,7 +7,7 @@ allowed-tools:
   - Read
   - Bash
   - Grep
-  - mcp__orchestrator__spawn_agent
+  - Task
 ---
 
 # Testing Patterns Skill
@@ -29,17 +29,18 @@ Per the Delegation Rules, consider spawning tester-haiku for test writing:
 
 ```python
 # Spawn tester agent to write tests for new code
-mcp__orchestrator__spawn_agent(
-    agent_type="tester-haiku",
-    task="Write unit tests for the new functions in src/feature.ts. Cover happy path, edge cases, and error scenarios.",
-    workspace_dir="C:/Projects/current-project"
+# Use the native Task tool with subagent_type="tester-haiku"
+Task(
+    subagent_type="tester-haiku",
+    description="Write unit tests for the new functions in src/feature.ts. Cover happy path, edge cases, and error scenarios.",
+    prompt="Write unit tests for the new functions in src/feature.ts. Cover happy path, edge cases, and error scenarios."
 )
 
 # For E2E web tests, use web-tester-haiku
-mcp__orchestrator__spawn_agent(
-    agent_type="web-tester-haiku",
-    task="Write Playwright E2E tests for the login flow.",
-    workspace_dir="C:/Projects/current-project"
+Task(
+    subagent_type="web-tester-haiku",
+    description="Write Playwright E2E tests for the login flow.",
+    prompt="Write Playwright E2E tests for the login flow."
 )
 ```
 
@@ -264,7 +265,7 @@ Before committing code:
 
 ---
 
-**Version**: 1.1 (Added agent spawning guidance)
+**Version**: 1.2 (Fix stale tool refs: mcp__orchestrator__spawn_agent→native Task tool)
 **Created**: 2025-12-26
-**Updated**: 2026-01-10
+**Updated**: 2026-03-09
 **Location**: .claude/skills/testing/skill.md

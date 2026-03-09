@@ -5,7 +5,7 @@ model: haiku
 allowed-tools:
   - Read
   - mcp__postgres__*
-  - mcp__orchestrator__check_inbox
+  - mcp__project-tools__check_inbox
 ---
 
 # Session Management Skill
@@ -338,8 +338,7 @@ Before ending session, verify:
 
 3. **Logging**
    - [ ] Updated session record with summary
-   - [ ] Stored reusable knowledge (if any)
-   - [ ] Updated memory graph
+   - [ ] Stored reusable knowledge via `remember()` (if any)
 
 4. **Handoff**
    - [ ] Generated TODO_NEXT_SESSION.md
@@ -378,7 +377,7 @@ Before ending session, verify:
 
 ---
 
-**Version**: 2.0 (Added message accountability + todo persistence workflows)
+**Version**: 2.1 (Fix stale tool refs: orchestrator→project-tools, memory MCP→remember())
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
+**Updated**: 2026-03-09
 **Location**: .claude/skills/session-management/skill.md

@@ -94,14 +94,24 @@ def demote_in_progress_todos(project_name: str, conn):
         return 0
 
 
-def consolidate_session_facts(project_name: str, conn):
+def consolidate_session_facts(project_name: str, conn, current_session_id: str = None):
     """Promote qualifying session facts to mid-tier knowledge (F130 Cognitive Memory).
 
     Lightweight version: inserts into claude.knowledge WITHOUT Voyage AI embeddings.
     Embeddings are added later by the MCP consolidate_memories() tool.
+
+    Args:
+        project_name: Project to consolidate facts for.
+        conn: Active DB connection.
+        current_session_id: The session being closed. Included in the query even
+            though session_end is not yet set, so current-session facts are promoted.
+            Without this, the session_end IS NOT NULL filter would exclude them.
     """
     try:
         cur = conn.cursor()
+        # Include facts from:
+        # (a) sessions already closed (session_end IS NOT NULL) within 7 days, OR
+        # (b) the current session being closed right now (session_end not yet stamped)
         cur.execute("""
             SELECT sf.fact_id, sf.fact_key, sf.fact_value, sf.fact_type
             FROM claude.session_facts sf
@@ -109,14 +119,16 @@ def consolidate_session_facts(project_name: str, conn):
             WHERE sf.project_name = %s
               AND sf.fact_type IN ('decision', 'reference', 'note', 'data')
               AND LENGTH(sf.fact_value) >= 50
-              AND s.session_end IS NOT NULL
-              AND s.session_end > NOW() - INTERVAL '7 days'
+              AND (
+                  (s.session_end IS NOT NULL AND s.session_end > NOW() - INTERVAL '7 days')
+                  OR (s.session_id = %s::uuid)
+              )
               AND NOT EXISTS (
                   SELECT 1 FROM claude.knowledge k
                   WHERE k.title = sf.fact_key AND k.source = 'consolidation'
               )
             LIMIT 5
-        """, (project_name,))
+        """, (project_name, current_session_id))
 
         facts = cur.fetchall()
         promoted = 0
@@ -167,8 +179,10 @@ def auto_save_session(session_id: str, project_name: str):
         # BPMN step: demote_to_pending - in_progress todos become pending
         demote_in_progress_todos(project_name, conn)
 
-        # F130: Promote qualifying session facts to mid-tier knowledge
-        consolidate_session_facts(project_name, conn)
+        # F130: Promote qualifying session facts to mid-tier knowledge.
+        # Pass session_id so current-session facts are included even though
+        # session_end is not yet stamped on this session (ordering fix).
+        consolidate_session_facts(project_name, conn, current_session_id=session_id)
 
         # Mark session end (only if not already closed)
         if session_id:

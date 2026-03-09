@@ -316,6 +316,72 @@ def run_periodic_consolidation(conn):
         return None
 
 
+def _replay_session_end_fallback():
+    """Replay orphaned session_end records from the JSONL fallback file.
+
+    Called early in startup after DB is confirmed working.  Each fallback entry
+    represents a session where session_end_hook could not reach the DB and wrote
+    a JSONL record instead.  We close those sessions now.
+
+    Fails silently — this is best-effort cleanup, not critical path.
+    """
+    try:
+        from hook_data_fallback import replay_fallback, get_pending_count
+
+        pending = get_pending_count("session_end")
+        if pending == 0:
+            return
+
+        def _close_session(data: dict) -> bool:
+            """Close a single orphaned session. Returns True on success."""
+            session_id = data.get("session_id")
+            project_name = data.get("project_name", "")
+            try:
+                conn = get_db_connection()
+                if not conn:
+                    return False
+                cur = conn.cursor()
+                if session_id:
+                    cur.execute("""
+                        UPDATE claude.sessions
+                        SET session_end = NOW(),
+                            session_summary = COALESCE(session_summary,
+                                'Session auto-closed via fallback replay (startup hook)')
+                        WHERE session_id = %s::uuid
+                          AND session_end IS NULL
+                    """, (session_id,))
+                else:
+                    # No session_id — close the most recent unclosed session for the project
+                    cur.execute("""
+                        UPDATE claude.sessions
+                        SET session_end = NOW(),
+                            session_summary = COALESCE(session_summary,
+                                'Session auto-closed via fallback replay (startup hook)')
+                        WHERE project_name = %s
+                          AND session_end IS NULL
+                          AND session_start > NOW() - INTERVAL '48 hours'
+                        ORDER BY session_start DESC
+                        LIMIT 1
+                    """, (project_name,))
+                conn.commit()
+                cur.close()
+                conn.close()
+                return True
+            except Exception as e:
+                logger.warning(f"Fallback replay failed for session {session_id}: {e}")
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                return False
+
+        replayed = replay_fallback("session_end", _close_session)
+        if replayed > 0:
+            logger.info(f"Replayed {replayed} orphaned session_end record(s) from fallback")
+    except Exception as e:
+        logger.warning(f"session_end fallback replay skipped: {e}")
+
+
 def main():
     """Run session startup with lean output."""
 
@@ -325,69 +391,89 @@ def main():
     }
 
     context_lines = []
+    # Pre-initialize project_name so it is available in the systemMessage even
+    # if the try block exits early due to an exception.
+    project_name = os.path.basename(os.getcwd())
 
-    # Get current directory to determine project
-    cwd = os.getcwd()
-    project_name = os.path.basename(cwd)
+    try:
+        # Confirm project name (may be refined inside the try block)
+        cwd = os.getcwd()
+        project_name = os.path.basename(cwd)
 
-    # Determine identity (default to unified)
-    identity_name = 'claude-code-unified'
-    identity_id = IDENTITY_MAP.get(identity_name, IDENTITY_MAP['claude-code-unified'])
+        # Determine identity (default to unified)
+        identity_name = 'claude-code-unified'
+        identity_id = IDENTITY_MAP.get(identity_name, IDENTITY_MAP['claude-code-unified'])
 
-    # === HEALTH CHECK ===
-    health = check_system_health()
-    health_icon = {'healthy': '[OK]', 'partial': '[!]', 'degraded': '[X]'}.get(health['overall'], '[?]')
+        # === HEALTH CHECK ===
+        health = check_system_health()
+        health_icon = {'healthy': '[OK]', 'partial': '[!]', 'degraded': '[X]'}.get(health['overall'], '[?]')
 
-    context_lines.append(f"=== Claude Family Session Started ===")
-    context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    context_lines.append(f"Project: {project_name}")
-    context_lines.append(f"Health: {health_icon} {health['overall'].upper()}")
+        context_lines.append(f"=== Claude Family Session Started ===")
+        context_lines.append(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        context_lines.append(f"Project: {project_name}")
+        context_lines.append(f"Health: {health_icon} {health['overall'].upper()}")
 
-    if health['issues']:
-        context_lines.append(f"Issues: {' | '.join(health['issues'])}")
+        if health['issues']:
+            context_lines.append(f"Issues: {' | '.join(health['issues'])}")
 
-    if DB_AVAILABLE:
-        # Log session to database
-        session_id, error = log_session_start(project_name, identity_id)
-        if session_id:
-            context_lines.append(f"Session ID: {session_id}")
+        if DB_AVAILABLE:
+            # Replay any orphaned session_end records from previous DB outages.
+            # Run before logging the new session so the DB is confirmed working first.
+            _replay_session_end_fallback()
+
+            # Log session to database
+            session_id, error = log_session_start(project_name, identity_id)
+            if session_id:
+                context_lines.append(f"Session ID: {session_id}")
+            else:
+                context_lines.append(f"Could not log session: {error or 'unknown error'}")
+                session_id = None
+
+            # Count outstanding todos + auto-archive stale ones
+            todo_count, archived_count = get_outstanding_todo_count(project_name)
+            if archived_count > 0:
+                context_lines.append(f"Auto-archived {archived_count} stale todo(s) (pending >7d or in_progress >3d)")
+            if todo_count > 0:
+                context_lines.append("")
+                context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
+
+            # F130: Run periodic memory consolidation (24h cooldown)
+            try:
+                consolidation_conn = get_db_connection()
+                if consolidation_conn:
+                    counts = run_periodic_consolidation(consolidation_conn)
+                    if counts and any(v > 0 for v in counts.values()):
+                        context_lines.append(f"Memory consolidation: {counts['promoted_mid_to_long']} promoted, {counts['decayed_edges']} decayed, {counts['archived']} archived")
+                    consolidation_conn.close()
+            except Exception as e:
+                logger.warning(f"Periodic consolidation skipped: {e}")
+
+            # System maintenance: detect staleness (fast, ~300ms)
+            try:
+                from system_maintenance import detect_all_staleness
+                staleness = detect_all_staleness(conn=None)  # opens its own connection
+                if staleness.get('any_stale'):
+                    summary = staleness.get('summary', 'unknown subsystems')
+                    context_lines.append(f"System staleness detected: {summary}. Run /maintenance to repair.")
+            except Exception as e:
+                logger.warning(f"Staleness detection skipped: {e}")
+
+            # Clean task_map to prevent stale session errors from discipline hook
+            if session_id:
+                _reset_task_map(project_name, session_id)
         else:
-            context_lines.append(f"Could not log session: {error or 'unknown error'}")
+            context_lines.append("Database not available (psycopg not installed)")
 
-        # Count outstanding todos + auto-archive stale ones
-        todo_count, archived_count = get_outstanding_todo_count(project_name)
-        if archived_count > 0:
-            context_lines.append(f"Auto-archived {archived_count} stale todo(s) (pending >7d or in_progress >3d)")
-        if todo_count > 0:
-            context_lines.append("")
-            context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
-
-        # F130: Run periodic memory consolidation (24h cooldown)
+    except Exception as e:
+        logger.error(f"Session startup hook failed: {e}", exc_info=True)
+        # failure_capture requires DB — wrap to avoid cascading failure on DB outage
         try:
-            consolidation_conn = get_db_connection()
-            if consolidation_conn:
-                counts = run_periodic_consolidation(consolidation_conn)
-                if counts and any(v > 0 for v in counts.values()):
-                    context_lines.append(f"Memory consolidation: {counts['promoted_mid_to_long']} promoted, {counts['decayed_edges']} decayed, {counts['archived']} archived")
-                consolidation_conn.close()
-        except Exception as e:
-            logger.warning(f"Periodic consolidation skipped: {e}")
-
-        # System maintenance: detect staleness (fast, ~300ms)
-        try:
-            from system_maintenance import detect_all_staleness
-            staleness = detect_all_staleness(conn=None)  # opens its own connection
-            if staleness.get('any_stale'):
-                summary = staleness.get('summary', 'unknown subsystems')
-                context_lines.append(f"System staleness detected: {summary}. Run /maintenance to repair.")
-        except Exception as e:
-            logger.warning(f"Staleness detection skipped: {e}")
-
-        # Clean task_map to prevent stale session errors from discipline hook
-        if session_id:
-            _reset_task_map(project_name, session_id)
-    else:
-        context_lines.append("Database not available (psycopg not installed)")
+            from failure_capture import capture_failure
+            capture_failure("session_startup_hook", str(e), "scripts/session_startup_hook_enhanced.py")
+        except Exception:
+            pass
+        # Fail-open: still output something so Claude Code can continue
+        context_lines.append(f"Session startup encountered an error: {e}")
 
     result["additionalContext"] = "\n".join(context_lines)
     result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database."

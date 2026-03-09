@@ -149,7 +149,7 @@ If you need to create `.mcp.json` manually (not database-driven):
 
 ## Method 1: Add Global MCP (All Claude Instances)
 
-**Use this for**: Core infrastructure MCPs (postgres, orchestrator, project-tools, etc.)
+**Use this for**: Core infrastructure MCPs (postgres, project-tools, sequential-thinking, bpmn-engine, etc.)
 
 **Location**: `~/.claude/mcp.json` (manually maintained)
 
@@ -376,14 +376,15 @@ WHERE project_name = 'project-name' AND mcp_server_name = 'old-mcp';
 | MCP Server | Purpose | Scope | Projects Using |
 |------------|---------|-------|----------------|
 | postgres | Database access | Global (~/.claude/mcp.json) | All |
-| orchestrator | Agent spawning, messaging | Global (~/.claude/mcp.json) | All |
-| project-tools | Work tracking, knowledge, config ops (40+ tools) | Global (~/.claude/mcp.json) | All |
+| project-tools | Work tracking, knowledge, messaging, config ops (40+ tools) | Global (~/.claude/mcp.json) | All |
 | sequential-thinking | Complex problem solving | Global (~/.claude/mcp.json) | All |
-| python-repl | Python code execution | Global (~/.claude.json) | All |
-| bpmn-engine | BPMN process navigation, search, validation | Project (DB → .mcp.json) | All (23 projects) |
+| python-repl | Python code execution | Global (~/.claude/mcp.json) | All |
+| bpmn-engine | BPMN process navigation, search, validation | Global (~/.claude/mcp.json) | All |
 | nimbus-knowledge | Nimbus API domain knowledge | Project (DB → .mcp.json) | nimbus-mui, nimbus-import, nimbus-odata-configurator, nimbus-user-loader |
 | mui | MUI X component docs | Project (DB → .mcp.json) | nimbus-mui, ATO-Tax-Agent |
 | playwright | Browser automation | Project (DB → .mcp.json) | ATO-Tax-Agent |
+
+> **Note**: `orchestrator` was **RETIRED 2026-02-24**. Messaging tools migrated to `project-tools`. Agent spawning uses the native `Task` tool. Do not add orchestrator to new projects.
 
 ---
 
@@ -442,7 +443,7 @@ See [[MCP configuration]] for architecture details.
 
 ---
 
-**Version**: 3.2 (Added bpmn-engine to all projects, fixed nimbus-knowledge scope to project-specific, added BPMN ref)
+**Version**: 3.3 (Removed orchestrator from available MCPs; updated current server list; added retirement notice)
 **Created**: 2025-12-27
-**Updated**: 2026-02-21
+**Updated**: 2026-03-09
 **Location**: 40-Procedures/Add MCP Server SOP.md

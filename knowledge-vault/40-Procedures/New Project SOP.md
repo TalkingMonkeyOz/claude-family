@@ -329,9 +329,10 @@ The launcher script (`C:\claude\start-claude.bat`) will:
 What you get automatically based on project type:
 
 ### infrastructure
-- **MCP Servers**: postgres, project-tools, orchestrator
-- **Skills**: database-operations, work-item-routing, session-management, code-review, project-ops, messaging, agentic-orchestration
+- **MCP Servers**: postgres, project-tools, sequential-thinking, bpmn-engine, python-repl
+- **Skills**: database-operations, work-item-routing, session-management, code-review, project-ops, messaging, agentic-orchestration, bpmn-modeling
 - **Instructions**: sql-postgres.instructions.md
+- **Note**: `orchestrator` was retired 2026-02-24. Use native `Task` tool for agent spawning and `project-tools` for messaging.
 
 ### csharp-desktop
 - **MCP Servers**: postgres, project-tools
@@ -411,11 +412,12 @@ Create missing documents using templates above.
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2025-12-27
-**Updated**: 2025-12-28
+**Updated**: 2026-03-09
 **Location**: 40-Procedures/New Project SOP.md
 
 **Changelog**:
+- v1.2 (2026-03-09): Updated infrastructure MCP list (removed orchestrator, added sequential-thinking, bpmn-engine, python-repl); added bpmn-modeling skill
 - v1.1 (2025-12-28): Added Section 6 - Configure Project-Specific MCPs (.mcp.json, database registration, workspaces update)
 - v1.0 (2025-12-27): Initial version

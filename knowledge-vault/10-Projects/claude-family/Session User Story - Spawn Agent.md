@@ -25,119 +25,55 @@ See [[Session User Stories - Overview]]
 
 **User**: "Run the doc-keeper agent to audit the knowledge vault"
 
-**Claude Decision**: Use orchestrator MCP server to spawn agent
+**Claude Decision**: Use the native `Task` tool to spawn a subagent
 
 ---
 
-### 2. Claude Calls spawn_agent MCP Tool
+### 2. Claude Uses Native Task Tool to Spawn Agent
 
-**Tool**: `mcp__orchestrator__spawn_agent`
+> **Updated**: The `orchestrator` MCP was retired 2026-02-24. Agent spawning now uses Claude Code's native `Task` tool.
+
+**Tool**: Native `Task` tool
 
 **Parameters**:
 ```json
 {
-  "agent_type": "doc-keeper-haiku",
-  "task": "Audit knowledge vault for staleness and accuracy",
-  "workspace_dir": "C:\\Projects\\claude-family"
+  "description": "Audit knowledge vault for staleness and accuracy",
+  "prompt": "You are a doc-keeper agent. Read the knowledge vault at C:\\Projects\\claude-family\\knowledge-vault and audit for stale documents (last updated > 30 days ago), broken wiki-links, and missing version footers. Generate a report of findings.",
+  "subagent_type": "claude-haiku-4-5"
 }
 ```
 
+The spawned agent has access to built-in Read/Glob/Grep tools and any MCPs configured in `disableAllHooks: false` mode.
+
+**Logging**: Spawn is tracked via the `subagent_start_hook.py` PostToolUse hook, which writes to `claude.agent_sessions`.
+
 ---
 
-### 3. Orchestrator MCP Server Receives Call
+### 3. Agent Executes Task
 
-**File**: `mcp-servers/orchestrator/server.py`
+> **Note**: Steps 3-4 from the original orchestrator flow (server-side handler, explicit subprocess launch) no longer apply. The native `Task` tool handles agent lifecycle internally.
 
-**Handler**: `handle_spawn_agent()`
+**The spawned agent**:
 
-**Actions**:
+1. Reads knowledge vault files using built-in `Read`/`Glob` tools
+2. Checks for stale documents
+3. Verifies cross-links
+4. Generates report and returns it as the task result
 
-1. **Load Agent Spec**:
-```python
-agent_spec = load_agent_spec('doc-keeper-haiku')
-# {
-#   "agent_type": "doc-keeper-haiku",
-#   "model": "haiku",
-#   "mcp_config": "configs/agent-configs/doc-keeper-haiku.mcp.json",
-#   "timeout": 300
-# }
-```
-
-2. **Generate Agent Session ID**:
-```python
-agent_session_id = str(uuid.uuid4())
-# Example: 'b2c3d4e5-f6a7-8901-bcde-f12345678901'
-```
-
-3. **Log Spawn to Database**:
-```python
-agent_logger.log_spawn(
-    session_id=agent_session_id,
-    agent_type='doc-keeper-haiku',
-    task_description='Audit knowledge vault for staleness and accuracy',
-    workspace_dir='C:\\Projects\\claude-family'
-)
-```
-
-**Database Write** → `claude.agent_sessions`:
+**Database Write** → `claude.agent_sessions` (via `subagent_start_hook.py`):
 ```sql
 session_id: b2c3d4e5-f6a7-8901-bcde-f12345678901
-agent_type: doc-keeper-haiku
+agent_type: Task (subagent)
 task_description: Audit knowledge vault for staleness and accuracy
 created_at: 2025-12-26 10:35:00
-created_by: NULL  -- Gap: No parent session tracking
-started_at: 2025-12-26 10:35:00
-completed_at: NULL
-success: NULL
-result: NULL
-error_message: NULL
-estimated_cost_usd: NULL
 ```
-
-**Gap**: `created_by` is NULL because parent session ID not tracked
 
 ---
 
-### 4. Orchestrator Launches Agent Process
+### 4. Result Returned to Claude
 
-**Command**:
-```bash
-claude \
-  --model haiku \
-  --mcp-config "C:\Projects\claude-family\mcp-servers\orchestrator\configs\agent-configs\doc-keeper-haiku.mcp.json" \
-  --message "Audit knowledge vault for staleness and accuracy"
-```
-
-**Agent MCP Config** (`doc-keeper-haiku.mcp.json`):
-```json
-{
-  "postgres": {
-    "command": "python",
-    "args": ["C:\\Projects\\claude-family\\mcp-servers\\postgres\\server.py"]
-  },
-  "filesystem": {
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem",
-             "C:\\Projects\\claude-family\\knowledge-vault"]
-  }
-}
-```
-
-Agent has access to:
-- PostgreSQL database (read-only typically)
-- Knowledge vault filesystem
-
----
-
-### 5. Agent Executes Task
-
-**Agent Actions**:
-1. Read knowledge vault files
-2. Check for stale documents (updated_at > 30 days)
-3. Verify cross-links
-4. Generate report
-
-**Agent Output**:
+**Native Task tool returns**:
 ```
 # Documentation Audit Report
 
@@ -155,44 +91,6 @@ Agent has access to:
 2. Create missing Identity System.md
 ```
 
----
-
-### 6. Agent Completes
-
-**Orchestrator Detects Completion**:
-```python
-agent_logger.log_completion(
-    session_id=agent_session_id,
-    success=True,
-    result=agent_output,
-    estimated_cost_usd=0.08
-)
-```
-
-**Database Write** → `claude.agent_sessions` (UPDATE):
-```sql
-session_id: b2c3d4e5-f6a7-8901-bcde-f12345678901
-completed_at: 2025-12-26 10:40:00
-success: TRUE
-result: "# Documentation Audit Report\n\n..."
-error_message: NULL
-estimated_cost_usd: 0.08
-```
-
----
-
-### 7. Result Returned to Claude
-
-**Orchestrator Returns**:
-```json
-{
-  "session_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-  "success": true,
-  "output": "# Documentation Audit Report...",
-  "cost": 0.08
-}
-```
-
 **Claude Receives Result**: Can now show user the audit report
 
 ---
@@ -202,25 +100,20 @@ estimated_cost_usd: 0.08
 ```
 User request
     ↓
-Claude calls mcp__orchestrator__spawn_agent
+Claude uses native Task tool
     ↓
-Orchestrator MCP server
-    ↓
+├─ subagent_start_hook.py fires (PostToolUse)
 ├─ INSERT → claude.agent_sessions (log spawn)
-├─ Load agent spec
-├─ Launch claude subprocess with agent config
-└─ Wait for completion
+└─ Agent process starts with built-in tools
     ↓
 Agent executes task
     ↓
-├─ Agent uses filesystem MCP to read vault
-├─ Agent uses postgres MCP to query database
+├─ Agent uses built-in Read/Glob/Grep to read vault
 └─ Agent generates report
     ↓
 Agent completes
     ↓
-├─ UPDATE → claude.agent_sessions (log completion)
-└─ Return result to Claude
+└─ Return result to Claude (Task tool result)
     ↓
 Claude shows report to user
 ```
@@ -231,10 +124,7 @@ Claude shows report to user
 
 | File | Purpose |
 |------|---------|
-| `mcp-servers/orchestrator/server.py` | MCP server handling spawn_agent |
-| `mcp-servers/orchestrator/agent_specs.json` | Agent type definitions |
-| `mcp-servers/orchestrator/db_logger.py` | AgentLogger class |
-| `mcp-servers/orchestrator/configs/agent-configs/doc-keeper-haiku.mcp.json` | Agent MCP config |
+| `scripts/subagent_start_hook.py` | Logs agent spawns to claude.agent_sessions (PostToolUse hook) |
 
 ---
 
@@ -247,7 +137,7 @@ Claude shows report to user
 
 ---
 
-**Version**: 2.0
+**Version**: 3.0 (Updated to native Task tool; orchestrator MCP retired 2026-02-24)
 **Created**: 2025-12-26
-**Updated**: 2025-12-26
+**Updated**: 2026-03-09
 **Location**: knowledge-vault/10-Projects/claude-family/Session User Story - Spawn Agent.md
