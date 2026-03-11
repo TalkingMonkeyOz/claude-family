@@ -7,13 +7,13 @@ tags:
 projects:
   - Project-Metis
 created: 2026-02-23
-updated: 2026-03-07
+updated: 2026-03-08
 synced: false
 ---
 
 # The System — Product Definition
 
-> A full system lifecycle platform that gives development houses an AI brain that knows their product, their processes, and their customers — and gets smarter with every engagement.
+> An enterprise AI platform that learns what your organisation does and uses that knowledge to help people produce better outcomes, faster.
 
 **Status:** DRAFT — Brainstorm / Ideation
 **Date:** 2026-02-23
@@ -23,32 +23,38 @@ synced: false
 
 ## 1. What It Is
 
-A platform that sits alongside a development house's existing product and toolstack. It ingests everything the organisation knows — product APIs, configuration options, implementation patterns, support resolutions, compliance rules — and makes that knowledge available to every person and every process in the business.
+An enterprise AI platform that learns what your organisation does — your products, your processes, your domain expertise — and uses that knowledge to accelerate every person and every process in the business.
 
-It is not a chatbot. It is not a knowledge base. It is an AI-assisted development lifecycle platform that handles design, configuration, documentation, testing, and deployment — with humans guiding at validation checkpoints.
+It sits alongside an organisation's existing product and toolstack. It ingests everything the organisation knows — product APIs, configuration options, implementation patterns, support resolutions, compliance rules — and makes that knowledge available through purpose-built AI skills.
 
-The platform maintains state across sessions, code changes, and years of application lifecycle. It learns from every client engagement, every support ticket, every test run. The knowledge compounds.
+It is not a chatbot. It is not a knowledge base. It is a knowledge-augmented platform where people produce real artifacts — configurations, design documents, test scenarios, code, deployment documentation — dramatically faster and with better outcomes. Humans guide at validation checkpoints; AI does the heavy lifting between them.
+
+The platform helps people produce these artifacts by assembling the right domain context for every AI interaction through its **Augmentation Layer** — so the output is grounded in what your organisation actually knows, not generic guesswork.
+
+The platform maintains state across sessions, changes, and years of operational lifecycle. It learns from every engagement, every support ticket, every decision. The knowledge compounds.
 
 ---
 
 ## 2. Who It's For
 
-**Primary:** Development houses and software companies that:
-- Have a complex product with deep domain knowledge
-- Deliver through professional services (implementation, configuration, customisation)
+**Primary:** Knowledge-intensive organisations that:
+- Have deep domain expertise that's hard to transfer
+- Deliver through professional services, consulting, or specialist teams
 - Lose knowledge when people leave
 - Want to scale delivery without proportionally scaling headcount
 - Need audit-ready documentation and compliance validation
 
-**Examples:** Workforce management vendors, ERP implementers, healthcare software companies, fintech platforms, any B2B software company with a professional services arm.
+**Lead example:** Software development houses — complex products, professional services delivery, configuration management. This is where METIS is proven first (nimbus / time2work).
 
-**Not for:** Companies that just want a chatbot, or companies without a product to wrap knowledge around.
+**Also fits:** Professional services firms, consulting companies, healthcare organisations, legal practices, financial services — any organisation where domain knowledge is the bottleneck and the work produces artifacts that need to be correct.
+
+**Not for:** Companies that just want a chatbot, or organisations without deep domain knowledge to wrap the platform around.
 
 ---
 
 ## 3. The Problem
 
-Every software company with professional services has the same set of problems:
+Every knowledge-intensive organisation hits the same set of problems:
 
 **Knowledge is locked in people's heads.** Senior staff leave and take years of implementation patterns, edge case knowledge, and client-specific insights with them. New hires take months to become productive.
 
@@ -58,7 +64,7 @@ Every software company with professional services has the same set of problems:
 
 **Scaling requires proportional hiring.** Each new client requires roughly the same manual effort. Growth is constrained by the ability to find and train experienced staff.
 
-**AI tools don't understand your product.** Off-the-shelf AI (Copilot, Glean, Guru) is useful for general productivity but knows nothing about your specific product, your domain, your implementation methodology, or your clients' configurations.
+**AI tools don't understand your domain.** Off-the-shelf AI (Copilot, Glean, Guru) is useful for general productivity but knows nothing about your specific domain, your methodology, or your clients' contexts.
 
 ---
 
@@ -179,9 +185,9 @@ The platform supports multiple levels of isolation:
 
 | Level | What | Example |
 |-------|------|---------|
-| **Organisation** | The development house using the platform | "Acme Software Ltd" |
+| **Organisation** | The company using the platform | "Acme Software Ltd" |
 | **Product** | The customer's product(s) the platform knows about | "AcmeHR" |
-| **Client** | End-clients of the development house | "University of Melbourne" |
+| **Client** | End-clients of the organisation | "University of Melbourne" |
 | **Engagement** | A specific project/implementation for a client | "AcmeHR Phase 2 rollout" |
 
 Knowledge can be scoped at any level. Product knowledge is shared across all clients. Client knowledge is isolated. Engagement knowledge is contained within its project.
@@ -291,4 +297,4 @@ Infrastructure decisions are deliberately deferred at this stage. The platform s
 - [ ] What's the generic integration catalogue? (Standard connectors every customer needs)
 
 ---
-*Product Definition v0.2 | Created: 2026-02-23 | Updated: 2026-03-07 — Added Ethos/Design Principles, updated notation stack to 7 perspectives, gate framework reference*
+*Product Definition v0.3 | Created: 2026-02-23 | Updated: 2026-03-08 — Domain-agnostic scope reframe (knowledge-intensive organisations, dev houses as lead example). Augmentation Layer referenced as named subsystem. Human-produces-artifacts-with-AI-accelerant framing.*

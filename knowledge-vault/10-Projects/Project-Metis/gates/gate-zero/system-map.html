@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>METIS System Map — C4 Level 1 & Level 2</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root { --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a; --text: #e4e4e7; --text-muted: #9194a1; --accent: #6366f1; --accent-light: #818cf8; --person: #4f8ff7; --person-ext: #7c8ba1; --system: #6366f1; --system-ext: #4a4d5e; --container-know: #10b981; --container-int: #f59e0b; --container-app: #6366f1; --container-plat: #8b5cf6; --container-wf: #ef4444; --container-db: #06b6d4; --container-api: #ec4899; --container-ai: #f97316; --container-aug: #14b8a6; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .page { max-width: 1400px; margin: 0 auto; padding: 40px 32px; }
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  .subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 40px; }
+  .tabs { display: flex; gap: 2px; margin-bottom: 32px; background: var(--surface); border-radius: 10px; padding: 4px; width: fit-content; }
+  .tab { padding: 10px 24px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-muted); transition: all 0.2s; border: none; background: none; font-family: inherit; }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--accent); color: #fff; }
+  .diagram-area { display: none; }
+  .diagram-area.active { display: block; }
+  .c4-canvas { position: relative; width: 100%; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+  .c4-node { position: absolute; border-radius: 10px; padding: 14px 18px; text-align: center; transition: transform 0.15s, box-shadow 0.15s; cursor: default; z-index: 1; }
+  .c4-node:hover { transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,0.3); }
+  .c4-node .node-label { font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .c4-node .node-desc { font-size: 10px; opacity: 0.75; line-height: 1.4; }
+  .c4-node .node-tech { font-family: 'JetBrains Mono', monospace; font-size: 9px; opacity: 0.55; margin-top: 4px; }
+  .c4-person::before { content: ''; display: block; width: 32px; height: 32px; border-radius: 50%; margin: 0 auto 8px; background: rgba(255,255,255,0.15); }
+  .person-direct { background: var(--person); color: #fff; }
+  .person-indirect { background: var(--person-ext); color: #fff; border: 2px dashed rgba(255,255,255,0.3); }
+  .system-main { background: var(--system); color: #fff; border: 2px solid var(--accent-light); box-shadow: 0 0 40px rgba(99,102,241,0.2); }
+  .system-ext { background: var(--system-ext); color: var(--text); border: 1px solid var(--border); }
+  .l2-boundary { position: absolute; border: 2px dashed var(--border); border-radius: 16px; }
+  .l2-boundary-label { position: absolute; top: -12px; left: 20px; background: var(--surface); padding: 2px 12px; font-size: 12px; font-weight: 600; color: var(--accent-light); }
+  .container-know { background: var(--container-know); color: #fff; }
+  .container-int { background: var(--container-int); color: #1a1d27; }
+  .container-app { background: var(--container-app); color: #fff; }
+  .container-plat { background: var(--container-plat); color: #fff; }
+  .container-wf { background: var(--container-wf); color: #fff; }
+  .container-db { background: var(--container-db); color: #1a1d27; }
+  .container-api { background: var(--container-api); color: #fff; }
+  .container-ai { background: var(--container-ai); color: #1a1d27; }
+  .container-aug { background: var(--container-aug); color: #fff; border: 2px solid #2dd4bf; box-shadow: 0 0 30px rgba(20,184,166,0.2); }
+  .c4-lines { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+  .c4-line { stroke: rgba(255,255,255,0.12); stroke-width: 1.5; fill: none; }
+  .c4-line-label { font-family: 'DM Sans', sans-serif; font-size: 9px; fill: var(--text-muted); }
+  .c4-line.dashed { stroke-dasharray: 6 4; }
+  .c4-line.highlight { stroke: rgba(99,102,241,0.4); stroke-width: 2; }
+  .c4-line.aug-line { stroke: rgba(20,184,166,0.5); stroke-width: 2; }
+  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 24px; padding: 16px 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+  .legend-swatch { width: 14px; height: 14px; border-radius: 4px; }
+  .details { margin-top: 24px; }
+  .details-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+  .detail-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; border-left: 3px solid; }
+  .detail-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .detail-card p { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+  .detail-card .tag { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 8px; border-radius: 4px; background: rgba(255,255,255,0.06); color: var(--text-muted); margin-top: 8px; }
+  .detail-card.highlight-card { border: 1px solid rgba(20,184,166,0.4); box-shadow: 0 0 16px rgba(20,184,166,0.08); }
+  .section-title { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+  .crux-callout { margin-top: 24px; padding: 16px 20px; background: rgba(20,184,166,0.08); border: 1px solid rgba(20,184,166,0.3); border-radius: 10px; font-size: 13px; line-height: 1.6; }
+  .crux-callout strong { color: #2dd4bf; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>METIS System Map</h1>
+  <p class="subtitle">Gate Zero Document 4 — C4 Level 1 (Context) & Level 2 (Container) — Updated 2026-03-08</p>
+  <div class="tabs">
+    <button class="tab active" onclick="showTab('l1')">C4 Level 1 — Context</button>
+    <button class="tab" onclick="showTab('l2')">C4 Level 2 — Containers</button>
+  </div>
+
+  <div id="l1" class="diagram-area active">
+    <div class="c4-canvas" style="height:680px;">
+      <svg class="c4-lines" viewBox="0 0 1400 680" preserveAspectRatio="none">
+        <line class="c4-line highlight" x1="145" y1="130" x2="620" y2="300"/>
+        <line class="c4-line highlight" x1="395" y1="130" x2="660" y2="280"/>
+        <line class="c4-line highlight" x1="645" y1="130" x2="700" y2="260"/>
+        <line class="c4-line dashed" x1="930" y1="130" x2="1170" y2="430"/>
+        <line class="c4-line" x1="600" y1="380" x2="200" y2="520"/><text class="c4-line-label" x="370" y="440">Inference</text>
+        <line class="c4-line" x1="620" y1="400" x2="200" y2="610"/><text class="c4-line-label" x="370" y="520">Embeddings</text>
+        <line class="c4-line" x1="800" y1="380" x2="1170" y2="460"/><text class="c4-line-label" x="970" y="400">Bidirectional</text>
+        <line class="c4-line" x1="800" y1="400" x2="1170" y2="570"/><text class="c4-line-label" x="970" y="510">REST / OData / MCP</text>
+      </svg>
+      <div class="c4-node c4-person person-direct" style="left:80px;top:40px;width:140px;"><div class="node-label">Platform Builder</div><div class="node-desc">Builds & maintains METIS</div></div>
+      <div class="c4-node c4-person person-direct" style="left:280px;top:40px;width:140px;"><div class="node-label">Enterprise Admin</div><div class="node-desc">Configures platform, manages knowledge</div></div>
+      <div class="c4-node c4-person person-direct" style="left:480px;top:40px;width:160px;"><div class="node-label">Enterprise Staff</div><div class="node-desc">PS, Support, Dev — day-to-day usage</div></div>
+      <div class="c4-node c4-person person-indirect" style="left:780px;top:40px;width:170px;"><div class="node-label">End Customer</div><div class="node-desc">No direct access. Inputs via enterprise channels.</div></div>
+      <div class="c4-node system-main" style="left:530px;top:260px;width:260px;"><div class="node-label" style="font-size:18px;">METIS Platform</div><div class="node-desc" style="font-size:11px;">Enterprise AI platform that learns what your organisation does and uses that knowledge to do the work</div></div>
+      <div class="c4-node system-ext" style="left:60px;top:470px;width:200px;"><div class="node-label">LLM Provider</div><div class="node-desc">Claude API (primary)</div><div class="node-tech">Provider-agnostic</div></div>
+      <div class="c4-node system-ext" style="left:60px;top:580px;width:200px;"><div class="node-label">Embedding Service</div><div class="node-desc">Voyage AI</div><div class="node-tech">Vector generation</div></div>
+      <div class="c4-node system-ext" style="left:1060px;top:410px;width:220px;"><div class="node-label">Enterprise Toolstack</div><div class="node-desc">Jira, Confluence, CRM, repos</div><div class="node-tech">Bidirectional · REST / MCP</div></div>
+      <div class="c4-node system-ext" style="left:1060px;top:530px;width:220px;"><div class="node-label">Enterprise Product</div><div class="node-desc">Customer's own product APIs</div><div class="node-tech">REST · OData · MCP</div></div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--person);"></div> Direct actor</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--person-ext);border:2px dashed rgba(255,255,255,0.3);"></div> Indirect actor</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--system);border:2px solid var(--accent-light);"></div> METIS</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--system-ext);"></div> External system</div>
+    </div>
+    <div class="details" style="margin-top:24px;">
+      <div class="section-title">Actors & Systems Summary</div>
+      <div class="details-grid">
+        <div class="detail-card" style="border-left-color:var(--person);"><h3>Platform Builder</h3><p>Builds and maintains METIS itself. Currently John + Claude Family.</p><span class="tag">direct access</span></div>
+        <div class="detail-card" style="border-left-color:var(--person);"><h3>Enterprise Admin</h3><p>Configures platform, manages knowledge, sets up constrained deployments, manages tenants.</p><span class="tag">direct access</span></div>
+        <div class="detail-card" style="border-left-color:var(--person);"><h3>Enterprise Staff</h3><p>Professional services, support, developers. Uses AI capabilities day-to-day for actual work.</p><span class="tag">direct access</span></div>
+        <div class="detail-card" style="border-left-color:var(--person-ext);"><h3>End Customer</h3><p>Enterprise's customers. Inputs arrive via enterprise channels: tickets, docs, specs. No direct METIS access initially.</p><span class="tag">indirect · future direct chat possible</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="l2" class="diagram-area">
+    <div class="c4-canvas" style="height:840px;">
+      <svg class="c4-lines" viewBox="0 0 1400 840" preserveAspectRatio="none">
+        <line class="c4-line highlight" x1="160" y1="65" x2="440" y2="130"/>
+        <line class="c4-line highlight" x1="380" y1="65" x2="500" y2="130"/>
+        <line class="c4-line highlight" x1="590" y1="65" x2="560" y2="130"/>
+        <line class="c4-line" x1="520" y1="185" x2="360" y2="290"/>
+        <line class="c4-line" x1="560" y1="185" x2="820" y2="290"/>
+        <line class="c4-line aug-line" x1="320" y1="360" x2="380" y2="420"/><text class="c4-line-label" x="280" y="395" style="fill:#2dd4bf;">Requests AI work</text>
+        <line class="c4-line" x1="380" y1="360" x2="760" y2="500"/>
+        <line class="c4-line aug-line" x1="320" y1="490" x2="180" y2="560"/><text class="c4-line-label" x="180" y="530" style="fill:#2dd4bf;">Retrieves context</text>
+        <line class="c4-line aug-line" x1="520" y1="490" x2="560" y2="560"/><text class="c4-line-label" x="500" y="530" style="fill:#2dd4bf;">Enriched context</text>
+        <line class="c4-line" x1="160" y1="640" x2="440" y2="720"/>
+        <line class="c4-line" x1="100" y1="640" x2="80" y2="750"/><text class="c4-line-label" x="15" y="700">Embeddings</text>
+        <line class="c4-line" x1="520" y1="640" x2="80" y2="790"/><text class="c4-line-label" x="260" y="720">Inference</text>
+        <line class="c4-line" x1="1090" y1="580" x2="1250" y2="690"/>
+        <line class="c4-line" x1="1090" y1="580" x2="1250" y2="770"/>
+        <line class="c4-line dashed" x1="990" y1="560" x2="260" y2="580"/>
+        <line class="c4-line dashed" x1="990" y1="530" x2="430" y2="340"/>
+        <line class="c4-line" x1="780" y1="580" x2="560" y2="720"/>
+        <line class="c4-line" x1="830" y1="360" x2="560" y2="700"/>
+      </svg>
+      <div class="c4-node c4-person person-direct" style="left:80px;top:20px;width:120px;padding:10px 12px;"><div class="node-label" style="font-size:11px;">Platform Builder</div></div>
+      <div class="c4-node c4-person person-direct" style="left:280px;top:20px;width:130px;padding:10px 12px;"><div class="node-label" style="font-size:11px;">Enterprise Admin</div></div>
+      <div class="c4-node c4-person person-direct" style="left:480px;top:20px;width:130px;padding:10px 12px;"><div class="node-label" style="font-size:11px;">Enterprise Staff</div></div>
+      <div class="l2-boundary" style="left:40px;top:110px;right:200px;bottom:80px;"><div class="l2-boundary-label">METIS PLATFORM</div></div>
+      <div class="c4-node container-api" style="left:390px;top:130px;width:240px;"><div class="node-label">API Layer</div><div class="node-desc">Front door. Auth, routing, rate limiting.</div><div class="node-tech">Gateway</div></div>
+      <div class="c4-node container-app" style="left:110px;top:280px;width:340px;"><div class="node-label">Application Services</div><div class="node-desc">Delivery Accelerator · Quality & Compliance · Support Intelligence · Project Governance</div><div class="node-tech">Areas 3, 4, 5, 6</div></div>
+      <div class="c4-node container-plat" style="left:700px;top:280px;width:260px;"><div class="node-label">Platform Services</div><div class="node-desc">Orchestration, auth, sessions, tenants, commercial</div><div class="node-tech">Areas 7 + 8</div></div>
+      <div class="c4-node container-aug" style="left:180px;top:420px;width:460px;"><div class="node-label" style="font-size:15px;">Augmentation Layer</div><div class="node-desc" style="font-size:11px;">Context assembly · Cognitive memory · Skills · RAG orchestration · Session management</div><div class="node-tech">The bridge · Cross-cutting · THE CRUX</div></div>
+      <div class="c4-node container-know" style="left:60px;top:560px;width:220px;"><div class="node-label">Knowledge Engine</div><div class="node-desc">Ingestion, retrieval, RAG pipeline, embeddings</div><div class="node-tech">Area 1 · The brain</div></div>
+      <div class="c4-node container-ai" style="left:400px;top:560px;width:240px;"><div class="node-label">Intelligence Layer</div><div class="node-desc">LLM interaction, prompt construction, cached knowledge, constrained deployment</div><div class="node-tech">The mind</div></div>
+      <div class="c4-node container-wf" style="left:680px;top:500px;width:220px;"><div class="node-label">Workflow Engine</div><div class="node-desc">BPMN/SOP enforcement, stage gates, approvals</div><div class="node-tech">Area 9 · Cross-cutting</div></div>
+      <div class="c4-node container-int" style="left:920px;top:500px;width:220px;"><div class="node-label">Integration Hub</div><div class="node-desc">Connectors: REST, OData, MCP. Bidirectional.</div><div class="node-tech">Area 2 · Nervous system</div></div>
+      <div class="c4-node container-db" style="left:370px;top:700px;width:260px;border-radius:0 0 10px 10px;border-top:4px solid #0891b2;"><div class="node-label">Knowledge Store</div><div class="node-desc">All persistent data: knowledge, embeddings, state, config, audit trail</div><div class="node-tech">PostgreSQL + pgvector</div></div>
+      <div class="c4-node system-ext" style="left:20px;top:730px;width:160px;padding:10px;"><div class="node-label" style="font-size:11px;">Embedding Service</div><div class="node-tech">Voyage AI</div></div>
+      <div class="c4-node system-ext" style="left:20px;top:790px;width:160px;padding:10px;"><div class="node-label" style="font-size:11px;">LLM Provider</div><div class="node-tech">Claude API</div></div>
+      <div class="c4-node system-ext" style="left:1180px;top:650px;width:180px;padding:10px;"><div class="node-label" style="font-size:11px;">Enterprise Toolstack</div><div class="node-tech">Jira · Confluence · CRM</div></div>
+      <div class="c4-node system-ext" style="left:1180px;top:730px;width:180px;padding:10px;"><div class="node-label" style="font-size:11px;">Enterprise Product</div><div class="node-tech">REST · OData · MCP</div></div>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-api);"></div> API Layer</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-app);"></div> Application Services (3-6)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-plat);"></div> Platform Services (7+8)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-aug);border:2px solid #2dd4bf;"></div> Augmentation Layer (crux)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-know);"></div> Knowledge Engine (1)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-ai);"></div> Intelligence Layer</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-wf);"></div> Workflow Engine (9)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-int);"></div> Integration Hub (2)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--container-db);"></div> Knowledge Store (DB)</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:var(--system-ext);"></div> External system</div>
+    </div>
+    <div class="crux-callout"><strong>The Augmentation Layer is the crux of METIS.</strong> It sits between the Knowledge Engine (what the platform knows) and the Intelligence Layer (what the platform thinks with), assembling the right context for every AI interaction. Cognitive memory, RAG orchestration, skills, session management — all live here. If this doesn't work well with non-technical people in a contained sandbox, nothing else matters.</div>
+    <div class="details" style="margin-top:24px;">
+      <div class="section-title">Area → Logical Group Mapping</div>
+      <div class="details-grid">
+        <div class="detail-card highlight-card" style="border-left-color:var(--container-aug);"><h3>Augmentation Layer</h3><p>Cross-cutting. Context assembly, cognitive memory, skills system, RAG orchestration, session management. Spans Knowledge Engine and Intelligence Layer.</p><span class="tag">the bridge · THE CRUX</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-know);"><h3>Knowledge Engine</h3><p>Area 1. Ingestion, retrieval, RAG pipeline, embedding management.</p><span class="tag">the brain</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-ai);"><h3>Intelligence Layer</h3><p>LLM interaction, prompt construction, cached knowledge, constrained deployment.</p><span class="tag">the mind</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-int);"><h3>Integration Hub</h3><p>Area 2. REST, OData, MCP adapters. Bidirectional.</p><span class="tag">the nervous system</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-app);"><h3>Application Services</h3><p>Areas 3–6. All subsystems consuming the Augmentation Layer.</p><span class="tag">the muscle</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-wf);"><h3>Workflow Engine</h3><p>Area 9. BPMN/SOP enforcement, stage gates. Cross-cutting.</p><span class="tag">the rulebook</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-plat);"><h3>Platform Services</h3><p>Areas 7+8. Auth, sessions, tenants, commercial.</p><span class="tag">the skeleton</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-db);"><h3>Knowledge Store</h3><p>PostgreSQL + pgvector. All persistent data.</p><span class="tag">the foundation</span></div>
+        <div class="detail-card" style="border-left-color:var(--container-api);"><h3>API Layer</h3><p>Front door. Auth, routing, rate limiting.</p><span class="tag">the gateway</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function showTab(id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.diagram-area').forEach(d => d.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
