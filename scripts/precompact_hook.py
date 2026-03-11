@@ -123,22 +123,26 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
             return None
         project_id = row['project_id'] if isinstance(row, dict) else row[0]
 
-        # P0: In-progress todos only (highest priority - what you're actively doing)
+        # P0: Active todos (in_progress AND pending — both survive compaction)
         cur.execute("""
             SELECT content, status, priority
             FROM claude.todos
             WHERE project_id = %s::uuid AND is_deleted = false
-              AND status = 'in_progress'
-            ORDER BY priority ASC
-            LIMIT 5
+              AND status IN ('in_progress', 'pending')
+            ORDER BY
+              CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,
+              priority ASC
+            LIMIT 10
         """, (project_id,))
         todos = cur.fetchall()
 
         if todos:
-            todo_lines = ["IN-PROGRESS WORK (preserved from pre-compaction):"]
+            todo_lines = ["ACTIVE TASKS (preserved from pre-compaction — use TaskList to see full state):"]
             for t in todos:
                 content = t['content'] if isinstance(t, dict) else t[0]
-                todo_lines.append(f"  [>] {content}")
+                status = t['status'] if isinstance(t, dict) else t[1]
+                marker = "[>]" if status == 'in_progress' else "[ ]"
+                todo_lines.append(f"  {marker} {content}")
             sections.append((0, "in_progress_todos", todo_lines))
 
         # P1: Session state (focus, next_steps)
@@ -207,6 +211,32 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
                 fact_lines.append(f"  [{key}]: {display}")
             sections.append((3, "facts", fact_lines))
 
+        # P3.5: Pinned workfiles (component context summaries)
+        try:
+            cur.execute("""
+                SELECT component, title, workfile_type
+                FROM claude.project_workfiles
+                WHERE project_id = %s::uuid AND is_pinned = TRUE AND is_active = TRUE
+                ORDER BY component, updated_at DESC
+                LIMIT 10
+            """, (project_id,))
+            pinned = cur.fetchall()
+
+            if pinned:
+                wf_lines = ["\nPINNED WORKFILES (component context):"]
+                current_component = None
+                for p in pinned:
+                    comp = p['component'] if isinstance(p, dict) else p[0]
+                    title = p['title'] if isinstance(p, dict) else p[1]
+                    if comp != current_component:
+                        wf_lines.append(f"  [{comp}]")
+                        current_component = comp
+                    wf_lines.append(f"    - {title}")
+                wf_lines.append("  Use unstash(component) to load full content")
+                sections.append((3, "pinned_workfiles", wf_lines))
+        except Exception:
+            pass  # Table might not exist yet in older deployments
+
         conn.close()
 
         if not sections:
@@ -262,7 +292,7 @@ def build_refresh_message(hook_input: Dict) -> str:
         "",
         "=" * 40,
         "RECOVERY: list_session_facts() | get_session_notes() | get_work_context('current')",
-        "Then recall_memories('<what you were working on>') and resume from session facts.",
+        "Then recall_memories('<what you were working on>'), unstash(component) for workfiles, and resume.",
     ])
 
     return "\n".join(parts)
