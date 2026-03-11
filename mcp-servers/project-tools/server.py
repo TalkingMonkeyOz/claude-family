@@ -1077,6 +1077,7 @@ async def tool_recall_knowledge(
                 1 - (embedding <=> %s::vector) as similarity
             FROM claude.knowledge
             WHERE embedding IS NOT NULL
+              AND tier != 'archived'
               AND 1 - (embedding <=> %s::vector) >= %s
               {filter_clause}
             ORDER BY similarity DESC
@@ -1848,7 +1849,34 @@ async def tool_remember(
             }
         return result
 
-    # MID/LONG path: knowledge table with embedding
+    # MID/LONG path: quality gate before storage
+    # Reject ephemeral task state and short junk content
+    JUNK_PATTERNS = [
+        r'agent\d+[_\s]complete',
+        r'task\s+(done|complete|finished)',
+        r'moving\s+to\s+(step|task|phase)',
+        r'step\s+\d+\s+of\s+\d+',
+        r'^(starting|began|finished)\s+(work|task)',
+        r'^(checking|checked)\s+(status|progress)',
+    ]
+
+    if len(content) < 80:
+        return {
+            "success": False,
+            "reason": f"Content too short ({len(content)} chars, minimum 80). "
+                      "Use store_session_fact() for brief session-scoped notes.",
+        }
+
+    content_lower = content.lower().strip()
+    for pattern in JUNK_PATTERNS:
+        if re.search(pattern, content_lower):
+            return {
+                "success": False,
+                "reason": f"Content matches ephemeral task-state pattern. "
+                          "Use store_session_fact() for task progress, "
+                          "remember() is for reusable patterns/decisions/gotchas.",
+            }
+
     # Build text for embedding
     embed_text = content
     if context:
@@ -1872,7 +1900,7 @@ async def tool_remember(
                 FROM claude.knowledge
                 WHERE embedding IS NOT NULL
                   AND tier = %s
-                  AND 1 - (embedding <=> %s::vector) > 0.85
+                  AND 1 - (embedding <=> %s::vector) > 0.75
                 ORDER BY similarity DESC
                 LIMIT 1
             """, (embedding, tier, embedding))
@@ -2047,6 +2075,7 @@ async def tool_consolidate_memories(
                   AND NOT EXISTS (
                       SELECT 1 FROM claude.knowledge k
                       WHERE k.title = sf.fact_key AND k.source = 'consolidation'
+                        AND k.embedding IS NOT NULL
                   )
                 LIMIT 10
             """, (project_name,))
@@ -2097,15 +2126,18 @@ async def tool_consolidate_memories(
 
         # ---- PHASE 2: MID→LONG promotion (periodic or manual) ----
         if trigger in ("periodic", "manual"):
-            # Promote mid-tier entries that have been applied 3+ times,
-            # confidence >= 80, and accessed across multiple sessions
+            # Retrieval-frequency promotion: if knowledge has been retrieved 5+
+            # times over 7+ days, it's proven useful regardless of explicit
+            # mark_knowledge_applied() calls (which are rarely made in practice).
+            # access_count IS reliably incremented by RAG hook and recall_memories.
             cur.execute("""
                 UPDATE claude.knowledge
                 SET tier = 'long'
                 WHERE tier = 'mid'
-                  AND COALESCE(times_applied, 0) >= 3
-                  AND confidence_level >= 80
                   AND COALESCE(access_count, 0) >= 5
+                  AND confidence_level >= 60
+                  AND created_at < NOW() - INTERVAL '7 days'
+                  AND embedding IS NOT NULL
                 RETURNING knowledge_id
             """)
             result["promoted_mid_to_long"] = cur.rowcount

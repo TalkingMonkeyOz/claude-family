@@ -279,14 +279,16 @@ def run_periodic_consolidation(conn):
 
         counts = {"promoted_mid_to_long": 0, "decayed_edges": 0, "archived": 0}
 
-        # Mid→Long promotion: applied 3+ times, confidence >= 80, accessed 5+ times
+        # Mid→Long promotion: retrieval-frequency based
+        # access_count >= 5 (retrieved by RAG/recall_memories), age >= 7 days, has embedding
         cur.execute("""
             UPDATE claude.knowledge
             SET tier = 'long'
             WHERE tier = 'mid'
-              AND COALESCE(times_applied, 0) >= 3
-              AND confidence_level >= 80
               AND COALESCE(access_count, 0) >= 5
+              AND confidence_level >= 60
+              AND created_at < NOW() - INTERVAL '7 days'
+              AND embedding IS NOT NULL
         """)
         counts["promoted_mid_to_long"] = cur.rowcount
 

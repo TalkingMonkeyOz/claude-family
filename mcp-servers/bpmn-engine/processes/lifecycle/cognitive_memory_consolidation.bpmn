@@ -123,14 +123,15 @@ mid_memories = locals().get('mid_memories', [])
       <bpmn:incoming>to_evaluate_mid</bpmn:incoming>
       <bpmn:outgoing>to_promote_mid_gw</bpmn:outgoing>
       <bpmn:script>
-# Promotion to long-term criteria (ALL of):
-# 1. Applied successfully >= 3 times (mark_knowledge_applied feedback)
-# 2. Confidence >= 80
-# 3. Accessed in multiple sessions (cross-session validation)
-# 4. Not contradicted by newer knowledge
+# Promotion to long-term criteria (retrieval-frequency based):
+# 1. access_count >= 5 (retrieved by RAG/recall_memories 5+ times)
+# 2. confidence >= 60
+# 3. age >= 7 days (proven useful over time, not just within one session)
+# 4. embedding IS NOT NULL (searchable)
+# NOTE: times_applied requirement removed — mark_knowledge_applied() is never
+# called in practice. access_count is the reliable signal (incremented by RAG hook).
 # Decay criteria:
-# - Not accessed in 14+ days
-# - Confidence below 50
+# - Not accessed in 14+ days AND confidence below 50
 # - Single-session-only usage
 promote_to_long = locals().get('promote_to_long', [])
 decay_list = locals().get('decay_list', [])

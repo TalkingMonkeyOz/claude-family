@@ -42,11 +42,13 @@ _CAPTURE_PROCESS_ID = "cognitive_memory_capture"
 # All gateway condition variables initialised to default (non-matching) values.
 # - source_gw default → flow_session_harvest (when source is not "explicit"/"auto_detect")
 # - significance_gw default → flow_not_significant (significance_score < 0.5)
+# - quality_gw default → flow_quality_fail (passes_quality == False)
 # - dedup_gw default → flow_not_dup (is_duplicate == False)
 # - relation_gw default → flow_no_relations (has_nearby_knowledge == False)
 _CAPTURE_DEFAULT_DATA = {
     "source": "session_harvest",    # source_gw: no condition matches → default (harvest)
     "significance_score": 0.0,      # significance_gw: < 0.8 → default (discard)
+    "passes_quality": True,         # quality_gw: True → pass (most tests need this)
     "is_duplicate": False,          # dedup_gw: not True → default (not dup)
     "has_nearby_knowledge": False,  # relation_gw: not True → default (no relations)
 }
@@ -235,7 +237,75 @@ class TestCaptureSessionHarvest:
 
 
 # ---------------------------------------------------------------------------
-# Capture P6: Sanity – workflow loads and produces the expected first task
+# Capture P6: Quality gate rejects low-quality content
+# ---------------------------------------------------------------------------
+
+class TestCaptureQualityGateReject:
+    """Content that fails quality validation is rejected before dedup/storage."""
+
+    def test_quality_gate_rejects_junk(self):
+        wf = _load_capture(data_overrides={
+            "source": "explicit",
+            "passes_quality": False,
+        })
+
+        # formulate_memory is the userTask on explicit path
+        assert "formulate_memory" in _ready_task_names_capture(wf)
+        _complete_user_task_capture(wf, "formulate_memory")
+
+        assert wf.is_completed()
+        names = _completed_capture_names(wf)
+
+        assert "formulate_memory" in names
+        assert "classify_tier" in names
+        assert "validate_quality" in names
+        assert "end_quality_fail" in names
+        # Should NOT reach dedup or storage
+        assert "dedup_check" not in names
+        assert "store_memory" not in names
+        assert "end" not in names
+
+    def test_quality_gate_rejects_harvest_junk(self):
+        """Session harvest path also gets quality-gated."""
+        wf = _load_capture(data_overrides={
+            "passes_quality": False,
+        })
+
+        assert wf.is_completed()
+        names = _completed_capture_names(wf)
+
+        assert "harvest_session" in names
+        assert "classify_tier" in names
+        assert "validate_quality" in names
+        assert "end_quality_fail" in names
+        assert "dedup_check" not in names
+
+
+# ---------------------------------------------------------------------------
+# Capture P7: Quality gate passes good content through
+# ---------------------------------------------------------------------------
+
+class TestCaptureQualityGatePass:
+    """Quality content passes through the gate to dedup and storage."""
+
+    def test_quality_gate_passes_good_content(self):
+        wf = _load_capture(data_overrides={
+            "passes_quality": True,
+        })
+
+        assert wf.is_completed()
+        names = _completed_capture_names(wf)
+
+        assert "classify_tier" in names
+        assert "validate_quality" in names
+        assert "dedup_check" in names
+        assert "store_memory" in names
+        assert "end_quality_fail" not in names
+        assert "end" in names
+
+
+# ---------------------------------------------------------------------------
+# Capture P8: Sanity – workflow loads and produces the expected first task
 # ---------------------------------------------------------------------------
 
 class TestCaptureWorkflowValidation:
@@ -251,7 +321,7 @@ class TestCaptureWorkflowValidation:
         assert "formulate_memory" in _ready_task_names_capture(wf)
 
     def test_harvest_path_runs_to_completion_without_user_tasks(self):
-        wf = _load_capture()
+        wf = _load_capture(data_overrides={"passes_quality": True})
         # No manual tasks on the harvest path
         assert _ready_task_names_capture(wf) == []
         assert wf.is_completed()
@@ -507,7 +577,33 @@ class TestConsolidationManualFullCycle:
 
 
 # ---------------------------------------------------------------------------
-# Consolidation P5: Sanity – workflow loads
+# Consolidation P5: Periodic – no promotions, no stale (decay only)
+# ---------------------------------------------------------------------------
+
+class TestConsolidationPeriodicDecayOnly:
+    """Periodic trigger with no long promotions and no stale entries — only decay runs."""
+
+    def test_periodic_decay_only(self):
+        wf = _load_consolidation(data_overrides={
+            "trigger": "periodic",
+            "has_long_promotions": False,
+            "has_stale": False,
+        })
+
+        assert wf.is_completed()
+        names = _completed_consolidation_names(wf)
+
+        assert "scan_mid" in names
+        assert "evaluate_mid" in names
+        assert "promote_to_long" not in names
+        assert "run_decay" in names
+        assert "find_stale" in names
+        assert "archive_stale" not in names
+        assert "end" in names
+
+
+# ---------------------------------------------------------------------------
+# Consolidation P6: Sanity – workflow loads
 # ---------------------------------------------------------------------------
 
 class TestConsolidationWorkflowValidation:
