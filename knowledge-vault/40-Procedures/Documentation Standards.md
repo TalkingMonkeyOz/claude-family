@@ -52,12 +52,29 @@ Is this knowledge reusable across sessions?
 | Folder | Purpose | Naming Pattern |
 |--------|---------|----------------|
 | `00-Inbox/` | Quick capture, unsorted | Any |
-| `10-Projects/` | Project-specific knowledge | `{project-name}/topic.md` |
+| `10-Projects/` | Project-specific knowledge | `{project-name}/{topic-folder}/file.md` |
 | `20-Domains/` | Domain expertise | `{domain}/topic.md` |
 | `30-Patterns/` | Reusable patterns | `gotchas/*.md`, `solutions/*.md` |
 | `40-Procedures/` | SOPs, workflows | `{procedure-name}.md` |
 | `Claude Family/` | Core system docs | `{Component Name}.md` |
 | `_templates/` | Document templates | Not synced |
+
+### Project Folder Rule (Filing Research)
+
+Project folders in `10-Projects/{project-name}/` MUST use topic subfolders when the project has more than 10 files. This follows the file plan principle from records management (ISO 15489): hierarchies should be 3-4 levels deep for discoverability.
+
+| Subfolder Pattern | Example | Contains |
+|-------------------|---------|----------|
+| `research/` | `Project-Metis/research/` | Research documents, schema audits, implementation audits |
+| `gates/` | `Project-Metis/gates/gate-zero/` | Design gate deliverables |
+| `handoffs/` | `Project-Metis/handoffs/` | Inter-agent handoff documents |
+| `wcc/` or `{feature}/` | `Project-Metis/wcc/` | Feature-specific design documents |
+| `audits/` | `Project-Metis/audits/` | Audit reports and findings |
+| `session-handoffs/` | `Project-Metis/session-handoffs/` | Session continuity notes |
+
+**Root-level files** (ethos, README, plan-of-attack, security-architecture) are project-level documents that don't belong to a topic cluster. These stay in the project root.
+
+**Rule of thumb**: If 3+ files share a topic prefix (e.g., `audit-*.md`, `wcc-*.md`), they belong in a subfolder.
 
 ---
 
