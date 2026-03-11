@@ -18,7 +18,8 @@
         3. Survive compaction: PreCompact hook → inject facts into system message
         4. Post-compaction recovery: recall user_intent → check work items
         5. Cross-session recall: recall_previous_session_facts(n_sessions=3)
-        6. Session notes (parallel): store_session_notes → markdown file
+        6. Workfile: stash/unstash component-scoped working context
+        7. Session notes (parallel): store_session_notes → markdown file
 
       Actors:
         [CLAUDE] = userTask (decides what to store/recall)
@@ -58,6 +59,7 @@
       <bpmn:outgoing>flow_recall</bpmn:outgoing>
       <bpmn:outgoing>flow_notes</bpmn:outgoing>
       <bpmn:outgoing>flow_cross_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_workfile</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
     <!-- ================================================================== -->
@@ -228,6 +230,28 @@ except NameError:
     </bpmn:userTask>
 
     <!-- ================================================================== -->
+    <!-- PATH 5: WORKFILE (COMPONENT-SCOPED CONTEXT)                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="route_workfile" name="[MCP] Route to Workfile Operation" scriptFormat="python">
+      <bpmn:incoming>flow_workfile</bpmn:incoming>
+      <bpmn:outgoing>flow_workfile_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Routes to stash() or unstash() based on sub-action
+# stash(component, title, content) → UPSERT workfile with embedding
+# unstash(component, title?) → retrieve workfile(s) by component
+# Component-scoped context that bridges sessions
+# Unlike session_facts: persists across sessions, has semantic search
+# Unlike knowledge: project+component scoped, transient lifecycle
+try:
+    if workfile_routed is None:
+        workfile_routed = True
+except NameError:
+    workfile_routed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
     <!-- END EVENTS                                                          -->
     <!-- ================================================================== -->
 
@@ -237,6 +261,7 @@ except NameError:
       <bpmn:incoming>flow_missing_to_end</bpmn:incoming>
       <bpmn:incoming>flow_recover_to_end</bpmn:incoming>
       <bpmn:incoming>flow_merge_prev_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_workfile_to_end</bpmn:incoming>
       <bpmn:outgoing>flow_to_end</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
@@ -290,6 +315,12 @@ except NameError:
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_previous_to_merge" sourceRef="recall_previous" targetRef="merge_with_current"/>
     <bpmn:sequenceFlow id="flow_merge_prev_to_end" sourceRef="merge_with_current" targetRef="end_merge"/>
+
+    <!-- Workfile path -->
+    <bpmn:sequenceFlow id="flow_workfile" sourceRef="action_gw" targetRef="route_workfile">
+      <bpmn:conditionExpression>action == "workfile"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_workfile_to_end" sourceRef="route_workfile" targetRef="end_merge"/>
 
     <!-- End -->
     <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end"/>

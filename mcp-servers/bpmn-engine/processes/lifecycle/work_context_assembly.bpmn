@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/work-context-assembly"
+    id="Definitions_WCC">
+
+  <bpmn:process id="work_context_assembly" name="Work Context Container (WCC) Assembly" isExecutable="true">
+
+    <!-- ================================================================== -->
+    <!-- START: Triggered every prompt via RAG hook                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:startEvent id="start_event" name="Prompt Received">
+      <bpmn:outgoing>flow_start_to_detect</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: Activity Detection                                         -->
+    <!-- ================================================================== -->
+
+    <!-- User Task: Detect Activity
+         Priority: 1) session_fact override, 2) exact name/alias, 3) fuzzy, 4) workfile component -->
+    <bpmn:userTask id="detect_activity" name="[HOOK] Detect Activity from Prompt">
+      <bpmn:incoming>flow_start_to_detect</bpmn:incoming>
+      <bpmn:outgoing>flow_detect_to_activity_check</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Activity Detected? -->
+    <bpmn:exclusiveGateway id="activity_detected_gw" name="Activity Detected?" default="flow_no_activity">
+      <bpmn:incoming>flow_detect_to_activity_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_activity</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_activity</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- End Event: No Activity (fall through to normal RAG) -->
+    <bpmn:endEvent id="end_no_activity" name="No Activity — Normal RAG">
+      <bpmn:incoming>flow_no_activity</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Exclusive Gateway: Activity Changed? -->
+    <bpmn:exclusiveGateway id="activity_changed_gw" name="Activity Changed?" default="flow_not_changed">
+      <bpmn:incoming>flow_has_activity</bpmn:incoming>
+      <bpmn:outgoing>flow_changed</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_changed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2a: Cache Hit (activity unchanged, cache valid)               -->
+    <!-- ================================================================== -->
+
+    <!-- Exclusive Gateway: Cache Valid? -->
+    <bpmn:exclusiveGateway id="cache_valid_gw" name="Cache Valid?" default="flow_cache_miss">
+      <bpmn:incoming>flow_not_changed</bpmn:incoming>
+      <bpmn:outgoing>flow_cache_hit</bpmn:outgoing>
+      <bpmn:outgoing>flow_cache_miss</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="load_cached_wcc" name="[HOOK] Load Cached WCC" scriptFormat="python">
+      <bpmn:incoming>flow_cache_hit</bpmn:incoming>
+      <bpmn:outgoing>flow_cached_to_inject</bpmn:outgoing>
+      <bpmn:script>wcc_source = 'cache'</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2b: Assembly (activity changed or cache invalid)              -->
+    <!-- ================================================================== -->
+
+    <!-- Exclusive Gateway: Merge changed + cache_miss paths before parallel split -->
+    <bpmn:exclusiveGateway id="assembly_merge_gw" name="Needs Assembly">
+      <bpmn:incoming>flow_changed</bpmn:incoming>
+      <bpmn:incoming>flow_cache_miss</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_parallel</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Parallel Gateway: Query 6 Sources (split only, single incoming) -->
+    <bpmn:parallelGateway id="parallel_start" name="Query 6 Sources">
+      <bpmn:incoming>flow_merge_to_parallel</bpmn:incoming>
+      <bpmn:outgoing>flow_to_workfiles</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_knowledge</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_features</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_facts</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_vault</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_bpmn</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Source 1: Workfiles (25% budget) -->
+    <bpmn:scriptTask id="query_workfiles" name="[DB] Query Workfiles (25%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_workfiles</bpmn:incoming>
+      <bpmn:outgoing>flow_workfiles_done</bpmn:outgoing>
+      <bpmn:script>workfiles_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Source 2: Knowledge mid/long (25% budget) -->
+    <bpmn:scriptTask id="query_knowledge" name="[DB] Query Knowledge mid/long (25%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_knowledge</bpmn:incoming>
+      <bpmn:outgoing>flow_knowledge_done</bpmn:outgoing>
+      <bpmn:script>knowledge_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Source 3: Features/Tasks (15% budget) -->
+    <bpmn:scriptTask id="query_features" name="[DB] Query Features/Tasks (15%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_features</bpmn:incoming>
+      <bpmn:outgoing>flow_features_done</bpmn:outgoing>
+      <bpmn:script>features_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Source 4: Session Facts (10% budget) -->
+    <bpmn:scriptTask id="query_session_facts" name="[DB] Query Session Facts (10%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_facts</bpmn:incoming>
+      <bpmn:outgoing>flow_facts_done</bpmn:outgoing>
+      <bpmn:script>facts_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Source 5: Vault RAG (15% budget) -->
+    <bpmn:scriptTask id="query_vault_rag" name="[DB] Query Vault RAG (15%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_vault</bpmn:incoming>
+      <bpmn:outgoing>flow_vault_done</bpmn:outgoing>
+      <bpmn:script>vault_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Source 6: Skills/BPMN (10% budget) -->
+    <bpmn:scriptTask id="query_skills_bpmn" name="[DB] Query Skills/BPMN (10%)" scriptFormat="python">
+      <bpmn:incoming>flow_to_bpmn</bpmn:incoming>
+      <bpmn:outgoing>flow_bpmn_done</bpmn:outgoing>
+      <bpmn:script>bpmn_queried = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel Gateway: Join sources -->
+    <bpmn:parallelGateway id="parallel_join" name="All Sources Complete">
+      <bpmn:incoming>flow_workfiles_done</bpmn:incoming>
+      <bpmn:incoming>flow_knowledge_done</bpmn:incoming>
+      <bpmn:incoming>flow_features_done</bpmn:incoming>
+      <bpmn:incoming>flow_facts_done</bpmn:incoming>
+      <bpmn:incoming>flow_vault_done</bpmn:incoming>
+      <bpmn:incoming>flow_bpmn_done</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_budget</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Script Task: Budget Cap + Rank -->
+    <bpmn:scriptTask id="budget_cap_rank" name="[HOOK] Budget Cap + Rank Results" scriptFormat="python">
+      <bpmn:incoming>flow_join_to_budget</bpmn:incoming>
+      <bpmn:outgoing>flow_budget_to_cache</bpmn:outgoing>
+      <bpmn:script>wcc_assembled = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Cache WCC -->
+    <bpmn:scriptTask id="cache_wcc" name="[HOOK] Cache WCC to State File" scriptFormat="python">
+      <bpmn:incoming>flow_budget_to_cache</bpmn:incoming>
+      <bpmn:outgoing>flow_cache_to_inject</bpmn:outgoing>
+      <bpmn:script>wcc_cached = True; wcc_source = 'assembled'</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: Inject into RAG Hook Context                               -->
+    <!-- ================================================================== -->
+
+    <!-- Exclusive Gateway: Merge cache hit and assembly paths -->
+    <bpmn:exclusiveGateway id="inject_merge_gw" name="Merge Paths">
+      <bpmn:incoming>flow_cached_to_inject</bpmn:incoming>
+      <bpmn:incoming>flow_cache_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_inject</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="inject_wcc" name="[HOOK] Inject WCC as Priority 2 Block" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_inject</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_to_end</bpmn:outgoing>
+      <bpmn:script>wcc_injected = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_wcc_injected" name="WCC Injected — Per-Source RAG Skipped">
+      <bpmn:incoming>flow_inject_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:sequenceFlow id="flow_start_to_detect" sourceRef="start_event" targetRef="detect_activity"/>
+    <bpmn:sequenceFlow id="flow_detect_to_activity_check" sourceRef="detect_activity" targetRef="activity_detected_gw"/>
+    <bpmn:sequenceFlow id="flow_has_activity" sourceRef="activity_detected_gw" targetRef="activity_changed_gw">
+      <bpmn:conditionExpression>activity_detected == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_activity" sourceRef="activity_detected_gw" targetRef="end_no_activity"/>
+
+    <bpmn:sequenceFlow id="flow_changed" sourceRef="activity_changed_gw" targetRef="assembly_merge_gw">
+      <bpmn:conditionExpression>activity_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_changed" sourceRef="activity_changed_gw" targetRef="cache_valid_gw"/>
+
+    <bpmn:sequenceFlow id="flow_cache_hit" sourceRef="cache_valid_gw" targetRef="load_cached_wcc">
+      <bpmn:conditionExpression>cache_valid == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_cache_miss" sourceRef="cache_valid_gw" targetRef="assembly_merge_gw"/>
+
+    <bpmn:sequenceFlow id="flow_merge_to_parallel" sourceRef="assembly_merge_gw" targetRef="parallel_start"/>
+    <bpmn:sequenceFlow id="flow_to_workfiles" sourceRef="parallel_start" targetRef="query_workfiles"/>
+    <bpmn:sequenceFlow id="flow_to_knowledge" sourceRef="parallel_start" targetRef="query_knowledge"/>
+    <bpmn:sequenceFlow id="flow_to_features" sourceRef="parallel_start" targetRef="query_features"/>
+    <bpmn:sequenceFlow id="flow_to_facts" sourceRef="parallel_start" targetRef="query_session_facts"/>
+    <bpmn:sequenceFlow id="flow_to_vault" sourceRef="parallel_start" targetRef="query_vault_rag"/>
+    <bpmn:sequenceFlow id="flow_to_bpmn" sourceRef="parallel_start" targetRef="query_skills_bpmn"/>
+
+    <bpmn:sequenceFlow id="flow_workfiles_done" sourceRef="query_workfiles" targetRef="parallel_join"/>
+    <bpmn:sequenceFlow id="flow_knowledge_done" sourceRef="query_knowledge" targetRef="parallel_join"/>
+    <bpmn:sequenceFlow id="flow_features_done" sourceRef="query_features" targetRef="parallel_join"/>
+    <bpmn:sequenceFlow id="flow_facts_done" sourceRef="query_session_facts" targetRef="parallel_join"/>
+    <bpmn:sequenceFlow id="flow_vault_done" sourceRef="query_vault_rag" targetRef="parallel_join"/>
+    <bpmn:sequenceFlow id="flow_bpmn_done" sourceRef="query_skills_bpmn" targetRef="parallel_join"/>
+
+    <bpmn:sequenceFlow id="flow_join_to_budget" sourceRef="parallel_join" targetRef="budget_cap_rank"/>
+    <bpmn:sequenceFlow id="flow_budget_to_cache" sourceRef="budget_cap_rank" targetRef="cache_wcc"/>
+
+    <bpmn:sequenceFlow id="flow_cached_to_inject" sourceRef="load_cached_wcc" targetRef="inject_merge_gw"/>
+    <bpmn:sequenceFlow id="flow_cache_to_inject" sourceRef="cache_wcc" targetRef="inject_merge_gw"/>
+    <bpmn:sequenceFlow id="flow_merge_to_inject" sourceRef="inject_merge_gw" targetRef="inject_wcc"/>
+    <bpmn:sequenceFlow id="flow_inject_to_end" sourceRef="inject_wcc" targetRef="end_wcc_injected"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

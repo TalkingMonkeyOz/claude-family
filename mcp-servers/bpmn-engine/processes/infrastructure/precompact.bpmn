@@ -20,6 +20,7 @@
         - Queries active todos, session_state, active features from DB
         - Queries session facts (decisions, references, user_intent) from DB
         - Reads session notes from markdown file
+        - Queries pinned workfiles for component context summaries
         - Builds refresh message with preserved state + narrative
         - Includes post-compaction checklist (recall user_intent, re-read CLAUDE.md)
         - Fail-open: returns minimal message if DB unavailable
@@ -95,7 +96,7 @@ facts_queried = True
 
     <bpmn:scriptTask id="read_session_notes" name="[FILE] Read Session Notes" scriptFormat="python">
       <bpmn:incoming>flow_facts_to_notes</bpmn:incoming>
-      <bpmn:outgoing>flow_notes_to_budget</bpmn:outgoing>
+      <bpmn:outgoing>flow_notes_to_workfiles</bpmn:outgoing>
       <bpmn:script>
 # Read ~/.claude/session_notes.md if exists
 # Truncate to 500 chars to avoid bloating context
@@ -104,8 +105,20 @@ notes_read = True
       </bpmn:script>
     </bpmn:scriptTask>
 
+    <bpmn:scriptTask id="query_pinned_workfiles" name="[DB] Query Pinned Workfiles" scriptFormat="python">
+      <bpmn:incoming>flow_notes_to_workfiles</bpmn:incoming>
+      <bpmn:outgoing>flow_workfiles_to_budget</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.project_workfiles WHERE is_pinned = TRUE AND is_active = TRUE
+# AND project_id = current project
+# Returns component + title list for pinned workfiles
+# Adds ~200 token summary to refresh message
+pinned_workfiles_queried = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
     <bpmn:scriptTask id="apply_budget_cap" name="[TOOL] Apply Token Budget Cap (~2000 tokens)" scriptFormat="python">
-      <bpmn:incoming>flow_notes_to_budget</bpmn:incoming>
+      <bpmn:incoming>flow_workfiles_to_budget</bpmn:incoming>
       <bpmn:outgoing>flow_budget_to_build</bpmn:outgoing>
       <bpmn:script>
 # Estimate tokens (chars / 4) for each section
@@ -114,6 +127,7 @@ notes_read = True
 #   P1: current focus + next steps
 #   P2: active features
 #   P3: session facts (decisions, user_intent)
+#   P3.5: pinned workfiles (component context summaries)
 #   P4: session notes
 # Trim from P4 upward until total &lt; 2000 tokens
 # Log what was trimmed for audit
@@ -155,7 +169,8 @@ state_injected = True
     <bpmn:sequenceFlow id="flow_fallback_to_end" sourceRef="fallback_message" targetRef="end_injected"/>
     <bpmn:sequenceFlow id="flow_query_to_facts" sourceRef="query_session_state" targetRef="query_session_facts"/>
     <bpmn:sequenceFlow id="flow_facts_to_notes" sourceRef="query_session_facts" targetRef="read_session_notes"/>
-    <bpmn:sequenceFlow id="flow_notes_to_budget" sourceRef="read_session_notes" targetRef="apply_budget_cap"/>
+    <bpmn:sequenceFlow id="flow_notes_to_workfiles" sourceRef="read_session_notes" targetRef="query_pinned_workfiles"/>
+    <bpmn:sequenceFlow id="flow_workfiles_to_budget" sourceRef="query_pinned_workfiles" targetRef="apply_budget_cap"/>
     <bpmn:sequenceFlow id="flow_budget_to_build" sourceRef="apply_budget_cap" targetRef="build_message"/>
     <bpmn:sequenceFlow id="flow_build_to_end" sourceRef="build_message" targetRef="end_injected"/>
 

@@ -1122,6 +1122,310 @@ async def tool_recall_knowledge(
         conn.close()
 
 
+# ============================================================================
+# Workfile Tools (Project-Scoped Component Working Context)
+# ============================================================================
+
+async def tool_stash(
+    component: str,
+    title: str,
+    content: str,
+    project: str = "",
+    workfile_type: str = "notes",
+    tags: Optional[List[str]] = None,
+    feature_code: Optional[str] = None,
+    is_pinned: bool = False,
+    mode: str = "replace",
+) -> Dict:
+    """Store/update a workfile. UPSERT on (project, component, title)."""
+    project = project or os.path.basename(os.getcwd())
+
+    # Validate workfile_type
+    valid, err = validate_value('project_workfiles', 'workfile_type', workfile_type)
+    if not valid:
+        return {"error": err}
+
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    session_id = _resolve_session_id(project)
+
+    # Generate embedding
+    embed_text = f"{component} {title} {content[:500]}"
+    embedding = generate_embedding(embed_text)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if mode == "append":
+            # Fetch existing content to append to
+            cur.execute("""
+                SELECT content FROM claude.project_workfiles
+                WHERE project_id = %s::uuid AND component = %s AND title = %s AND is_active = TRUE
+            """, (project_id, component, title))
+            existing = cur.fetchone()
+            if existing:
+                content = existing['content'] + "\n---\n" + content
+
+        # UPSERT
+        cur.execute("""
+            INSERT INTO claude.project_workfiles
+                (project_id, component, title, content, workfile_type, tags,
+                 feature_code, is_pinned, linked_sessions, embedding, updated_at)
+            VALUES (%s::uuid, %s, %s, %s, %s, %s,
+                    %s, %s, ARRAY[%s]::uuid[], %s::vector, NOW())
+            ON CONFLICT (project_id, component, title)
+            DO UPDATE SET
+                content = EXCLUDED.content,
+                workfile_type = EXCLUDED.workfile_type,
+                tags = COALESCE(EXCLUDED.tags, project_workfiles.tags),
+                feature_code = COALESCE(EXCLUDED.feature_code, project_workfiles.feature_code),
+                is_pinned = EXCLUDED.is_pinned,
+                linked_sessions = (
+                    SELECT array_agg(DISTINCT s)
+                    FROM unnest(project_workfiles.linked_sessions || EXCLUDED.linked_sessions) s
+                ),
+                embedding = EXCLUDED.embedding,
+                updated_at = NOW()
+            RETURNING workfile_id::text, (xmax = 0) AS is_insert
+        """, (
+            project_id, component, title, content, workfile_type, tags,
+            feature_code, is_pinned, session_id, embedding
+        ))
+
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        is_insert = row['is_insert'] if row else True
+        action = "created" if is_insert else ("appended" if mode == "append" else "updated")
+
+        return {
+            "success": True,
+            "workfile_id": row['workfile_id'] if row else None,
+            "action": action,
+            "component": component,
+            "title": title,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"Stash failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_unstash(
+    component: str,
+    title: Optional[str] = None,
+    project: str = "",
+) -> Dict:
+    """Retrieve workfile(s). If title given, single file. If omitted, all active in component."""
+    project = project or os.path.basename(os.getcwd())
+
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if title:
+            cur.execute("""
+                UPDATE claude.project_workfiles
+                SET last_accessed_at = NOW(), access_count = access_count + 1
+                WHERE project_id = %s::uuid AND component = %s AND title = %s AND is_active = TRUE
+                RETURNING workfile_id::text, title, content, workfile_type,
+                          tags, feature_code, is_pinned, updated_at, access_count
+            """, (project_id, component, title))
+        else:
+            # Get all active files in component, update access stats
+            cur.execute("""
+                UPDATE claude.project_workfiles
+                SET last_accessed_at = NOW(), access_count = access_count + 1
+                WHERE project_id = %s::uuid AND component = %s AND is_active = TRUE
+                RETURNING workfile_id::text, title, content, workfile_type,
+                          tags, feature_code, is_pinned, updated_at, access_count
+            """, (project_id, component))
+
+        rows = cur.fetchall()
+        conn.commit()
+        cur.close()
+
+        files = [{
+            "title": r['title'],
+            "content": r['content'],
+            "workfile_type": r['workfile_type'],
+            "tags": r['tags'],
+            "feature_code": r['feature_code'],
+            "is_pinned": r['is_pinned'],
+            "updated_at": str(r['updated_at']),
+            "access_count": r['access_count'],
+        } for r in rows]
+
+        return {
+            "success": True,
+            "component": component,
+            "file_count": len(files),
+            "files": files,
+        }
+
+    except Exception as e:
+        return {"error": f"Unstash failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_list_workfiles(
+    project: str = "",
+    component: Optional[str] = None,
+    is_active: bool = True,
+) -> Dict:
+    """Browse the cabinet. Groups by component with file counts."""
+    project = project or os.path.basename(os.getcwd())
+
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if component:
+            cur.execute("""
+                SELECT title, workfile_type, is_pinned, updated_at, access_count
+                FROM claude.project_workfiles
+                WHERE project_id = %s::uuid AND component = %s AND is_active = %s
+                ORDER BY is_pinned DESC, updated_at DESC
+            """, (project_id, component, is_active))
+            rows = cur.fetchall()
+            cur.close()
+
+            files = [{
+                "title": r['title'],
+                "workfile_type": r['workfile_type'],
+                "is_pinned": r['is_pinned'],
+                "updated_at": str(r['updated_at']),
+                "access_count": r['access_count'],
+            } for r in rows]
+
+            return {
+                "success": True,
+                "project": project,
+                "component": component,
+                "file_count": len(files),
+                "files": files,
+            }
+        else:
+            cur.execute("""
+                SELECT component,
+                       COUNT(*) AS file_count,
+                       MAX(updated_at) AS last_updated,
+                       COUNT(*) FILTER (WHERE is_pinned) AS pinned_count
+                FROM claude.project_workfiles
+                WHERE project_id = %s::uuid AND is_active = %s
+                GROUP BY component
+                ORDER BY last_updated DESC
+            """, (project_id, is_active))
+            rows = cur.fetchall()
+            cur.close()
+
+            components = [{
+                "name": r['component'],
+                "file_count": r['file_count'],
+                "last_updated": str(r['last_updated']),
+                "pinned_count": r['pinned_count'],
+            } for r in rows]
+
+            return {
+                "success": True,
+                "project": project,
+                "component_count": len(components),
+                "components": components,
+            }
+
+    except Exception as e:
+        return {"error": f"List workfiles failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_search_workfiles(
+    query: str,
+    project: str = "",
+    component: Optional[str] = None,
+    limit: int = 5,
+) -> Dict:
+    """Semantic search via Voyage AI embeddings + optional component filter."""
+    project = project or os.path.basename(os.getcwd())
+
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    query_embedding = generate_query_embedding(query)
+    if not query_embedding:
+        return {"error": "Failed to generate query embedding"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        if component:
+            cur.execute("""
+                SELECT workfile_id::text, component, title,
+                       LEFT(content, 200) AS preview,
+                       workfile_type, tags, is_pinned,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM claude.project_workfiles
+                WHERE project_id = %s::uuid AND component = %s
+                  AND is_active = TRUE AND embedding IS NOT NULL
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """, (query_embedding, project_id, component, query_embedding, limit))
+        else:
+            cur.execute("""
+                SELECT workfile_id::text, component, title,
+                       LEFT(content, 200) AS preview,
+                       workfile_type, tags, is_pinned,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM claude.project_workfiles
+                WHERE project_id = %s::uuid
+                  AND is_active = TRUE AND embedding IS NOT NULL
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            """, (query_embedding, project_id, query_embedding, limit))
+
+        rows = cur.fetchall()
+        cur.close()
+
+        results = [{
+            "component": r['component'],
+            "title": r['title'],
+            "preview": r['preview'],
+            "workfile_type": r['workfile_type'],
+            "tags": r['tags'],
+            "is_pinned": r['is_pinned'],
+            "similarity": round(float(r['similarity']), 4),
+        } for r in rows]
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(results),
+            "results": results,
+        }
+
+    except Exception as e:
+        return {"error": f"Search workfiles failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
 async def tool_graph_search(
     query: str,
     max_initial_hits: int = 5,
@@ -2548,6 +2852,215 @@ async def tool_get_session_resume(project: str) -> Dict:
 
 
 # ============================================================================
+# Activity / WCC Tools
+# ============================================================================
+
+
+async def tool_create_activity(
+    name: str,
+    aliases: Optional[List[str]] = None,
+    description: str = "",
+    project: str = "",
+) -> Dict:
+    """Create a named activity for WCC context assembly."""
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    # Generate embedding for the activity
+    embed_text = f"{name} {description}" if description else name
+    embedding = generate_embedding(embed_text)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.activities
+                (project_id, name, aliases, description, embedding)
+            VALUES (%s::uuid, %s, %s, %s, %s::vector)
+            ON CONFLICT (project_id, name)
+            DO UPDATE SET
+                aliases = COALESCE(EXCLUDED.aliases, activities.aliases),
+                description = COALESCE(NULLIF(EXCLUDED.description, ''), activities.description),
+                embedding = COALESCE(EXCLUDED.embedding, activities.embedding),
+                last_accessed_at = NOW()
+            RETURNING activity_id::text, (xmax = 0) AS is_insert
+        """, (project_id, name, aliases or [], description, embedding))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        is_insert = row['is_insert'] if row else True
+        return {
+            "success": True,
+            "activity_id": row['activity_id'] if row else None,
+            "action": "created" if is_insert else "updated",
+            "name": name,
+            "project": project,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"Create activity failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_list_activities(
+    project: str = "",
+) -> Dict:
+    """List activities with access stats for a project."""
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT activity_id::text, name, aliases, description,
+                   last_accessed_at, access_count, is_active
+            FROM claude.activities
+            WHERE project_id = %s::uuid
+            ORDER BY access_count DESC, last_accessed_at DESC
+        """, (project_id,))
+        rows = cur.fetchall()
+        cur.close()
+
+        activities = []
+        for r in rows:
+            activities.append({
+                "activity_id": r['activity_id'],
+                "name": r['name'],
+                "aliases": r['aliases'] or [],
+                "description": r['description'] or "",
+                "last_accessed_at": str(r['last_accessed_at']) if r['last_accessed_at'] else None,
+                "access_count": r['access_count'],
+                "is_active": r['is_active'],
+            })
+
+        return {
+            "success": True,
+            "project": project,
+            "count": len(activities),
+            "activities": activities,
+        }
+    except Exception as e:
+        return {"error": f"List activities failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_update_activity(
+    activity_id: str,
+    aliases: Optional[List[str]] = None,
+    description: Optional[str] = None,
+    is_active: Optional[bool] = None,
+) -> Dict:
+    """Update an existing activity's aliases, description, or active status."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Build dynamic SET clause
+        sets = []
+        params = []
+        if aliases is not None:
+            sets.append("aliases = %s")
+            params.append(aliases)
+        if description is not None:
+            sets.append("description = %s")
+            params.append(description)
+            # Re-embed with new description
+            embedding = generate_embedding(description)
+            if embedding:
+                sets.append("embedding = %s::vector")
+                params.append(embedding)
+        if is_active is not None:
+            sets.append("is_active = %s")
+            params.append(is_active)
+
+        if not sets:
+            return {"error": "No fields to update"}
+
+        params.append(activity_id)
+        cur.execute(f"""
+            UPDATE claude.activities
+            SET {', '.join(sets)}
+            WHERE activity_id = %s::uuid
+            RETURNING activity_id::text, name
+        """, tuple(params))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        if not row:
+            return {"error": f"Activity '{activity_id}' not found"}
+
+        return {
+            "success": True,
+            "activity_id": row['activity_id'],
+            "name": row['name'],
+            "updated_fields": [s.split(" = ")[0] for s in sets],
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"Update activity failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_assemble_context(
+    activity_name: str,
+    project: str = "",
+    budget: int = 1000,
+) -> Dict:
+    """Manually assemble WCC context for a named activity."""
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"error": f"Project '{project}' not found"}
+
+    # Import wcc_assembly
+    import sys as _sys
+    scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts")
+    if scripts_dir not in _sys.path:
+        _sys.path.insert(0, scripts_dir)
+
+    try:
+        from wcc_assembly import assemble_wcc, _lookup_activity_id
+    except ImportError:
+        return {"error": "wcc_assembly module not found"}
+
+    conn = get_db_connection()
+    try:
+        activity_id = _lookup_activity_id(conn, project, activity_name)
+
+        wcc_text = assemble_wcc(
+            activity_name=activity_name,
+            activity_id=activity_id,
+            project_name=project,
+            conn=conn,
+            session_id=None,
+            total_budget=budget,
+            generate_embedding_fn=generate_embedding,
+        )
+
+        return {
+            "success": True,
+            "activity_name": activity_name,
+            "project": project,
+            "context": wcc_text or "(no context assembled — activity may not have associated data)",
+            "token_estimate": len(wcc_text) // 4 if wcc_text else 0,
+        }
+    except Exception as e:
+        return {"error": f"Context assembly failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
 # MCP Tool Definitions
 # ============================================================================
 
@@ -2915,6 +3428,58 @@ async def list_tools() -> List[Tool]:
                 },
                 "required": []
             }
+        ),
+        Tool(
+            name="create_activity",
+            description="Create a named activity for WCC context assembly. Activities represent work contexts that auto-assemble relevant knowledge, workfiles, and tasks.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Activity name (e.g., 'auth-flow', 'data-migration')"},
+                    "aliases": {"type": "array", "items": {"type": "string"}, "description": "Alternative names for detection"},
+                    "description": {"type": "string", "description": "What this activity is about"},
+                    "project": {"type": "string", "description": "Project name (defaults to current directory)"}
+                },
+                "required": ["name"]
+            }
+        ),
+        Tool(
+            name="list_activities",
+            description="List activities with access stats for a project.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Project name (defaults to current directory)"}
+                },
+                "required": []
+            }
+        ),
+        Tool(
+            name="update_activity",
+            description="Update an existing activity's aliases, description, or active status.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "activity_id": {"type": "string", "description": "UUID of the activity"},
+                    "aliases": {"type": "array", "items": {"type": "string"}, "description": "New aliases list"},
+                    "description": {"type": "string", "description": "New description"},
+                    "is_active": {"type": "boolean", "description": "Set to false to deactivate"}
+                },
+                "required": ["activity_id"]
+            }
+        ),
+        Tool(
+            name="assemble_context",
+            description="Manually assemble WCC context for a named activity. Queries 6 sources (workfiles, knowledge, features, facts, vault, BPMN) and returns assembled context.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "activity_name": {"type": "string", "description": "Name of the activity to assemble context for"},
+                    "project": {"type": "string", "description": "Project name (defaults to current directory)"},
+                    "budget": {"type": "integer", "description": "Token budget (default 1000)"}
+                },
+                "required": ["activity_name"]
+            }
         )
     ]
 
@@ -3051,6 +3616,30 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         elif name == "get_session_notes":
             result = await tool_get_session_notes(
                 arguments.get('section')
+            )
+        elif name == "create_activity":
+            result = await tool_create_activity(
+                name=arguments['name'],
+                aliases=arguments.get('aliases'),
+                description=arguments.get('description', ''),
+                project=arguments.get('project', ''),
+            )
+        elif name == "list_activities":
+            result = await tool_list_activities(
+                project=arguments.get('project', ''),
+            )
+        elif name == "update_activity":
+            result = await tool_update_activity(
+                activity_id=arguments['activity_id'],
+                aliases=arguments.get('aliases'),
+                description=arguments.get('description'),
+                is_active=arguments.get('is_active'),
+            )
+        elif name == "assemble_context":
+            result = await tool_assemble_context(
+                activity_name=arguments['activity_name'],
+                project=arguments.get('project', ''),
+                budget=arguments.get('budget', 1000),
             )
         else:
             result = {"error": f"Unknown tool: {name}"}

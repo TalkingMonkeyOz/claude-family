@@ -12,7 +12,7 @@ synced: false
 
 # Project Tools MCP
 
-MCP server providing project-aware tooling for Claude Family. **41 tools** across session management, workflow engine, config ops, conversations, books, knowledge, work tracking, and session persistence.
+MCP server providing project-aware tooling for Claude Family. **45 tools** across session management, workflow engine, config ops, conversations, books, knowledge, work tracking, session persistence, and project workfiles.
 
 **Server**: `mcp-servers/project-tools/server_v2.py` (globally deployed via `~/.claude/mcp.json`)
 
@@ -20,7 +20,7 @@ MCP server providing project-aware tooling for Claude Family. **41 tools** acros
 
 ---
 
-## Complete Tool Reference (41 tools)
+## Complete Tool Reference (45 tools)
 
 ### Session Lifecycle (3)
 
@@ -126,6 +126,30 @@ Create and manage feedback, features, and build tasks.
 | `get_ready_tasks(project)` | Get unblocked tasks ready for work |
 | `update_work_status(type, id, status)` | Legacy status update (routes through WorkflowEngine) |
 
+### Workfile Tools (4)
+
+| Tool | Purpose |
+|------|---------|
+| `stash(component, title, content)` | Store/update component-scoped workfile (UPSERT). mode=replace\|append |
+| `unstash(component, title?)` | Retrieve workfile(s) by component, updates access stats |
+| `list_workfiles(project?, component?)` | Browse components with file counts, pinned status |
+| `search_workfiles(query)` | Semantic search across workfiles via Voyage AI embeddings |
+
+### Work Context Container (4)
+
+Automatically assemble and inject context when activity changes. **Runs in RAG hook — no manual calls needed.**
+
+| Tool | Purpose |
+|------|---------|
+| `create_activity(project, name, aliases)` | Create named activity (e.g., "user-auth-flow"). Aliases enable fuzzy detection. |
+| `list_activities(project)` | Browse activities + access stats + last changed |
+| `update_activity(activity_id, name, aliases)` | Rename or add aliases for better detection |
+| `assemble_context(activity_id, budget)` | Manually assemble context for an activity (usually auto-triggered) |
+
+**How it works**: Every prompt → `detect_activity()` checks for activity change → if changed, `assemble_wcc()` queries 6 sources in parallel (workfiles 25%, knowledge 25%, features/tasks 15%, session facts 10%, vault RAG 15%, BPMN/skills 10%) → context cached 5 min → injected at priority 2 in RAG hook.
+
+**Key gotcha**: When WCC active, per-source knowledge/RAG/nimbus queries are **SKIPPED** (WCC replaces them, not adds). Net token budget unchanged.
+
 ### Context & Discovery (7)
 
 | Tool | Purpose |
@@ -155,6 +179,7 @@ Create and manage feedback, features, and build tasks.
 | Deploy config from DB | `deploy_project` or `regenerate_settings` |
 | Search past conversations | `search_conversations` |
 | Store book concepts | `store_book` + `store_book_reference` |
+| Component working context (cross-session) | `stash()` / `unstash()` |
 
 ---
 
@@ -178,6 +203,8 @@ Create and manage feedback, features, and build tasks.
 | `claude.knowledge_routes` | Task pattern → knowledge source routing |
 | `claude.workflow_transitions` | Valid state machine transitions (28 rules) |
 | `claude.vault_embeddings` | Vault document embeddings (8,856 rows) |
+| `claude.project_workfiles` | Component-scoped cross-session working context |
+| `claude.activities` | Named activities per project with aliases, embeddings, access stats |
 
 ---
 
@@ -211,7 +238,8 @@ Create and manage feedback, features, and build tasks.
 
 ---
 
-**Version**: 2.0
+**Version**: 2.2
 **Created**: 2026-01-23
-**Updated**: 2026-02-13
+**Updated**: 2026-03-10
 **Location**: knowledge-vault/Claude Family/Project Tools MCP.md
+**Changes**: Added Work Context Container (4 new tools, activities table, RAG hook integration)

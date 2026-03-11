@@ -40,8 +40,9 @@ context = {"project": "test", "query": "test"}
 #   recall:        short=200, mid=500, long=300  (default)
 total_budget = 1000
 budget_short = 200
-budget_mid = 500
+budget_mid = 400
 budget_long = 300
+budget_workfiles = 100
       </bpmn:script>
     </bpmn:scriptTask>
     <bpmn:sequenceFlow id="to_allocate_budget" sourceRef="parse_context" targetRef="allocate_budget" />
@@ -52,6 +53,7 @@ budget_long = 300
       <bpmn:outgoing>to_search_short</bpmn:outgoing>
       <bpmn:outgoing>to_search_mid</bpmn:outgoing>
       <bpmn:outgoing>to_search_long</bpmn:outgoing>
+      <bpmn:outgoing>to_search_workfiles</bpmn:outgoing>
     </bpmn:parallelGateway>
     <bpmn:sequenceFlow id="to_parallel_search" sourceRef="allocate_budget" targetRef="parallel_search" />
 
@@ -99,16 +101,33 @@ long_results = []
     </bpmn:scriptTask>
     <bpmn:sequenceFlow id="to_search_long" sourceRef="parallel_search" targetRef="search_long" />
 
+    <!-- WORKFILES: Project-scoped component context (semantic search) -->
+    <bpmn:scriptTask id="search_workfiles" name="[WORKFILE] Search Component Working Context">
+      <bpmn:incoming>to_search_workfiles</bpmn:incoming>
+      <bpmn:outgoing>to_parallel_join_from_workfiles</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.project_workfiles WHERE project_id = project_id AND is_active = TRUE
+# pgvector similarity search using query_embedding
+# Only fires if project has active workfiles
+# Budget: 10% of total (stolen from mid tier: 40% -> 30%)
+# Results tagged as [WORKFILE] in output
+workfile_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_search_workfiles" sourceRef="parallel_search" targetRef="search_workfiles" />
+
     <!-- === PARALLEL JOIN === -->
     <bpmn:parallelGateway id="parallel_join" name="Merge Tier Results">
       <bpmn:incoming>to_parallel_join_from_short</bpmn:incoming>
       <bpmn:incoming>to_parallel_join_from_mid</bpmn:incoming>
       <bpmn:incoming>to_parallel_join_from_long</bpmn:incoming>
+      <bpmn:incoming>to_parallel_join_from_workfiles</bpmn:incoming>
       <bpmn:outgoing>to_rank</bpmn:outgoing>
     </bpmn:parallelGateway>
     <bpmn:sequenceFlow id="to_parallel_join_from_short" sourceRef="search_short" targetRef="parallel_join" />
     <bpmn:sequenceFlow id="to_parallel_join_from_mid" sourceRef="search_mid" targetRef="parallel_join" />
     <bpmn:sequenceFlow id="to_parallel_join_from_long" sourceRef="search_long" targetRef="parallel_join" />
+    <bpmn:sequenceFlow id="to_parallel_join_from_workfiles" sourceRef="search_workfiles" targetRef="parallel_join" />
 
     <!-- Rank all results across tiers -->
     <bpmn:scriptTask id="rank_results" name="[KMS] Rank All Results (composite score)">

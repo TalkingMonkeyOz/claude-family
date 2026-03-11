@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  id="Definitions_1"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="L2_session_monitor" name="Session Monitor Display" isExecutable="true">
+
+    <!-- Start -->
+    <bpmn:startEvent id="Start" name="User navigates to Sessions tab">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Load project -->
+    <bpmn:serviceTask id="LoadProject" name="[TAURI] getProject(projectId)">
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Parallel load sessions -->
+    <bpmn:parallelGateway id="PG_LoadSessions" name="Load active + history">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_active</bpmn:outgoing>
+      <bpmn:outgoing>Flow_history</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:serviceTask id="LoadActiveSessions" name="[TAURI] getActiveSessions(project_name)">
+      <bpmn:incoming>Flow_active</bpmn:incoming>
+      <bpmn:outgoing>Flow_active_done</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:serviceTask id="LoadSessionHistory" name="[TAURI] getSessionHistory(project_name, limit)&#10;&#10;[DB] SELECT session_id, project_name, session_start,&#10;session_end, session_summary, tasks_completed,&#10;session_metadata FROM claude.sessions">
+      <bpmn:incoming>Flow_history</bpmn:incoming>
+      <bpmn:outgoing>Flow_history_done</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:parallelGateway id="PG_Join" name="Both loaded">
+      <bpmn:incoming>Flow_active_done</bpmn:incoming>
+      <bpmn:incoming>Flow_history_done</bpmn:incoming>
+      <bpmn:outgoing>Flow_3</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Map Rust struct to JSON -->
+    <bpmn:serviceTask id="MapToSession" name="[RUST] Map DB rows to Session struct&#10;&#10;Fields: session_id, project_name,&#10;session_start, session_end, session_summary,&#10;tasks_completed_count, model_used, status">
+      <bpmn:incoming>Flow_3</bpmn:incoming>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Display tabs -->
+    <bpmn:userTask id="DisplayTabs" name="[UI] Show Active/History tabs">
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+      <bpmn:outgoing>Flow_5</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User selects tab -->
+    <bpmn:exclusiveGateway id="GW_Tab" name="Which Tab?">
+      <bpmn:incoming>Flow_5</bpmn:incoming>
+      <bpmn:outgoing>Flow_active_tab</bpmn:outgoing>
+      <bpmn:outgoing>Flow_history_tab</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Active sessions grid -->
+    <bpmn:userTask id="ShowActiveGrid" name="[UI] DataGrid: Active Sessions&#10;&#10;Columns: Session ID (short), Started,&#10;Summary, Status">
+      <bpmn:incoming>Flow_active_tab</bpmn:incoming>
+      <bpmn:outgoing>Flow_6a</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- History grid -->
+    <bpmn:userTask id="ShowHistoryGrid" name="[UI] DataGrid: Session History&#10;&#10;Columns: Session ID (short), Started,&#10;Duration, Summary, Tasks Done, Status">
+      <bpmn:incoming>Flow_history_tab</bpmn:incoming>
+      <bpmn:outgoing>Flow_6b</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Auto-refresh timer -->
+    <bpmn:intermediateCatchEvent id="RefreshTimer" name="10s auto-refresh">
+      <bpmn:incoming>Flow_6a</bpmn:incoming>
+      <bpmn:incoming>Flow_6b</bpmn:incoming>
+      <bpmn:outgoing>Flow_refresh</bpmn:outgoing>
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT10S</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+
+    <!-- Loop back to reload -->
+    <bpmn:exclusiveGateway id="GW_StillOnPage" name="Still on Sessions?">
+      <bpmn:incoming>Flow_refresh</bpmn:incoming>
+      <bpmn:outgoing>Flow_reload</bpmn:outgoing>
+      <bpmn:outgoing>Flow_navigate_away</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="End_Normal" name="End (navigated away)">
+      <bpmn:incoming>Flow_navigate_away</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="LoadProject" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="LoadProject" targetRef="PG_LoadSessions" />
+    <bpmn:sequenceFlow id="Flow_active" sourceRef="PG_LoadSessions" targetRef="LoadActiveSessions" />
+    <bpmn:sequenceFlow id="Flow_history" sourceRef="PG_LoadSessions" targetRef="LoadSessionHistory" />
+    <bpmn:sequenceFlow id="Flow_active_done" sourceRef="LoadActiveSessions" targetRef="PG_Join" />
+    <bpmn:sequenceFlow id="Flow_history_done" sourceRef="LoadSessionHistory" targetRef="PG_Join" />
+    <bpmn:sequenceFlow id="Flow_3" sourceRef="PG_Join" targetRef="MapToSession" />
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="MapToSession" targetRef="DisplayTabs" />
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="DisplayTabs" targetRef="GW_Tab" />
+    <bpmn:sequenceFlow id="Flow_active_tab" name="Active" sourceRef="GW_Tab" targetRef="ShowActiveGrid" />
+    <bpmn:sequenceFlow id="Flow_history_tab" name="History" sourceRef="GW_Tab" targetRef="ShowHistoryGrid" />
+    <bpmn:sequenceFlow id="Flow_6a" sourceRef="ShowActiveGrid" targetRef="RefreshTimer" />
+    <bpmn:sequenceFlow id="Flow_6b" sourceRef="ShowHistoryGrid" targetRef="RefreshTimer" />
+    <bpmn:sequenceFlow id="Flow_refresh" sourceRef="RefreshTimer" targetRef="GW_StillOnPage" />
+    <bpmn:sequenceFlow id="Flow_reload" name="Yes" sourceRef="GW_StillOnPage" targetRef="PG_LoadSessions" />
+    <bpmn:sequenceFlow id="Flow_navigate_away" name="No" sourceRef="GW_StillOnPage" targetRef="End_Normal" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

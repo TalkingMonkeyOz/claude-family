@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/workfile-management"
+    id="Definitions_WFM">
+
+  <bpmn:process id="workfile_management" name="Workfile Management: Component-Scoped Working Context" isExecutable="true">
+
+    <!--
+      Workfiles are cross-session, component-scoped working context documents.
+      Think of them as a filing cabinet:
+        - project  = the cabinet   (which project's work is this?)
+        - component = the drawer   (which subsystem/area? e.g. "session-hooks", "bpmn-engine")
+        - title     = the file folder (the named document within that drawer)
+
+      A workfile survives across sessions, letting Claude pick up where it left off
+      on a specific component without relying on session memory or RAG retrieval.
+
+      Paths:
+        1. stash  (default): Store/update a workfile for a component.
+                             validate_type → resolve_project → upsert_workfile
+                             → generate_embedding → link_session → end
+        2. unstash: Retrieve workfile(s) for a component (optionally filtered by title).
+                    resolve_project → query_workfiles → update_access_stats → end
+        3. list:   Browse cabinet metadata — what drawers (components) exist and how many files.
+                   resolve_project → query_components → end
+        4. search: Semantic search across all workfiles using pgvector cosine similarity.
+                   generate_query_embedding → search_embeddings → end
+
+      Actors:
+        [CLAUDE] = userTask (Claude decides which action to perform)
+        [MCP]    = scriptTask (project-tools MCP server operation)
+        [DB]     = scriptTask (direct database interaction, claude.project_workfiles)
+        [AI]     = scriptTask (Voyage AI embedding generation)
+
+      Key constraints:
+        - workfile_type: notes, findings, questions, approach, investigation, reference
+        - Upsert on (project_id, component, title) — no duplicate titled files per drawer
+        - Embeddings: Voyage AI voyage-3, 1024 dimensions, stored in project_workfiles.embedding
+        - access_count and last_accessed_at updated on every unstash
+        - session_id linked at stash time for audit trail
+
+      Implementation: mcp-servers/project-tools/server_v2.py + claude.project_workfiles table
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START EVENT                                                         -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Workfile Action Requested">
+      <bpmn:outgoing>flow_start_to_action</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- ACTION IDENTIFICATION                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:userTask id="identify_action" name="[CLAUDE] Identify Workfile Action">
+      <bpmn:incoming>flow_start_to_action</bpmn:incoming>
+      <bpmn:outgoing>flow_action_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="action_gw" name="Action Type?" default="flow_stash">
+      <bpmn:incoming>flow_action_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_stash</bpmn:outgoing>
+      <bpmn:outgoing>flow_unstash</bpmn:outgoing>
+      <bpmn:outgoing>flow_list</bpmn:outgoing>
+      <bpmn:outgoing>flow_search</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PATH 1: STASH (default)                                            -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="validate_type" name="[MCP] Validate Workfile Type" scriptFormat="python">
+      <bpmn:incoming>flow_stash</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_resolve</bpmn:outgoing>
+      <bpmn:script>
+# validate_value('project_workfiles', 'workfile_type', workfile_type)
+# Valid: notes, findings, questions, approach, investigation, reference
+try:
+    if type_valid is None:
+        type_valid = True
+except NameError:
+    type_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="resolve_project" name="[DB] Resolve Project ID" scriptFormat="python">
+      <bpmn:incoming>flow_validate_to_resolve</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_upsert</bpmn:outgoing>
+      <bpmn:script>
+# SELECT project_id FROM claude.projects WHERE project_name = project_name
+# Raises ValueError if project not found in registry
+try:
+    if project_resolved is None:
+        project_resolved = True
+except NameError:
+    project_resolved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="upsert_workfile" name="[DB] Upsert Workfile Record" scriptFormat="python">
+      <bpmn:incoming>flow_resolve_to_upsert</bpmn:incoming>
+      <bpmn:outgoing>flow_upsert_to_embed</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.project_workfiles (project_id, component, title, workfile_type, content, session_id)
+# ON CONFLICT (project_id, component, title) DO UPDATE SET content=..., updated_at=NOW()
+# The filing cabinet upsert: project=cabinet, component=drawer, title=file_folder
+try:
+    if workfile_upserted is None:
+        workfile_upserted = True
+except NameError:
+    workfile_upserted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="generate_embedding" name="[AI] Generate Content Embedding" scriptFormat="python">
+      <bpmn:incoming>flow_upsert_to_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_embed_to_link</bpmn:outgoing>
+      <bpmn:script>
+# voyage_client.embed([content], model="voyage-3", input_type="document")
+# UPDATE claude.project_workfiles SET embedding = %s WHERE workfile_id = %s
+# Enables semantic search across workfiles via pgvector cosine similarity
+try:
+    if embedding_generated is None:
+        embedding_generated = True
+except NameError:
+    embedding_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="link_session" name="[DB] Link Session to Workfile" scriptFormat="python">
+      <bpmn:incoming>flow_embed_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_stash_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.project_workfiles SET session_id = current_session_id WHERE workfile_id = %s
+# Records which session last modified this workfile for audit trail
+try:
+    if session_linked is None:
+        session_linked = True
+except NameError:
+    session_linked = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 2: UNSTASH                                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="resolve_project_unstash" name="[DB] Resolve Project ID" scriptFormat="python">
+      <bpmn:incoming>flow_unstash</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_unstash_to_query</bpmn:outgoing>
+      <bpmn:script>
+# SELECT project_id FROM claude.projects WHERE project_name = project_name
+try:
+    if project_resolved is None:
+        project_resolved = True
+except NameError:
+    project_resolved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="query_workfiles" name="[DB] Query Workfiles by Component" scriptFormat="python">
+      <bpmn:incoming>flow_resolve_unstash_to_query</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_stats</bpmn:outgoing>
+      <bpmn:script>
+# SELECT * FROM claude.project_workfiles
+#   WHERE project_id = %s AND component = %s
+#   AND (title = %s OR %s IS NULL)   -- optional title filter
+#   ORDER BY last_accessed_at DESC NULLS LAST
+# Returns list of matching workfiles
+try:
+    if workfiles_retrieved is None:
+        workfiles_retrieved = True
+except NameError:
+    workfiles_retrieved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="update_access_stats" name="[DB] Update Access Stats" scriptFormat="python">
+      <bpmn:incoming>flow_query_to_stats</bpmn:incoming>
+      <bpmn:outgoing>flow_unstash_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.project_workfiles
+#   SET access_count = access_count + 1,
+#       last_accessed_at = NOW()
+#   WHERE workfile_id = ANY(%s)
+try:
+    if access_updated is None:
+        access_updated = True
+except NameError:
+    access_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 3: LIST                                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="resolve_project_list" name="[DB] Resolve Project ID" scriptFormat="python">
+      <bpmn:incoming>flow_list</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_list_to_components</bpmn:outgoing>
+      <bpmn:script>
+# SELECT project_id FROM claude.projects WHERE project_name = project_name
+try:
+    if project_resolved is None:
+        project_resolved = True
+except NameError:
+    project_resolved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="query_components" name="[DB] Query Cabinet Components" scriptFormat="python">
+      <bpmn:incoming>flow_resolve_list_to_components</bpmn:incoming>
+      <bpmn:outgoing>flow_list_to_end</bpmn:outgoing>
+      <bpmn:script>
+# SELECT component,
+#        COUNT(*) AS file_count,
+#        MAX(updated_at) AS last_updated
+# FROM claude.project_workfiles
+# WHERE project_id = %s
+# GROUP BY component
+# ORDER BY component
+# Returns: [{component, file_count, last_updated}]
+try:
+    if components_listed is None:
+        components_listed = True
+except NameError:
+    components_listed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PATH 4: SEARCH                                                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="generate_query_embedding" name="[AI] Generate Query Embedding" scriptFormat="python">
+      <bpmn:incoming>flow_search</bpmn:incoming>
+      <bpmn:outgoing>flow_query_embed_to_search</bpmn:outgoing>
+      <bpmn:script>
+# voyage_client.embed([query_text], model="voyage-3", input_type="query")
+# Produces 1024-dimension vector for cosine similarity search
+try:
+    if query_embedding_generated is None:
+        query_embedding_generated = True
+except NameError:
+    query_embedding_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="search_embeddings" name="[DB] Search via pgvector Cosine Similarity" scriptFormat="python">
+      <bpmn:incoming>flow_query_embed_to_search</bpmn:incoming>
+      <bpmn:outgoing>flow_search_to_end</bpmn:outgoing>
+      <bpmn:script>
+# SELECT workfile_id, project_id, component, title, workfile_type,
+#        1 - (embedding &lt;=&gt; %s::vector) AS similarity
+# FROM claude.project_workfiles
+# WHERE (project_id = %s OR %s IS NULL)   -- optional project filter
+# ORDER BY embedding &lt;=&gt; %s::vector
+# LIMIT %s
+# Operator &lt;=&gt; is pgvector cosine distance; 1 - distance = similarity
+try:
+    if search_results_found is None:
+        search_results_found = True
+except NameError:
+    search_results_found = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END MERGE + END EVENT                                               -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="end_merge" name="End Merge">
+      <bpmn:incoming>flow_stash_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_unstash_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_list_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_search_to_end</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end" name="Workfile Action Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start -->
+    <bpmn:sequenceFlow id="flow_start_to_action" sourceRef="start" targetRef="identify_action"/>
+    <bpmn:sequenceFlow id="flow_action_to_gw" sourceRef="identify_action" targetRef="action_gw"/>
+
+    <!-- Stash path (default — no condition expression) -->
+    <bpmn:sequenceFlow id="flow_stash" sourceRef="action_gw" targetRef="validate_type"/>
+    <bpmn:sequenceFlow id="flow_validate_to_resolve" sourceRef="validate_type" targetRef="resolve_project"/>
+    <bpmn:sequenceFlow id="flow_resolve_to_upsert" sourceRef="resolve_project" targetRef="upsert_workfile"/>
+    <bpmn:sequenceFlow id="flow_upsert_to_embed" sourceRef="upsert_workfile" targetRef="generate_embedding"/>
+    <bpmn:sequenceFlow id="flow_embed_to_link" sourceRef="generate_embedding" targetRef="link_session"/>
+    <bpmn:sequenceFlow id="flow_stash_to_end" sourceRef="link_session" targetRef="end_merge"/>
+
+    <!-- Unstash path -->
+    <bpmn:sequenceFlow id="flow_unstash" sourceRef="action_gw" targetRef="resolve_project_unstash">
+      <bpmn:conditionExpression>action == "unstash"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_resolve_unstash_to_query" sourceRef="resolve_project_unstash" targetRef="query_workfiles"/>
+    <bpmn:sequenceFlow id="flow_query_to_stats" sourceRef="query_workfiles" targetRef="update_access_stats"/>
+    <bpmn:sequenceFlow id="flow_unstash_to_end" sourceRef="update_access_stats" targetRef="end_merge"/>
+
+    <!-- List path -->
+    <bpmn:sequenceFlow id="flow_list" sourceRef="action_gw" targetRef="resolve_project_list">
+      <bpmn:conditionExpression>action == "list"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_resolve_list_to_components" sourceRef="resolve_project_list" targetRef="query_components"/>
+    <bpmn:sequenceFlow id="flow_list_to_end" sourceRef="query_components" targetRef="end_merge"/>
+
+    <!-- Search path -->
+    <bpmn:sequenceFlow id="flow_search" sourceRef="action_gw" targetRef="generate_query_embedding">
+      <bpmn:conditionExpression>action == "search"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_query_embed_to_search" sourceRef="generate_query_embedding" targetRef="search_embeddings"/>
+    <bpmn:sequenceFlow id="flow_search_to_end" sourceRef="search_embeddings" targetRef="end_merge"/>
+
+    <!-- End -->
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="end_merge" targetRef="end"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="workfile_management">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

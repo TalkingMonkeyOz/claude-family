@@ -344,6 +344,20 @@ def main():
             logger.warning("No file path in tool_input")
             allow_operation()
 
+        # GOVERNANCE: Block edits to DB-generated files
+        generated_files = {'.mcp.json', 'settings.local.json'}
+        file_basename = os.path.basename(file_path.replace('\\', '/'))
+        if file_basename in generated_files:
+            logger.warning(f"BLOCKED: Attempt to edit DB-generated file: {file_path}")
+            block_with_reason(
+                f"BLOCKED: '{file_basename}' is generated from database and must not be edited directly. "
+                f"To change MCP or settings config permanently:\n"
+                f"  1. Send a task_request message to claude-family via send_message()\n"
+                f"  2. claude-family updates claude.config_templates or claude.workspaces\n"
+                f"  3. File regenerates on next session start\n"
+                f"Manual edits will be overwritten."
+            )
+
         # Get proposed content
         content = None
         if tool_name == 'Write':

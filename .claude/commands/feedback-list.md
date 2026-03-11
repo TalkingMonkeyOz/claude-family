@@ -1,152 +1,193 @@
 # List and Filter Feedback
 
-Display feedback items with optional filters for status, type, search keywords, and timeframe.
-
-**Schema is `claude.*` — never `claude_pm.*` or `claude_family.*`.**
+Display feedback items with optional filters for status, type, and search keywords.
 
 ---
 
-## Execute These Steps
+## Step 1: Detect Current Project
 
-### Step 1: Detect Current Project
+Determine project_id from current working directory:
 
-```sql
-SELECT id, project_code, project_name
-FROM claude.projects
-WHERE project_code ILIKE '%current-project-keyword%'
-   OR project_name ILIKE '%current-project-keyword%'
-LIMIT 1;
-```
+**Quick Reference:**
+- `claude-pm` → `a3097e59-7799-4114-86a7-308702115905`
+- `nimbus-user-loader` → `07206097-4caf-423b-9eb8-541d4c25da6c`
+- `ATO-Tax-Agent` → `7858ecf4-4550-456d-9509-caea0339ec0d`
 
-### Step 2: Ask User for Filters (Optional)
+---
 
-Ask what they want to see:
+## Step 2: Ask User for Filters (Optional)
 
-1. **Status**: All / New / Triaged / In Progress / Resolved / Won't Fix
+Use AskUserQuestion to ask what they want to see:
+
+**Filter Options:**
+1. **Status**: All / New / In Progress / Fixed / Won't Fix
 2. **Type**: All / Bug / Design / Question / Change
 3. **Search**: Keywords to search in descriptions (optional)
 4. **Timeframe**: All time / Last 7 days / Last 30 days / This year
 
-### Step 3: Build and Execute Query
+---
 
-**Default Query (all open items, newest first):**
+## Step 3: Build and Execute Query
 
+Based on user's selections, build the appropriate SQL:
+
+**Default Query (All Open):**
 ```sql
 SELECT
-    f.id::text,
-    f.feedback_type,
-    f.status,
-    f.priority,
-    f.description,
-    f.created_at,
-    f.updated_at
-FROM claude.feedback f
-WHERE f.project_id = 'PROJECT-ID'::uuid
-  AND f.status IN ('new', 'triaged', 'in_progress')
-ORDER BY f.priority ASC, f.created_at DESC;
+    feedback_id::text,
+    feedback_type,
+    status,
+    description,
+    created_at,
+    updated_at,
+    resolved_at,
+    (SELECT COUNT(*) FROM claude_pm.project_feedback_comments c
+     WHERE c.feedback_id = f.feedback_id) as comments
+FROM claude_pm.project_feedback f
+WHERE project_id = 'PROJECT-ID'::uuid
+  AND status IN ('new', 'in_progress')
+ORDER BY created_at DESC;
 ```
 
-**Add type filter:**
+**With Type Filter:**
 ```sql
--- Append to WHERE clause:
-AND f.feedback_type = 'bug'  -- bug | design | question | change
+-- Add to WHERE clause:
+AND feedback_type = 'bug'  -- or 'design', 'question', 'change'
 ```
 
-**Add status filter:**
+**With Status Filter:**
 ```sql
--- Replace status filter or append:
-AND f.status = 'resolved'  -- new | triaged | in_progress | resolved | wont_fix | duplicate
+-- Add to WHERE clause:
+AND status = 'fixed'  -- or 'new', 'in_progress', 'wont_fix'
 ```
 
-**Add keyword search:**
+**With Search:**
 ```sql
--- Append to WHERE clause:
-AND f.description ILIKE '%search-keyword%'
+-- Add to WHERE clause:
+AND description ILIKE '%search-keyword%'
 ```
 
-**Add timeframe:**
+**With Timeframe:**
 ```sql
--- Append to WHERE clause:
-AND f.created_at > NOW() - INTERVAL '7 days'  -- or '30 days', '1 year'
+-- Add to WHERE clause:
+AND created_at > NOW() - INTERVAL '7 days'  -- or '30 days', '1 year'
 ```
-
-### Step 4: Display Results
-
-Format results as a readable list:
-
-```
-FEEDBACK LIST - [Project Name]
-
-Filters: [Status: New/Triaged/In Progress] [Type: All] [Search: none] [Timeframe: All]
-Total Results: X items
-
-ID (prefix)  | Type    | Status      | Priority | Created    | Description
--------------|---------|-------------|----------|------------|------------
-a1b2c3d4     | bug     | new         | 2-high   | 2026-03-01 | Export button...
-b2c3d4e5     | design  | in_progress | 3-medium | 2026-02-28 | Sidebar layout...
 
 ---
-View details:  SELECT * FROM claude.feedback WHERE id = 'full-uuid'::uuid;
-Advance status: mcp__project-tools__advance_status(type="feedback", id="FB-N", status="triaged")
+
+## Step 4: Display Results
+
+Format results in a readable table:
+
+```
+📋 FEEDBACK LIST - [Project Name]
+
+Filters: [Status: New/In Progress] [Type: All] [Search: none] [Timeframe: All]
+
+Total Results: X items
+
+┌──────────────────────────────────────┬──────────┬──────────┬─────────────┬──────────┬──────────┐
+│ ID (first 8 chars)                   │ Type     │ Status   │ Created     │ Comments │ Desc     │
+├──────────────────────────────────────┼──────────┼──────────┼─────────────┼──────────┼──────────┤
+│ a1b2c3d4                             │ 🐛 Bug   │ New      │ 2025-11-05  │ 2        │ Login... │
+│ b2c3d4e5                             │ 🎨 Design│ Progress │ 2025-11-04  │ 5        │ Export.. │
+└──────────────────────────────────────┴──────────┴──────────┴─────────────┴──────────┴──────────┘
+
+---
+View details: SELECT * FROM claude_pm.project_feedback WHERE feedback_id = 'full-uuid'::uuid
+View comments: SELECT * FROM claude_pm.project_feedback_comments WHERE feedback_id = 'full-uuid'::uuid ORDER BY created_at
 ```
 
-### Step 5: Offer Actions
+---
+
+## Step 5: Offer Actions
+
+Present common next actions:
 
 ```
 What would you like to do?
 
-1. View details of a specific item (provide FB code or ID prefix)
-2. Advance the status of an item
-3. Create new feedback (/feedback-create)
-4. Check open items summary (/feedback-check)
+1. View details of specific item (provide ID)
+2. Update status
+3. Add comment
+4. Create new feedback
+5. Export to CSV (if needed)
+
+Commands:
+- /feedback-check - Quick view of open items
+- /feedback-create - Create new item
 ```
 
 ---
 
 ## Advanced Queries
 
-**Count by status and type:**
-
+**Get Statistics:**
 ```sql
+-- Count by status and type
 SELECT
     feedback_type,
     status,
     COUNT(*) as count
-FROM claude.feedback
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
 GROUP BY feedback_type, status
 ORDER BY feedback_type, status;
 ```
 
-**Aging report (how long items have been open):**
-
+**Get Most Discussed:**
 ```sql
+-- Items with most comments
 SELECT
-    id::text,
+    f.feedback_id::text,
+    f.feedback_type,
+    f.description,
+    COUNT(c.comment_id) as comment_count
+FROM claude_pm.project_feedback f
+LEFT JOIN claude_pm.project_feedback_comments c ON f.feedback_id = c.feedback_id
+WHERE f.project_id = 'PROJECT-ID'::uuid
+GROUP BY f.feedback_id, f.feedback_type, f.description
+HAVING COUNT(c.comment_id) > 0
+ORDER BY comment_count DESC
+LIMIT 10;
+```
+
+**Get Aging Report:**
+```sql
+-- How long items have been open
+SELECT
+    feedback_id::text,
     feedback_type,
     status,
     description,
     created_at,
-    EXTRACT(DAY FROM (NOW() - created_at))::int as days_open
-FROM claude.feedback
+    EXTRACT(DAY FROM (NOW() - created_at)) as days_open
+FROM claude_pm.project_feedback
 WHERE project_id = 'PROJECT-ID'::uuid
-  AND status IN ('new', 'triaged', 'in_progress')
+  AND status IN ('new', 'in_progress')
 ORDER BY days_open DESC;
 ```
 
-**All projects — cross-project view:**
+---
 
+## Export Options
+
+**CSV Export (if requested):**
 ```sql
-SELECT
-    p.project_code,
-    f.feedback_type,
-    f.status,
-    COUNT(*) as count
-FROM claude.feedback f
-JOIN claude.projects p ON f.project_id = p.id
-WHERE f.status IN ('new', 'triaged', 'in_progress')
-GROUP BY p.project_code, f.feedback_type, f.status
-ORDER BY p.project_code, f.feedback_type;
+-- Copy to CSV
+COPY (
+    SELECT
+        feedback_id,
+        feedback_type,
+        status,
+        description,
+        created_at,
+        updated_at,
+        resolved_at
+    FROM claude_pm.project_feedback
+    WHERE project_id = 'PROJECT-ID'::uuid
+    ORDER BY created_at DESC
+) TO 'C:\Projects\{project}\feedback_export.csv' WITH CSV HEADER;
 ```
 
 ---
@@ -155,31 +196,23 @@ ORDER BY p.project_code, f.feedback_type;
 
 **If no results:**
 ```
-No feedback items match your filters.
+✅ No feedback items match your filters.
 
 Try:
-- Broaden status filter (include 'resolved' items)
+- Broaden status filter (include 'fixed' items)
 - Remove search keywords
 - Expand timeframe
 ```
 
 **If project not found:**
-- Query `SELECT id, project_code FROM claude.projects ORDER BY project_code;`
-- Use `/project-init` to register if missing
+- Guide to project registration
+- Link to feedback-system-guide.md
 
 ---
 
-## Valid Column Values
+**Quick Usage Examples:**
 
-| Column | Valid Values |
-|--------|-------------|
-| `feedback_type` | `bug`, `design`, `question`, `change` |
-| `status` | `new`, `triaged`, `in_progress`, `resolved`, `wont_fix`, `duplicate` |
-| `priority` | `1` (critical) to `5` (low) |
-
----
-
-**Version**: 2.0 (Rewrote: use claude.feedback schema, removed all claude_pm.* references)
-**Created**: 2025-12-20
-**Updated**: 2026-03-09
-**Location**: .claude/commands/feedback-list.md
+1. "Show all bugs" → Type filter: bug, Status: all
+2. "What's fixed this week?" → Status: fixed, Timeframe: 7 days
+3. "Search for login issues" → Search: "login"
+4. "Show everything" → All filters: All

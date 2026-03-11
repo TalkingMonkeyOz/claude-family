@@ -700,6 +700,30 @@ def start_session(
                     result["relevant_knowledge"] = [dict(r) for r in cur.fetchall()]
                 except Exception:
                     result["relevant_knowledge"] = []
+
+                # Active workfiles (components with file counts, pinned first)
+                try:
+                    cur.execute("""
+                        SELECT component,
+                               COUNT(*) AS file_count,
+                               MAX(updated_at) AS last_updated,
+                               COUNT(*) FILTER (WHERE is_pinned) AS pinned_count
+                        FROM claude.project_workfiles
+                        WHERE project_id = %s::uuid AND is_active = TRUE
+                        GROUP BY component
+                        ORDER BY MAX(CASE WHEN is_pinned THEN 1 ELSE 0 END) DESC, MAX(updated_at) DESC
+                        LIMIT 10
+                    """, (project_id,))
+                    workfile_rows = cur.fetchall()
+                    if workfile_rows:
+                        result["active_workfiles"] = [{
+                            "component": r['component'],
+                            "file_count": r['file_count'],
+                            "last_updated": str(r['last_updated']),
+                            "pinned_count": r['pinned_count'],
+                        } for r in workfile_rows]
+                except Exception:
+                    pass
         else:
             # No project_id - still get messages
             cur.execute("""
@@ -5795,6 +5819,246 @@ def _defer_message(message_id: str, reason: str) -> dict:
         return {"success": False, "error": str(e)}
     finally:
         conn.close()
+
+
+# ============================================================================
+# Workfile Tools (Project-Scoped Component Working Context)
+# ============================================================================
+
+
+@mcp.tool()
+def stash(
+    component: str,
+    title: str,
+    content: str,
+    project: str = "",
+    workfile_type: str = "notes",
+    tags: list[str] | None = None,
+    feature_code: str | None = None,
+    is_pinned: bool = False,
+    mode: str = "replace",
+) -> dict:
+    """Store/update a workfile. UPSERT on (project, component, title).
+
+    Like filing a document in a cabinet: project is the cabinet, component
+    is the drawer (e.g. "parallel-runner", "auth-flow"), title is the file.
+
+    Use when: Saving component-scoped working context that should bridge
+    sessions. Unlike session_facts (session-scoped) or knowledge (permanent),
+    workfiles are project+component scoped with transient lifecycle.
+    Returns: {success, workfile_id, action: "created"|"updated"|"appended",
+              component, title}.
+
+    Args:
+        component: Drawer name (e.g., "parallel-runner", "auth-flow").
+        title: File title within component (e.g., "approach notes", "open questions").
+        content: The workfile content to store.
+        project: Project name. Defaults to current directory.
+        workfile_type: notes, findings, questions, approach, investigation, or reference.
+        tags: Optional list of tags for categorization.
+        feature_code: Optional link to a feature (e.g., "F12").
+        is_pinned: If True, auto-surfaces at session start and in precompact.
+        mode: "replace" (default) overwrites content, "append" concatenates with separator.
+    """
+    from server import tool_stash
+    return _run_async(tool_stash(
+        component=component, title=title, content=content,
+        project=project, workfile_type=workfile_type, tags=tags,
+        feature_code=feature_code, is_pinned=is_pinned, mode=mode,
+    ))
+
+
+@mcp.tool()
+def unstash(
+    component: str,
+    title: str = "",
+    project: str = "",
+) -> dict:
+    """Retrieve workfile(s). If title given, single file. If omitted, all active in component.
+
+    Use when: Loading component working context at the start of work on a
+    specific component, or retrieving specific notes/findings.
+    Returns: {success, component, file_count, files: [{title, content,
+              workfile_type, tags, updated_at, access_count}]}.
+
+    Args:
+        component: Drawer name to retrieve from.
+        title: Specific file title. If empty, returns all files in component.
+        project: Project name. Defaults to current directory.
+    """
+    from server import tool_unstash
+    return _run_async(tool_unstash(
+        component=component,
+        title=title or None,
+        project=project,
+    ))
+
+
+@mcp.tool()
+def list_workfiles(
+    project: str = "",
+    component: str = "",
+    is_active: bool = True,
+) -> dict:
+    """Browse the filing cabinet. Groups by component with file counts and last-updated.
+
+    No content returned (metadata only — keeps response small).
+
+    Use when: Discovering what components have workfiles, how many files each has,
+    and which are pinned. If component given, lists files within that component.
+    Returns: {success, project, components: [{name, file_count, last_updated,
+              pinned_count}]} or {success, project, component, files: [...]}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+        component: If given, list files in this component. If empty, list all components.
+        is_active: Filter by active status (default True). Set False to see archived.
+    """
+    from server import tool_list_workfiles
+    return _run_async(tool_list_workfiles(
+        project=project,
+        component=component or None,
+        is_active=is_active,
+    ))
+
+
+@mcp.tool()
+def search_workfiles(
+    query: str,
+    project: str = "",
+    component: str = "",
+    limit: int = 5,
+) -> dict:
+    """Semantic search via Voyage AI embeddings + optional component filter.
+
+    Returns content preview (200 chars) + similarity score.
+
+    Use when: Looking for workfile content by meaning rather than exact title.
+    Useful for finding notes about a topic across all components.
+    Returns: {success, query, result_count, results: [{component, title,
+              preview, similarity, workfile_type}]}.
+
+    Args:
+        query: Natural language search query.
+        project: Project name. Defaults to current directory.
+        component: Optional filter to search within a specific component.
+        limit: Maximum number of results (default 5).
+    """
+    from server import tool_search_workfiles
+    return _run_async(tool_search_workfiles(
+        query=query,
+        project=project,
+        component=component or None,
+        limit=limit,
+    ))
+
+
+# ============================================================================
+# Activity / WCC Tools (Work Context Container)
+# ============================================================================
+
+
+@mcp.tool()
+def create_activity(
+    name: str,
+    aliases: list[str] | None = None,
+    description: str = "",
+    project: str = "",
+) -> dict:
+    """Create a named activity for WCC context assembly.
+
+    Activities represent named work contexts (e.g., "auth-flow",
+    "data-migration") that group related knowledge, workfiles, tasks,
+    and session facts. WCC auto-detects activities from prompts and
+    assembles context automatically.
+
+    Use when: Explicitly creating an activity with aliases for better
+    detection. Activities are also auto-created when workfile components
+    match prompt text.
+    Returns: {success, activity_id, action: "created"|"updated", name, project}.
+
+    Args:
+        name: Activity name (e.g., "auth-flow", "data-migration").
+        aliases: Alternative names for detection (e.g., ["authentication", "login"]).
+        description: What this activity is about.
+        project: Project name. Defaults to current directory.
+    """
+    from server import tool_create_activity
+    return _run_async(tool_create_activity(
+        name=name, aliases=aliases, description=description, project=project,
+    ))
+
+
+@mcp.tool()
+def list_activities(
+    project: str = "",
+) -> dict:
+    """List activities with access stats for a project.
+
+    Use when: Reviewing what activities exist, how often they're accessed,
+    and managing activity lifecycle.
+    Returns: {success, project, count, activities: [{activity_id, name,
+              aliases, description, last_accessed_at, access_count, is_active}]}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+    """
+    from server import tool_list_activities
+    return _run_async(tool_list_activities(project=project))
+
+
+@mcp.tool()
+def update_activity(
+    activity_id: str,
+    aliases: list[str] | None = None,
+    description: str | None = None,
+    is_active: bool | None = None,
+) -> dict:
+    """Update an existing activity's aliases, description, or active status.
+
+    Use when: Adding aliases for better detection, updating descriptions,
+    or deactivating stale activities.
+    Returns: {success, activity_id, name, updated_fields}.
+
+    Args:
+        activity_id: UUID of the activity to update.
+        aliases: New aliases list (replaces existing).
+        description: New description.
+        is_active: Set to False to deactivate.
+    """
+    from server import tool_update_activity
+    return _run_async(tool_update_activity(
+        activity_id=activity_id, aliases=aliases,
+        description=description, is_active=is_active,
+    ))
+
+
+@mcp.tool()
+def assemble_context(
+    activity_name: str,
+    project: str = "",
+    budget: int = 1000,
+) -> dict:
+    """Manually assemble WCC context for a named activity.
+
+    Queries 6 sources (workfiles, knowledge, features, session facts,
+    vault RAG, BPMN) with proportional budget allocation and returns
+    the assembled context. Normally this happens automatically via the
+    RAG hook — use this for manual inspection or debugging.
+
+    Use when: Manually triggering context assembly, debugging WCC output,
+    or loading context for an activity without waiting for auto-detection.
+    Returns: {success, activity_name, project, context, token_estimate}.
+
+    Args:
+        activity_name: Name of the activity to assemble context for.
+        project: Project name. Defaults to current directory.
+        budget: Token budget for assembled context (default 1000).
+    """
+    from server import tool_assemble_context
+    return _run_async(tool_assemble_context(
+        activity_name=activity_name, project=project, budget=budget,
+    ))
 
 
 # ============================================================================

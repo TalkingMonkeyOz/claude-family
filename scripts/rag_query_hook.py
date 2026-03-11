@@ -360,6 +360,22 @@ from config import get_db_connection, detect_psycopg
 psycopg_mod, PSYCOPG_VERSION, _, _ = detect_psycopg()
 DB_AVAILABLE = psycopg_mod is not None
 
+# WCC (Work Context Container) assembly — imported lazily
+_wcc_module = None  # Cached module reference
+
+
+def _get_wcc_module():
+    """Lazy-load wcc_assembly module."""
+    global _wcc_module
+    if _wcc_module is None:
+        try:
+            import wcc_assembly
+            _wcc_module = wcc_assembly
+        except ImportError:
+            logger.warning("wcc_assembly module not found — WCC disabled")
+    return _wcc_module
+
+
 # Voyage AI is lazy-loaded in generate_embedding() to save ~100ms startup time
 # Only imported when embeddings are actually needed
 VOYAGE_AVAILABLE = None  # Will be set on first use
@@ -2034,14 +2050,46 @@ def main():
         except Exception as e:
             logger.warning(f"Design map loading failed: {e}")
 
+        # WCC (WORK CONTEXT CONTAINER): Activity-based context assembly
+        # Detects activity switch, assembles from 6 sources, caches between prompts.
+        # When WCC is active, it REPLACES per-source knowledge/RAG/nimbus queries.
+        wcc_context = None
+        wcc_activity = None
+        wcc_active = False
+        if DB_AVAILABLE:
+            try:
+                wcc_mod = _get_wcc_module()
+                if wcc_mod:
+                    wcc_conn = get_db_connection()
+                    if wcc_conn:
+                        try:
+                            wcc_context, wcc_activity = wcc_mod.get_wcc_context(
+                                prompt=user_prompt,
+                                project_name=project_name,
+                                conn=wcc_conn,
+                                session_id=session_id,
+                                total_budget=1500,
+                                generate_embedding_fn=generate_embedding,
+                            )
+                            wcc_active = wcc_context is not None
+                            if wcc_active:
+                                logger.info(f"WCC active for activity: {wcc_activity}")
+                        finally:
+                            wcc_conn.close()
+            except Exception as e:
+                logger.warning(f"WCC assembly failed (non-fatal): {e}")
+
         # CONDITIONAL: Only query RAG/knowledge for questions and exploration
         # Action prompts ("implement X", "fix Y") don't benefit from documentation retrieval
+        # When WCC is active, skip per-source queries (WCC already assembled them)
         knowledge_context = None
         rag_context = None
         nimbus_context = None
         schema_context = None
 
-        if needs_rag(user_prompt):
+        if wcc_active:
+            logger.info(f"WCC active — skipping per-source RAG/knowledge queries")
+        elif needs_rag(user_prompt):
             logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
 
             # Query KNOWLEDGE GRAPH (pgvector seed + relationship walk)
@@ -2120,14 +2168,16 @@ def main():
         #
         # Priority 1-10 = trimmable (dropped lowest-priority-first when over budget):
         #   1. Process failures  (self-improvement loop — high urgency)
-        #   2. Config warning    (conditional, but important when triggered)
-        #   3. Knowledge graph   (high-value learned patterns)
-        #   4. Vault RAG         (documentation retrieval)
-        #   5. Skill suggestions (discovery aid)
-        #   6. Schema context    (table/column context)
-        #   7. Design map        (project orientation)
-        #   8. Nimbus context    (project-specific, narrow audience)
-        #   9. Periodic reminders (lowest priority — informational only)
+        #   2. WCC context       (activity-scoped assembled context — replaces 3-9 when active)
+        #   3. Config warning    (conditional, but important when triggered)
+        #   4. Knowledge graph   (high-value learned patterns)
+        #   5. Vault RAG         (documentation retrieval)
+        #   6. Skill suggestions (discovery aid)
+        #   7. Schema context    (table/column context)
+        #   8. Design map        (project orientation)
+        #   9. Nimbus context    (project-specific, narrow audience)
+        #
+        # When WCC is active, blocks 4-9 are None (WCC already contains their data).
         #
         # Fail-open: if _apply_context_budget() errors, the except block below
         # falls back to joining all non-None parts (previous behaviour).
@@ -2136,13 +2186,14 @@ def main():
             (0, critical_facts or ""),
             (0, context_health_msg or ""),
             (1, failure_context or ""),
-            (2, config_warning or ""),
-            (3, knowledge_context or ""),
-            (4, rag_context or ""),
-            (5, skill_context or ""),
-            (6, schema_context or ""),
-            (7, design_map_context or ""),
-            (8, nimbus_context or ""),
+            (2, wcc_context or ""),
+            (3, config_warning or ""),
+            (4, knowledge_context or ""),
+            (5, rag_context or ""),
+            (6, skill_context or ""),
+            (7, schema_context or ""),
+            (8, design_map_context or ""),
+            (9, nimbus_context or ""),
         ]
 
         try:

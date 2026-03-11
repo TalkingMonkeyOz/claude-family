@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+                  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+                  id="Definitions_1"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="L2_bpmn_viewer" name="BPMN Viewer Runtime" isExecutable="true">
+
+    <!-- Start -->
+    <bpmn:startEvent id="Start" name="User navigates to BPMN Processes">
+      <bpmn:outgoing>Flow_1</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Load process list -->
+    <bpmn:serviceTask id="LoadProcessList" name="[TAURI] Query bpmn_processes from DB">
+      <bpmn:incoming>Flow_1</bpmn:incoming>
+      <bpmn:outgoing>Flow_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:exclusiveGateway id="GW_DbAvailable" name="DB Available?">
+      <bpmn:incoming>Flow_2</bpmn:incoming>
+      <bpmn:outgoing>Flow_3_yes</bpmn:outgoing>
+      <bpmn:outgoing>Flow_3_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="ShowDbError" name="[UI] Show Database unavailable Alert">
+      <bpmn:incoming>Flow_3_no</bpmn:incoming>
+      <bpmn:outgoing>Flow_end_error1</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="End_DbError" name="End (DB Error)">
+      <bpmn:incoming>Flow_end_error1</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Display list -->
+    <bpmn:userTask id="DisplayProcessList" name="[UI] Display process list in DataGrid">
+      <bpmn:incoming>Flow_3_yes</bpmn:incoming>
+      <bpmn:outgoing>Flow_4</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- User selects process -->
+    <bpmn:userTask id="SelectProcess" name="[USER] Select process from list">
+      <bpmn:incoming>Flow_4</bpmn:incoming>
+      <bpmn:incoming>Flow_back</bpmn:incoming>
+      <bpmn:outgoing>Flow_5</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Lookup file path -->
+    <bpmn:serviceTask id="LookupFilePath" name="[TAURI] Lookup file_path + project_path">
+      <bpmn:incoming>Flow_5</bpmn:incoming>
+      <bpmn:outgoing>Flow_6</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Read XML -->
+    <bpmn:serviceTask id="ReadXml" name="[TAURI] Read XML file from disk">
+      <bpmn:incoming>Flow_6</bpmn:incoming>
+      <bpmn:outgoing>Flow_7</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:exclusiveGateway id="GW_FileExists" name="File Exists?">
+      <bpmn:incoming>Flow_7</bpmn:incoming>
+      <bpmn:outgoing>Flow_8_yes</bpmn:outgoing>
+      <bpmn:outgoing>Flow_8_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- File not found fallback -->
+    <bpmn:userTask id="ShowFileNotFound" name="[UI] Show File not found warning + fallback metadata">
+      <bpmn:incoming>Flow_8_no</bpmn:incoming>
+      <bpmn:outgoing>Flow_end_degraded</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="End_Degraded" name="End (Degraded)">
+      <bpmn:incoming>Flow_end_degraded</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- XML validity check -->
+    <bpmn:exclusiveGateway id="GW_XmlValid" name="XML Valid?">
+      <bpmn:incoming>Flow_8_yes</bpmn:incoming>
+      <bpmn:outgoing>Flow_9_yes</bpmn:outgoing>
+      <bpmn:outgoing>Flow_9_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="ShowXmlError" name="[UI] Show Invalid BPMN XML error">
+      <bpmn:incoming>Flow_9_no</bpmn:incoming>
+      <bpmn:outgoing>Flow_end_xmlerror</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="End_XmlError" name="End (XML Error)">
+      <bpmn:incoming>Flow_end_xmlerror</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Render diagram -->
+    <bpmn:serviceTask id="RenderDiagram" name="[VIEWER] Render diagram in bpmn-js">
+      <bpmn:incoming>Flow_9_yes</bpmn:incoming>
+      <bpmn:outgoing>Flow_10</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- User interaction -->
+    <bpmn:userTask id="InteractWithDiagram" name="[USER] Interact with diagram">
+      <bpmn:incoming>Flow_10</bpmn:incoming>
+      <bpmn:outgoing>Flow_11</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="GW_Interaction" name="Interaction Type?">
+      <bpmn:incoming>Flow_11</bpmn:incoming>
+      <bpmn:outgoing>Flow_click</bpmn:outgoing>
+      <bpmn:outgoing>Flow_drilldown</bpmn:outgoing>
+      <bpmn:outgoing>Flow_export</bpmn:outgoing>
+      <bpmn:outgoing>Flow_navigate_away</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Click element -->
+    <bpmn:userTask id="ShowElementDetail" name="[UI] Highlight + show detail panel">
+      <bpmn:incoming>Flow_click</bpmn:incoming>
+      <bpmn:outgoing>Flow_back_to_interact</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Drill-down into subprocess -->
+    <bpmn:serviceTask id="DrillDown" name="[TAURI] Load called process XML">
+      <bpmn:incoming>Flow_drilldown</bpmn:incoming>
+      <bpmn:outgoing>Flow_back</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Export SVG -->
+    <bpmn:serviceTask id="ExportSvg" name="[VIEWER] Export diagram as SVG">
+      <bpmn:incoming>Flow_export</bpmn:incoming>
+      <bpmn:outgoing>Flow_back_to_interact2</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <!-- Navigate away -->
+    <bpmn:serviceTask id="DestroyViewer" name="[VIEWER] destroy()">
+      <bpmn:incoming>Flow_navigate_away</bpmn:incoming>
+      <bpmn:outgoing>Flow_end_normal</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="End_Normal" name="End">
+      <bpmn:incoming>Flow_end_normal</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="Flow_1" sourceRef="Start" targetRef="LoadProcessList" />
+    <bpmn:sequenceFlow id="Flow_2" sourceRef="LoadProcessList" targetRef="GW_DbAvailable" />
+    <bpmn:sequenceFlow id="Flow_3_yes" name="Yes" sourceRef="GW_DbAvailable" targetRef="DisplayProcessList" />
+    <bpmn:sequenceFlow id="Flow_3_no" name="No" sourceRef="GW_DbAvailable" targetRef="ShowDbError" />
+    <bpmn:sequenceFlow id="Flow_end_error1" sourceRef="ShowDbError" targetRef="End_DbError" />
+    <bpmn:sequenceFlow id="Flow_4" sourceRef="DisplayProcessList" targetRef="SelectProcess" />
+    <bpmn:sequenceFlow id="Flow_5" sourceRef="SelectProcess" targetRef="LookupFilePath" />
+    <bpmn:sequenceFlow id="Flow_6" sourceRef="LookupFilePath" targetRef="ReadXml" />
+    <bpmn:sequenceFlow id="Flow_7" sourceRef="ReadXml" targetRef="GW_FileExists" />
+    <bpmn:sequenceFlow id="Flow_8_yes" name="Yes" sourceRef="GW_FileExists" targetRef="GW_XmlValid" />
+    <bpmn:sequenceFlow id="Flow_8_no" name="No" sourceRef="GW_FileExists" targetRef="ShowFileNotFound" />
+    <bpmn:sequenceFlow id="Flow_end_degraded" sourceRef="ShowFileNotFound" targetRef="End_Degraded" />
+    <bpmn:sequenceFlow id="Flow_9_yes" name="Yes" sourceRef="GW_XmlValid" targetRef="RenderDiagram" />
+    <bpmn:sequenceFlow id="Flow_9_no" name="No" sourceRef="GW_XmlValid" targetRef="ShowXmlError" />
+    <bpmn:sequenceFlow id="Flow_end_xmlerror" sourceRef="ShowXmlError" targetRef="End_XmlError" />
+    <bpmn:sequenceFlow id="Flow_10" sourceRef="RenderDiagram" targetRef="InteractWithDiagram" />
+    <bpmn:sequenceFlow id="Flow_11" sourceRef="InteractWithDiagram" targetRef="GW_Interaction" />
+    <bpmn:sequenceFlow id="Flow_click" name="Click element" sourceRef="GW_Interaction" targetRef="ShowElementDetail" />
+    <bpmn:sequenceFlow id="Flow_drilldown" name="CallActivity drill-down" sourceRef="GW_Interaction" targetRef="DrillDown" />
+    <bpmn:sequenceFlow id="Flow_export" name="Export SVG" sourceRef="GW_Interaction" targetRef="ExportSvg" />
+    <bpmn:sequenceFlow id="Flow_navigate_away" name="Navigate away" sourceRef="GW_Interaction" targetRef="DestroyViewer" />
+    <bpmn:sequenceFlow id="Flow_back" sourceRef="DrillDown" targetRef="SelectProcess" />
+    <bpmn:sequenceFlow id="Flow_back_to_interact" sourceRef="ShowElementDetail" targetRef="InteractWithDiagram" />
+    <bpmn:sequenceFlow id="Flow_back_to_interact2" sourceRef="ExportSvg" targetRef="InteractWithDiagram" />
+    <bpmn:sequenceFlow id="Flow_end_normal" sourceRef="DestroyViewer" targetRef="End_Normal" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

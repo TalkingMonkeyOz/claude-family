@@ -32,6 +32,8 @@ Captures, stores, and delivers institutional knowledge across sessions.
 | `40-Procedures/` | SOPs, workflows |
 | `Claude Family/` | System docs |
 
+**NEW (F177)**: Work Context Container (WCC) automatically detects activities and assembles context from 6 sources. See [[Project Tools MCP#Work Context Container]] for tools.
+
 ### 2. Sync Script
 
 **Script**: `scripts/sync_obsidian_to_db.py`
@@ -59,10 +61,13 @@ python scripts/sync_obsidian_to_db.py --force
 **Hook**: UserPromptSubmit
 
 On prompt submit:
-1. Query `claude.knowledge` embeddings (Voyage AI)
-2. Query `claude.vault_embeddings` for vault docs
-3. Inject relevant context (top 2 knowledge + top 3 vault)
-4. Log retrieval to `rag_usage_log`
+1. **Activity detection**: Check if user switched activities (session_fact override, name/alias match, word overlap, workfile component)
+2. **If activity changed**: Assemble WCC context from 6 sources (workfiles, knowledge, features, facts, vault, BPMN)
+3. **Otherwise**: Use cached WCC context (5-min TTL) or fall back to knowledge/vault RAG
+4. Inject relevant context (WCC or knowledge + vault)
+5. Log retrieval to `rag_usage_log`
+
+**WCC behavior**: When active, per-source knowledge/vault queries SKIPPED (WCC replaces them). Token budget stays constant.
 
 **Note**: Process router (process_registry) is deprecated. Skills system replaced it.
 
@@ -78,8 +83,10 @@ embed_vault_documents.py (Voyage AI embeddings)
 claude.vault_embeddings + claude.knowledge (PostgreSQL)
     ↓
 rag_query_hook.py (UserPromptSubmit hook)
+    ├─ detect_activity() → check session_fact, name/alias, word overlap, workfile
+    └─ assemble_wcc() → query 6 sources in parallel (if activity changed)
     ↓
-Claude Session (context injection)
+Claude Session (context injection — WCC or knowledge+vault)
 ```
 
 ---
@@ -110,6 +117,7 @@ synced_at: '2025-12-20'  # Managed by sync script
 | `claude.vault_embeddings` | Document chunk embeddings |
 | `claude.rag_usage_log` | RAG query tracking |
 | `claude.skill_content` | Skills repository |
+| `claude.activities` | Named activities for WCC detection (NEW) |
 
 **Deprecated**: `process_registry`, `process_triggers` (replaced by skills system)
 
@@ -119,6 +127,12 @@ synced_at: '2025-12-20'  # Managed by sync script
 SELECT title, knowledge_type
 FROM claude.knowledge
 WHERE 'claude-family' = ANY(applies_to_projects);
+
+-- Activities and access stats
+SELECT name, aliases, (access_stats->>'access_count')::int as accesses
+FROM claude.activities
+WHERE project_id = (SELECT project_id FROM claude.projects WHERE project_name = 'claude-family')
+ORDER BY (access_stats->>'last_accessed') DESC;
 
 -- Recent retrievals
 SELECT query_text, matched_knowledge
@@ -145,10 +159,13 @@ ORDER BY retrieved_at DESC LIMIT 10;
 - [[Database Architecture]] - Schema
 - [[Claude Hooks]] - Hook config
 - [[Documentation Standards]] - Writing docs
+- [[Project Tools MCP]] - WCC tools reference
+- [[RAG Usage Guide]] - WCC integration details
 
 ---
 
-**Version**: 2.1 (RAG system update, removed process_registry refs)
+**Version**: 2.2 (Added Work Context Container - F177)
 **Created**: 2025-12-20
-**Updated**: 2026-01-19
+**Updated**: 2026-03-10
 **Location**: knowledge-vault/Claude Family/Knowledge System.md
+**Changes**: Added WCC activity detection + assembly flow, activities table, activity query examples

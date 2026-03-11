@@ -33,7 +33,7 @@ SessionStart Hook → Load State → Work → PreCompact Hook → SessionEnd Hoo
 | Order | Hook Event | Script | What It Does |
 |-------|-----------|--------|--------------|
 | 1 | **SessionStart** | `session_startup_hook_enhanced.py` | Log session, load state, health check |
-| 2 | **UserPromptSubmit** | `rag_query_hook.py` | RAG context + core protocol + periodic reminders |
+| 2 | **UserPromptSubmit** | `rag_query_hook.py` | Detect activity change → assemble WCC context (6 sources) + knowledge/vault RAG (if WCC inactive) + core protocol + reminders |
 | 3 | **PreToolUse** (Write/Edit) | `context_injector_hook.py` | Inject coding standards from context_rules |
 | 3b | **PreToolUse** (Write/Edit) | `standards_validator.py` | Validate content against standards |
 | 4 | **PostToolUse** (TodoWrite) | `todo_sync_hook.py` | Sync todos to claude.todos |
@@ -57,6 +57,8 @@ SessionStart Hook → Load State → Work → PreCompact Hook → SessionEnd Hoo
 | `claude.identities` | Claude instances | identity_id, identity_name, platform |
 | `claude.agent_sessions` | Spawned agents | session_id, agent_type, task_description |
 | `claude.mcp_usage` | MCP tool calls | mcp_server, tool_name, session_id, success |
+| `claude.project_workfiles` | Cross-session component working context | project_id, component, title (unique together), content, is_pinned |
+| `claude.activities` | Named activities (WCC) | activity_id, project_id, name, aliases JSONB, embedding vector(1024), access_stats |
 
 **FK Constraints**:
 - `sessions.identity_id` → `identities.identity_id` (exists)
@@ -91,6 +93,8 @@ SessionStart Hook → Load State → Work → PreCompact Hook → SessionEnd Hoo
 | MCP usage logging | Analytics on tool usage patterns |
 | Session facts | Crash recovery for credentials, decisions |
 | Inter-Claude messaging | Multi-agent coordination |
+| Project Workfiles | Component-scoped working context that bridges sessions. stash/unstash pattern. Pinned files auto-surface at session start and in precompact. |
+| Work Context Container (WCC) | Auto-detect activity changes + assemble 6-source context (workfiles, knowledge, features, facts, vault, BPMN). Runs in RAG hook. 5-min cache. Budget-capped. |
 
 ---
 
@@ -132,7 +136,8 @@ workspaces.startup_config (overrides)
 
 ---
 
-**Version**: 3.0 (Full rewrite - accurate to 2026-02-07 system state)
+**Version**: 3.2
 **Created**: 2025-12-26
-**Updated**: 2026-02-07
+**Updated**: 2026-03-10
 **Location**: Claude Family/Session Architecture.md
+**Changes**: Added Work Context Container (WCC) to RAG hook, activities table, custom enhancements list

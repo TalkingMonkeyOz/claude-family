@@ -70,12 +70,22 @@ at session start so they can be addressed immediately.</bpmn:documentation>
     <!-- User Task: Load State (user/test injects prior_state and state_loaded) -->
     <bpmn:userTask id="load_state" name="Load State">
       <bpmn:incoming>flow_check_messages_to_load_state</bpmn:incoming>
-      <bpmn:outgoing>flow_load_state_to_prior_gateway</bpmn:outgoing>
+      <bpmn:outgoing>flow_load_state_to_check_workfiles</bpmn:outgoing>
     </bpmn:userTask>
+
+    <!-- Check for active workfiles in project (pinned first) -->
+    <bpmn:scriptTask id="check_workfiles" name="[MCP] Check Active Workfiles" scriptFormat="python">
+      <bpmn:incoming>flow_load_state_to_check_workfiles</bpmn:incoming>
+      <bpmn:outgoing>flow_check_workfiles_to_prior_gateway</bpmn:outgoing>
+      <bpmn:script>workfiles_checked = True</bpmn:script>
+      <bpmn:documentation>Queries claude.project_workfiles for active components (pinned first).
+Includes in start_session() output as active_workfiles array with component names,
+file counts, and pinned status. Helps Claude understand what component context is available.</bpmn:documentation>
+    </bpmn:scriptTask>
 
     <!-- Exclusive Gateway: Has Prior State? -->
     <bpmn:exclusiveGateway id="has_prior_state_gateway" name="Has Prior State?" default="flow_fresh_start">
-      <bpmn:incoming>flow_load_state_to_prior_gateway</bpmn:incoming>
+      <bpmn:incoming>flow_check_workfiles_to_prior_gateway</bpmn:incoming>
       <bpmn:outgoing>flow_restore_context</bpmn:outgoing>
       <bpmn:outgoing>flow_fresh_start</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -221,7 +231,8 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_auto_archive_to_session_start" sourceRef="auto_archive" targetRef="session_start"/>
     <bpmn:sequenceFlow id="flow_session_start_to_check_messages" sourceRef="session_start" targetRef="check_messages"/>
     <bpmn:sequenceFlow id="flow_check_messages_to_load_state" sourceRef="check_messages" targetRef="load_state"/>
-    <bpmn:sequenceFlow id="flow_load_state_to_prior_gateway" sourceRef="load_state" targetRef="has_prior_state_gateway"/>
+    <bpmn:sequenceFlow id="flow_load_state_to_check_workfiles" sourceRef="load_state" targetRef="check_workfiles"/>
+    <bpmn:sequenceFlow id="flow_check_workfiles_to_prior_gateway" sourceRef="check_workfiles" targetRef="has_prior_state_gateway"/>
 
     <bpmn:sequenceFlow id="flow_restore_context" sourceRef="has_prior_state_gateway" targetRef="display_session_summary">
       <bpmn:conditionExpression>prior_state == True</bpmn:conditionExpression>
@@ -292,38 +303,42 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <dc:Bounds x="700" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
+      <bpmndi:BPMNShape id="shape_check_workfiles" bpmnElement="check_workfiles">
+        <dc:Bounds x="810" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
       <bpmndi:BPMNShape id="shape_has_prior_state_gateway" bpmnElement="has_prior_state_gateway" isMarkerVisible="true">
-        <dc:Bounds x="860" y="193" width="50" height="50"/>
+        <dc:Bounds x="960" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <!-- Expanded restore context sub-flow (above main row) -->
       <bpmndi:BPMNShape id="shape_display_session_summary" bpmnElement="display_session_summary">
-        <dc:Bounds x="940" y="60" width="120" height="80"/>
+        <dc:Bounds x="1040" y="60" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_has_prior_tasks_gateway" bpmnElement="has_prior_tasks_gateway" isMarkerVisible="true">
-        <dc:Bounds x="1100" y="73" width="50" height="50"/>
+        <dc:Bounds x="1200" y="73" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_display_prior_tasks" bpmnElement="display_prior_tasks">
-        <dc:Bounds x="1190" y="20" width="120" height="80"/>
+        <dc:Bounds x="1290" y="20" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_prior_tasks_merge" bpmnElement="prior_tasks_merge" isMarkerVisible="true">
-        <dc:Bounds x="1350" y="73" width="50" height="50"/>
+        <dc:Bounds x="1450" y="73" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <!-- fresh_start branch (y=340 - below main row) -->
       <bpmndi:BPMNShape id="shape_fresh_start" bpmnElement="fresh_start">
-        <dc:Bounds x="940" y="340" width="100" height="80"/>
+        <dc:Bounds x="1040" y="340" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_work_merge_gateway" bpmnElement="work_merge_gateway" isMarkerVisible="true">
-        <dc:Bounds x="1440" y="193" width="50" height="50"/>
+        <dc:Bounds x="1540" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_rag_per_prompt" bpmnElement="rag_per_prompt">
-        <dc:Bounds x="1550" y="180" width="120" height="80"/>
+        <dc:Bounds x="1650" y="180" width="120" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_do_work" bpmnElement="do_work">
@@ -382,74 +397,79 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <di:waypoint x="700" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_load_state_to_prior_gateway" bpmnElement="flow_load_state_to_prior_gateway">
+      <bpmndi:BPMNEdge id="edge_flow_load_state_to_check_workfiles" bpmnElement="flow_load_state_to_check_workfiles">
         <di:waypoint x="800" y="220"/>
-        <di:waypoint x="860" y="218"/>
+        <di:waypoint x="810" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_check_workfiles_to_prior_gateway" bpmnElement="flow_check_workfiles_to_prior_gateway">
+        <di:waypoint x="930" y="220"/>
+        <di:waypoint x="960" y="218"/>
       </bpmndi:BPMNEdge>
 
       <!-- has_prior_state_gateway → display_session_summary (up branch) -->
       <bpmndi:BPMNEdge id="edge_flow_restore_context" bpmnElement="flow_restore_context">
-        <di:waypoint x="885" y="193"/>
-        <di:waypoint x="885" y="100"/>
-        <di:waypoint x="940" y="100"/>
+        <di:waypoint x="985" y="193"/>
+        <di:waypoint x="985" y="100"/>
+        <di:waypoint x="1040" y="100"/>
       </bpmndi:BPMNEdge>
 
       <!-- has_prior_state_gateway → fresh_start (down branch / default) -->
       <bpmndi:BPMNEdge id="edge_flow_fresh_start" bpmnElement="flow_fresh_start">
-        <di:waypoint x="885" y="243"/>
-        <di:waypoint x="885" y="380"/>
-        <di:waypoint x="940" y="380"/>
+        <di:waypoint x="985" y="243"/>
+        <di:waypoint x="985" y="380"/>
+        <di:waypoint x="1040" y="380"/>
       </bpmndi:BPMNEdge>
 
       <!-- display_session_summary → has_prior_tasks_gateway -->
       <bpmndi:BPMNEdge id="edge_flow_summary_to_tasks_gw" bpmnElement="flow_summary_to_tasks_gw">
-        <di:waypoint x="1060" y="100"/>
-        <di:waypoint x="1100" y="98"/>
+        <di:waypoint x="1160" y="100"/>
+        <di:waypoint x="1200" y="98"/>
       </bpmndi:BPMNEdge>
 
       <!-- has_prior_tasks_gateway → display_prior_tasks (up) -->
       <bpmndi:BPMNEdge id="edge_flow_display_prior_tasks" bpmnElement="flow_display_prior_tasks">
-        <di:waypoint x="1125" y="73"/>
-        <di:waypoint x="1125" y="60"/>
-        <di:waypoint x="1190" y="60"/>
+        <di:waypoint x="1225" y="73"/>
+        <di:waypoint x="1225" y="60"/>
+        <di:waypoint x="1290" y="60"/>
       </bpmndi:BPMNEdge>
 
       <!-- has_prior_tasks_gateway → prior_tasks_merge (default, skip) -->
       <bpmndi:BPMNEdge id="edge_flow_no_prior_tasks" bpmnElement="flow_no_prior_tasks">
-        <di:waypoint x="1150" y="98"/>
-        <di:waypoint x="1350" y="98"/>
+        <di:waypoint x="1250" y="98"/>
+        <di:waypoint x="1450" y="98"/>
       </bpmndi:BPMNEdge>
 
       <!-- display_prior_tasks → prior_tasks_merge -->
       <bpmndi:BPMNEdge id="edge_flow_prior_tasks_to_merge" bpmnElement="flow_prior_tasks_to_merge">
-        <di:waypoint x="1310" y="60"/>
-        <di:waypoint x="1375" y="60"/>
-        <di:waypoint x="1375" y="73"/>
+        <di:waypoint x="1410" y="60"/>
+        <di:waypoint x="1475" y="60"/>
+        <di:waypoint x="1475" y="73"/>
       </bpmndi:BPMNEdge>
 
       <!-- prior_tasks_merge → work_merge_gateway -->
       <bpmndi:BPMNEdge id="edge_flow_restore_to_merge" bpmnElement="flow_restore_to_merge">
-        <di:waypoint x="1400" y="98"/>
-        <di:waypoint x="1465" y="98"/>
-        <di:waypoint x="1465" y="193"/>
+        <di:waypoint x="1500" y="98"/>
+        <di:waypoint x="1565" y="98"/>
+        <di:waypoint x="1565" y="193"/>
       </bpmndi:BPMNEdge>
 
       <!-- fresh_start → work_merge_gateway -->
       <bpmndi:BPMNEdge id="edge_flow_fresh_to_merge" bpmnElement="flow_fresh_to_merge">
-        <di:waypoint x="1040" y="380"/>
-        <di:waypoint x="1465" y="380"/>
-        <di:waypoint x="1465" y="243"/>
+        <di:waypoint x="1140" y="380"/>
+        <di:waypoint x="1565" y="380"/>
+        <di:waypoint x="1565" y="243"/>
       </bpmndi:BPMNEdge>
 
       <!-- work_merge_gateway → rag_per_prompt -->
       <bpmndi:BPMNEdge id="edge_flow_merge_to_rag" bpmnElement="flow_merge_to_rag">
-        <di:waypoint x="1490" y="218"/>
-        <di:waypoint x="1550" y="220"/>
+        <di:waypoint x="1590" y="218"/>
+        <di:waypoint x="1650" y="220"/>
       </bpmndi:BPMNEdge>
 
       <!-- rag_per_prompt → do_work -->
       <bpmndi:BPMNEdge id="edge_flow_rag_to_do_work" bpmnElement="flow_rag_to_do_work">
-        <di:waypoint x="1670" y="220"/>
+        <di:waypoint x="1770" y="220"/>
         <di:waypoint x="1730" y="220"/>
       </bpmndi:BPMNEdge>
 

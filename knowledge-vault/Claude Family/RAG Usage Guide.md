@@ -183,22 +183,38 @@ Long conversations get compressed. Earlier context gets lost. Use session facts 
 
 ### 1. **AUTOMATIC Mode** (Primary - UserPromptSubmit Hook) ✨
 
-**Trigger**: Every user prompt (>=10 characters) automatically triggers RAG query
+**Trigger**: Every user prompt (>=10 characters) automatically triggers context assembly
 
-**What happens**:
+**What happens** (NEW - WCC enabled):
 1. Hook (`rag_query_hook.py`) runs silently on every user question
-2. Generates Voyage AI embedding for your question
-3. Searches vault embeddings with pgvector similarity
-4. Returns top 3 docs with similarity >= 0.45
-5. **Silently injects context** into Claude's view (no visible output!)
+2. **Activity detection**: Checks if you switched activities (via session_fact override, name/alias match, word overlap, or workfile component)
+3. **If activity changed**: Assemble WCC context from 6 sources in parallel (workfiles 25%, knowledge 25%, features/tasks 15%, session facts 10%, vault RAG 15%, BPMN/skills 10%)
+4. **If activity unchanged**: Use cached WCC context (5-min TTL) OR fall back to knowledge/vault RAG if no WCC yet
+5. **Silently injects context** into Claude's view at priority 2 in RAG hook (no visible output!)
 
-**User experience**: Completely transparent - you won't see any RAG activity, but Claude will have relevant vault docs in context automatically.
+**Key behavior**: When WCC context is assembled and active, per-source knowledge/vault/nimbus queries are **SKIPPED** (WCC replaces them, doesn't add). This keeps token budget constant at ~3000 tokens regardless of how many sources WCC aggregates.
+
+**User experience**: Completely transparent - you won't see any RAG or WCC activity, but Claude will have relevant activity-specific context automatically.
 
 **Logs**:
 - `~/.claude/hooks.log` (execution logs)
 - `claude.rag_usage_log` table (query analytics)
+- `~/.claude/state/wcc_state.json` (WCC cache, 5-min TTL)
 
-**Threshold**: `min_similarity = 0.45` (lower = more results, higher = more precise)
+**Activity management**:
+```python
+# Create a named activity
+create_activity(project="claude-family", name="database-schema-redesign", aliases=["db redesign", "schema v2"])
+
+# List activities
+list_activities(project="claude-family")
+
+# Manually override detected activity
+store_session_fact("current_activity", "database-schema-redesign", "config")
+
+# Clear override (auto-detect next prompt)
+recall_session_fact("current_activity")  # Then delete it
+```
 
 ### 2. **MANUAL Mode** (project-tools MCP)
 
@@ -276,8 +292,11 @@ Questions about external systems, current events, or non-vault topics:
 ### Automatic (RAG Hook - every prompt)
 
 The `rag_query_hook.py` handles all RAG automatically:
-- Queries `claude.knowledge` (2 results, similarity >= 0.45)
-- Queries `claude.vault_embeddings` (3 results, similarity >= 0.30)
+- **Activity detection**: Checks for activity changes (session_fact override, name/alias match, word overlap, workfile component)
+- **If activity changed**: Assemble WCC context from 6 sources (workfiles, knowledge, features, session facts, vault RAG, BPMN)
+- **Otherwise**: Use cached WCC context (5-min TTL) or fall back to knowledge/vault RAG
+- Queries `claude.knowledge` (2 results, similarity >= 0.45) — **SKIPPED when WCC active**
+- Queries `claude.vault_embeddings` (3 results, similarity >= 0.30) — **SKIPPED when WCC active**
 - Injects context silently via `additionalContext`
 
 ### Manual (project-tools MCP)
@@ -288,6 +307,10 @@ The `rag_query_hook.py` handles all RAG automatically:
 | `store_knowledge` | Store new knowledge | Learned something worth preserving |
 | `link_knowledge` | Create relations | Connect related knowledge entries |
 | `mark_knowledge_applied` | Track usage | After successfully using knowledge |
+| `create_activity` | Create named activity | Define a new activity for WCC detection |
+| `list_activities` | List activities | Browse available activities + access stats |
+| `update_activity` | Rename or add aliases | Improve activity detection |
+| `assemble_context` | Manually assemble WCC | Force context assembly (usually auto-triggered) |
 
 ### Direct File Access (Read tool)
 
@@ -650,11 +673,12 @@ NIMBUS PROJECT CONTEXT (5 entries, 12ms)
 - [[Claude Tools Reference]] - All available MCP tools
 - [[Knowledge Capture SOP]] - Adding content to vault
 - [[Database Integration Guide]] - nimbus_context schema details
+- [[Project Tools MCP]] - Complete tool reference including WCC tools
 
 ---
 
-**Version**: 3.1
+**Version**: 3.2
 **Created**: 2025-12-30
-**Updated**: 2026-02-10
+**Updated**: 2026-03-10
 **Location**: Claude Family/RAG Usage Guide.md
-**Changes**: Verified vault-rag MCP removal (2026-01). RAG automatic via hook. Manual search via project-tools recall_knowledge.
+**Changes**: Added Work Context Container (WCC) automatic activity detection + 6-source context assembly. WCC runs in RAG hook, replaces per-source queries when active, keeps token budget constant.

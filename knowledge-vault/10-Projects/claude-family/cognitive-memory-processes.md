@@ -64,6 +64,23 @@ The core innovation. Entirely automated (no user tasks).
 
 **Contradiction scoring**: recency + confidence + authority (user > auto > inferred) + applied_success. If score delta > 0.3: clear winner. Otherwise: flag as feedback for human review.
 
+### Project Workfiles (NEW - 2026-03-09)
+- **Table**: `claude.project_workfiles`
+- **Scope**: Project + Component (e.g., "nimbus-mui/parallel-runner")
+- **Tools**: stash(), unstash(), list_workfiles(), search_workfiles()
+- **Lifecycle**: Active → Archived (is_active flag). No tier promotion — separate from cognitive memory tiers.
+- **Embeddings**: Voyage AI (1024d), semantic search via pgvector
+- **Integration**: 4th parallel branch in cognitive_memory_retrieval, pinned files in precompact
+- **Key difference from knowledge**: Component-scoped, transient lifecycle (working notes, not permanent insights)
+
+### Work Context Container (NEW - 2026-03-10)
+- **Table**: `claude.activities` (activity_id, project_id, name, aliases JSONB, embedding vector(1024), access_stats)
+- **Scope**: Named activities per project (e.g., "user-auth-flow", "payment-processing")
+- **Tools**: create_activity(), list_activities(), update_activity(), assemble_context()
+- **How it works**: Every prompt → detect_activity() checks session_fact override, then name/alias match, then word overlap, then workfile component fallback → if activity changed, assemble_wcc() queries 6 sources in parallel (workfiles 25%, knowledge mid/long 25%, features/tasks 15%, session facts 10%, vault RAG 15%, BPMN/skills 10%) → context cached in `~/.claude/state/wcc_state.json` (5-min TTL) → injected at priority 2 in RAG hook
+- **Key difference from memory**: Activity-scoped (not tier-scoped). Orthogonal to cognitive memory. When WCC active, per-source knowledge/RAG/nimbus queries SKIPPED (WCC replaces, doesn't add). Net token budget unchanged (3000 tokens).
+- **BPMN model**: `work_context_assembly.bpmn` documents detection + assembly + caching flow
+
 ## What Already Exists
 
 | Component | Status |
@@ -75,6 +92,9 @@ The core innovation. Entirely automated (no user tasks).
 | `store_knowledge`, `recall_knowledge` tools | Built |
 | `mark_knowledge_applied` feedback loop | Built |
 | Voyage AI embedding pipeline | Built |
+| `claude.activities` + activity detection | Built (F177) |
+| WCC assembly (6-source context) | Built (F177) |
+| BPMN work_context_assembly.bpmn model | Built (F177) |
 
 ## What Needs Building
 
@@ -104,7 +124,8 @@ The core innovation. Entirely automated (no user tasks).
 
 ---
 
-**Version**: 1.0
+**Version**: 1.2
 **Created**: 2026-02-25
-**Updated**: 2026-02-25
+**Updated**: 2026-03-10
 **Location**: knowledge-vault/10-Projects/claude-family/cognitive-memory-processes.md
+**Changes**: Added Work Context Container (WCC) section, activity detection flow, BPMN model reference

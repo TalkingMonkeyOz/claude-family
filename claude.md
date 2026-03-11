@@ -157,6 +157,34 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `search_conversations(query, ...)` | Full-text search across stored conversations |
 | `extract_conversation(session_id)` | Parse JSONL conversation log |
 
+### Workfile Tools (Cross-Session Component Context)
+
+Project-scoped working files that bridge sessions. Like a filing cabinet: project = cabinet, component = drawer, title = file.
+
+| Tool | Use When |
+|------|----------|
+| `stash(component, title, content)` | Save component working context (approach notes, findings, questions) |
+| `unstash(component, title?)` | Retrieve workfile(s) by component, updates access stats |
+| `list_workfiles(project?, component?)` | Browse cabinet — component counts, pinned status |
+| `search_workfiles(query)` | Semantic search across workfiles via Voyage AI |
+
+**Key features**: UPSERT on (project, component, title), `mode="append"` to concatenate, `is_pinned=True` for session-start surfacing. Pinned workfiles preserved in precompact.
+
+### Work Context Container (WCC) — Automatic Activity-Based Context
+
+WCC automatically detects which activity you're working on and assembles relevant context from 6 sources. Runs in the RAG hook — no manual tool calls needed.
+
+**How it works**: Every prompt → `detect_activity()` → if changed → `assemble_wcc()` queries workfiles, knowledge, features, facts, vault, BPMN → cached → injected at priority 2 → per-source RAG skipped.
+
+| Tool | Use When |
+|------|----------|
+| `create_activity(name, aliases, desc)` | Explicitly create an activity with aliases for detection |
+| `list_activities(project)` | Browse activities and access stats |
+| `update_activity(id, aliases, is_active)` | Manage aliases, deactivate stale activities |
+| `assemble_context(name, budget)` | Manual WCC assembly (debugging/inspection) |
+
+**Detection priority**: 1) `session_fact("current_activity")` override, 2) exact name/alias match, 3) word overlap, 4) workfile component fallback.
+
 **State Machines** (enforced by `claude.workflow_transitions`):
 - **Feedback**: new → triaged → in_progress → resolved
 - **Features**: draft → planned → in_progress → completed (requires all_tasks_done)
@@ -284,6 +312,8 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-03-10 | **Work Context Container (WCC)**: Automatic activity-based context assembly in RAG hook. New `activities` table, `wcc_assembly.py` module, 4 MCP tools (create_activity/list_activities/update_activity/assemble_context), BPMN model + 17 new tests. Replaces per-source RAG when activity detected. |
+| 2026-03-09 | **Project Workfiles**: Cross-session component-scoped working context. 4 new MCP tools (stash/unstash/list_workfiles/search_workfiles), new `project_workfiles` table with Voyage AI embeddings, BPMN model + 4 BPMN updates (precompact, cognitive retrieval, session lifecycle, working memory). |
 | 2026-02-28 | **Pre-Metis Cleanup**: Dropped 43 dead tables (101→58), removed 5 deprecated MCP tools (65→60), consolidated 3 slash commands (23→20), archived orchestrator + process_router. Schema governance + reference map documented. |
 | 2026-02-26 | **F130 Cognitive Memory**: 3-tier memory (short/mid/long) with `remember()`, `recall_memories()`, `consolidate_memories()`. Core Protocol v8. |
 | 2026-02-24 | **Orchestrator retirement**: Messaging tools migrated to project-tools. Orchestrator MCP removed. BPMN model for messaging lifecycle added. |
@@ -298,7 +328,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-**Version**: 3.7 (Pre-Metis Cleanup - 58 tables, ~60 tools, 20 commands)
+**Version**: 3.9 (Work Context Container - 60 tables, ~68 tools, 20 commands)
 **Created**: 2025-10-21
-**Updated**: 2026-02-28
+**Updated**: 2026-03-10
 **Location**: C:\Projects\claude-family\CLAUDE.md

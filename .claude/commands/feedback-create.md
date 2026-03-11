@@ -1,65 +1,126 @@
 # Create New Feedback
 
-Guide the user through creating a new feedback item (bug, design, question, or change request).
-
-**Use `mcp__project-tools__create_feedback` — do NOT write raw SQL against `claude_pm.*`.**
+Guide the user through creating a new feedback item (bug, design, question, or change request) interactively.
 
 ---
 
-## Execute These Steps
+## Step 1: Detect Current Project
 
-### Step 1: Gather Feedback Details
+Determine which project you're in:
 
-Ask the user for:
-
-1. **Type** — What kind of feedback is this?
-   - `bug` - Something broken or not working correctly
-   - `design` - UI/UX issue, design concern, or architectural question
-   - `question` - Need clarification or information
-   - `change` - Feature request or enhancement
-
-2. **Description** — What is the issue or request? Encourage detail:
-   - For bugs: Steps to reproduce, expected vs actual behavior, error messages
-   - For design: What is confusing or problematic, suggested improvement
-   - For questions: Context and what needs clarification
-   - For changes: What feature is needed and why
-
-3. **Priority** (optional) — 1 (critical) to 5 (low). Default: 3.
-
-### Step 2: Create the Feedback Item
-
-Call `mcp__project-tools__create_feedback` with:
-
+```bash
+pwd
 ```
-mcp__project-tools__create_feedback(
-    feedback_type="bug",        -- bug | design | question | change
-    description="Full description of the issue or request",
-    priority=3                  -- 1=critical, 2=high, 3=medium, 4=low, 5=trivial
+
+Map to project_id using the quick reference:
+- `claude-pm` → `a3097e59-7799-4114-86a7-308702115905`
+- `nimbus-user-loader` → `07206097-4caf-423b-9eb8-541d4c25da6c`
+- `ATO-Tax-Agent` → `7858ecf4-4550-456d-9509-caea0339ec0d`
+
+If not found, query:
+```sql
+SELECT project_id FROM claude_pm.projects
+WHERE project_code ILIKE '%keyword%';
+```
+
+---
+
+## Step 2: Ask User for Feedback Type
+
+Use the AskUserQuestion tool to gather feedback details:
+
+**Question 1: What type of feedback?**
+- 🐛 Bug - Something broken or not working
+- 🎨 Design - UI/UX issue or design question
+- ❓ Question - Need clarification or information
+- 🔄 Change - Feature request or enhancement
+
+---
+
+## Step 3: Ask for Description
+
+**Question 2: Describe the issue/request**
+
+Prompt user to provide detailed description. Encourage them to include:
+- For bugs: Steps to reproduce, expected vs actual behavior, error messages
+- For design: What's confusing/problematic, suggested improvement
+- For questions: Context and what needs clarification
+- For changes: What feature is needed and why
+
+---
+
+## Step 4: Create Feedback in Database
+
+```sql
+-- Insert new feedback
+INSERT INTO claude_pm.project_feedback (
+    project_id,
+    feedback_type,
+    description,
+    status
 )
+VALUES (
+    'PROJECT-ID'::uuid,
+    'bug',  -- or 'design', 'question', 'change'
+    'User-provided description here',
+    'new'
+)
+RETURNING feedback_id, created_at;
 ```
 
-The tool auto-detects the current project from the working directory and routes through the WorkflowEngine state machine (initial status is always `new`).
+---
 
-**Valid feedback_type values**: `bug`, `design`, `question`, `change`
-**Do NOT use `idea`** — not a valid type per column_registry.
+## Step 5: Offer to Add Initial Comment (Optional)
 
-### Step 3: Confirm Creation
+Ask user: "Would you like to add any additional notes or context?"
 
-Display success to the user:
+If yes:
+```sql
+INSERT INTO claude_pm.project_feedback_comments (
+    feedback_id,
+    author,
+    content
+)
+VALUES (
+    'FEEDBACK-ID-FROM-STEP-4'::uuid,
+    'user',  -- or 'claude' if AI-generated
+    'Additional context here'
+);
+```
+
+---
+
+## Step 6: Offer Screenshot Option
+
+Inform user: "You can add screenshots by placing them in: `C:\Projects\{project}\feedback\{feedback_id}-1.png`"
+
+Then update:
+```sql
+UPDATE claude_pm.project_feedback
+SET screenshot_path = '["feedback/{feedback_id}-1.png"]'
+WHERE feedback_id = 'FEEDBACK-ID'::uuid;
+```
+
+---
+
+## Step 7: Confirm Creation
+
+Display success message:
 
 ```
-Feedback Created
+✅ Feedback Created!
 
 Type: [Bug/Design/Question/Change]
-Code: FB-N
-Description: [First 100 chars...]
-Status: new
-Priority: [N]
+ID: feedback_id
+Description: [First 80 chars...]
+Created: timestamp
 
 Next Steps:
-- View open feedback: /feedback-check
-- List all feedback: /feedback-list
-- Advance status: mcp__project-tools__advance_status(type="feedback", id="FB-N", status="triaged")
+- View all feedback: /feedback-check
+- Add comments: INSERT INTO claude_pm.project_feedback_comments...
+- Add screenshots: Save to C:\Projects\{project}\feedback\{feedback_id}-N.png
+
+Full guide: C:\claude\shared\docs\feedback-system-guide.md
 ```
 
 ---
@@ -67,31 +128,26 @@ Next Steps:
 ## Error Handling
 
 **If project not registered:**
-- Query `claude.projects` to find the project
-- If missing, use `/project-init` to register it first
-
-**If invalid feedback_type:**
-- Valid values are: `bug`, `design`, `question`, `change`
-- `idea` is not valid — use `change` for feature requests/enhancements
+- Provide registration instructions from feedback-system-guide.md
+- Show program + project creation SQL
 
 **If database connection fails:**
-- Check postgres MCP configuration
-- Test: `SELECT 1;`
+- Check postgres MCP connection
+- Suggest running: `SELECT 1;`
+
+**If description is too short:**
+- Prompt for more details
+- Minimum: 20 characters recommended
 
 ---
 
-## Example Interaction
+**Quick Usage Example:**
 
-User: "The export button doesn't work"
+When user says: "The export button doesn't work"
 
-1. Ask for type → Bug
-2. Expand description → "Export to Excel button throws NullReferenceException when clicked after filtering data. Error: 'Object reference not set' in ExportService.cs line 89. Steps: 1) Apply filter 2) Click Export → crash."
-3. Call `create_feedback(feedback_type="bug", description="...", priority=2)`
-4. Display confirmation with FB code
-
----
-
-**Version**: 2.0 (Rewrote: use create_feedback MCP tool, removed claude_pm.* raw SQL)
-**Created**: 2025-12-20
-**Updated**: 2026-03-09
-**Location**: .claude/commands/feedback-create.md
+1. Detect project → nimbus-user-loader
+2. Ask type → Bug
+3. Expand description → "Export to Excel button throws NullReferenceException when clicked after filtering data. Error: 'Object reference not set to an instance of an object' in ExportService.cs line 89"
+4. Create feedback
+5. Offer to add comment with stack trace
+6. Confirm creation
