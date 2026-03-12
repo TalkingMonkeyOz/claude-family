@@ -153,6 +153,8 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `store_book(title, author, ...)` | Add book to reference library |
 | `store_book_reference(book, concept, ...)` | Add concept reference with embedding |
 | `recall_book_reference(query, ...)` | Semantic search over book references |
+| `catalog(entity_type, properties, ...)` | Store structured entity (book, API, OData, pattern) |
+| `recall_entities(query, entity_type?, ...)` | RRF search over cataloged entities |
 | `extract_insights(session_id)` | Extract knowledge from past conversations |
 | `search_conversations(query, ...)` | Full-text search across stored conversations |
 | `extract_conversation(session_id)` | Parse JSONL conversation log |
@@ -312,6 +314,7 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables (`entity_types`, `entities`, `entity_relationships`), 2 new MCP tools (`catalog`/`recall_entities`), BPMN model + 15 tests, book data migration (49 entities). Core Protocol v12. |
 | 2026-03-10 | **Work Context Container (WCC)**: Automatic activity-based context assembly in RAG hook. New `activities` table, `wcc_assembly.py` module, 4 MCP tools (create_activity/list_activities/update_activity/assemble_context), BPMN model + 17 new tests. Replaces per-source RAG when activity detected. |
 | 2026-03-09 | **Project Workfiles**: Cross-session component-scoped working context. 4 new MCP tools (stash/unstash/list_workfiles/search_workfiles), new `project_workfiles` table with Voyage AI embeddings, BPMN model + 4 BPMN updates (precompact, cognitive retrieval, session lifecycle, working memory). |
 | 2026-02-28 | **Pre-Metis Cleanup**: Dropped 43 dead tables (101→58), removed 5 deprecated MCP tools (65→60), consolidated 3 slash commands (23→20), archived orchestrator + process_router. Schema governance + reference map documented. |
@@ -328,7 +331,7 @@ python scripts/embed_vault_documents.py --force
 
 ---
 
-**Version**: 3.9 (Work Context Container - 60 tables, ~68 tools, 20 commands)
+**Version**: 4.0 (Entity Catalog System - 63 tables, ~70 tools, 20 commands)
 **Created**: 2025-10-21
-**Updated**: 2026-03-10
+**Updated**: 2026-03-13
 **Location**: C:\Projects\claude-family\CLAUDE.md

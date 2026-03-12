@@ -383,6 +383,7 @@ class TestRetrievalFullCycle:
         assert "search_short" in names
         assert "search_mid" in names
         assert "search_long" in names
+        assert "search_entities" in names
         assert "rank_results" in names
         assert "trim_to_budget" in names
         assert "format_output" in names

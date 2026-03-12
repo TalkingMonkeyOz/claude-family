@@ -8,4 +8,4 @@ If the user's message contains multiple sentences, line breaks, or conjunctions 
 5. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
 6. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
 7. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-8. Check MCP tools first - project-tools has 40+ tools.
+8. Check MCP tools first - project-tools has 40+ tools. For structured reference data (books, APIs, OData entities, patterns), use catalog() to store and recall_entities() to search.

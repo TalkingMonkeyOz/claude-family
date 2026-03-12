@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_entity_management"
+                  targetNamespace="http://bpmn.io/schema/bpmn">
+
+  <bpmn:process id="entity_management" name="Entity Management: Catalog, Recall, Link, Register" isExecutable="true">
+
+    <!-- ============ START ============ -->
+    <bpmn:startEvent id="start" name="Entity Operation Request">
+      <bpmn:outgoing>to_route</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Route to the correct operation -->
+    <bpmn:exclusiveGateway id="route" name="Which Operation?" default="to_catalog">
+      <bpmn:incoming>to_route</bpmn:incoming>
+      <bpmn:outgoing>to_catalog</bpmn:outgoing>
+      <bpmn:outgoing>to_recall</bpmn:outgoing>
+      <bpmn:outgoing>to_link</bpmn:outgoing>
+      <bpmn:outgoing>to_register_type</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_route" sourceRef="start" targetRef="route" />
+
+    <!-- ============ CATALOG PATH ============ -->
+    <bpmn:sequenceFlow id="to_catalog" sourceRef="route" targetRef="lookup_type" />
+
+    <bpmn:scriptTask id="lookup_type" name="[DB] Lookup Entity Type">
+      <bpmn:incoming>to_catalog</bpmn:incoming>
+      <bpmn:outgoing>to_validate_schema</bpmn:outgoing>
+      <bpmn:script>
+# SELECT type_id, json_schema, embedding_template, name_property
+# FROM claude.entity_types WHERE type_name = entity_type AND is_active
+entity_type_row = {"type_id": "uuid", "json_schema": {}, "embedding_template": "{name}"}
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_schema" name="[CLAUDE] Validate Properties Against JSON Schema">
+      <bpmn:incoming>to_validate_schema</bpmn:incoming>
+      <bpmn:outgoing>to_check_dedup</bpmn:outgoing>
+      <bpmn:script>
+# jsonschema.validate(properties, entity_type_row['json_schema'])
+# If invalid, return error with missing required fields
+validation_passed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_validate_schema" sourceRef="lookup_type" targetRef="validate_schema" />
+
+    <bpmn:scriptTask id="check_dedup" name="[DB] Check for Existing Entity (Dedup)">
+      <bpmn:incoming>to_check_dedup</bpmn:incoming>
+      <bpmn:outgoing>to_dedup_decision</bpmn:outgoing>
+      <bpmn:script>
+# SELECT entity_id FROM claude.entities
+# WHERE entity_type_id = type_id AND properties @> key_properties AND NOT is_archived
+# Sets existing_entity = True if match found, False otherwise
+# (existing_entity may already be set by caller for testing)
+if 'existing_entity' not in dir() or existing_entity is None:
+    existing_entity = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_check_dedup" sourceRef="validate_schema" targetRef="check_dedup" />
+
+    <bpmn:exclusiveGateway id="dedup_decision" name="Entity Exists?" default="to_generate_embedding">
+      <bpmn:incoming>to_dedup_decision</bpmn:incoming>
+      <bpmn:outgoing>to_upsert_existing</bpmn:outgoing>
+      <bpmn:outgoing>to_generate_embedding</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="to_dedup_decision" sourceRef="check_dedup" targetRef="dedup_decision" />
+
+    <bpmn:scriptTask id="upsert_existing" name="[DB] Merge Properties Into Existing Entity">
+      <bpmn:incoming>to_upsert_existing</bpmn:incoming>
+      <bpmn:outgoing>to_catalog_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.entities SET properties = properties || new_properties,
+#   updated_at = NOW() WHERE entity_id = existing_id
+# Refresh embedding with merged properties
+upserted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_upsert_existing" sourceRef="dedup_decision" targetRef="upsert_existing">
+      <bpmn:conditionExpression>existing_entity == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="generate_embedding" name="[VOYAGE] Generate Embedding from Template">
+      <bpmn:incoming>to_generate_embedding</bpmn:incoming>
+      <bpmn:outgoing>to_insert_entity</bpmn:outgoing>
+      <bpmn:script>
+# text = interpolate_template(embedding_template, properties)
+# embedding = voyage_ai.embed(text, model='voyage-3', input_type='document')
+embedding = [0.1, 0.2]
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_generate_embedding" sourceRef="dedup_decision" targetRef="generate_embedding" />
+
+    <bpmn:scriptTask id="insert_entity" name="[DB] INSERT Entity + Create Relationships">
+      <bpmn:incoming>to_insert_entity</bpmn:incoming>
+      <bpmn:outgoing>to_catalog_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.entities (entity_type_id, project_id, properties, tags, embedding)
+# For each relationship: INSERT INTO claude.entity_relationships
+entity_id = "new-uuid"
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_insert_entity" sourceRef="generate_embedding" targetRef="insert_entity" />
+
+    <bpmn:endEvent id="catalog_end" name="Entity Cataloged">
+      <bpmn:incoming>to_catalog_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_catalog_end" sourceRef="insert_entity" targetRef="catalog_end" />
+    <bpmn:sequenceFlow id="to_catalog_end_upsert" sourceRef="upsert_existing" targetRef="catalog_end" />
+
+    <!-- ============ RECALL PATH ============ -->
+    <bpmn:sequenceFlow id="to_recall" sourceRef="route" targetRef="recall_generate_embedding">
+      <bpmn:conditionExpression>operation == 'recall'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="recall_generate_embedding" name="[VOYAGE] Generate Query Embedding">
+      <bpmn:incoming>to_recall</bpmn:incoming>
+      <bpmn:outgoing>to_recall_rrf</bpmn:outgoing>
+      <bpmn:script>
+# query_embedding = voyage_ai.embed(query, model='voyage-3', input_type='query')
+query_embedding = [0.1, 0.2]
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="recall_rrf" name="[DB] RRF Fusion: Vector + BM25 Search">
+      <bpmn:incoming>to_recall_rrf</bpmn:incoming>
+      <bpmn:outgoing>to_recall_access</bpmn:outgoing>
+      <bpmn:script>
+# entity_hits CTE: pgvector similarity + tsvector BM25
+# Optional filters: entity_type, project_id, tags
+# RRF: 1/(60+rank_vec) + 1/(60+rank_bm25)
+# LIMIT 20, then trim to requested limit
+results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_recall_rrf" sourceRef="recall_generate_embedding" targetRef="recall_rrf" />
+
+    <bpmn:scriptTask id="recall_access" name="[DB] Update Access Stats">
+      <bpmn:incoming>to_recall_access</bpmn:incoming>
+      <bpmn:outgoing>to_recall_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.entities SET last_accessed_at = NOW(), access_count = access_count + 1
+# WHERE entity_id = ANY(returned_ids)
+access_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_recall_access" sourceRef="recall_rrf" targetRef="recall_access" />
+
+    <bpmn:endEvent id="recall_end" name="Entities Recalled">
+      <bpmn:incoming>to_recall_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_recall_end" sourceRef="recall_access" targetRef="recall_end" />
+
+    <!-- ============ LINK PATH ============ -->
+    <bpmn:sequenceFlow id="to_link" sourceRef="route" targetRef="validate_link">
+      <bpmn:conditionExpression>operation == 'link'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="validate_link" name="[DB] Validate Both Entities Exist">
+      <bpmn:incoming>to_link</bpmn:incoming>
+      <bpmn:outgoing>to_insert_link</bpmn:outgoing>
+      <bpmn:script>
+# Verify from_entity_id and to_entity_id exist and are not archived
+# Verify relationship_type is valid
+entities_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="insert_link" name="[DB] INSERT Relationship">
+      <bpmn:incoming>to_insert_link</bpmn:incoming>
+      <bpmn:outgoing>to_link_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.entity_relationships (from_entity_id, to_entity_id, relationship_type, metadata)
+relationship_id = "new-uuid"
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_insert_link" sourceRef="validate_link" targetRef="insert_link" />
+
+    <bpmn:endEvent id="link_end" name="Entities Linked">
+      <bpmn:incoming>to_link_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_link_end" sourceRef="insert_link" targetRef="link_end" />
+
+    <!-- ============ REGISTER TYPE PATH ============ -->
+    <bpmn:sequenceFlow id="to_register_type" sourceRef="route" targetRef="validate_type_name">
+      <bpmn:conditionExpression>operation == 'register_type'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="validate_type_name" name="[CLAUDE] Validate Type Name Unique">
+      <bpmn:incoming>to_register_type</bpmn:incoming>
+      <bpmn:outgoing>to_insert_type</bpmn:outgoing>
+      <bpmn:script>
+# Check type_name not already in entity_types
+# Validate json_schema is valid JSON Schema
+# Validate embedding_template has at least one {placeholder}
+name_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="insert_type" name="[DB] INSERT Entity Type">
+      <bpmn:incoming>to_insert_type</bpmn:incoming>
+      <bpmn:outgoing>to_register_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.entity_types (type_name, display_name, description, json_schema, embedding_template, name_property)
+type_id = "new-uuid"
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="to_insert_type" sourceRef="validate_type_name" targetRef="insert_type" />
+
+    <bpmn:endEvent id="register_end" name="Type Registered">
+      <bpmn:incoming>to_register_end</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="to_register_end" sourceRef="insert_type" targetRef="register_end" />
+
+  </bpmn:process>
+</bpmn:definitions>

@@ -6062,6 +6062,337 @@ def assemble_context(
 
 
 # ============================================================================
+# Entity Catalog Tools
+# ============================================================================
+
+
+def _interpolate_template(template: str, properties: dict) -> str:
+    """Replace {placeholders} with property values, skip missing."""
+    import re
+    def replacer(match):
+        key = match.group(1)
+        val = properties.get(key, '')
+        return str(val) if val else ''
+    return re.sub(r'\{(\w+)\}', replacer, template).strip()
+
+
+@mcp.tool()
+def catalog(
+    entity_type: str,
+    properties: dict,
+    project: str = "",
+    tags: list[str] | None = None,
+    relationships: list[dict] | None = None,
+) -> dict:
+    """Store a structured entity in the catalog with type validation and embedding.
+
+    Entities are typed, validated, embeddable reference data: books, API endpoints,
+    OData entities, patterns, etc. New entity types can be registered via SQL INSERT
+    into claude.entity_types — no code change needed.
+
+    Use when: Cataloging structured reference data that should be searchable later.
+    Deduplicates: if an entity with the same type and key properties exists, merges.
+    Returns: {success, entity_id, entity_type, display_name, action: 'created'|'merged'}.
+
+    Args:
+        entity_type: Type name (e.g., 'book', 'api_endpoint', 'odata_entity').
+        properties: JSONB properties validated against the type's json_schema.
+        project: Project scope (optional, defaults to current directory).
+        tags: Tags for filtering.
+        relationships: List of {to_entity_id, relationship_type} dicts.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Lookup entity type
+        cur.execute("""
+            SELECT type_id::text, json_schema, embedding_template, name_property
+            FROM claude.entity_types
+            WHERE type_name = %s AND is_active = TRUE
+        """, (entity_type,))
+        type_row = cur.fetchone()
+        if not type_row:
+            return {"success": False, "error": f"Unknown entity type: '{entity_type}'. "
+                    "Check claude.entity_types for valid types."}
+
+        type_id = type_row['type_id']
+        json_schema = type_row['json_schema']
+        embedding_template = type_row['embedding_template']
+        name_property = type_row['name_property']
+
+        # 2. Validate properties against json_schema
+        if json_schema and json_schema.get('required'):
+            missing = [r for r in json_schema['required'] if r not in properties]
+            if missing:
+                return {"success": False,
+                        "error": f"Missing required properties: {missing}"}
+
+        # 3. Resolve project_id
+        project_id = None
+        if project:
+            project_id = get_project_id(project)
+
+        # 4. Check for existing entity (dedup)
+        name_val = properties.get(name_property, properties.get('name', properties.get('title', '')))
+        cur.execute("""
+            SELECT entity_id::text FROM claude.entities
+            WHERE entity_type_id = %s::uuid
+              AND properties ->> %s = %s
+              AND NOT is_archived
+            LIMIT 1
+        """, (type_id, name_property, str(name_val)))
+        existing = cur.fetchone()
+
+        if existing:
+            # Merge properties into existing entity
+            cur.execute("""
+                UPDATE claude.entities
+                SET properties = properties || %s,
+                    tags = CASE WHEN %s::text[] != '{}' THEN %s ELSE tags END,
+                    updated_at = NOW()
+                WHERE entity_id = %s::uuid
+                RETURNING entity_id::text,
+                    COALESCE(properties->>'name', properties->>'title', 'Unnamed') AS display_name
+            """, (json.dumps(properties), tags or [], tags or [], existing['entity_id']))
+            merged = cur.fetchone()
+
+            # Refresh embedding
+            embed_text = _interpolate_template(embedding_template, properties)
+            embedding = generate_embedding(embed_text)
+            if embedding:
+                cur.execute("""
+                    UPDATE claude.entities SET embedding = %s::vector
+                    WHERE entity_id = %s::uuid
+                """, (embedding, existing['entity_id']))
+
+            conn.commit()
+            return {
+                "success": True,
+                "entity_id": merged['entity_id'],
+                "entity_type": entity_type,
+                "display_name": merged['display_name'],
+                "action": "merged",
+            }
+
+        # 5. Generate embedding from template
+        embed_text = _interpolate_template(embedding_template, properties)
+        embedding = generate_embedding(embed_text)
+
+        # 6. INSERT new entity
+        cur.execute("""
+            INSERT INTO claude.entities (
+                entity_type_id, project_id, properties, tags, embedding,
+                created_at, updated_at
+            ) VALUES (
+                %s::uuid, %s, %s, %s, %s::vector, NOW(), NOW()
+            )
+            RETURNING entity_id::text,
+                COALESCE(properties->>'name', properties->>'title', 'Unnamed') AS display_name
+        """, (type_id, project_id, json.dumps(properties), tags or [], embedding))
+        result = cur.fetchone()
+
+        # 7. Create relationships if provided
+        rel_count = 0
+        if relationships:
+            for rel in relationships:
+                to_id = rel.get('to_entity_id')
+                rel_type = rel.get('relationship_type', 'related_to')
+                if to_id and to_id != result['entity_id']:
+                    cur.execute("""
+                        INSERT INTO claude.entity_relationships (
+                            from_entity_id, to_entity_id, relationship_type
+                        ) VALUES (%s::uuid, %s::uuid, %s)
+                    """, (result['entity_id'], to_id, rel_type))
+                    rel_count += 1
+
+        conn.commit()
+        return {
+            "success": True,
+            "entity_id": result['entity_id'],
+            "entity_type": entity_type,
+            "display_name": result['display_name'],
+            "action": "created",
+            "relationships_created": rel_count,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to catalog entity: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def recall_entities(
+    query: str,
+    entity_type: str = "",
+    project: str = "",
+    tags: list[str] | None = None,
+    limit: int = 10,
+    min_similarity: float = 0.5,
+) -> dict:
+    """Search cataloged entities using RRF fusion (vector + BM25 full-text).
+
+    Searches across all entity types (books, API endpoints, OData entities,
+    patterns, etc.) using Reciprocal Rank Fusion of Voyage AI vector similarity
+    and PostgreSQL tsvector BM25 ranking.
+
+    Use when: Looking for structured reference data previously stored via catalog().
+    Returns: {success, query, result_count, results: [{entity_id, entity_type,
+              display_name, properties, tags, similarity, rrf_score}]}.
+
+    Args:
+        query: Natural language search query.
+        entity_type: Filter by entity type name (optional).
+        project: Filter by project (optional).
+        tags: Filter by tags overlap (optional).
+        limit: Max results (default: 10).
+        min_similarity: Minimum vector similarity threshold (default: 0.5).
+    """
+    from server import generate_query_embedding, _get_voyage_key
+
+    if not _get_voyage_key():
+        return {"error": "Embedding service not configured — semantic search unavailable"}
+
+    query_embedding = generate_query_embedding(query)
+    if not query_embedding:
+        return {"error": "Failed to generate query embedding"}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Build optional filters
+        filters = []
+        filter_params = []
+
+        if entity_type:
+            filters.append("AND et.type_name = %s")
+            filter_params.append(entity_type)
+
+        if project:
+            project_id = get_project_id(project)
+            if project_id:
+                filters.append("AND (e.project_id = %s OR e.project_id IS NULL)")
+                filter_params.append(project_id)
+
+        if tags and len(tags) > 0:
+            filters.append("AND e.tags && %s")
+            filter_params.append(tags)
+
+        filter_clause = " ".join(filters)
+
+        # Build tsquery from natural language
+        # Split words, join with & for AND matching
+        ts_words = [w.strip() for w in query.split() if w.strip() and len(w.strip()) > 2]
+        ts_query_str = " | ".join(ts_words) if ts_words else query
+
+        # RRF fusion: vector similarity + BM25
+        cur.execute(f"""
+            WITH entity_vec AS (
+                SELECT e.entity_id, e.properties, e.tags, e.display_name,
+                    et.type_name,
+                    1 - (e.embedding <=> %s::vector) AS similarity,
+                    ROW_NUMBER() OVER (ORDER BY e.embedding <=> %s::vector) AS rank_vec
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE NOT e.is_archived
+                  AND e.embedding IS NOT NULL
+                  AND 1 - (e.embedding <=> %s::vector) >= %s
+                  {filter_clause}
+                ORDER BY e.embedding <=> %s::vector
+                LIMIT 20
+            ),
+            entity_bm25 AS (
+                SELECT e.entity_id,
+                    ts_rank(e.search_vector, to_tsquery('english', %s)) AS bm25_score,
+                    ROW_NUMBER() OVER (
+                        ORDER BY ts_rank(e.search_vector, to_tsquery('english', %s)) DESC
+                    ) AS rank_bm25
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE NOT e.is_archived
+                  AND e.search_vector @@ to_tsquery('english', %s)
+                  {filter_clause}
+                LIMIT 20
+            ),
+            rrf AS (
+                SELECT v.entity_id, v.properties, v.tags, v.display_name, v.type_name,
+                    v.similarity,
+                    COALESCE(1.0 / (60 + v.rank_vec), 0) +
+                    COALESCE(1.0 / (60 + b.rank_bm25), 0) AS rrf_score
+                FROM entity_vec v
+                LEFT JOIN entity_bm25 b ON v.entity_id = b.entity_id
+                UNION
+                SELECT e.entity_id, e.properties, e.tags, e.display_name,
+                    et.type_name,
+                    0 AS similarity,
+                    COALESCE(1.0 / (60 + b.rank_bm25), 0) AS rrf_score
+                FROM entity_bm25 b
+                JOIN claude.entities e ON b.entity_id = e.entity_id
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE b.entity_id NOT IN (SELECT entity_id FROM entity_vec)
+            )
+            SELECT entity_id::text, type_name, display_name, properties::text,
+                tags, similarity, rrf_score
+            FROM rrf
+            ORDER BY rrf_score DESC
+            LIMIT %s
+        """, (
+            query_embedding, query_embedding, query_embedding, min_similarity,
+            *filter_params,  # vec filters
+            query_embedding,
+            ts_query_str, ts_query_str, ts_query_str,
+            *filter_params,  # bm25 filters
+            limit,
+        ))
+
+        results = []
+        entity_ids = []
+        for row in cur.fetchall():
+            entity_ids.append(row['entity_id'])
+            results.append({
+                "entity_id": row['entity_id'],
+                "entity_type": row['type_name'],
+                "display_name": row['display_name'],
+                "properties": json.loads(row['properties']) if isinstance(row['properties'], str) else row['properties'],
+                "tags": row['tags'] or [],
+                "similarity": round(row['similarity'], 4) if row['similarity'] else 0,
+                "rrf_score": round(row['rrf_score'], 4),
+            })
+
+        # Update access stats for returned entities
+        if entity_ids:
+            cur.execute("""
+                UPDATE claude.entities
+                SET last_accessed_at = NOW(),
+                    access_count = access_count + 1
+                WHERE entity_id = ANY(%s::uuid[])
+            """, (entity_ids,))
+            conn.commit()
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(results),
+            "results": results,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Entity recall failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
