@@ -62,7 +62,7 @@ Layer 3+4 together form the assembled context bundle. Dynamic priority, not fixe
 | 5 | Project/Delivery | `delivery_cache` (TTL-bound) | Tenant-scoped |
 | 6 | Learned/Cognitive | `session_facts` + `persistent_knowledge` | Tenant-isolated |
 
-All tables: `tenant_id UUID NOT NULL`, PostgreSQL RLS on `current_setting('app.current_tenant')`. Shared types (1-2) use `tenant_id = NULL` with RLS policy allowing NULL reads.
+Architecture: separate database per customer (no RLS). Within an instance, Org → Product → Client → Engagement four-tier scope hierarchy provides internal security. Shared types (1-2) are platform-level knowledge available to all scopes within the instance.
 
 ---
 

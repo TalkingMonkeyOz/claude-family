@@ -4,7 +4,7 @@ tags:
   - scope/system
   - type/gap-analysis
 created: 2026-03-11
-updated: 2026-03-11
+updated: 2026-03-12
 ---
 
 # METIS Consolidation — Gap List
@@ -25,10 +25,10 @@ Genuine gaps requiring decisions or documentation work, organized by gate. Sourc
 
 Gate Zero is complete and validated (2026-03-08). All 5 documents confirmed.
 
-| Gap | What's Missing | Severity |
-|-----|----------------|----------|
-| Augmentation Layer not yet named in system-product-definition.md | Sections 2–3 updated to v0.3 but the Augmentation Layer is not yet explicitly named in the document body | minor |
-| Division-of-labour decision not in any G0 doc | Desktop = design with John; Claude Code = technical build is decided (Mar 10) but only in session notes, not in G0 documents | needs-writing |
+| Gap | What's Missing | Severity | Resolution |
+|-----|----------------|----------|------------|
+| ~~Augmentation Layer not yet named in system-product-definition.md~~ | ~~Sections 2–3 updated to v0.3 but the Augmentation Layer is not yet explicitly named in the document body~~ | ~~minor~~ | **RESOLVED 2026-03-12**: SPD section 4.1 updated from Three-Layer Engine to Four-Layer Architecture. Augmentation Layer now fully described. |
+| ~~Division-of-labour decision not in any G0 doc~~ | ~~Desktop = design with John; Claude Code = technical build is decided (Mar 10) but only in session notes, not in G0 documents~~ | ~~needs-writing~~ | **RESOLVED 2026-03-12**: Division of Labour section added to stakeholders-decision-rights.md (G0 Doc 3). |
 
 ---
 
@@ -42,8 +42,8 @@ Gate 1 has 5 documents. The feature catalogue and actor map are substantially co
 |-----|----------------|----------|
 | No consolidated process inventory document | Nine area READMEs exist but no single G1 Doc 1. Content is scattered across brainstorm files. | needs-writing |
 | Delivery Accelerator (Area 2) BPMN files absent | Pipeline described in detail, gate model decided, BPMN-driven architecture confirmed — but no `.bpmn` files authored | needs-writing |
-| Area 3 (Quality & Compliance) BPMN-to-test-case generation logic undesigned | "BPMN as test generation source" decided; the actual generation logic is not designed; Area 9 vs Area 4 responsibility unresolved | genuine-decision |
-| User Loader v2 PRD not in vault | PRD referenced in ps-accelerator/README.md as a concrete near-term deliverable; not present in vault | genuine-decision |
+| ~~Area 3 (Quality & Compliance) BPMN-to-test-case generation logic undesigned~~ | ~~Area 9 vs Area 4 responsibility unresolved~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Area 4 (Quality) owns generation logic, Area 9 (BPMN/SOP) provides process models. Area 9 enforces compliance at design time; Area 4 is the safety net catching oversight. |
+| ~~User Loader v2 PRD not in vault~~ | ~~PRD referenced in ps-accelerator/README.md~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific tool, not a platform deliverable. Generic data import/validation already covered in Delivery Accelerator. Reference removed from README. |
 
 ### G1 Doc 2 — Actor Map
 
@@ -65,18 +65,18 @@ Gate 1 has 5 documents. The feature catalogue and actor map are substantially co
 | Gap | What's Missing | Severity |
 |-----|----------------|----------|
 | No consolidated business rules inventory | Rules are scattered across feature descriptions, brainstorm files, and DMN candidates; no single inventory document | needs-writing |
-| Award/EA documentation availability unknown | "What Award/EA documentation exists in structured form?" — affects ingestion planning; no answer recorded | genuine-decision |
-| Confluence space scope unknown | "Which Confluence spaces are relevant?" — no answer recorded | genuine-decision |
-| Salesforce data model at nimbus unknown | "What Salesforce data model does nimbus use for timesheets/projects?" — no answer recorded | genuine-decision |
+| ~~Award/EA documentation availability unknown~~ | ~~affects ingestion planning~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific. Generic answer: source formats include online docs, PDFs, Excel, PowerPoint, Word, unstructured human input. Already covered by process inventory (1.1-1.7). Defer to nimbus onboarding plan. |
+| ~~Confluence space scope unknown~~ | ~~no answer recorded~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific. Defer to nimbus onboarding plan. |
+| ~~Salesforce data model at nimbus unknown~~ | ~~no answer recorded~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific. Defer to nimbus onboarding plan. |
 
 ### G1 Doc 5 — Integration Points
 
 | Gap | What's Missing | Severity |
 |-----|----------------|----------|
 | Integration points connector list exists but endpoint specs absent | Connector list is complete (12 integrations). Request/response schemas, auth per-integration, rate limits, and error contracts are absent | needs-writing |
-| time2work API rate limits unknown | Rate limits affect connector queue depth and burst handling design | genuine-decision |
-| Implementation knowledge location unknown | "How much implementation knowledge is in Confluence vs people's heads?" — affects ingestion effort estimation | genuine-decision |
-| Git provider not selected | Four options assessed (Azure DevOps, GitHub Team, GitHub Enterprise, Gitea/Forgejo); decision not made | genuine-decision |
+| ~~time2work API rate limits unknown~~ | ~~Rate limits affect connector queue depth and burst handling design~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific. Platform handles rate limiting generically via connector middleware (rate_limits JSONB per config). Defer to nimbus onboarding. |
+| ~~Implementation knowledge location unknown~~ | ~~affects ingestion effort estimation~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: Nimbus-specific. Defer to nimbus onboarding plan. |
+| ~~Git provider not selected~~ | ~~Four options assessed; decision not made~~ | ~~genuine-decision~~ | **RESOLVED 2026-03-12**: GitHub probable. Architecture already provider-agnostic (EX-08). Final selection deferred to Gate 3 environment setup. |
 
 ---
 

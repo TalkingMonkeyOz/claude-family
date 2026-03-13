@@ -69,11 +69,11 @@ AI-assisted client implementation pipeline: requirements gathering, configuratio
 - Human review for edge cases and client-specific exceptions
 - Audit trail for every generated configuration
 
-### Data Import/Validation (User Loader v2)
+### Data Import/Validation
 - Bulk data operations with validation
 - Standardised templates for customer data
 - Intelligent data validation and transformation
-- The User Loader v2 PRD exists (separate document — not in vault yet)
+- Per-customer implementation detail — specific tooling (e.g. nimbus User Loader) is a customer engagement artifact, not a platform deliverable
 
 ### Release Management (from Doc 2 §2.4)
 - Controlled deployment: development → UAT → production
@@ -160,7 +160,7 @@ Other benefits:
 - [ ] Is Monash the right first POC? Who engages the client?
 - [ ] What Monash-specific documentation and config details exist?
 - [ ] Is the proposed 8-10 week timeline realistic given Monash's availability?
-- [ ] Where does the User Loader v2 PRD live? Needs to be brought into vault.
+
 
 ---
 *Source: Doc 1 §5 | Doc 2 (all) | Doc 4 §3.2 WS4, WS6 | Created: 2026-02-19*

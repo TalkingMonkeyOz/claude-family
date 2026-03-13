@@ -7,7 +7,7 @@ tags:
   - domain/feedback-loops
   - type/design
 created: 2026-03-11
-updated: 2026-03-11
+updated: 2026-03-12
 status: active
 ---
 
@@ -104,8 +104,8 @@ retrieval_feedback (
     feedback_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chunk_id        UUID NOT NULL REFERENCES knowledge_chunks(chunk_id),
     session_id      UUID NOT NULL,
-    tenant_id       UUID NOT NULL,
     activity_id     UUID REFERENCES activities(activity_id),
+    -- No tenant_id: separate DB per customer; scope is implicit
     feedback_type   TEXT NOT NULL,   -- marked_useful | task_completed | rephrased |
                                      -- contradicted | outdated | not_relevant | ab_useful | ab_not_useful
     feedback_source TEXT NOT NULL,   -- implicit_rephrase | implicit_completion | explicit_user | ab_test
@@ -153,7 +153,7 @@ co_access_log (
     prompt_hash  TEXT NOT NULL,
     chunk_ids    UUID[] NOT NULL,   -- all chunks in this assembly
     activity_id  UUID REFERENCES activities(activity_id),
-    tenant_id    UUID NOT NULL,
+    -- No tenant_id: separate DB per customer; scope is implicit
     retrieved_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 )
 CREATE INDEX idx_co_access_chunk_ids ON co_access_log USING GIN (chunk_ids);
@@ -173,6 +173,7 @@ co_access_score(C, current_candidates, activity_id):
   total_retrieval_count = COUNT(log entries WHERE C IN chunk_ids
                                 AND activity_id = current_activity
                                 AND retrieved_at > NOW() - INTERVAL '90 days')
+  # No tenant filter needed — separate DB per customer
   return co_retrieval_count / NULLIF(total_retrieval_count, 0)
   -- NULL → treated as 0 in composite formula
 ```

@@ -39,7 +39,7 @@ The dossier metaphor from library science applies: the Activity Space is the dos
 ```
 activity
 ├── activity_id         UUID PK
-├── tenant_id           UUID NOT NULL (FK tenants, RLS)
+├── scope_org_id        UUID NOT NULL          -- Org level of 4-tier hierarchy
 ├── name                TEXT NOT NULL          -- canonical name (authority control)
 ├── description         TEXT                   -- used in embedding
 ├── aliases             TEXT[]                 -- synonym list, maps → canonical name

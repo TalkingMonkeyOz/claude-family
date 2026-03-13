@@ -7,7 +7,7 @@ tags:
   - domain/retrieval
   - type/design
 created: 2026-03-11
-updated: 2026-03-11
+updated: 2026-03-12
 status: active
 ---
 
@@ -39,12 +39,15 @@ The same knowledge entry can be retrieved by all three paths, scored differently
 ## Single Retrieval Path
 
 ```
-retrieve_and_rank(prompt, activity, tenant_id, budget_tokens) → ranked_chunks[]
+retrieve_and_rank(prompt, activity, budget_tokens) → ranked_chunks[]
+# Note: No tenant_id parameter — separate DB per customer means
+# customer scope is implicit in the database connection.
 
 1. Embed prompt (Voyage AI, cache 5 min)
 2. Query all active sources in PARALLEL:
    a. persistent_knowledge WHERE linked to activity OR cosine_sim >= 0.50
    b. knowledge_chunks (types per activity.linked_knowledge_types) cosine_sim >= 0.45
+      Scope: Org→Product→Client→Engagement hierarchy via activity's scope fields
    c. activity_workfiles WHERE activity_id = current_activity
    d. delivery_cache WHERE feature_id IN activity.linked_features
 3. Collect all candidates into single list
@@ -65,7 +68,7 @@ Steps 2a-2d execute in parallel. Measured parallel latency: 80-120ms vs 400-600m
 Cosine distance via pgvector `<=>` operator (HNSW index). Range 0-1. Chunks below 0.45 excluded at query time. Primary relevance signal.
 
 ### Signal 2: Co-Access Frequency
-Items retrieved together in the same assembly, tracked in `co_access_log`. Schema: `(session_id, prompt_hash, chunk_ids[], retrieved_at, tenant_id)`. For candidate C, score = frequency C appeared alongside current candidate set, normalised by total retrieval count. Bootstraps to zero — signal strengthens after ~100 retrievals per activity. Library science principle: materials found together are related, even when embeddings disagree.
+Items retrieved together in the same assembly, tracked in `co_access_log`. Schema: `(session_id, prompt_hash, chunk_ids[], activity_id, retrieved_at)`. For candidate C, score = frequency C appeared alongside current candidate set, normalised by total retrieval count. Bootstraps to zero — signal strengthens after ~100 retrievals per activity. Library science principle: materials found together are related, even when embeddings disagree.
 
 ### Signal 3: Freshness Score
 `freshness_score` (0.0-1.0) on every chunk. Event-driven, not time-driven:

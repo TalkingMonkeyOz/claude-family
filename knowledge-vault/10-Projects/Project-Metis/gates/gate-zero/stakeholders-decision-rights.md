@@ -5,7 +5,7 @@ tags:
   - type/gate-zero
   - gate/zero
 created: 2026-03-07
-updated: 2026-03-07
+updated: 2026-03-12
 status: validated
 ---
 
@@ -30,6 +30,20 @@ Gate Zero Document 3.
 | Justin | CFO / COO | Commercial terms, budget, operational impact |
 | David | CTO | Technical approval, infrastructure, security, integration |
 | Sharon | Chief Customer Manager | Customer-facing impact, support readiness |
+
+## Division of Labour
+
+The METIS build follows a clear division of responsibility across the Claude Family:
+
+| Role | Responsibility | When Engaged |
+|---|---|---|
+| **Claude Desktop** | Design decisions and principles WITH John. Brainstorming, gap closure, validation. | Every design session |
+| **Claude Code (Claude Family)** | Technical design, implementation, consolidation. Reads vault material, builds, tests. | Delegated tasks requiring large-scale work — consolidation, data model design, code implementation |
+| **John de Vere** | All decisions. Validates every design choice. Guides priorities. | Always — nothing is decided without John |
+
+Claude Desktop does not delegate routine doc updates or small edits to Claude Family — those are handled directly in the Desktop session. Claude Family is brought in for architectural work, large consolidation tasks, and implementation that requires reading and synthesising many files.
+
+---
 
 ## AI Decision Rights Model
 

@@ -7,7 +7,7 @@ tags:
   - domain/agentic-routing
   - type/design
 created: 2026-03-11
-updated: 2026-03-11
+updated: 2026-03-12
 status: active
 ---
 
@@ -58,17 +58,24 @@ The retrieval query is augmented per hint:
 
 ### Implementation Path
 
-**Phase 1 — Rule-based classifier** (launch):
-- Entity detection: match against registered entity names (OData entities, API resources)
-- Keyword patterns: "how do I", "what's the endpoint", error message regex
-- Client name dictionary lookup
+> **DECISION (2026-03-12):** No keyword/rule-based classifier at any phase. John's experience across 6+ months of Claude Family work: keyword matching has been consistently poor, RAG/embeddings far better by a large margin. This applies to activity detection AND agentic routing. The entire retrieval system is embedding-first.
 
-**Phase 2 — ML classifier** (after retrieval quality metrics establish gaps):
-- Fine-tuned classifier on retrieval quality data
-- Identifies cases where rule-based routing missed relevant sources
-- Replaces rule misses without removing rule-based speed advantage
+**Phase 1 — Embedding-based classifier** (launch):
+- Embed the prompt; compare against stored **routing exemplars** per hint type
+- Routing exemplar = a short description embedded at ingestion time (e.g. "OData entity schema lookup", "known error workaround", "client-specific configuration")
+- Cosine similarity ≥ 0.55 against a routing exemplar emits the corresponding hint
+- Exemplars are seeded per knowledge type at onboarding; refined through retrieval feedback
+- Entity detection: embed entity names/descriptions at ingestion — prompt similarity to those embeddings surfaces entity-scoped hints
+- Error pattern detection: embed known-gotcha summaries — prompt similarity surfaces gotcha-check hints
+- Client scoping: activity's scope fields provide client context directly (no dictionary lookup needed)
 
-Phase 1 is sufficient to distinguish Option C from Option B. The ML layer adds precision, not capability.
+**Phase 2 — Learned classifier** (after retrieval quality metrics establish gaps):
+- Analyse retrieval feedback data to identify systematic routing misses
+- Generate new routing exemplars from successful retrievals where hints were absent
+- Retire underperforming exemplars with low hit rates
+- The classifier improves through the same feedback loop as the ranking system
+
+Phase 1 is sufficient to distinguish Option C from Option B. Phase 2 adds precision through data, not through keyword rules.
 
 ### What This Looks Like in Practice
 
@@ -77,13 +84,13 @@ User prompt: "Getting NullReferenceException when the parallel pay run tries to 
 Without agentic routing (Option B): Similarity search against full knowledge store with activity scoping. Returns most similar chunks.
 
 With agentic routing (Option C):
-1. Classifier detects error pattern → emit `gotcha_check` hint
-2. Classifier detects "Monash" → emit `client_scope` hint for Monash tenant
-3. Classifier detects "roster config" → emit `entity_lookup` for RosterConfig entity
+1. Prompt embedding compared against routing exemplars → `gotcha_check` hint fires (similarity to "known error workaround" exemplar)
+2. Activity scope already carries Monash client context → `client_scope` hint implicit
+3. Prompt embedding similar to RosterConfig entity description → `entity_lookup` hint fires
 4. Retrieval executes with these three augmentations
 5. Result includes: known-gotchas for parallel pay run (learned_cognitive), Monash roster config schema, RosterConfig OData entity definition
 
-The classifier adds ~5ms. The retrieval augmentation adds no latency (hints modify the query parameters, not the query count). The quality difference is significant: learned gotchas surface first, client config is scoped correctly.
+The embedding classifier adds ~10ms (one vector comparison against exemplar set, cacheable). The retrieval augmentation adds no latency (hints modify the query parameters, not the query count). The quality difference is significant: learned gotchas surface first, client config is scoped correctly.
 
 ---
 

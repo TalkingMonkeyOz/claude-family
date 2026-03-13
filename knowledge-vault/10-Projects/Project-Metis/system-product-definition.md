@@ -7,7 +7,7 @@ tags:
 projects:
   - Project-Metis
 created: 2026-02-23
-updated: 2026-03-08
+updated: 2026-03-12
 synced: false
 ---
 
@@ -70,13 +70,13 @@ Every knowledge-intensive organisation hits the same set of problems:
 
 ## 4. Core Architecture
 
-### 4.1 Three-Layer Engine
+### 4.1 Four-Layer Architecture
 
 | Layer | What It Does | Technology |
 |-------|-------------|------------|
-| **Knowledge Store** | Stores all domain knowledge: product APIs, configuration docs, compliance rules, implementation patterns, client configs, support resolutions | PostgreSQL + pgvector |
-| **Retrieval System** | Finds the most relevant knowledge for any question. Two-stage: vector search then reranking | Voyage AI embeddings (1024 dim) + cosine similarity |
-| **Intelligence Layer** | Takes retrieved context + user question, generates answers, flags uncertainty, learns from corrections | LLM API (currently Claude, provider-agnostic) |
+| **Knowledge Store** | Stores all domain knowledge: product APIs, configuration docs, compliance rules, implementation patterns, client configs, support resolutions. All persistent data including embeddings, state, config, and audit trail. | PostgreSQL + pgvector |
+| **Augmentation Layer** | The crux. Assembles the right context for every AI interaction. Retrieves knowledge at chunk granularity (not whole documents), manages cognitive memory across sessions, orchestrates RAG retrieval, manages skills and session state. Sits between what the platform knows and what it thinks with. | HybridRAG (vector + graph walk), Voyage AI embeddings (1024 dim), four-layer context management |
+| **Intelligence Layer** | Takes assembled context + user question, generates answers, constructs prompts, manages constrained deployments, flags uncertainty, learns from corrections. | LLM API (currently Claude, provider-agnostic) |
 
 The architecture is modular. The embedding model, vector database, and LLM can each be swapped independently. The knowledge and processes are the assets, not the specific AI provider.
 
