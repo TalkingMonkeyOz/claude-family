@@ -176,6 +176,15 @@ def auto_save_session(session_id: str, project_name: str):
     try:
         cur = conn.cursor()
 
+        # Safety net: roll back any aborted transaction left by a prior failed
+        # operation (e.g. a helper called before this point). Without this,
+        # PostgreSQL raises "current transaction is aborted, commands ignored
+        # until end of transaction block" for every subsequent statement.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
         # BPMN step: demote_to_pending - in_progress todos become pending
         demote_in_progress_todos(project_name, conn)
 

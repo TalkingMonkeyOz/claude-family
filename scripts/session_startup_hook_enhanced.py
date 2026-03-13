@@ -439,6 +439,27 @@ def main():
                 context_lines.append(f"Could not log session: {error or 'unknown error'}")
                 session_id = None
 
+            # Close zombie sessions (open > 24h, excluding the session just created)
+            try:
+                zombie_conn = get_db_connection()
+                if zombie_conn:
+                    zombie_cur = zombie_conn.cursor()
+                    zombie_cur.execute("""
+                        UPDATE claude.sessions
+                        SET session_end = session_start + INTERVAL '1 hour',
+                            session_summary = 'auto-closed (zombie cleanup on session start)'
+                        WHERE session_end IS NULL
+                          AND session_start < NOW() - INTERVAL '24 hours'
+                          AND (%s IS NULL OR session_id != %s::uuid)
+                    """, (session_id, session_id))
+                    zombie_count = zombie_cur.rowcount
+                    zombie_conn.commit()
+                    zombie_conn.close()
+                    if zombie_count > 0:
+                        logger.info(f"Closed {zombie_count} zombie sessions (>24h old)")
+            except Exception as e:
+                logger.warning(f"Zombie cleanup failed (non-fatal): {e}")
+
             # Count outstanding todos + auto-archive stale ones
             todo_count, archived_count = get_outstanding_todo_count(project_name)
             if archived_count > 0:

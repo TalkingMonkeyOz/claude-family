@@ -140,8 +140,18 @@ has_linked_build_task = has_linked_build_task if has_linked_build_task is not No
       <bpmn:outgoing>flow_not_completed</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <bpmn:scriptTask id="advance_build_task" name="[DB] Advance Build Task Status" scriptFormat="python">
+    <bpmn:scriptTask id="auto_checkpoint" name="[DB] Save Auto-Checkpoint" scriptFormat="python">
       <bpmn:incoming>flow_completed_and_linked</bpmn:incoming>
+      <bpmn:outgoing>flow_checkpoint_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# save_checkpoint() persists task completion state before advancing build task
+# Ensures completion is durable even if subsequent steps fail
+checkpoint_saved = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="advance_build_task" name="[DB] Advance Build Task Status" scriptFormat="python">
+      <bpmn:incoming>flow_checkpoint_to_advance</bpmn:incoming>
       <bpmn:outgoing>flow_advance_to_sibling_check</bpmn:outgoing>
       <bpmn:script>
 # UPDATE claude.build_tasks SET status='completed'
@@ -229,10 +239,11 @@ map_updated = True
     <!-- Phase 2B: Update -->
     <bpmn:sequenceFlow id="flow_lookup_to_update" sourceRef="lookup_task_map" targetRef="update_todo_status"/>
     <bpmn:sequenceFlow id="flow_update_to_completion_check" sourceRef="update_todo_status" targetRef="completion_gw"/>
-    <bpmn:sequenceFlow id="flow_completed_and_linked" sourceRef="completion_gw" targetRef="advance_build_task">
+    <bpmn:sequenceFlow id="flow_completed_and_linked" sourceRef="completion_gw" targetRef="auto_checkpoint">
       <bpmn:conditionExpression>is_completed == True and has_linked_build_task == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_not_completed" sourceRef="completion_gw" targetRef="update_merge"/>
+    <bpmn:sequenceFlow id="flow_checkpoint_to_advance" sourceRef="auto_checkpoint" targetRef="advance_build_task"/>
     <bpmn:sequenceFlow id="flow_advance_to_sibling_check" sourceRef="advance_build_task" targetRef="check_sibling_tasks"/>
     <bpmn:sequenceFlow id="flow_sibling_to_gw" sourceRef="check_sibling_tasks" targetRef="all_done_gw"/>
     <bpmn:sequenceFlow id="flow_all_done" sourceRef="all_done_gw" targetRef="surface_feature_completion">

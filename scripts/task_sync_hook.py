@@ -461,7 +461,7 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str) ->
             try:
                 cur.execute("""
                     INSERT INTO claude.session_state (project_name, current_focus, updated_at)
-                    VALUES (%s, %s, NOW())
+                    VALUES (%s::text, %s::text, NOW())
                     ON CONFLICT (project_name) DO UPDATE SET
                         current_focus = EXCLUDED.current_focus,
                         updated_at = NOW()

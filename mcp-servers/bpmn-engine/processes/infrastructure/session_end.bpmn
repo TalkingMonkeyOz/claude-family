@@ -65,8 +65,19 @@ except NameError:
       <bpmn:incoming>flow_no_db</bpmn:incoming>
     </bpmn:endEvent>
 
-    <bpmn:scriptTask id="demote_todos" name="[DB] Demote In-Progress Todos" scriptFormat="python">
+    <bpmn:scriptTask id="rollback_safety" name="[DB] Rollback Any Aborted Transaction" scriptFormat="python">
       <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_rollback_to_demote</bpmn:outgoing>
+      <bpmn:script>
+# Issue ROLLBACK to clear any aborted transaction state left by a prior error
+# Ensures subsequent UPDATE statements run in a clean transaction context
+# psycopg2: conn.rollback() — safe no-op if no aborted transaction exists
+rollback_issued = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="demote_todos" name="[DB] Demote In-Progress Todos" scriptFormat="python">
+      <bpmn:incoming>flow_rollback_to_demote</bpmn:incoming>
       <bpmn:outgoing>flow_demote_to_close</bpmn:outgoing>
       <bpmn:script>
 # UPDATE claude.todos SET status='pending'
@@ -88,20 +99,32 @@ session_closed = True
       </bpmn:script>
     </bpmn:scriptTask>
 
+    <bpmn:boundaryEvent id="close_session_error" name="DB Error" attachedToRef="close_session">
+      <bpmn:outgoing>flow_close_error_to_failed</bpmn:outgoing>
+      <bpmn:errorEventDefinition id="err_close_session"/>
+    </bpmn:boundaryEvent>
+
     <bpmn:endEvent id="end_saved" name="Session Auto-Saved">
       <bpmn:incoming>flow_close_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_save_failed" name="Save Failed (Logged)">
+      <bpmn:incoming>flow_close_error_to_failed</bpmn:incoming>
+      <bpmn:errorEventDefinition id="err_end_save_failed"/>
     </bpmn:endEvent>
 
     <!-- SEQUENCE FLOWS -->
     <bpmn:sequenceFlow id="flow_start_parse" sourceRef="start" targetRef="parse_input"/>
     <bpmn:sequenceFlow id="flow_parse_to_db" sourceRef="parse_input" targetRef="connect_db"/>
     <bpmn:sequenceFlow id="flow_db_to_check" sourceRef="connect_db" targetRef="db_gw"/>
-    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="demote_todos">
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_gw" targetRef="rollback_safety">
       <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_no_db" sourceRef="db_gw" targetRef="end_no_db"/>
+    <bpmn:sequenceFlow id="flow_rollback_to_demote" sourceRef="rollback_safety" targetRef="demote_todos"/>
     <bpmn:sequenceFlow id="flow_demote_to_close" sourceRef="demote_todos" targetRef="close_session"/>
     <bpmn:sequenceFlow id="flow_close_to_end" sourceRef="close_session" targetRef="end_saved"/>
+    <bpmn:sequenceFlow id="flow_close_error_to_failed" sourceRef="close_session_error" targetRef="end_save_failed"/>
 
   </bpmn:process>
 

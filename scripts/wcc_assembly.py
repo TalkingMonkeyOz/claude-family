@@ -174,7 +174,7 @@ def _check_manual_override(
             SELECT fact_value FROM claude.session_facts
             WHERE fact_key = 'current_activity'
               AND session_id = %s::uuid
-            ORDER BY stored_at DESC LIMIT 1
+            ORDER BY created_at DESC LIMIT 1
         """, (session_id,))
         row = cur.fetchone()
         cur.close()
@@ -667,7 +667,7 @@ def _query_session_facts(
             WHERE session_id = %s::uuid
               AND is_sensitive = FALSE
               AND (fact_key ILIKE %s OR fact_value ILIKE %s)
-            ORDER BY stored_at DESC
+            ORDER BY created_at DESC
             LIMIT 5
         """, (session_id, f'%{activity_name}%', f'%{activity_name}%'))
         rows = cur.fetchall()

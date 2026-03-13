@@ -337,7 +337,7 @@ def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool
             JOIN claude.projects p ON f.project_id = p.project_id
             WHERE p.project_name = %s
               AND bt.status IN ('todo', 'in_progress')
-              AND bt.created_at > NOW() - INTERVAL '%s hours'
+              AND bt.created_at > NOW() - make_interval(hours => %s)
         """, (project_name, max_age_hours))
         row = cur.fetchone()
         count = row[0] if row else 0
