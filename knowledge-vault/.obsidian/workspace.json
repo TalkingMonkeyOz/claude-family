@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "10-Projects/Project-Metis/wcc/work-context-container-design.md",
+                "file": "10-Projects/Project-Metis/CATALOG_EXPORT.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "work-context-container-design"
+              "title": "CATALOG_EXPORT"
             }
           }
         ]
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "10-Projects/Project-Metis/wcc/work-context-container-design.md",
+                "file": "10-Projects/Project-Metis/CATALOG_EXPORT.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for work-context-container-design"
+              "title": "Backlinks for CATALOG_EXPORT"
             }
           },
           {
@@ -184,41 +184,41 @@
   },
   "active": "0a1e735fe9a416ce",
   "lastOpenFiles": [
-    "10-Projects/Project-Metis/wcc/wcc-ranking-design.md",
-    "10-Projects/Project-Metis/wcc/wcc-mechanics-feedback-design.md",
-    "10-Projects/Project-Metis/wcc/wcc-activity-space-design.md",
-    "10-Projects/Project-Metis/gates/gate-one/process-inventory.md",
-    "10-Projects/claude-family/knowledge-pipeline-gaps.md",
+    "10-Projects/Project-Metis/bpmn-maps/bpmn-process-map-architecture.md",
+    "10-Projects/Project-Metis/bpmn-maps/bpmn-process-map.md",
+    "10-Projects/Project-Metis/gates/gate-zero/problem-statement.md",
+    "10-Projects/Project-Metis/CATALOG_EXPORT.md",
+    "10-Projects/Project-Metis/CATALOG_EXPORT.md.tmp.47316.1773411360716",
+    "10-Projects/Project-Metis/README.md.tmp.47316.1773411321256",
+    "10-Projects/Project-Metis/_archive/handoffs/handoff-wcc-design-request.md",
+    "10-Projects/Project-Metis/_archive/handoffs/handoff-gate1-consolidation.md",
+    "10-Projects/Project-Metis/_archive/handoffs/handoff-data-model-response.md",
+    "10-Projects/Project-Metis/_archive/handoffs/handoff-data-model-request.md",
+    "10-Projects/Project-Metis/_archive/handoffs",
+    "10-Projects/Project-Metis/_archive/superseded/consolidation-gaps.md",
+    "10-Projects/Project-Metis/_archive/superseded/stocktake-2026-02-23.md",
+    "10-Projects/Project-Metis/_archive/superseded/gap-resolution-summary.md",
+    "10-Projects/Project-Metis/_archive/superseded/gap-tracker.md",
+    "10-Projects/Project-Metis/_archive/superseded/plan-of-attack.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-system-analysis-part2.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-system-analysis-part1.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-audit-part3.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-audit-part2.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-audit-part1.md",
+    "10-Projects/Project-Metis/_archive/audits/storage-audit-findings.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-systems-audit.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-operations.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-mcp.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-knowledge.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-hooks.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-database.md",
+    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-bpmn.md",
+    "10-Projects/Project-Metis/_archive/superseded",
+    "10-Projects/Project-Metis/_archive/session-handoffs",
+    "10-Projects/Project-Metis/_archive/audits",
+    "10-Projects/Project-Metis/_archive",
     "10-Projects/claude-family/knowledge-pipeline-gaps.md.tmp.10676.1773202775622",
-    "10-Projects/claude-family/knowledge-pipeline-lifecycle.md",
     "10-Projects/claude-family/knowledge-pipeline-lifecycle.md.tmp.10676.1773202734160",
-    "10-Projects/claude-family/knowledge-pipeline-recall.md",
-    "10-Projects/claude-family/knowledge-pipeline-recall.md.tmp.10676.1773202693293",
-    "10-Projects/claude-family/knowledge-pipeline-ingest.md",
-    "10-Projects/claude-family/knowledge-pipeline-ingest.md.tmp.10676.1773202651195",
-    "10-Projects/claude-family/knowledge-pipeline-analysis.md",
-    "10-Projects/claude-family/knowledge-pipeline-analysis.md.tmp.10676.1773202617094",
-    "20-Domains/hooks/PreToolUse Context Injection.md",
-    "20-Domains/hooks/Core Protocol Injection.md",
-    "20-Domains/hooks/Claude Code Hooks.md",
-    "20-Domains/Database/Table Code Reference Map - KEEP.md",
-    "20-Domains/Database/Table Code Reference Map.md",
-    "20-Domains/Database/Schema Governance.md",
-    "20-Domains/Database/Database Integration Guide.md",
-    "20-Domains/Database/Database FK Constraints.md",
-    "20-Domains/Database/Database Architecture.md",
-    "20-Domains/hooks",
-    "30-Patterns/platform/MCP Windows npx Wrapper Pattern.md",
-    "30-Patterns/platform/Windows Bash and MCP Gotchas.md",
-    "30-Patterns/platform/Tauri Multiple Instances Port Isolation.md",
-    "30-Patterns/platform/Tauri Cross-Platform Build Pattern.md",
-    "30-Patterns/workflows/Agent Selection Decision Tree.md",
-    "30-Patterns/workflows/Self-Test Pipeline.md",
-    "30-Patterns/workflows/Feature Planning System.md",
-    "30-Patterns/workflows/Structured Autonomy Workflow.md",
-    "30-Patterns/platform",
-    "30-Patterns/workflows",
-    "40-Procedures/infrastructure",
-    "40-Procedures/config-management"
+    "10-Projects/claude-family/knowledge-pipeline-recall.md.tmp.10676.1773202693293"
   ]
 }

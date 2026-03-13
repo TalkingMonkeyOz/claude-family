@@ -57,3 +57,6 @@ nul
 
 # Downloaded reference repos (keep local, don't track)
 knowledge-vault/20-Domains/awesome-copilot-reference/
+tools/claude-voice/ClaudeVoice/bin/
+tools/claude-voice/ClaudeVoice/obj/
+tools/claude-voice/ClaudeVoice/*.csproj.user

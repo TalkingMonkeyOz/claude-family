@@ -1,0 +1,196 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  id="Definitions_1"
+                  targetNamespace="http://claude-family.local/bpmn">
+
+  <bpmn:process id="L2_terminal_session_lifecycle" name="Terminal Session Lifecycle" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="User requests new session">
+      <bpmn:outgoing>flow_to_select_project</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="select_project" name="[UI] Select project from sidebar">
+      <bpmn:incoming>flow_to_select_project</bpmn:incoming>
+      <bpmn:outgoing>flow_to_resolve_config</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="resolve_config" name="[RUST] Resolve project config">
+      <bpmn:incoming>flow_to_resolve_config</bpmn:incoming>
+      <bpmn:outgoing>flow_to_prepare_env</bpmn:outgoing>
+      <bpmn:script>
+# Read project workspace from claude.workspaces DB
+# Resolve: project_dir, .claude/ settings, .mcp.json, CLAUDE_CODE_TASK_LIST_ID
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="prepare_env" name="[RUST] Prepare environment variables">
+      <bpmn:incoming>flow_to_prepare_env</bpmn:incoming>
+      <bpmn:outgoing>flow_to_spawn_pty</bpmn:outgoing>
+      <bpmn:script>
+# Set: CLAUDE_CODE_TASK_LIST_ID, DATABASE_URL, PATH, SystemRoot
+# Working directory = project_dir
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="spawn_pty" name="[RUST] Spawn PTY via portable-pty">
+      <bpmn:incoming>flow_to_spawn_pty</bpmn:incoming>
+      <bpmn:outgoing>flow_to_check_spawn</bpmn:outgoing>
+      <bpmn:script>
+# Create PTY via tauri-plugin-pty / portable-pty
+# Spawn claude CLI, register in PtyManager, launch Tokio read task
+# Emit tauri event: pty:{session_id}:ready
+spawn_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="check_spawn" name="PTY spawned successfully?">
+      <bpmn:incoming>flow_to_check_spawn</bpmn:incoming>
+      <bpmn:outgoing>flow_spawn_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_spawn_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="spawn_failed" name="Show error to user">
+      <bpmn:incoming>flow_spawn_fail</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="create_terminal_panel" name="[UI] Create xterm.js terminal panel">
+      <bpmn:incoming>flow_spawn_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_to_inject_context</bpmn:outgoing>
+      <bpmn:script>
+# Mount TerminalPanel React component in tab/grid slot
+# Connect xterm.js to PTY via Tauri events
+# Apply fit addon, attempt WebGL renderer
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="check_initial_prompt" name="Initial prompt provided?">
+      <bpmn:incoming>flow_to_inject_context</bpmn:incoming>
+      <bpmn:outgoing>flow_has_prompt</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_prompt</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="inject_initial_prompt" name="[RUST] Write initial prompt to PTY stdin">
+      <bpmn:incoming>flow_has_prompt</bpmn:incoming>
+      <bpmn:outgoing>flow_to_active</bpmn:outgoing>
+      <bpmn:script>
+# Wait for Claude Code ready prompt
+# Write user-provided initial prompt to PTY stdin
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="active_session" name="[UI] Interactive terminal session">
+      <bpmn:incoming>flow_no_prompt</bpmn:incoming>
+      <bpmn:incoming>flow_to_active</bpmn:incoming>
+      <bpmn:incoming>flow_message_handled</bpmn:incoming>
+      <bpmn:outgoing>flow_to_event_check</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="event_check" name="Session event type?">
+      <bpmn:incoming>flow_to_event_check</bpmn:incoming>
+      <bpmn:outgoing>flow_to_message_event</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_close_event</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_crash_event</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="format_message" name="[UI] Format message for terminal injection">
+      <bpmn:incoming>flow_to_message_event</bpmn:incoming>
+      <bpmn:outgoing>flow_to_inject_message</bpmn:outgoing>
+      <bpmn:script>
+# Read from claude.messages, format as prompt injection
+# "[Message from {from_project}]: {body}"
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="inject_message" name="[RUST] Write message to PTY stdin">
+      <bpmn:incoming>flow_to_inject_message</bpmn:incoming>
+      <bpmn:outgoing>flow_message_handled</bpmn:outgoing>
+      <bpmn:script>
+# Wait for Claude at prompt, write message, mark as read
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="graceful_shutdown" name="[RUST] Send exit command to Claude CLI">
+      <bpmn:incoming>flow_to_close_event</bpmn:incoming>
+      <bpmn:outgoing>flow_to_cleanup_from_close</bpmn:outgoing>
+      <bpmn:script>
+# Write "/exit" or Ctrl+D to PTY stdin
+# Wait for process exit (timeout 10s), kill if needed
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:userTask id="show_crash" name="[UI] Show crash notification with restart option">
+      <bpmn:incoming>flow_to_crash_event</bpmn:incoming>
+      <bpmn:outgoing>flow_to_cleanup_from_crash</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="cleanup" name="[RUST] Cleanup PTY resources">
+      <bpmn:incoming>flow_to_cleanup_from_close</bpmn:incoming>
+      <bpmn:incoming>flow_to_cleanup_from_crash</bpmn:incoming>
+      <bpmn:outgoing>flow_to_remove_panel</bpmn:outgoing>
+      <bpmn:script>
+# Remove from PtyManager, drop PTY handle, cancel Tokio task
+# Emit pty:{session_id}:closed
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="remove_panel" name="[UI] Remove terminal panel, update tab bar">
+      <bpmn:incoming>flow_to_remove_panel</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Dispose xterm.js, remove React component, update tab state
+pass
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end" name="Session terminated">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_to_select_project" sourceRef="start" targetRef="select_project"/>
+    <bpmn:sequenceFlow id="flow_to_resolve_config" sourceRef="select_project" targetRef="resolve_config"/>
+    <bpmn:sequenceFlow id="flow_to_prepare_env" sourceRef="resolve_config" targetRef="prepare_env"/>
+    <bpmn:sequenceFlow id="flow_to_spawn_pty" sourceRef="prepare_env" targetRef="spawn_pty"/>
+    <bpmn:sequenceFlow id="flow_to_check_spawn" sourceRef="spawn_pty" targetRef="check_spawn"/>
+    <bpmn:sequenceFlow id="flow_spawn_ok" name="spawn_success == True" sourceRef="check_spawn" targetRef="create_terminal_panel">
+      <bpmn:conditionExpression>spawn_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_spawn_fail" name="spawn_success == False" sourceRef="check_spawn" targetRef="spawn_failed">
+      <bpmn:conditionExpression>spawn_success == False</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_inject_context" sourceRef="create_terminal_panel" targetRef="check_initial_prompt"/>
+    <bpmn:sequenceFlow id="flow_has_prompt" name="initial_prompt != None" sourceRef="check_initial_prompt" targetRef="inject_initial_prompt">
+      <bpmn:conditionExpression>initial_prompt != None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_prompt" name="initial_prompt == None" sourceRef="check_initial_prompt" targetRef="active_session">
+      <bpmn:conditionExpression>initial_prompt == None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_active" sourceRef="inject_initial_prompt" targetRef="active_session"/>
+    <bpmn:sequenceFlow id="flow_to_event_check" sourceRef="active_session" targetRef="event_check"/>
+    <bpmn:sequenceFlow id="flow_to_message_event" name="event_type == 'message'" sourceRef="event_check" targetRef="format_message">
+      <bpmn:conditionExpression>event_type == 'message'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_close_event" name="event_type == 'close'" sourceRef="event_check" targetRef="graceful_shutdown">
+      <bpmn:conditionExpression>event_type == 'close'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_crash_event" name="event_type == 'crash'" sourceRef="event_check" targetRef="show_crash">
+      <bpmn:conditionExpression>event_type == 'crash'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_inject_message" sourceRef="format_message" targetRef="inject_message"/>
+    <bpmn:sequenceFlow id="flow_message_handled" sourceRef="inject_message" targetRef="active_session"/>
+    <bpmn:sequenceFlow id="flow_to_cleanup_from_close" sourceRef="graceful_shutdown" targetRef="cleanup"/>
+    <bpmn:sequenceFlow id="flow_to_cleanup_from_crash" sourceRef="show_crash" targetRef="cleanup"/>
+    <bpmn:sequenceFlow id="flow_to_remove_panel" sourceRef="cleanup" targetRef="remove_panel"/>
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="remove_panel" targetRef="end"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>
