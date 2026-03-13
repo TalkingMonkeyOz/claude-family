@@ -25,20 +25,21 @@ Registry of installed MCPs with project assignments and token costs.
 **Package**: `postgres-mcp.exe`
 **Scope**: Global (all projects)
 
-### orchestrator
-**Purpose**: Spawn agents (19 types) + inter-Claude messaging + agent stats
-**Tokens**: ~9k
-**Package**: Custom (`mcp-servers/orchestrator/`)
-**Scope**: Global (all projects)
-**Docs**: [[Orchestrator MCP]]
-
 ### project-tools
-**Purpose**: Work tracking, knowledge, config ops, conversations, books
+**Purpose**: Work tracking, knowledge, config ops, messaging, workfiles, entity catalog, cognitive memory
 **Tokens**: ~12k
 **Package**: Custom (`mcp-servers/project-tools/`)
 **Scope**: Global (all projects)
-**Key tools**: advance_status, start_work, complete_work, update_claude_md, extract_conversation, store_book, recall_knowledge (40+ total)
-**Note**: v3 (2026-02-11): Added 15 tools across 4 pillars (P0: Conversations, P1: Config, P2: Knowledge, P3: Work Tracking)
+**Key tools**: advance_status, start_work, complete_work, update_claude_md, remember, recall_memories, catalog, recall_entities, stash, unstash, check_inbox, send_message, store_book (~60+ total)
+**Note**: v3 (2026-02-11) added 15 tools. F130 (cognitive memory), F131 (entity catalog), FB177 (workfiles) added since.
+
+### bpmn-engine
+**Purpose**: BPMN process model query, validation, alignment checking, GPS-style workflow navigation
+**Tokens**: ~3k
+**Package**: Custom (`mcp-servers/bpmn-engine/`)
+**Scope**: Global (all projects)
+**Key tools**: list_processes, get_process, search_processes, validate_process, get_current_step, check_alignment, get_dependency_tree, file_alignment_gaps
+**Note**: Added as part of BPMN-First architecture rule. Processes stored in `mcp-servers/bpmn-engine/processes/` (git) + `claude.bpmn_processes` (search registry with Voyage AI embeddings).
 
 ### sequential-thinking
 **Purpose**: Complex multi-step reasoning
@@ -78,6 +79,7 @@ Registry of installed MCPs with project assignments and token costs.
 
 | MCP | Removed | Replaced By |
 |-----|---------|-------------|
+| orchestrator | 2026-02-24 | Messaging → project-tools; agent spawning → native Task tool |
 | filesystem | 2026-01 | Built-in Read/Write/Edit tools |
 | memory | 2026-01 | project-tools knowledge + session facts |
 | vault-rag | 2026-01 | UserPromptSubmit hook (auto RAG) |
@@ -156,11 +158,10 @@ Generator automatically resolves `npx` to `node.exe <entry_point>` if globally i
 - [[MCP configuration]] - Database-driven config
 - [[Setting's File]] - Settings structure
 - [[Claude Tools Reference]] - All available tools
-- [[Orchestrator MCP]] - Orchestrator details
 
 ---
 
-**Version**: 4.0 (npx resolved to direct node paths, added playwright entry, updated install flow)
+**Version**: 5.0 (Retired orchestrator, added bpmn-engine, updated project-tools tool count to 60+)
 **Created**: 2025-12-26
-**Updated**: 2026-02-20
-**Location**: Claude Family/MCP Registry.md
+**Updated**: 2026-03-14
+**Location**: Claude Family/mcp-and-tools/MCP Registry.md

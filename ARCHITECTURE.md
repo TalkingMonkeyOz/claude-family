@@ -1,48 +1,35 @@
 # Architecture - Claude Family Infrastructure
 
 **Project**: claude-family
-**Version**: 1.4
-**Updated**: 2026-02-10
+**Version**: 2.0
+**Updated**: 2026-03-14
 **Status**: Active
 
 ---
 
 ## Overview
 
-Claude Family is the infrastructure layer that enables coordinated AI-assisted software development across multiple Claude Code instances. It provides shared configuration, commands, scripts, and a PostgreSQL-backed state management system.
+Claude Family is the infrastructure layer that enables coordinated AI-assisted software development across multiple Claude Code instances. It provides shared configuration, commands, scripts, hooks, and a PostgreSQL-backed state management system with cognitive memory, BPMN process modeling, and automated RAG.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    User (John) - Desktop                        │
 ├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
 │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐        │
 │   │ Claude Code  │  │ Claude Code  │  │ Claude Code  │        │
 │   │ Instance #1  │  │ Instance #2  │  │ Instance #3  │        │
 │   └──────┬───────┘  └──────┬───────┘  └──────┬───────┘        │
-│          │                 │                 │                 │
 │          └────────────────┬┴─────────────────┘                 │
-│                           │                                    │
 │   ┌───────────────────────▼─────────────────────────────────┐  │
 │   │              Shared Infrastructure Layer                 │  │
 │   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────┐  │  │
 │   │  │ CLAUDE.md   │  │  /commands  │  │  MCP Servers    │  │  │
-│   │  │ (per proj)  │  │  (shared)   │  │  (postgres,etc) │  │  │
-│   │  └─────────────┘  └─────────────┘  └─────────────────┘  │  │
-│   └─────────────────────────┬───────────────────────────────┘  │
-│                             │                                  │
+│   │  │ (per proj)  │  │  (shared)   │  │  (project-tools │  │  │
+│   │  └─────────────┘  └─────────────┘  │   bpmn-engine)  │  │  │
+│   └─────────────────────────┬───────────┴─────────────────┘  │  │
 │   ┌─────────────────────────▼───────────────────────────────┐  │
 │   │           PostgreSQL: ai_company_foundation              │  │
-│   │                    claude schema                         │  │
-│   │  ┌────────────┐ ┌────────────┐ ┌────────────┐          │  │
-│   │  │  sessions  │ │  projects  │ │  documents │          │  │
-│   │  │  messages  │ │  features  │ │  feedback  │          │  │
-│   │  │  activity  │ │  tasks     │ │  reminders │          │  │
-│   │  └────────────┘ └────────────┘ └────────────┘          │  │
-│   └─────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│   ┌─────────────────────────────────────────────────────────┐  │
-│   │         Mission Control Web (MCW) - Visibility           │  │
+│   │                 claude schema (63 tables)                │  │
 │   └─────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -53,59 +40,82 @@ Claude Family is the infrastructure layer that enables coordinated AI-assisted s
 
 ### 1. Claude Code Instances
 
-Multiple Claude Code instances can run simultaneously, each working on different projects. They share:
-- Slash commands (session-start, session-end, etc.)
-- Global CLAUDE.md (`~/.claude/CLAUDE.md`)
-- Database access via MCP postgres server
-- Work tracking via MCP project-tools server
+Multiple instances run simultaneously, each on different projects. They share slash commands, global `~/.claude/CLAUDE.md`, database access, work tracking, and automatic RAG via the UserPromptSubmit hook.
 
-### 2. Project Layer
+### 2. PostgreSQL Database
 
-Each project in `C:\Projects\` has:
-- **CLAUDE.md** - AI-readable configuration and context
-- **PROBLEM_STATEMENT.md** - What problem the project solves
-- **ARCHITECTURE.md** - System design (this document pattern)
-- **docs/** - Additional documentation
+**Schema**: `claude` | **Tables**: 63 | **DB**: `ai_company_foundation`
 
-### 3. PostgreSQL Database
+Key groups: sessions, projects/workspaces, work items (features/tasks), knowledge (3-tier memory), entities (catalog), workfiles, activities (WCC), BPMN registry, messages, config templates, and data quality tables. See [Architecture Details Part 1](knowledge-vault/10-Projects/claude-family/architecture-details-part1.md) for full table inventory and hook details.
 
-**Schema**: `claude`
-**Tables**: 36 (as of 2025-12-04)
+### 3. MCP Servers
 
-Key table groups:
+| Server | Purpose | Scope |
+|--------|---------|-------|
+| postgres | Database read access, SQL execution | Global |
+| project-tools | Work tracking, knowledge, config, messaging, workfiles (~60+ tools) | Global |
+| sequential-thinking | Complex multi-step reasoning | Global |
+| python-repl | Python code execution | Global |
+| bpmn-engine | Process model query, validation, navigation | Global |
+| nimbus-knowledge | Nimbus domain knowledge (pending migration) | Nimbus only |
+| mui | MUI X component documentation | Selected projects |
+| playwright | Browser automation and testing | Selected projects |
 
-| Group | Tables | Purpose |
-|-------|--------|---------|
-| Sessions | sessions, session_history, session_state | Track Claude sessions |
-| Projects | projects, project_tech_stack | Project registry |
-| Documents | documents, document_projects | Documentation index |
-| Work | features, build_tasks, work_tasks | Work tracking |
-| Feedback | feedback | Ideas, bugs, questions |
-| System | activity_feed, reminders, messages | Coordination |
-| Quality | column_registry | Data validation |
+**Retired**: `orchestrator` (2026-02-24) — messaging migrated to project-tools, agent spawning uses native Task tool.
 
-### 4. MCP Servers
+### 4. Hook System
 
-Model Context Protocol servers provide Claude instances with capabilities:
+Hooks live in `.claude/settings.local.json` (DB-generated — never edit manually). Full hook script details in [Architecture Details Part 1](knowledge-vault/10-Projects/claude-family/architecture-details-part1.md).
 
-| Server | Purpose |
-|--------|---------|
-| postgres | Database access, session logging |
-| orchestrator | Agent spawning, messages |
-| python-repl | Python execution |
-| sequential-thinking | Complex problem solving |
-| project-tools | Work tracking, session facts, knowledge |
-| nimbus-knowledge | Entity search, patterns (Nimbus projects) |
-| mui | MUI component documentation |
+| Script | Hook Event | Purpose |
+|--------|-----------|---------|
+| `session_startup_hook_enhanced.py` | SessionStart | Log session, load state |
+| `rag_query_hook.py` | UserPromptSubmit | RAG + core protocol injection |
+| `todo_sync_hook.py` | PostToolUse(TodoWrite) | Sync todos to DB |
+| `task_sync_hook.py` | PostToolUse(TaskCreate) | Sync tasks to claude.todos |
+| `task_discipline_hook.py` | PreToolUse(Write/Edit) | Block if no tasks created |
+| `context_injector_hook.py` | PreToolUse(Write/Edit) | Inject coding standards |
+| `precompact_hook.py` | PreCompact | Inject session state |
+| `session_end_hook.py` | SessionEnd | Auto-close session in DB |
+| `subagent_start_hook.py` | SubagentStart | Log agent spawns |
 
 ### 5. Mission Control Web (MCW)
 
-Next.js web application providing visibility into:
-- Active sessions and history
-- Project status and documents
-- Work items (features, tasks)
-- Feedback/issues
-- Activity feed
+Next.js web app providing visibility: sessions, projects, work items, feedback, activity feed.
+
+---
+
+## Directory Structure
+
+```
+C:\Projects\claude-family\
+├── CLAUDE.md                  # AI constitution (self-healing from DB)
+├── PROBLEM_STATEMENT.md
+├── ARCHITECTURE.md            # This document
+├── README.md
+├── .claude/
+│   ├── commands/              # 24 slash commands
+│   ├── instructions/          # Auto-apply coding standards
+│   ├── skills/                # Domain skills (9 skills)
+│   ├── rules/                 # Enforcement rules
+│   ├── agents/                # Agent profiles
+│   ├── collections/           # Agent groupings
+│   └── settings.local.json    # Generated from DB (do not edit)
+├── scripts/                   # Python utilities + 11 hook scripts
+├── mcp-servers/
+│   ├── project-tools/         # Main work tracking server
+│   ├── bpmn-engine/           # BPMN process modeling server
+│   └── flaui-testing/         # Windows UI automation (C#)
+├── knowledge-vault/           # Obsidian vault (Markdown + YAML)
+│   ├── 00-Inbox/
+│   ├── 10-Projects/
+│   ├── 20-Domains/
+│   ├── 30-Patterns/
+│   └── 40-Procedures/
+├── templates/                 # Project scaffolding templates
+└── docs/
+    └── adr/                   # Architecture decision records
+```
 
 ---
 
@@ -114,225 +124,48 @@ Next.js web application providing visibility into:
 ### Session Lifecycle
 
 ```
-START                                               END
-  │                                                  │
-  ▼                                                  ▼
-┌────────────────┐    ┌────────────────┐    ┌────────────────┐
-│ /session-start │───▶│   DO WORK      │───▶│  /session-end  │
-└────────────────┘    └────────────────┘    └────────────────┘
-        │                                           │
-        ▼                                           ▼
-  - Check reminders                           - Log summary
-  - Check messages                            - Record outcome
-  - Load context                              - Update state
-  - Log session start                         - Close session
-```
-
-### Document Indexing
-
-```
-┌─────────────────┐      ┌─────────────────┐      ┌──────────────┐
-│ scan_documents  │─────▶│ claude.documents│─────▶│ MCW Display  │
-│     .py         │      │     table       │      │              │
-└─────────────────┘      └─────────────────┘      └──────────────┘
-        │
-        ├── Detect doc type (ARCHITECTURE, SOP, etc.)
-        ├── Extract title from # heading
-        ├── Calculate file hash (change detection)
-        ├── Detect core docs (CLAUDE.md, shared/)
-        └── Link to projects (junction table)
+SessionStart hook (AUTO) → logs session, loads state
+UserPromptSubmit hook (AUTO) → RAG + core protocol (8 rules)
+PostToolUse hooks (AUTO) → todo sync, MCP usage logging
+PreCompact hook (AUTO) → injects active work before compaction
+SessionEnd hook (AUTO) → auto-closes session in DB
+/session-end (MANUAL) → detailed summary + knowledge capture
 ```
 
 ### Work Tracking Flow
 
 ```
 IDEA ──▶ feedback (type='idea')
-                │
-                ▼ (approved)
-         features table
-                │
-                ▼ (breakdown)
-         build_tasks table
-                │
-                ▼ (in session)
-          TodoWrite tool
+               │ (approved)
+        features table
+               │ (breakdown)
+        build_tasks table ──▶ advance_status() / start_work() / complete_work()
+               │ (in session)
+         TodoWrite tool
+```
+
+State changes flow through WorkflowEngine (`claude.workflow_transitions`, 28 transitions). All transitions logged to `claude.audit_log`.
+
+### RAG + Context Injection
+
+```
+UserPromptSubmit → rag_query_hook.py
+  ├── WCC activity detection → assemble_wcc() (6 sources, budget-capped)
+  │   OR per-source RAG (vault embeddings + knowledge + session facts)
+  └── Core protocol injection (8 rules, every prompt)
 ```
 
 ---
 
-## Data Quality
-
-### Column Registry
-
-The `claude.column_registry` table defines valid values for constrained columns. CHECK constraints enforce at database level.
-
-```sql
--- Check valid values before INSERT/UPDATE
-SELECT valid_values FROM claude.column_registry
-WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
-```
-
-### Enforcement Hierarchy
+## Enforcement Hierarchy
 
 ```
-Weak ───────────────────────────────────────────▶ Strong
+Weak ───────────────────────────────────────────────────▶ Strong
 
-CLAUDE.md    Slash      Hooks      DB         Reviewer
+CLAUDE.md    Slash      Hooks        DB            Reviewer
 (guidance) ─▶ Commands ─▶ (block) ─▶ Constraints ─▶ Agents
-              (manual)              (reject)      (verify)
+              (manual)   (enforce)   (reject)       (verify)
 ```
-
----
-
-## Directory Structure
-
-```
-C:\Projects\claude-family\
-├── .claude/
-│   ├── commands/          # Slash commands
-│   │   ├── session-start.md
-│   │   ├── session-end.md
-│   │   └── team-status.md
-│   └── hooks.json         # Pre/post tool hooks
-├── .claude-plugins/       # Plugin ecosystem
-│   └── claude-family-core/
-├── docs/
-│   ├── CLAUDE_GOVERNANCE_SYSTEM_PLAN.md
-│   ├── TODO_NEXT_SESSION.md
-│   └── sops/              # Standard operating procedures
-├── mcp-servers/
-│   └── orchestrator/      # Agent orchestration
-├── scripts/
-│   ├── scan_documents.py
-│   ├── link_checker.py
-│   └── orphan_report.py
-├── templates/             # Project templates
-├── CLAUDE.md
-├── PROBLEM_STATEMENT.md
-├── ARCHITECTURE.md        # This document
-└── README.md
-```
-
----
-
-## Integration Points
-
-### 1. New Project Creation
-
-Future `/project-init` command will:
-1. Create directory structure
-2. Generate CLAUDE.md from template
-3. Create PROBLEM_STATEMENT.md (prompting user)
-4. Register in claude.projects table
-5. Link documents via junction table
-
-### 2. MCW Dashboards
-
-MCW reads from `claude` schema to display:
-- `claude.sessions` → Sessions view
-- `claude.projects` → Projects view
-- `claude.documents` → Documents view
-- `claude.activity_feed` → Activity timeline
-- `claude.feedback` → Feedback/issues
-
-### 3. Agent Orchestration
-
-The orchestrator MCP server can spawn specialized agents:
-- coder-haiku: Quick coding tasks
-- reviewer-sonnet: Code review
-- architect-opus: Design decisions
-- tester-haiku: Test writing
-
-**Current**: Agents spawn synchronously (caller blocks until completion)
-**Planned**: Async spawn with messaging-based result delivery (ADR-003)
-
----
-
-## Scheduled Jobs
-
-**IMPORTANT**: Job execution gap identified 2025-12-06.
-
-The `claude.scheduled_jobs` table registers scheduled jobs, but **no execution mechanism exists**. The `session_startup_hook.py` checks for due jobs and reports them but does NOT execute them.
-
-```
-STATUS (2025-12-06):
-- 11 jobs registered, 0 have ever run
-- Jobs are reported to Claude at session start
-- Claude must manually run or delegate jobs
-- MCW task requested to build job runner
-```
-
-**Planned resolution**: MCW job runner integration (see docs/TODO_NEXT_SESSION.md)
-
----
-
-## Enforcement Reality
-
-The enforcement hierarchy exists but with gaps:
-
-| Level | Mechanism | Status |
-|-------|-----------|--------|
-| CLAUDE.md | Guidance | Active (not always followed) |
-| Slash Commands | Manual | Active |
-| Hooks | Pre-tool validation | Active (3 validators) |
-| DB Constraints | CHECK constraints | Active (limited coverage) |
-| Reviewer Agents | Async verification | Not yet implemented |
-
-**Recent additions** (2025-12-06):
-- `validate_parent_links.py` - Prevents orphan records at INSERT time
-- Updated hooks.json to include parent validation
-
----
-
-## Security Considerations
-
-- Database credentials in local MCP config only
-- No secrets in committed CLAUDE.md files
-- Project IDs are UUIDs (not sequential)
-- All projects default to PRIVATE repos
-
----
-
-## Related Documents
-
-- `docs/CLAUDE_GOVERNANCE_SYSTEM_PLAN.md` - Full governance implementation plan
-- `docs/DATA_GATEWAY_MASTER_PLAN.md` - Data quality system details
-- `~/.claude/CLAUDE.md` - Global Claude configuration
-- `C:\claude\shared\docs\` - Shared documentation
-
----
-
-## Skills System (ADR-005)
-
-Skills replaced the deprecated Process Router in December 2025. Skills are domain-specific expertise modules that Claude can invoke via the `Skill` tool.
-
-### Core Skills
-
-| Skill | Purpose |
-|-------|---------|
-| `database-operations` | SQL validation, column_registry checks |
-| `work-item-routing` | Feedback, features, build_tasks routing |
-| `session-management` | Session lifecycle (start/end/resume) |
-| `code-review` | Pre-commit review, testing |
-| `project-ops` | Project init, retrofit, phases |
-| `messaging` | Inter-Claude communication |
-| `agentic-orchestration` | Agent spawning, parallel work |
-| `testing-patterns` | Test writing and execution |
-
-### Skill Locations
-
-- **User skills**: `~/.claude/commands/*.md` (global)
-- **Project skills**: `.claude/commands/*.md` (project-specific)
-- **Managed skills**: `.claude/skills/*.md` (auto-generated)
-
-### Migration from Process Router
-
-The process_registry table (32 workflows) was archived. Skills provide:
-- Simpler invocation (no regex/LLM classification needed)
-- Better composability
-- Direct user control via `/skill-name`
-
-**Legacy reference**: `archive/process-router/` contains historical implementation.
 
 ---
 
@@ -345,9 +178,24 @@ The process_registry table (32 workflows) was archived. Skills provide:
 | ADR-003 | Data Gateway Pattern for Validated Writes | Accepted |
 | ADR-005 | Skills-First Architecture (replacing Process Router) | Accepted |
 
-See `claude.architecture_decisions` table for full records.
+---
+
+## Related Documents
+
+- [Architecture Details Part 1](knowledge-vault/10-Projects/claude-family/architecture-details-part1.md) — Full table inventory, all hook scripts, config system, cognitive memory
+- [Architecture Details Part 2](knowledge-vault/10-Projects/claude-family/architecture-details-part2.md) — Skills, BPMN modeling, Entity Catalog, WCC, Workfiles
+- `CLAUDE.md` — AI constitution with full tool index
+- `PROBLEM_STATEMENT.md` — Problem definition
+- `knowledge-vault/40-Procedures/Config Management SOP.md`
 
 ---
 
 **Maintained by**: Claude Family Infrastructure Team
 **Review Cycle**: Monthly or on major changes
+
+---
+
+**Version**: 2.0
+**Created**: 2025-10-21
+**Updated**: 2026-03-14
+**Location**: C:\Projects\claude-family\ARCHITECTURE.md
