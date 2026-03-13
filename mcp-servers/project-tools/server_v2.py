@@ -3398,10 +3398,10 @@ def update_work_status(
     item_id: str,
     new_status: str,
 ) -> dict:
-    """Update status of a feedback, feature, or build_task.
+    """DEPRECATED: Use advance_status() instead (same behavior, consistent naming).
 
-    Use when: Changing status (legacy interface). Routes through WorkflowEngine.
-    Prefer advance_status (same behavior, consistent naming).
+    Update status of a feedback, feature, or build_task.
+    Routes through WorkflowEngine. For build tasks, prefer start_work()/complete_work().
     Use short codes: FB12, F5, BT23.
     Returns: Same as advance_status - {success, entity_type, entity_code,
               from_status, to_status}.
@@ -3441,7 +3441,9 @@ def store_knowledge(
     confidence_level: int = 80,
     source: str = "",
 ) -> dict:
-    """Store new knowledge with automatic embedding for semantic search.
+    """LEGACY: Prefer remember() which auto-routes to the correct tier with dedup/merge.
+
+    Store new knowledge with automatic embedding for semantic search.
 
     Use when: Capturing a reusable insight, pattern, or fact. Embedding is
     auto-generated via Voyage AI for later recall via recall_knowledge.
@@ -3482,7 +3484,9 @@ def recall_knowledge(
     tags: list[str] | None = None,
     date_range_days: int | None = None,
 ) -> dict:
-    """Semantic search over knowledge entries with structured filters.
+    """LEGACY: Prefer recall_memories() which searches all 3 tiers with budget-capped results.
+
+    Semantic search over knowledge entries with structured filters.
 
     Use when: Looking for previously stored knowledge (learnings, patterns,
     gotchas). Uses Voyage AI embeddings for semantic similarity matching.
@@ -3522,7 +3526,9 @@ def graph_search(
     min_similarity: float = 0.5,
     token_budget: int = 500,
 ) -> dict:
-    """Graph-aware knowledge search: pgvector similarity + relationship graph walk.
+    """LEGACY: Prefer recall_memories() for most use cases. Use graph_search only when you need explicit relationship traversal.
+
+    Graph-aware knowledge search: pgvector similarity + relationship graph walk.
 
     Finds knowledge via semantic similarity, then walks the knowledge_relations
     graph to discover connected entries up to max_hops away. Returns both direct
@@ -3624,11 +3630,12 @@ def remember(
 
     Routes to the right storage: credentials/configs/endpoints → session_facts (short tier),
     learned/facts/decisions → knowledge table (mid tier), patterns/procedures/gotchas →
-    knowledge table (long tier). Automatically deduplicates (merges if >85% similar),
+    knowledge table (long tier). Automatically deduplicates (merges if >75% similar),
     detects contradictions, and creates relation links to nearby knowledge.
 
     Use when: You learn something worth remembering. Call this instead of separate
     store_knowledge / store_session_fact — it auto-routes to the right place.
+    Quality gate: rejects content < 80 chars or junk patterns (task acks, agent handoffs).
     Returns: {success, memory_id, tier, action: 'created'|'merged'|'contradiction_flagged',
               relations_created}.
 
@@ -4941,9 +4948,13 @@ def update_protocol(
 ) -> dict:
     """Update a protocol to a new version. Deactivates old, inserts new, deploys to file.
 
+    WARNING: CORE_PROTOCOL is injected on EVERY prompt for EVERY Claude instance.
+    Changes here have system-wide blast radius. Test content carefully before updating.
+
     Use when: Changing the CORE_PROTOCOL or other injected protocols.
     Creates a new version in claude.protocol_versions, sets it active,
     and deploys to scripts/core_protocol.txt for runtime use.
+    Use get_protocol_history() to review previous versions before making changes.
     Returns: {success, protocol_name, old_version, new_version, deployed}.
 
     Args:
@@ -5156,7 +5167,8 @@ def check_inbox(
     """Check for pending messages from other Claude instances. Returns unread messages addressed to you or broadcast to all. IMPORTANT: Pass project_name to see project-targeted messages!
 
     Use when: Checking for messages from other Claude instances at session start
-    or periodically during work.
+    or periodically during work. For actionable messages only (task_request/question/handoff),
+    use get_unactioned_messages() instead.
     Returns: {count, messages: [{message_id, from_session_id, from_project, to_project, message_type,
               priority, subject, body, metadata, status, created_at, parent_message_id, thread_id}]}.
 
@@ -5622,6 +5634,8 @@ def get_unactioned_messages(
     """Get actionable messages (task_request/question/handoff) that haven't been actioned or deferred for a project.
 
     Use when: Checking for messages that need action during session start.
+    Unlike check_inbox() which returns all pending messages, this filters to only
+    actionable types (task_request, question, handoff) that haven't been actioned or deferred.
     Returns: {count, messages: [...]}.
 
     Args:

@@ -12,7 +12,7 @@ synced: false
 
 # Unified Storage Design — Overview
 
-**Status**: Draft (design complete, pending implementation)
+**Status**: Partial Implementation (entities system deployed 2026-03-13, dossier/recall redesign pending)
 **Origin**: Comprehensive audit (8 docs) + online research (filing systems, library science, external memory frameworks)
 **Audit docs**: `docs/audit-*.md` (8 files covering storage, BPMN, tasks, structured data)
 **Research**: See [Research Basis](#research-basis) below
