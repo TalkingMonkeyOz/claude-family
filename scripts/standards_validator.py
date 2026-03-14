@@ -147,8 +147,12 @@ def get_file_type(file_path: str) -> str:
     if base_name == 'README.md':
         return 'readme'
 
-    # Check patterns
-    if 'docs/' in file_path or 'TODO' in base_name or 'PLAN' in base_name:
+    # Check patterns — order matters: reports before generic docs/
+    if 'TODO' in base_name or 'PLAN' in base_name:
+        return 'working'
+    if 'docs/' in file_path and any(kw in base_name.lower() for kw in ['audit', 'report', 'analysis', 'review', 'test']):
+        return 'report'
+    if 'docs/' in file_path:
         return 'working'
 
     if any(folder in file_path.lower() for folder in ['40-procedures', 'procedures', 'sop']):
