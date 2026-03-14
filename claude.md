@@ -134,7 +134,7 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
 | `regenerate_settings(project)` | Regenerate settings.local.json from DB |
 
-### Cognitive Memory Tools (F130)
+### Memory Tools (F130 - Cognitive Memory)
 
 3-tier memory system: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns).
 
@@ -159,9 +159,9 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `search_conversations(query, ...)` | Full-text search across stored conversations |
 | `extract_conversation(session_id)` | Parse JSONL conversation log |
 
-### Workfile Tools (Cross-Session Component Context)
+### Filing Cabinet Tools (Cross-Session Component Context)
 
-Project-scoped working files that bridge sessions. Like a filing cabinet: project = cabinet, component = drawer, title = file.
+Project-scoped working files that bridge sessions. Filing cabinet metaphor: project = cabinet, component = drawer, title = file.
 
 | Tool | Use When |
 |------|----------|
@@ -269,7 +269,7 @@ CAPTURE ──> EMBED (Voyage AI) ──> 3-TIER MEMORY ──> BUDGET-CAPPED RE
   remember()          auto           short/mid/long       recall_memories()
 ```
 
-### Cognitive Memory (F130)
+### Memory System (F130)
 
 3-tier system replaces unbounded knowledge graph dumps:
 - **SHORT**: Session facts (credentials, configs). Auto via `store_session_fact`.

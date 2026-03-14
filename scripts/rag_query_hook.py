@@ -97,7 +97,17 @@ REMINDER_INTERVALS = {
     "git_check": 10,         # Every 10 interactions - check uncommitted changes
     "tool_awareness": 8,     # Every 8 interactions - remind about MCP tools
     "budget_check": 12,      # Every 12 interactions - context budget awareness
+    "storage_nudge": 25,     # Every 25 interactions - rotate storage system reminders
 }
+
+# Rotating storage nudges — cycle through these to reinforce filing habits
+STORAGE_NUDGES = [
+    "📁 **Filing Cabinet**: Working on a component? `stash()` your notes. `unstash()` to reload next session.",
+    "🧠 **Memory**: Learned a pattern or gotcha? `remember()` it for future sessions (min 80 chars).",
+    "📋 **Notepad**: Important finding or decision? `store_session_fact()` — survives compaction.",
+    "📚 **Reference Library**: Found structured data (API, schema, entity)? `catalog()` it.",
+    "📂 **Filing Check**: `list_workfiles()` before starting work — check if a dossier already exists.",
+]
 
 # State file for tracking interaction count
 STATE_DIR = Path.home() / ".claude" / "state"
@@ -162,14 +172,19 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
 
     if count > 0 and count % REMINDER_INTERVALS["tool_awareness"] == 0:
         if count != state.get("last_tool_awareness", 0):
-            reminders.append("""🔧 **When to use MCP tools** (ToolSearch first):
-  - **User reports bug/idea?** → `project-tools.create_feedback` (NOT raw SQL)
-  - **Planning 3+ file feature?** → `project-tools.create_feature` + `add_build_task`
-  - **Task too complex for me?** → Native `Task` tool (delegate to coder/analyst agents)
-  - **Need deep reasoning?** → `sequential-thinking` for multi-step analysis
-  - **Processing Excel/CSV?** → `python-repl` (keep data in REPL, not context)
-  - **Learned something useful?** → `project-tools.store_knowledge` (persists for future)""")
+            reminders.append("""🔧 **When to use MCP tools**:
+  - **User reports bug/idea?** → `create_feedback` (NOT raw SQL)
+  - **Planning 3+ file feature?** → `create_feature` + `add_build_task`
+  - **Task too complex?** → Native `Task` tool (delegate to agents)
+  - **Need deep reasoning?** → `sequential-thinking`
+  - **Processing data?** → `python-repl` (keep out of context)""")
             state["last_tool_awareness"] = count
+
+    if count > 0 and count % REMINDER_INTERVALS["storage_nudge"] == 0:
+        if count != state.get("last_storage_nudge", 0):
+            nudge_index = (count // REMINDER_INTERVALS["storage_nudge"]) % len(STORAGE_NUDGES)
+            reminders.append(STORAGE_NUDGES[nudge_index])
+            state["last_storage_nudge"] = count
 
     if count > 0 and count % REMINDER_INTERVALS["budget_check"] == 0:
         if count != state.get("last_budget_check", 0):
