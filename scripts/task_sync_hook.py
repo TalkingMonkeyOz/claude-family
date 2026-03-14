@@ -79,11 +79,11 @@ def _get_project_name(cwd: str) -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             git_root = result.stdout.strip().replace('/', os.sep)
-            return os.path.basename(git_root)
+            return os.path.basename(git_root).lower()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
     # Fallback to cwd basename
-    return os.path.basename(cwd.rstrip('/\\'))
+    return os.path.basename(cwd.rstrip('/\\')).lower()
 
 
 def get_task_map_path(project_name: str) -> Path:
@@ -174,7 +174,7 @@ def get_project_id(project_name: str, conn) -> str:
     """Get the project ID for this project."""
     try:
         cur = conn.cursor()
-        cur.execute("SELECT project_id::text FROM claude.projects WHERE project_name = %s", (project_name,))
+        cur.execute("SELECT project_id::text FROM claude.projects WHERE LOWER(project_name) = LOWER(%s)", (project_name,))
         row = cur.fetchone()
         if row:
             return row['project_id'] if isinstance(row, dict) else row[0]
@@ -301,6 +301,13 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
     """Handle TaskCreate: insert new todo or link to existing one in claude.todos.
 
     Also checks for matching build_tasks and creates a bridge if found.
+
+    GRACEFUL DEGRADATION PATTERN: The task map file is ALWAYS written, even when
+    the DB sync fails. The discipline hook reads the map file to decide whether to
+    allow gated tools — if the map is never written, the discipline hook denies ALL
+    tool use for the session, which is far worse than having a map entry without a
+    DB-backed todo_id. DB failures are logged but do not prevent the map write.
+    When DB sync fails, the map entry uses todo_id="pending-db-sync" as a sentinel.
     """
     subject = tool_input.get('subject', '')
     description = tool_input.get('description', '')
@@ -315,75 +322,83 @@ def handle_task_create(tool_input: dict, tool_output: str, project_name: str, ho
         logger.warning(f"Could not extract task number from output: {tool_output}")
         return
 
+    # These are populated by DB sync. Defaults allow map write even on DB failure.
+    todo_id = "pending-db-sync"
+    matched_bt = None
+    session_id = hook_session_id  # Use hook session_id as fallback if DB unavailable
+
     conn = get_db_connection()
-    if not conn:
-        return
-
-    try:
-        project_id = get_project_id(project_name, conn)
-        if not project_id:
-            logger.warning(f"Project not found: {project_name}")
-            conn.close()
-            return
-
-        session_id = get_current_session_id(project_name, conn)
-
-        # Check for duplicate: does a similar todo already exist?
-        existing = find_existing_todo(subject, project_id, conn)
-
-        if existing:
-            # Reuse existing todo instead of creating duplicate
-            todo_id = existing['todo_id']
-            # Increment restore_count to track zombie tasks (FB130)
-            cur = conn.cursor()
-            cur.execute("""
-                UPDATE claude.todos
-                SET restore_count = COALESCE(restore_count, 0) + 1
-                WHERE todo_id = %s::uuid
-            """, (todo_id,))
-            logger.info(f"TaskCreate linked to existing todo: task #{task_number} → {todo_id[:8]}... (restore_count incremented)")
-        else:
-            # Insert new todo
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO claude.todos (project_id, content, active_form, status, priority, created_session_id)
-                VALUES (%s::uuid, %s, %s, 'pending', 3, %s::uuid)
-                RETURNING todo_id::text
-            """, (project_id, subject, active_form, session_id))
-
-            row = cur.fetchone()
-            todo_id = row['todo_id'] if isinstance(row, dict) else row[0]
-            logger.info(f"TaskCreate synced: task #{task_number} → new todo {todo_id[:8]}... ({subject[:50]})")
-
-        # NEW: Check for matching build_task
-        matched_bt = find_matching_build_task(subject, project_name, conn)
-
-        conn.commit()
-        conn.close()
-
-        # Save mapping with session_id for discipline hook scoping
-        task_map = load_task_map(project_name)
-
-        # Store todo_id plus optional build_task bridge
-        if matched_bt:
-            task_map[task_number] = {
-                "todo_id": todo_id,
-                "bt_code": matched_bt['bt_code'],
-                "bt_task_id": matched_bt['bt_task_id']
-            }
-            logger.info(f"Task #{task_number} bridged to {matched_bt['bt_code']}")
-        else:
-            task_map[task_number] = {"todo_id": todo_id}
-
-        save_task_map(project_name, task_map, session_id=hook_session_id)
-
-    except Exception as e:
-        logger.error(f"Failed to sync TaskCreate: {e}")
+    if conn:
         try:
-            conn.rollback()
-            conn.close()
-        except Exception:
-            pass
+            project_id = get_project_id(project_name, conn)
+            if not project_id:
+                # Project not registered in claude.projects (e.g. new projects like Project-Metis).
+                # Log and fall through — map file will still be written with sentinel todo_id.
+                logger.warning(f"Project not found in DB: {project_name} — skipping todo insert, map file will still be written")
+            else:
+                db_session_id = get_current_session_id(project_name, conn)
+                if db_session_id:
+                    session_id = db_session_id
+
+                # Check for duplicate: does a similar todo already exist?
+                existing = find_existing_todo(subject, project_id, conn)
+
+                if existing:
+                    # Reuse existing todo instead of creating duplicate
+                    todo_id = existing['todo_id']
+                    # Increment restore_count to track zombie tasks (FB130)
+                    cur = conn.cursor()
+                    cur.execute("""
+                        UPDATE claude.todos
+                        SET restore_count = COALESCE(restore_count, 0) + 1
+                        WHERE todo_id = %s::uuid
+                    """, (todo_id,))
+                    logger.info(f"TaskCreate linked to existing todo: task #{task_number} → {todo_id[:8]}... (restore_count incremented)")
+                else:
+                    # Insert new todo
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO claude.todos (project_id, content, active_form, status, priority, created_session_id)
+                        VALUES (%s::uuid, %s, %s, 'pending', 3, %s::uuid)
+                        RETURNING todo_id::text
+                    """, (project_id, subject, active_form, session_id))
+
+                    row = cur.fetchone()
+                    todo_id = row['todo_id'] if isinstance(row, dict) else row[0]
+                    logger.info(f"TaskCreate synced: task #{task_number} → new todo {todo_id[:8]}... ({subject[:50]})")
+
+                # Check for matching build_task (only if project exists in DB)
+                matched_bt = find_matching_build_task(subject, project_name, conn)
+
+            conn.commit()
+        except Exception as e:
+            logger.error(f"DB sync failed for TaskCreate (map file will still be written): {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    # Always write the map file regardless of DB outcome.
+    # The discipline hook needs this to allow gated tools (Write/Edit/Bash/Task).
+    task_map = load_task_map(project_name)
+
+    # Store todo_id plus optional build_task bridge
+    if matched_bt:
+        task_map[task_number] = {
+            "todo_id": todo_id,
+            "bt_code": matched_bt['bt_code'],
+            "bt_task_id": matched_bt['bt_task_id']
+        }
+        logger.info(f"Task #{task_number} bridged to {matched_bt['bt_code']}")
+    else:
+        task_map[task_number] = {"todo_id": todo_id}
+
+    save_task_map(project_name, task_map, session_id=hook_session_id)
 
 
 def handle_task_update(tool_input: dict, tool_output: str, project_name: str) -> str:

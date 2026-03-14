@@ -302,21 +302,28 @@ def _get_project_name(cwd: str) -> str:
         )
         if result.returncode == 0 and result.stdout.strip():
             git_root = result.stdout.strip().replace('/', os.sep)
-            return os.path.basename(git_root)
+            return os.path.basename(git_root).lower()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         pass
-    # Fallback to cwd basename
-    return os.path.basename(cwd.rstrip('/\\'))
+    # Fallback to cwd basename (lowercased for DB match)
+    return os.path.basename(cwd.rstrip('/\\')).lower()
 
 
 def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool:
-    """Fallback: check database for recent build_tasks when task_map is empty.
+    """Fallback: check database for recent tasks when task_map is empty.
 
     This covers the case where tasks were created via MCP create_linked_task
     (which writes to DB but not the task_map file). Only queries DB when
     the fast task_map check fails - not on every tool call.
 
-    Returns True if active build_tasks exist for this project (created recently).
+    Checks TWO sources (GRACEFUL DEGRADATION):
+    1. claude.build_tasks — for projects with tracked features/tasks (established projects).
+    2. claude.todos — for projects not yet registered or with no build_tasks (e.g.
+       new projects like Project-Metis). The task_sync_hook writes todos for all
+       TaskCreate calls, so this catches the common case where the map file was
+       written but then lost (temp dir cleared, new machine, etc.).
+
+    Returns True if active tasks exist for this project in either table.
     """
     import sys as _sys_import
     _sys_import.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -331,6 +338,8 @@ def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool
 
     try:
         cur = conn.cursor()
+
+        # Source 1: build_tasks (established projects with feature tracking)
         cur.execute("""
             SELECT COUNT(*) FROM claude.build_tasks bt
             JOIN claude.features f ON bt.feature_id = f.feature_id
@@ -340,11 +349,31 @@ def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool
               AND bt.created_at > NOW() - make_interval(hours => %s)
         """, (project_name, max_age_hours))
         row = cur.fetchone()
-        count = row[0] if row else 0
+        bt_count = row[0] if row else 0
+
+        if bt_count > 0:
+            logger.info(f"DB fallback: found {bt_count} active build_tasks for {project_name}")
+            conn.close()
+            return True
+
+        # Source 2: todos — covers projects not in claude.projects or without build_tasks.
+        # task_sync_hook writes todos for every TaskCreate, making this a reliable signal.
+        cur.execute("""
+            SELECT COUNT(*) FROM claude.todos t
+            JOIN claude.projects p ON t.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND t.status IN ('pending', 'in_progress')
+              AND t.is_deleted = false
+              AND t.created_at > NOW() - make_interval(hours => %s)
+        """, (project_name, max_age_hours))
+        row = cur.fetchone()
+        todo_count = row[0] if row else 0
+
         conn.close()
-        if count > 0:
-            logger.info(f"DB fallback: found {count} active build_tasks for {project_name}")
-        return count > 0
+        if todo_count > 0:
+            logger.info(f"DB fallback: found {todo_count} active todos for {project_name}")
+        return todo_count > 0
+
     except Exception as e:
         logger.error(f"DB fallback check failed: {e}")
         try:

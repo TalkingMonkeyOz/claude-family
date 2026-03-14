@@ -358,6 +358,7 @@ def _format_resume(data: dict) -> dict:
     last_date = str(last.get("ended", ""))[:10] if last.get("ended") else "N/A"
     last_summary = last.get("summary", "No previous session") or "No summary"
     focus = (data.get("previous_state", {}) or {}).get("focus", "None set")
+    next_steps = (data.get("previous_state", {}) or {}).get("next_steps", []) or []
     todos = data.get("todos", {"in_progress": [], "pending": []})
     features = data.get("active_features", [])
     msg_count = data.get("pending_messages", 0)
@@ -377,6 +378,23 @@ def _format_resume(data: dict) -> dict:
     lines.append(row(f"Last Session: {last_date} - {last_summary[:w - 20]}"))
     lines.append(row(f"Focus: {focus[:w - 10]}"))
     lines.append(div)
+
+    # Next priorities from previous session's end_session() call
+    if next_steps:
+        lines.append(row(f"NEXT PRIORITIES ({len(next_steps)}):"))
+        for i, step in enumerate(next_steps[:9], 1):
+            step_text = step if isinstance(step, str) else str(step)
+            lines.append(row(f"  {i}. {step_text[:w - 8]}"))
+        lines.append(div)
+
+    # Active dossiers (workfile components) — populated by start_session()
+    active_workfiles = data.get("active_workfiles", [])
+    if active_workfiles:
+        lines.append(row(f"ACTIVE DOSSIERS ({len(active_workfiles)}):"))
+        for wf in active_workfiles[:5]:
+            pin = " [pinned]" if wf.get("pinned_count", 0) > 0 else ""
+            lines.append(row(f"  - {wf['component']} ({wf['file_count']} files){pin}"))
+        lines.append(div)
 
     # Prior tasks section (display-only, NOT restored as TaskCreate)
     # Claude Code natively persists tasks in ~/.claude/tasks/.
@@ -933,6 +951,35 @@ def end_session(
         results["next_steps_saved"] = len(next_steps)
 
         conn.commit()
+
+        # 2b. Auto-stash session handoff workfile when there are next steps
+        if next_steps:
+            try:
+                stash_content = f"## Session Summary ({datetime.now().strftime('%Y-%m-%d')})\n\n"
+                stash_content += f"**What was done:** {summary}\n\n"
+                if tasks_completed:
+                    stash_content += "**Completed:**\n"
+                    for tc in tasks_completed:
+                        stash_content += f"- {tc}\n"
+                stash_content += "\n**Next priorities:**\n"
+                for ns in next_steps:
+                    stash_content += f"- {ns}\n"
+                if learnings:
+                    stash_content += "\n**Key learnings:**\n"
+                    for lg in learnings:
+                        stash_content += f"- {lg}\n"
+
+                stash_result = stash(
+                    component="session-handoff",
+                    title=f"handoff-{datetime.now().strftime('%Y-%m-%d')}",
+                    content=stash_content,
+                    project=project,
+                    workfile_type="notes",
+                    mode="replace",
+                )
+                results["handoff_stashed"] = stash_result.get("success", False)
+            except Exception:
+                pass  # Don't break end_session if stash fails
 
         # 3. Extract and store conversation (after successful commit)
         closed_session_id = results.get("session_id")

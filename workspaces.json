@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-03-14T09:01:25.100018",
+    "generated_at": "2026-03-14T20:17:32.627815",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -49,6 +49,11 @@
       "path": "C:\\Projects\\claude-family\\knowledge-vault\\10-Projects\\nimbus-ai-platform",
       "type": "infrastructure",
       "description": "Project Metis - AI Development Lifecycle Platform"
+    },
+    "project-metis": {
+      "path": "C:\\Projects\\project-metis",
+      "type": "infrastructure",
+      "description": null
     },
     "ATO-Tax-Agent": {
       "path": "C:\\Projects\\ATO-Tax-Agent",

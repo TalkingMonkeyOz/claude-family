@@ -38,7 +38,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 **Regenerate manually:** `python scripts/generate_project_settings.py <project-name>` (run from project directory)
 
-**Full details**: See `knowledge-vault/40-Procedures/Config Management SOP.md`
+**Full details**: See `knowledge-vault/40-Procedures/config-management/Config Management SOP.md`
 
 ---
 
@@ -216,7 +216,7 @@ All transitions logged to `claude.audit_log`.
 
 - **New project**: See `knowledge-vault/40-Procedures/New Project SOP.md`
 - **Add MCP**: See `knowledge-vault/40-Procedures/Add MCP Server SOP.md`
-- **Manage config**: See `knowledge-vault/40-Procedures/Config Management SOP.md`
+- **Manage config**: See `knowledge-vault/40-Procedures/config-management/Config Management SOP.md`
 
 ## Key Procedures
 
