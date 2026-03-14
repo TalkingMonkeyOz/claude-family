@@ -11,33 +11,34 @@ tags:
 # Memory and Storage Cheat Sheet
 
 **Use this when**: Deciding where to save something during or between sessions.
+**Architecture overview**: See [[storage-architecture-guide]] for how the 5 systems (session facts, cognitive memory, workfile dossiers, entity catalog, vault) fit together and WHY each exists.
 
 ---
 
 ## Decision Table
 
-| I need to... | Use this | Example |
-|-------------|----------|---------|
-| Save a credential or key for this session | `store_session_fact(key, value, "credential")` | API key discovered mid-session |
-| Save a config value or endpoint for this session | `store_session_fact(key, value, "config")` | DB connection string |
-| Record a decision made this session | `store_session_fact(key, value, "decision")` | "decided to use approach B" |
-| Note a finding for this session | `store_session_fact(key, value, "note")` | unexpected schema column |
-| Retrieve a session fact by key | `recall_session_fact(key)` | get back the decision |
-| Learn a reusable pattern or gotcha for future sessions | `remember(content, "pattern")` | psycopg dict_row quirk |
-| Remember a decision that future Claudes should know | `remember(content, "decision")` | "use advance_status not raw UPDATE" |
-| Search what was learned in past sessions | `recall_memories(query)` | "how do I handle workflow transitions" |
-| Store structured reference data (API, OData entity) | `catalog(entity_type, properties)` | OData entity with fields |
-| Search structured reference data | `recall_entities(query, entity_type)` | find OData entity by name |
-| Save working notes on a component across sessions | `stash(component, title, content)` | design decisions for rag-hook |
-| Load component working notes | `unstash(component)` | resume work on rag-hook |
-| Browse available dossiers | `list_workfiles()` | see all active components |
-| Track a todo for this session | `TodoWrite` (native) | task list in current session |
-| Persist a todo to the DB | `claude.todos` via task_sync_hook | automatic on TaskCreate |
-| Track a feature | `create_feature(name, desc)` | new capability to build |
-| Track a build task | `add_build_task(feature, name)` | step within a feature |
-| Persist session handoff state | `stash("session-handoff", date, content)` | end-of-session stash for next Claude |
-| Record next priorities for next session | `session_state.next_steps` via `/session-end` | top 3 items to pick up |
-| Write session notes mid-session | `store_session_notes(content, section)` | progress tracker, survives compaction |
+| I need to...                                           | Use this                                       | Example                                |
+| ------------------------------------------------------ | ---------------------------------------------- | -------------------------------------- |
+| Save a credential or key for this session              | `store_session_fact(key, value, "credential")` | API key discovered mid-session         |
+| Save a config value or endpoint for this session       | `store_session_fact(key, value, "config")`     | DB connection string                   |
+| Record a decision made this session                    | `store_session_fact(key, value, "decision")`   | "decided to use approach B"            |
+| Note a finding for this session                        | `store_session_fact(key, value, "note")`       | unexpected schema column               |
+| Retrieve a session fact by key                         | `recall_session_fact(key)`                     | get back the decision                  |
+| Learn a reusable pattern or gotcha for future sessions | `remember(content, "pattern")`                 | psycopg dict_row quirk                 |
+| Remember a decision that future Claudes should know    | `remember(content, "decision")`                | "use advance_status not raw UPDATE"    |
+| Search what was learned in past sessions               | `recall_memories(query)`                       | "how do I handle workflow transitions" |
+| Store structured reference data (API, OData entity)    | `catalog(entity_type, properties)`             | OData entity with fields               |
+| Search structured reference data                       | `recall_entities(query, entity_type)`          | find OData entity by name              |
+| Save working notes on a component across sessions      | `stash(component, title, content)`             | design decisions for rag-hook          |
+| Load component working notes                           | `unstash(component)`                           | resume work on rag-hook                |
+| Browse available dossiers                              | `list_workfiles()`                             | see all active components              |
+| Track a todo for this session                          | `TodoWrite` (native)                           | task list in current session           |
+| Persist a todo to the DB                               | `claude.todos` via task_sync_hook              | automatic on TaskCreate                |
+| Track a feature                                        | `create_feature(name, desc)`                   | new capability to build                |
+| Track a build task                                     | `add_build_task(feature, name)`                | step within a feature                  |
+| Persist session handoff state                          | `stash("session-handoff", date, content)`      | end-of-session stash for next Claude   |
+| Record next priorities for next session                | `session_state.next_steps` via `/session-end`  | top 3 items to pick up                 |
+| Write session notes mid-session                        | `store_session_notes(content, section)`        | progress tracker, survives compaction  |
 
 ---
 

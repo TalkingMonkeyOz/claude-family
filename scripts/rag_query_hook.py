@@ -198,15 +198,16 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
 # Returns (level, remaining_pct, message) for injection into context.
 
 CONTEXT_HEALTH_FILE = STATE_DIR / "context_health.json"
-CONTEXT_HEALTH_FRESHNESS_SECONDS = 120  # Data older than this triggers fallback
+CONTEXT_HEALTH_FRESHNESS_SECONDS = 3600  # 1 hour — trust last StatusLine reading unless truly ancient
 
-# Prompt count fallback thresholds (when StatusLine data unavailable)
-# Calibrated for 1M context window (Opus 4.6). At 200K these would be ~4x lower.
-# Rationale: average prompt+response is ~5K tokens. 1M / 5K = ~200 exchanges.
+# Prompt count fallback thresholds (LAST RESORT — only when StatusLine file doesn't exist at all)
+# These are intentionally very conservative. The StatusLine sensor provides actual
+# remaining_percentage from Claude Code, which knows the real context window size.
+# The fallback is just prompt counting — it cannot know if we're on 200K or 1M.
 FALLBACK_THRESHOLDS = {
-    "red": 250,    # 250+ prompts → likely <10% remaining at 1M
-    "orange": 200, # 200+ prompts → likely 10-20% remaining
-    "yellow": 150, # 150+ prompts → likely 20-30% remaining
+    "red": 800,    # Only trigger at extreme prompt counts
+    "orange": 600, # These are deliberately high to avoid false alarms
+    "yellow": 400, # Real data from StatusLine is always preferred
 }
 
 CONTEXT_HEALTH_MESSAGES = {
@@ -269,20 +270,13 @@ def _check_context_health(interaction_count: int = 0) -> tuple:
                     health_data = json.load(f)
                     remaining_pct = health_data.get('remaining_pct', -1)
             else:
-                # Stale StatusLine data — trust last reading if it was healthy,
-                # otherwise fall through to prompt count heuristic.
-                # This prevents false alarms when StatusLine sensor stops updating
-                # mid-session (common on long 1M context sessions).
+                # Stale StatusLine data — but still trust it.
+                # The StatusLine sensor provides ACTUAL remaining_percentage from
+                # Claude Code. Even stale data is better than prompt-count guessing,
+                # which can't distinguish 200K from 1M context windows.
                 with open(CONTEXT_HEALTH_FILE, 'r', encoding='utf-8') as f:
                     health_data = json.load(f)
-                    last_remaining = health_data.get('remaining_pct', -1)
-                    if last_remaining > 30:
-                        # Last reading was green — don't panic, use prompt heuristic
-                        # but with relaxed thresholds (the data was good recently)
-                        remaining_pct = -1  # Fall through to heuristic
-                    else:
-                        # Last reading was already concerning — trust it
-                        remaining_pct = last_remaining
+                    remaining_pct = health_data.get('remaining_pct', -1)
     except (json.JSONDecodeError, IOError, OSError):
         pass
 
