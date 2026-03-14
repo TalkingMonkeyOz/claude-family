@@ -201,10 +201,12 @@ CONTEXT_HEALTH_FILE = STATE_DIR / "context_health.json"
 CONTEXT_HEALTH_FRESHNESS_SECONDS = 120  # Data older than this triggers fallback
 
 # Prompt count fallback thresholds (when StatusLine data unavailable)
+# Calibrated for 1M context window (Opus 4.6). At 200K these would be ~4x lower.
+# Rationale: average prompt+response is ~5K tokens. 1M / 5K = ~200 exchanges.
 FALLBACK_THRESHOLDS = {
-    "red": 70,     # 70+ prompts → likely <10% remaining
-    "orange": 55,  # 55+ prompts → likely 10-20% remaining
-    "yellow": 40,  # 40+ prompts → likely 20-30% remaining
+    "red": 250,    # 250+ prompts → likely <10% remaining at 1M
+    "orange": 200, # 200+ prompts → likely 10-20% remaining
+    "yellow": 150, # 150+ prompts → likely 20-30% remaining
 }
 
 CONTEXT_HEALTH_MESSAGES = {
@@ -262,9 +264,25 @@ def _check_context_health(interaction_count: int = 0) -> tuple:
             import time as _time
             file_age = _time.time() - CONTEXT_HEALTH_FILE.stat().st_mtime
             if file_age < CONTEXT_HEALTH_FRESHNESS_SECONDS:
+                # Fresh data from StatusLine
                 with open(CONTEXT_HEALTH_FILE, 'r', encoding='utf-8') as f:
                     health_data = json.load(f)
                     remaining_pct = health_data.get('remaining_pct', -1)
+            else:
+                # Stale StatusLine data — trust last reading if it was healthy,
+                # otherwise fall through to prompt count heuristic.
+                # This prevents false alarms when StatusLine sensor stops updating
+                # mid-session (common on long 1M context sessions).
+                with open(CONTEXT_HEALTH_FILE, 'r', encoding='utf-8') as f:
+                    health_data = json.load(f)
+                    last_remaining = health_data.get('remaining_pct', -1)
+                    if last_remaining > 30:
+                        # Last reading was green — don't panic, use prompt heuristic
+                        # but with relaxed thresholds (the data was good recently)
+                        remaining_pct = -1  # Fall through to heuristic
+                    else:
+                        # Last reading was already concerning — trust it
+                        remaining_pct = last_remaining
     except (json.JSONDecodeError, IOError, OSError):
         pass
 
