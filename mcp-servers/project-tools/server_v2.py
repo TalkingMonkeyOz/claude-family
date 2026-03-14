@@ -724,6 +724,28 @@ def start_session(
                         } for r in workfile_rows]
                 except Exception:
                     pass
+
+                # Surface available entity types (Option B discoverability)
+                # Shows what structured data is available in the catalog for this project's domain
+                try:
+                    cur.execute("""
+                        SELECT et.type_name, et.display_name, COUNT(*) as count
+                        FROM claude.entities e
+                        JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                        WHERE e.project_id = %s::uuid AND NOT e.is_archived
+                        GROUP BY et.type_name, et.display_name
+                        ORDER BY count DESC
+                    """, (project_id,))
+                    entity_rows = cur.fetchall()
+                    if entity_rows:
+                        result["available_entities"] = [{
+                            "type": r['type_name'],
+                            "display_name": r['display_name'],
+                            "count": r['count'],
+                            "search_hint": f'recall_entities("query", entity_type="{r["type_name"]}")',
+                        } for r in entity_rows]
+                except Exception:
+                    pass
         else:
             # No project_id - still get messages
             cur.execute("""

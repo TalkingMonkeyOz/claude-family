@@ -88,16 +88,28 @@ at session start so they can be addressed immediately.</bpmn:documentation>
     <!-- Check for active workfiles in project (pinned first) -->
     <bpmn:scriptTask id="check_workfiles" name="[MCP] Check Active Workfiles" scriptFormat="python">
       <bpmn:incoming>flow_load_state_to_check_workfiles</bpmn:incoming>
-      <bpmn:outgoing>flow_check_workfiles_to_prior_gateway</bpmn:outgoing>
+      <bpmn:outgoing>flow_check_workfiles_to_surface_entities</bpmn:outgoing>
       <bpmn:script>workfiles_checked = True</bpmn:script>
       <bpmn:documentation>Queries claude.project_workfiles for active components (pinned first).
 Includes in start_session() output as active_workfiles array with component names,
 file counts, and pinned status. Helps Claude understand what component context is available.</bpmn:documentation>
     </bpmn:scriptTask>
 
+    <!-- Surface available cataloged entities for this project's domain -->
+    <bpmn:scriptTask id="surface_entities" name="[MCP] Surface Available Entity Types" scriptFormat="python">
+      <bpmn:incoming>flow_check_workfiles_to_surface_entities</bpmn:incoming>
+      <bpmn:outgoing>flow_surface_entities_to_prior_gateway</bpmn:outgoing>
+      <bpmn:script>entities_surfaced = True</bpmn:script>
+      <bpmn:documentation>Query claude.entities grouped by entity_type for the project's client_domain.
+If cataloged entities exist (e.g., 366 odata_entity for nimbus), include count
+and usage hint in start_session response. This is Option B discoverability —
+projects automatically learn what structured data is available without needing
+CLAUDE.md sections.</bpmn:documentation>
+    </bpmn:scriptTask>
+
     <!-- Exclusive Gateway: Has Prior State? -->
     <bpmn:exclusiveGateway id="has_prior_state_gateway" name="Has Prior State?" default="flow_fresh_start">
-      <bpmn:incoming>flow_check_workfiles_to_prior_gateway</bpmn:incoming>
+      <bpmn:incoming>flow_surface_entities_to_prior_gateway</bpmn:incoming>
       <bpmn:outgoing>flow_restore_context</bpmn:outgoing>
       <bpmn:outgoing>flow_fresh_start</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -245,7 +257,8 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_zombie_cleanup_to_check_messages" sourceRef="zombie_cleanup" targetRef="check_messages"/>
     <bpmn:sequenceFlow id="flow_check_messages_to_load_state" sourceRef="check_messages" targetRef="load_state"/>
     <bpmn:sequenceFlow id="flow_load_state_to_check_workfiles" sourceRef="load_state" targetRef="check_workfiles"/>
-    <bpmn:sequenceFlow id="flow_check_workfiles_to_prior_gateway" sourceRef="check_workfiles" targetRef="has_prior_state_gateway"/>
+    <bpmn:sequenceFlow id="flow_check_workfiles_to_surface_entities" sourceRef="check_workfiles" targetRef="surface_entities"/>
+    <bpmn:sequenceFlow id="flow_surface_entities_to_prior_gateway" sourceRef="surface_entities" targetRef="has_prior_state_gateway"/>
 
     <bpmn:sequenceFlow id="flow_restore_context" sourceRef="has_prior_state_gateway" targetRef="display_session_summary">
       <bpmn:conditionExpression>prior_state == True</bpmn:conditionExpression>

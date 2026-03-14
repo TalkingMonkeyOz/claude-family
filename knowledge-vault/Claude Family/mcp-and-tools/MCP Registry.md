@@ -56,12 +56,8 @@ Registry of installed MCPs with project assignments and token costs.
 
 ## Active MCPs (Project-specific - in `.mcp.json` or settings)
 
-### nimbus-knowledge
-**Purpose**: Nimbus project domain knowledge (facts, patterns, learnings)
-**Tokens**: ~3k
-**Package**: Custom (`mcp-servers/nimbus-knowledge/`)
-**Scope**: Nimbus projects only (`nimbus_context` schema)
-**Data**: 61 facts, 12 patterns, 12 learnings
+### nimbus-knowledge — RETIRED (2026-03-14)
+**Status**: RETIRED. Data migrated to universal entity catalog (366 OData entities → `odata_entity`, 124 knowledge items → `claude.knowledge`). Use `recall_entities("entity", entity_type="odata_entity")` instead.
 
 ### mui
 **Purpose**: MUI X component documentation
