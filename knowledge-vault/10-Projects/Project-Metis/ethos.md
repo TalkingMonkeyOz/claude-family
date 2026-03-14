@@ -24,6 +24,7 @@ Gate Zero Document 5. These rules apply before anyone builds anything.
 - **Dual-lens** — the same gate framework applies to building METIS AND to what METIS enforces for client engagements. Eat our own cooking.
 - **Humans guide, AI executes** — humans at validation checkpoints, AI does the heavy lifting between them.
 - **No shortcuts for AI** — humans may skip gates with documented justification; AI agents cannot skip gates. Agents need structure because they lack judgment to know when shortcuts are safe.
+- **No build without documentation** — no code gets written without a requirements or design document first. What is the problem? What are we building? What are we trying to achieve? Applies to building METIS itself, client engagements through METIS, and agent-driven work. Cross-cutting across all areas.
 
 ## Source
 
