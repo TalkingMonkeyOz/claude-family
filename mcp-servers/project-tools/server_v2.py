@@ -3414,7 +3414,6 @@ def get_ready_tasks(
     return _run_async(tool_get_ready_tasks(project))
 
 
-@mcp.tool()
 def update_work_status(
     item_type: Literal["feedback", "feature", "build_task"],
     item_id: str,
@@ -3451,7 +3450,6 @@ def update_work_status(
 
 
 # LEGACY - F130 cognitive memory is preferred
-@mcp.tool()
 def store_knowledge(
     title: str,
     description: str,
@@ -3494,7 +3492,6 @@ def store_knowledge(
 
 
 # LEGACY - F130 cognitive memory is preferred
-@mcp.tool()
 def recall_knowledge(
     query: str,
     limit: int = 5,
@@ -3539,7 +3536,6 @@ def recall_knowledge(
 
 
 # LEGACY - F130 cognitive memory is preferred
-@mcp.tool()
 def graph_search(
     query: str,
     max_initial_hits: int = 5,
