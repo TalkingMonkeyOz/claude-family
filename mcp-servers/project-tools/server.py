@@ -3461,58 +3461,9 @@ async def list_tools() -> List[Tool]:
                 "required": []
             }
         ),
-        Tool(
-            name="create_activity",
-            description="Create a named activity for WCC context assembly. Activities represent work contexts that auto-assemble relevant knowledge, workfiles, and tasks.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "name": {"type": "string", "description": "Activity name (e.g., 'auth-flow', 'data-migration')"},
-                    "aliases": {"type": "array", "items": {"type": "string"}, "description": "Alternative names for detection"},
-                    "description": {"type": "string", "description": "What this activity is about"},
-                    "project": {"type": "string", "description": "Project name (defaults to current directory)"}
-                },
-                "required": ["name"]
-            }
-        ),
-        Tool(
-            name="list_activities",
-            description="List activities with access stats for a project.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "project": {"type": "string", "description": "Project name (defaults to current directory)"}
-                },
-                "required": []
-            }
-        ),
-        Tool(
-            name="update_activity",
-            description="Update an existing activity's aliases, description, or active status.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "activity_id": {"type": "string", "description": "UUID of the activity"},
-                    "aliases": {"type": "array", "items": {"type": "string"}, "description": "New aliases list"},
-                    "description": {"type": "string", "description": "New description"},
-                    "is_active": {"type": "boolean", "description": "Set to false to deactivate"}
-                },
-                "required": ["activity_id"]
-            }
-        ),
-        Tool(
-            name="assemble_context",
-            description="Manually assemble WCC context for a named activity. Queries 6 sources (workfiles, knowledge, features, facts, vault, BPMN) and returns assembled context.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "activity_name": {"type": "string", "description": "Name of the activity to assemble context for"},
-                    "project": {"type": "string", "description": "Project name (defaults to current directory)"},
-                    "budget": {"type": "integer", "description": "Token budget (default 1000)"}
-                },
-                "required": ["activity_name"]
-            }
-        )
+        # WCC activity tools removed from MCP surface (2026-03-14)
+        # Internal plumbing — 0-1 calls ever. Functions remain in code for internal use.
+        # Removed: create_activity, list_activities, update_activity, assemble_context
     ]
 
 
@@ -3649,30 +3600,7 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
             result = await tool_get_session_notes(
                 arguments.get('section')
             )
-        elif name == "create_activity":
-            result = await tool_create_activity(
-                name=arguments['name'],
-                aliases=arguments.get('aliases'),
-                description=arguments.get('description', ''),
-                project=arguments.get('project', ''),
-            )
-        elif name == "list_activities":
-            result = await tool_list_activities(
-                project=arguments.get('project', ''),
-            )
-        elif name == "update_activity":
-            result = await tool_update_activity(
-                activity_id=arguments['activity_id'],
-                aliases=arguments.get('aliases'),
-                description=arguments.get('description'),
-                is_active=arguments.get('is_active'),
-            )
-        elif name == "assemble_context":
-            result = await tool_assemble_context(
-                activity_name=arguments['activity_name'],
-                project=arguments.get('project', ''),
-                budget=arguments.get('budget', 1000),
-            )
+        # WCC tools removed from MCP surface (2026-03-14) — functions still available internally
         else:
             result = {"error": f"Unknown tool: {name}"}
 
