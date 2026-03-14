@@ -41,6 +41,8 @@ See [[Session Lifecycle - Overview]] for complete context.
 
 > **CRITICAL**: Hooks must be in `settings.local.json`, NOT `hooks.json`! See [[Claude Hooks]] for details.
 
+**Launcher pre-flight** (2026-03-15): `C:\claude\start-claude.bat` now runs `sync_project.py --no-interactive` before launching Claude Code. This deploys all DB-backed components (settings, skills, rules, instructions, commands, agents) in one pass. The SessionStart hook then runs again inside Claude Code as the self-heal step. See [[Config Management SOP]] for full details on `sync_project.py`.
+
 ---
 
 ## Project Detection (cwd-based)
@@ -221,6 +223,7 @@ User                 Launcher            Claude Code         Hook Script        
  | Click "Launch"       |                      |                   |                  |
  |--------------------->|                      |                   |                  |
  |                      |                      |                   |                  |
+ |                      | sync_project.py      |                   |                  |
  |                      | wt.exe -d {path}     |                   |                  |
  |                      | claude               |                   |                  |
  |                      |--------------------->|                   |                  |
@@ -269,7 +272,7 @@ User                 Launcher            Claude Code         Hook Script        
 
 ---
 
-**Version**: 2.2 (Updated hooks location to settings.local.json, added once:true)
+**Version**: 2.3 (Launcher pre-flight note for sync_project.py; sequence diagram updated)
 **Created**: 2025-12-26
-**Updated**: 2026-01-08
+**Updated**: 2026-03-15
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Session Start.md

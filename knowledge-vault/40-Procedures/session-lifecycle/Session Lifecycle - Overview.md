@@ -127,6 +127,27 @@ A **session** is a single continuous interaction between a user and a Claude ins
 
 ---
 
+## Background Maintenance (Scheduler)
+
+As of 2026-03-15, Windows Task Scheduler runs `scripts/job_runner.py` on a periodic schedule. This is separate from the interactive session lifecycle above.
+
+**Active maintenance jobs** (6 total):
+
+| Job | Purpose | Trigger |
+|-----|---------|---------|
+| `bpmn-sync` | Sync BPMN models to DB registry | Periodic |
+| `knowledge-decay` | Decay low-confidence memories | Periodic |
+| `memory-consolidation` | Promote SHORT→MID→LONG, archive stale | Daily |
+| `system-maintenance` | Housekeeping (orphans, stale data) | Daily |
+| `vault-embeddings` | Re-embed changed vault documents | Periodic |
+| `insight-extraction` | Extract knowledge from past conversations | Daily |
+
+**Setup**: Run `setup_scheduler.bat` as admin to register jobs. Jobs run independently of any session.
+
+**SessionStart self-heal**: The SessionStart hook still calls `sync_project.py` (formerly `generate_project_settings.py`) to regenerate settings, skills, rules, commands, and agents from the database every time Claude Code opens. See [[Config Management SOP]] for details.
+
+---
+
 ## Related Detail Documents
 
 - [[Session Lifecycle - Session Start]] - Startup sequence and hook configuration
@@ -145,7 +166,7 @@ A **session** is a single continuous interaction between a user and a Claude ins
 
 ---
 
-**Version**: 2.1 (Added SubagentStart hook reference, updated hooks location)
+**Version**: 2.2 (Background maintenance scheduler section; sync_project.py self-heal note)
 **Created**: 2025-12-26
-**Updated**: 2026-01-08
+**Updated**: 2026-03-15
 **Location**: knowledge-vault/40-Procedures/Session Lifecycle - Overview.md

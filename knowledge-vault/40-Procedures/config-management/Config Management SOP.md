@@ -23,8 +23,12 @@ projects:
 ## Architecture
 
 ```
-Database → generate_project_settings.py → .claude/settings.local.json (ALL config)
-                                        → Claude Code
+Database → sync_project.py → .claude/settings.local.json (ALL config)
+                           → .claude/skills/              (from claude.skills)
+                           → .claude/rules/               (from claude.rules)
+                           → .claude/instructions/        (from claude.instructions)
+                           → .claude/agents/              (from claude.skills scope='agent')
+                           → .claude/commands/            (from claude.skills scope='command')
 ```
 
 **Source Tables**:
@@ -32,11 +36,43 @@ Database → generate_project_settings.py → .claude/settings.local.json (ALL c
 - `project_type_configs` - Defaults per project type
 - `workspaces` - Per-project overrides (startup_config column)
 - `config_deployment_log` - Audit trail
+- `skills` - Skills, commands, and agents (distinguished by `scope`)
+- `rules` - Rule files
+- `instructions` - Auto-apply instruction files
 
 **Generated Files** (regenerated every SessionStart):
 - `.claude/settings.local.json` - ALL settings (hooks, MCP servers, skills, permissions)
+- `.claude/skills/`, `.claude/rules/`, `.claude/instructions/` - Deployed from DB
+- `.claude/commands/`, `.claude/agents/` - Deployed from DB (`claude.skills` table)
 
 **Note**: Claude Code reads hooks from settings files only (`settings.json` or `settings.local.json`), NOT from a separate `hooks.json` file.
+
+---
+
+## Unified Deployment Script
+
+`scripts/sync_project.py` (980 lines) is the single entry point for all project config deployment. It replaces three earlier scripts (`generate_project_settings.py`, `generate_mcp_config.py`, `deploy_project_configs.py`) and the manual `C:\claude\shared\commands\` folder copy step.
+
+**What it deploys in one pass**:
+
+| Component | Source table | Output location |
+|-----------|-------------|-----------------|
+| `settings.local.json` | `config_templates` + `workspaces` | `.claude/settings.local.json` |
+| Skills | `claude.skills` where `scope IN ('global','project')` | `.claude/skills/` |
+| Rules | `claude.rules` | `.claude/rules/` |
+| Instructions | `claude.instructions` | `.claude/instructions/` |
+| Commands | `claude.skills` where `scope='command'` | `.claude/commands/` |
+| Agents | `claude.skills` where `scope='agent'` | `.claude/agents/` |
+
+**Launcher integration**: `C:\claude\start-claude.bat` calls `sync_project.py --no-interactive` once at startup instead of the previous four separate script calls.
+
+**Commands and agents in DB**: The `claude.skills` table now stores all four component types via the `scope` column:
+- `scope='global'` — skills available to all projects
+- `scope='project'` — skills scoped to a single project
+- `scope='command'` — slash commands (previously loose files in `C:\claude\shared\commands\`)
+- `scope='agent'` — agent definitions
+
+**Counts (2026-03-15)**: 20 global skills, 16 project skills, 24 commands, 19 agents, 6 rules, 9 instructions.
 
 ---
 
@@ -62,11 +98,11 @@ Config built in **merge order** (last wins):
 ## SessionStart Flow
 
 1. SessionStart hook triggers `session_startup_hook.py`
-2. Calls `generate_project_settings.py`
-3. Reads database (project type, base template, type defaults, overrides)
+2. Calls `sync_project.py` (previously `generate_project_settings.py`)
+3. Reads database (project type, base template, type defaults, overrides, skills, rules, instructions)
 4. Merges configs: `base → type defaults → project overrides`
 5. Preserves permissions from existing settings
-6. Writes `.claude/hooks.json` (hooks only) and `.claude/settings.local.json` (rest)
+6. Writes `settings.local.json` plus deploys skills, rules, instructions, commands, and agents
 
 **Self-Healing**: Corrupted/manually-edited files regenerate every session.
 
@@ -108,63 +144,18 @@ WHERE template_name = 'hooks-base';
 
 ## v3 Config Tools (MCP)
 
-**New in v3**: Config operations now available as MCP tools that handle file + DB atomically.
+Config operations available as MCP tools that handle file + DB atomically. All changes logged to `config_deployment_log`.
 
-### Available Tools
+| Tool | Purpose |
+|------|---------|
+| `update_claude_md(section, content)` | Update CLAUDE.md sections (DB + file together) |
+| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way) |
+| `deploy_project(components)` | Deploy skills/instructions/rules from DB to files |
+| `regenerate_settings()` | Force-recreate `settings.local.json` from DB |
 
-| Tool | Purpose | Example |
-|------|---------|---------|
-| `update_claude_md(section, content)` | Update CLAUDE.md sections | Update "Architecture Overview" section |
-| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file | One-way: DB is source of truth |
-| `deploy_project(components)` | Deploy from DB to files | ["skills", "instructions", "rules"] |
-| `regenerate_settings()` | Regenerate settings.local.json | Force config refresh |
-
-### Benefits
-
-1. **Atomic operations**: File and database updated together (no drift)
-2. **Audit trail**: All changes logged to `config_deployment_log`
-3. **No manual SQL**: Tools handle validation and constraints
-4. **Idempotent**: Safe to re-run
-
-### Usage Examples
-
-**Update CLAUDE.md section**:
-```python
-# Via MCP tool
-update_claude_md(
-  section="Architecture Overview",
-  content="New architecture description..."
-)
-# Updates: CLAUDE.md file + profiles.config->'behavior'
-```
-
-**Deploy CLAUDE.md from DB**:
-```python
-# Deploy DB content to file (one-way)
-deploy_claude_md(project="claude-family")
-```
-
-**Deploy components**:
-```python
-# Deploy all skills from DB to .claude/skills/
-deploy_project(components=["skills"])
-
-# Deploy multiple
-deploy_project(components=["skills", "instructions", "rules"])
-```
-
-**Regenerate settings**:
-```python
-# Force regeneration from DB
-regenerate_settings()
-# Recreates .claude/settings.local.json
-```
-
-### When to Use
-
-- ✅ **Use tools**: When you need to update config during a session
-- ✅ **Use SQL**: When seeding initial data or bulk operations
-- ⚠️ **Never manual file edits**: Files regenerate from DB
+- ✅ **Use tools** for session-time config changes
+- ✅ **Use SQL** for bulk seeding or initial data
+- ⚠️ **Never manual file edits** — files regenerate from DB
 
 **See**: [[Application Layer v3]] for full v3 architecture.
 
@@ -200,7 +191,7 @@ SELECT startup_config FROM claude.workspaces WHERE project_name = 'X';
 
 **Regenerate manually**:
 ```bash
-python scripts/generate_project_settings.py project-name
+python scripts/sync_project.py project-name
 cat ~/.claude/hooks.log | tail -20
 ```
 
@@ -217,7 +208,7 @@ cat ~/.claude/hooks.log | tail -20
 | `config_deployment_log` | Audit trail | project_id, config_type, file_path, deployed_at |
 | `profiles` | CLAUDE.md content | name, source_type, config (JSONB with 'behavior' key) |
 | `coding_standards` | Auto-apply standards | name, category, content, applies_to_patterns[] |
-| `skills` | Skill definitions | name, scope, project_id, content |
+| `skills` | Skills, commands, and agents | name, **scope** (`global`/`project`/`command`/`agent`), project_id, content |
 | `instructions` | Instruction files | name, scope, applies_to, content |
 | `rules` | Rule files | name, scope, content, rule_type |
 
@@ -255,8 +246,8 @@ WHERE table_name = 'config_templates' AND column_name = 'config_type';
 
 **Debug Steps**:
 ```bash
-# Regenerate
-python scripts/generate_project_settings.py project-name
+# Regenerate (all components: settings, skills, rules, commands, agents)
+python scripts/sync_project.py project-name
 
 # Check logs
 cat ~/.claude/hooks.log | grep -i error
@@ -284,35 +275,12 @@ cat .claude/settings.local.json | jq '.hooks.PreToolUse'
 
 If project has manual `.claude/settings.local.json`:
 
-1. **Extract current config**:
-   ```bash
-   cat .claude/settings.local.json | jq . > backup-settings.json
-   ```
-2. **Decide tier**: Common → project_type_configs, specific → workspaces.startup_config
-3. **Add to database**: `UPDATE claude.workspaces SET startup_config = {...}`
-4. **Test**: `python scripts/generate_project_settings.py project-name`
-5. **Compare**:
-   ```bash
-   diff backup-settings.json .claude/settings.local.json
-   ```
+1. Back up: `cat .claude/settings.local.json | jq . > backup-settings.json`
+2. **Decide tier**: Common → `project_type_configs`, specific → `workspaces.startup_config`
+3. Add to database: `UPDATE claude.workspaces SET startup_config = {...}`
+4. Test: `python scripts/sync_project.py project-name`
+5. Compare: `diff backup-settings.json .claude/settings.local.json`
 6. **Verify**: Restart Claude Code, check hooks fire
-
----
-
-## Configuration Schema
-
-**Settings Structure**:
-```typescript
-{
-  hooks: { [hookType]: [{ matcher?, hooks: [{ type, command, timeout }] }] }
-  enabledMcpjsonServers: string[]
-  skills: string[]
-  instructions: string[]
-  permissions: { allow: [], deny: [], ask: [] }
-}
-```
-
-**Hook Types**: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, Stop
 
 ---
 
@@ -325,7 +293,7 @@ If project has manual `.claude/settings.local.json`:
 
 ---
 
-**Version**: 3.2 (Added v3 MCP config tools)
+**Version**: 3.3 (sync_project.py replaces 3 scripts; DB-backed commands/agents; skill scope expansion)
 **Created**: 2025-12-27
-**Updated**: 2026-02-11
+**Updated**: 2026-03-15
 **Location**: 40-Procedures/Config Management SOP.md
