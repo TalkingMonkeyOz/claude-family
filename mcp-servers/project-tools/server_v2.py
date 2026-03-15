@@ -2783,7 +2783,37 @@ def update_claude_md(
             WHERE name = %s
             RETURNING profile_id::text
         """, (new_full_content, project))
-        profile_updated = cur.fetchone() is not None
+        profile_row = cur.fetchone()
+        profile_updated = profile_row is not None
+        profile_id = profile_row['profile_id'] if profile_row else None
+
+        # Create version snapshot in profile_versions
+        version_created = False
+        if profile_updated and profile_id:
+            try:
+                cur.execute("""
+                    UPDATE claude.profiles SET current_version = current_version + 1
+                    WHERE profile_id = %s::uuid
+                    RETURNING current_version
+                """, (profile_id,))
+                new_version = cur.fetchone()['current_version']
+
+                cur.execute("""
+                    INSERT INTO claude.profile_versions
+                    (version_id, profile_id, version, config, created_at, notes)
+                    VALUES (
+                        gen_random_uuid(),
+                        %s::uuid,
+                        %s,
+                        (SELECT config FROM claude.profiles WHERE profile_id = %s::uuid),
+                        NOW(),
+                        %s
+                    )
+                """, (profile_id, new_version, profile_id,
+                      f"Section '{section}' {mode}d via update_claude_md"))
+                version_created = True
+            except Exception as ve:
+                logger.warning(f"Failed to create profile version: {ve}")
 
         # Log to audit_log
         cur.execute("""
@@ -2818,6 +2848,7 @@ def update_claude_md(
             "file_path": str(claude_md_path),
             "mode": mode,
             "profile_updated": profile_updated,
+            "version_created": version_created,
         }
 
     except Exception as e:
