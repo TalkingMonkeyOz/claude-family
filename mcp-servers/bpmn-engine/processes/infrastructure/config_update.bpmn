@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/config-update"
+    id="Definitions_ConfigUpdate">
+
+  <bpmn:process id="config_update" name="Unified Config Update Lifecycle" isExecutable="true">
+
+    <!--
+      Models the update_config() MCP tool lifecycle.
+      Single tool handling: skill, rule, instruction, claude_md.
+
+      Flow: Validate → Version → Update → Deploy → Audit → Done
+
+      Extends the update_claude_md() pattern to all deployable config.
+      Populates *_versions tables (skills_versions, rules_versions, instructions_versions).
+
+      Actors:
+        [MCP]  = scriptTask (tool logic in server_v2.py)
+        [DB]   = scriptTask (database operations)
+        [FILE] = scriptTask (filesystem deployment)
+    -->
+
+    <bpmn:startEvent id="start" name="Config Update Request">
+      <bpmn:outgoing>flow_start_validate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Step 1: Validate component exists -->
+    <bpmn:scriptTask id="validate_component" name="[MCP] Validate Component" scriptFormat="python">
+      <bpmn:incoming>flow_start_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_gw</bpmn:outgoing>
+      <bpmn:script>validated = component_type in ('skill', 'rule', 'instruction', 'claude_md') and component_found == True</bpmn:script>
+      <bpmn:documentation>Validates: component_type is valid, component_name exists in the
+appropriate table (claude.skills, claude.rules, claude.instructions, claude.profiles).
+For skills: also checks scope (global/project_type/project/command/agent).
+Returns component_id and current content for versioning.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="valid_gw" name="Valid?" default="flow_invalid">
+      <bpmn:incoming>flow_validate_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_valid</bpmn:outgoing>
+      <bpmn:outgoing>flow_invalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_invalid" name="Invalid Component">
+      <bpmn:incoming>flow_invalid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Step 2: Create version snapshot -->
+    <bpmn:scriptTask id="create_version" name="[DB] Create Version Snapshot" scriptFormat="python">
+      <bpmn:incoming>flow_valid</bpmn:incoming>
+      <bpmn:outgoing>flow_version_to_update</bpmn:outgoing>
+      <bpmn:script>version_created = True</bpmn:script>
+      <bpmn:documentation>INSERT into the appropriate *_versions table:
+- skill → claude.skills_versions (skill_id, version_number, content, changed_by, change_reason)
+- rule → claude.rules_versions (rule_id, version_number, content, changed_by, change_reason)
+- instruction → claude.instructions_versions (instruction_id, version_number, content, changed_by, change_reason)
+- claude_md → claude.profile_versions (profile_id, version, config, notes)
+Version number is MAX(version_number) + 1 for the component.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Step 3: Update main table -->
+    <bpmn:scriptTask id="update_content" name="[DB] Update Content" scriptFormat="python">
+      <bpmn:incoming>flow_version_to_update</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_deploy</bpmn:outgoing>
+      <bpmn:script>content_updated = True</bpmn:script>
+      <bpmn:documentation>UPDATE the main table with new content:
+- skill → claude.skills SET content = new_content, updated_at = NOW()
+- rule → claude.rules SET content = new_content, updated_at = NOW()
+- instruction → claude.instructions SET content = new_content, updated_at = NOW()
+- claude_md → delegates to existing update_claude_md() logic</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Step 4: Deploy to filesystem -->
+    <bpmn:scriptTask id="deploy_file" name="[FILE] Deploy to Filesystem" scriptFormat="python">
+      <bpmn:incoming>flow_update_to_deploy</bpmn:incoming>
+      <bpmn:outgoing>flow_deploy_to_audit</bpmn:outgoing>
+      <bpmn:script>file_deployed = True</bpmn:script>
+      <bpmn:documentation>Write the updated content to the correct filesystem location:
+- skill (scope=project/global) → .claude/skills/{name}/SKILL.md
+- skill (scope=command) → .claude/commands/{name}.md
+- skill (scope=agent) → .claude/agents/{name}.md
+- rule → .claude/rules/{name}.md
+- instruction → .claude/instructions/{name}.instructions.md
+- claude_md → CLAUDE.md (via deploy_claude_md pattern)</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Step 5: Audit log -->
+    <bpmn:scriptTask id="log_audit" name="[DB] Log to Audit" scriptFormat="python">
+      <bpmn:incoming>flow_deploy_to_audit</bpmn:incoming>
+      <bpmn:outgoing>flow_audit_to_end</bpmn:outgoing>
+      <bpmn:script>audit_logged = True</bpmn:script>
+      <bpmn:documentation>INSERT into claude.audit_log:
+entity_type = component_type, entity_id = component_id,
+entity_code = component_name, change_source = 'update_config',
+from_status = old_content_hash, to_status = new_content_hash</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_success" name="Config Updated">
+      <bpmn:incoming>flow_audit_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="flow_start_validate" sourceRef="start" targetRef="validate_component"/>
+    <bpmn:sequenceFlow id="flow_validate_to_gw" sourceRef="validate_component" targetRef="valid_gw"/>
+    <bpmn:sequenceFlow id="flow_valid" sourceRef="valid_gw" targetRef="create_version">
+      <bpmn:conditionExpression>validated == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_invalid" sourceRef="valid_gw" targetRef="end_invalid"/>
+    <bpmn:sequenceFlow id="flow_version_to_update" sourceRef="create_version" targetRef="update_content"/>
+    <bpmn:sequenceFlow id="flow_update_to_deploy" sourceRef="update_content" targetRef="deploy_file"/>
+    <bpmn:sequenceFlow id="flow_deploy_to_audit" sourceRef="deploy_file" targetRef="log_audit"/>
+    <bpmn:sequenceFlow id="flow_audit_to_end" sourceRef="log_audit" targetRef="end_success"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="config_update">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

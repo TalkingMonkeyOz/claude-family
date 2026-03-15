@@ -562,8 +562,31 @@ def main():
             except Exception as e:
                 logger.warning(f"Zombie cleanup failed (non-fatal): {e}")
 
+            # 60-day retention: archive very old pending todos (holiday-safe threshold)
+            try:
+                retention_conn = get_db_connection()
+                if retention_conn:
+                    ret_cur = retention_conn.cursor()
+                    ret_cur.execute("""
+                        UPDATE claude.todos t
+                        SET status = 'archived', updated_at = NOW()
+                        FROM claude.projects p
+                        WHERE t.project_id = p.project_id
+                          AND p.project_name = %s
+                          AND NOT t.is_deleted
+                          AND t.status = 'pending'
+                          AND t.created_at < NOW() - INTERVAL '60 days'
+                    """, (project_name,))
+                    archived_old = ret_cur.rowcount
+                    retention_conn.commit()
+                    retention_conn.close()
+                    if archived_old > 0:
+                        context_lines.append(f"Archived {archived_old} todo(s) older than 60 days")
+                        logger.info(f"60-day retention: archived {archived_old} old todos")
+            except Exception as e:
+                logger.warning(f"Retention cleanup failed (non-fatal): {e}")
+
             # Read tasks back from DB → inject into context (task_lifecycle BPMN v4)
-            # No time-based archival. Tasks persist until explicitly completed/archived.
             pending_tasks = get_pending_tasks(project_name)
             completed_tasks = get_recently_completed_tasks(project_name)
 

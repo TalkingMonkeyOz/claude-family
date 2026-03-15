@@ -3461,6 +3461,47 @@ async def list_tools() -> List[Tool]:
                 "required": []
             }
         ),
+        Tool(
+            name="update_config",
+            description="Update any deployable config component (skill, rule, instruction, or CLAUDE.md) with versioning and filesystem deployment. Extends the update_claude_md pattern to all config. Projects can self-serve config changes without messaging claude-family.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "component_type": {
+                        "type": "string",
+                        "enum": ["skill", "rule", "instruction", "claude_md"],
+                        "description": "What to update."
+                    },
+                    "project": {
+                        "type": "string",
+                        "description": "Project name (for scoping and file deployment)."
+                    },
+                    "component_name": {
+                        "type": "string",
+                        "description": "Name of the skill/rule/instruction. Not needed for claude_md."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "New content to write."
+                    },
+                    "change_reason": {
+                        "type": "string",
+                        "description": "Why this change was made (stored in version history)."
+                    },
+                    "section": {
+                        "type": "string",
+                        "description": "For claude_md only — which section to update."
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["replace", "append"],
+                        "description": "Replace content (default) or append to existing.",
+                        "default": "replace"
+                    }
+                },
+                "required": ["component_type", "project"]
+            }
+        ),
         # WCC activity tools removed from MCP surface (2026-03-14)
         # Internal plumbing — 0-1 calls ever. Functions remain in code for internal use.
         # Removed: create_activity, list_activities, update_activity, assemble_context
@@ -3599,6 +3640,17 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
         elif name == "get_session_notes":
             result = await tool_get_session_notes(
                 arguments.get('section')
+            )
+        elif name == "update_config":
+            from server_v2 import update_config
+            result = update_config(
+                component_type=arguments['component_type'],
+                project=arguments['project'],
+                component_name=arguments.get('component_name', ''),
+                content=arguments.get('content', ''),
+                change_reason=arguments.get('change_reason', ''),
+                section=arguments.get('section', ''),
+                mode=arguments.get('mode', 'replace'),
             )
         # WCC tools removed from MCP surface (2026-03-14) — functions still available internally
         else:
