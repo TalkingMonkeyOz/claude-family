@@ -373,6 +373,49 @@ def main():
                 f"Example: update_claude_md('my-project', 'Recent Changes', '| 2026-03-15 | New feature |', mode='append')"
             )
 
+        # GOVERNANCE: Block direct edits to DB-deployed components
+        # These are deployed by sync_project.py from claude.skills / claude.rules tables
+        normalized_path = file_path.replace('\\', '/')
+
+        # Skills: .claude/skills/*/SKILL.md
+        if '/.claude/skills/' in normalized_path and file_basename == 'SKILL.md':
+            skill_name = normalized_path.split('/.claude/skills/')[-1].split('/')[0]
+            logger.warning(f"BLOCKED: Direct edit to skill: {skill_name}")
+            block_with_reason(
+                f"BLOCKED: Skills are deployed from database (claude.skills table).\n"
+                f"Direct edits will be overwritten by sync_project.py on next session.\n"
+                f"To edit permanently:\n"
+                f"  1. Update claude.skills table (scope='global', name='{skill_name}')\n"
+                f"  2. Run: python scripts/sync_project.py --component skills\n"
+                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+            )
+
+        # Rules: .claude/rules/*.md
+        if '/.claude/rules/' in normalized_path and file_basename.endswith('.md'):
+            rule_name = file_basename.replace('.md', '')
+            logger.warning(f"BLOCKED: Direct edit to rule: {rule_name}")
+            block_with_reason(
+                f"BLOCKED: Rules are deployed from database (claude.rules table).\n"
+                f"Direct edits will be overwritten by sync_project.py on next session.\n"
+                f"To edit permanently:\n"
+                f"  1. Update claude.rules table (name='{rule_name}')\n"
+                f"  2. Run: python scripts/sync_project.py --component rules\n"
+                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+            )
+
+        # Agents: .claude/agents/*.md
+        if '/.claude/agents/' in normalized_path and file_basename.endswith('.md'):
+            agent_name = file_basename.replace('.md', '')
+            logger.warning(f"BLOCKED: Direct edit to agent: {agent_name}")
+            block_with_reason(
+                f"BLOCKED: Agent definitions are deployed from database (claude.skills, scope='agent').\n"
+                f"Direct edits will be overwritten by sync_project.py on next session.\n"
+                f"To edit permanently:\n"
+                f"  1. Update claude.skills table (scope='agent', name='{agent_name}')\n"
+                f"  2. Run: python scripts/sync_project.py --component agents\n"
+                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+            )
+
         # Get proposed content
         content = None
         if tool_name == 'Write':
