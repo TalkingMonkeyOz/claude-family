@@ -1,4 +1,11 @@
-**COMPLETE SESSION WORKFLOW: Logging + Git**
+---
+name: session-commit
+description: "Complete session workflow with summary, knowledge capture, and git commit in one step"
+user-invocable: true
+disable-model-invocation: true
+---
+
+# Session Commit
 
 Performs session summary, knowledge capture, and git commit in one workflow.
 
@@ -38,12 +45,9 @@ WHERE project_name = '{project_name}';
 
 If you discovered a reusable pattern, gotcha, or solution:
 
-Use `mcp__project-tools__store_knowledge` with:
-- `title`: Clear name
+Use `mcp__project-tools__remember` with:
 - `content`: What was learned
-- `knowledge_type`: pattern, gotcha, solution, fact, or procedure
-- `topic`: Relevant topic
-- `confidence`: 1-100
+- `memory_type`: pattern, gotcha, decision, fact, or procedure
 
 ---
 
@@ -92,7 +96,7 @@ git push
 
 ---
 
-**Version**: 2.0 (Simplified: uses MCP tools, removed memory MCP and raw SQL session logging)
-**Created**: 2025-12-15
-**Updated**: 2026-02-08
-**Location**: .claude/commands/session-commit.md
+**Version**: 1.0
+**Created**: 2026-03-15
+**Updated**: 2026-03-15
+**Location**: .claude/skills/session-commit/SKILL.md

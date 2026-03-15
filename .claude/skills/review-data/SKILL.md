@@ -1,3 +1,10 @@
+---
+name: review-data
+description: "Run data quality review to find garbage data, orphan records, invalid statuses, and null required fields"
+user-invocable: true
+disable-model-invocation: true
+---
+
 # Review Data Quality
 
 Run the data quality reviewer to find garbage data in the database.
@@ -11,8 +18,6 @@ Run the data quality reviewer to find garbage data in the database.
 
 ## Instructions
 
-When executing this command:
-
 1. Run the reviewer script:
 ```bash
 python C:/Projects/claude-family/scripts/reviewer_data_quality.py
@@ -23,12 +28,7 @@ python C:/Projects/claude-family/scripts/reviewer_data_quality.py
 python C:/Projects/claude-family/scripts/reviewer_data_quality.py --table work_tasks
 ```
 
-3. Report findings to user in a table:
-
-| Table | Issue | Count |
-|-------|-------|-------|
-| work_tasks | test data | X |
-| feedback | test data | Y |
+3. Report findings in a table format.
 
 4. Check the run was logged:
 ```sql
@@ -37,27 +37,11 @@ WHERE reviewer_type = 'data-quality'
 ORDER BY started_at DESC LIMIT 1;
 ```
 
-5. If issues found, offer to clean up:
-```sql
--- Preview what would be deleted
-SELECT * FROM claude.work_tasks WHERE title ILIKE '%test%';
-
--- Delete test data (with user confirmation)
-DELETE FROM claude.work_tasks WHERE title ILIKE '%test%';
-```
-
-## Scheduled
-
-This review runs automatically **daily** via scheduled_jobs.
-
----
-
-**Reviewer Type**: data-quality
-**Schedule**: Daily
+5. If issues found, offer to clean up with user confirmation.
 
 ---
 
 **Version**: 1.0
-**Created**: 2025-12-15
-**Updated**: 2026-01-08
-**Location**: .claude/commands/review-data.md
+**Created**: 2026-03-15
+**Updated**: 2026-03-15
+**Location**: .claude/skills/review-data/SKILL.md

@@ -1,3 +1,10 @@
+---
+name: review-docs
+description: "Run documentation staleness review to find outdated docs, missing files, and stale critical documents"
+user-invocable: true
+disable-model-invocation: true
+---
+
 # Review Documentation Staleness
 
 Run the documentation staleness reviewer to find outdated docs.
@@ -10,8 +17,6 @@ Run the documentation staleness reviewer to find outdated docs.
 
 ## Instructions
 
-When executing this command:
-
 1. Run the reviewer script:
 ```bash
 python C:/Projects/claude-family/scripts/reviewer_doc_staleness.py
@@ -22,10 +27,7 @@ python C:/Projects/claude-family/scripts/reviewer_doc_staleness.py
 python C:/Projects/claude-family/scripts/reviewer_doc_staleness.py --project {project_name}
 ```
 
-3. Report findings to user:
-   - List stale documents with days since update
-   - Flag any missing files
-   - Highlight critical docs needing review
+3. Report findings: stale documents with days since update, missing files, critical docs needing review.
 
 4. Check the run was logged:
 ```sql
@@ -34,23 +36,11 @@ WHERE reviewer_type = 'doc-staleness'
 ORDER BY started_at DESC LIMIT 1;
 ```
 
-5. If issues found, suggest:
-   - Update stale docs with current info
-   - Remove or archive missing file references
-   - Review critical docs for accuracy
-
-## Scheduled
-
-This review runs automatically **weekly** via scheduled_jobs.
-
----
-
-**Reviewer Type**: doc-staleness
-**Schedule**: Weekly
+5. If issues found, suggest: update stale docs, remove missing file references, review critical docs for accuracy.
 
 ---
 
 **Version**: 1.0
-**Created**: 2025-12-15
-**Updated**: 2026-01-08
-**Location**: .claude/commands/review-docs.md
+**Created**: 2026-03-15
+**Updated**: 2026-03-15
+**Location**: .claude/skills/review-docs/SKILL.md

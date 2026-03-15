@@ -1,6 +1,11 @@
-# Feedback: View and Filter Feedback Items
+---
+name: feedback
+description: "View, filter, create, and manage feedback items (bugs, ideas, changes, questions) for the current project"
+user-invocable: true
+disable-model-invocation: true
+---
 
-Display feedback items for the current project with optional filters. Replaces `/feedback-check` and `/feedback-list`.
+# Feedback Management
 
 **Usage**: `/feedback [type] [status] [project]`
 
@@ -12,7 +17,9 @@ Display feedback items for the current project with optional filters. Replaces `
 
 ---
 
-## Step 1: Detect Current Project
+## View Feedback
+
+### Step 1: Detect Current Project
 
 Determine the project from the command argument or current working directory:
 
@@ -32,11 +39,7 @@ WHERE project_code ILIKE '%keyword%'
 LIMIT 1;
 ```
 
----
-
-## Step 2: Parse Filter Arguments
-
-Extract optional filters from the command arguments:
+### Step 2: Parse Filter Arguments
 
 | Argument | Valid Values | Default |
 |----------|-------------|---------|
@@ -44,13 +47,7 @@ Extract optional filters from the command arguments:
 | status | new, triaged, in_progress, resolved | new, triaged, in_progress |
 | project | project code or name | current project |
 
----
-
-## Step 3: Query Feedback
-
-Build and execute the query based on filters:
-
-**Default (all open feedback):**
+### Step 3: Query Feedback
 
 ```sql
 SELECT
@@ -75,24 +72,12 @@ ORDER BY
     f.created_at ASC;
 ```
 
-**With type filter** — add to WHERE clause:
-```sql
-AND f.feedback_type = 'bug'  -- or 'idea', 'question', 'change'
-```
+Add filters to WHERE clause as needed:
+- Type filter: `AND f.feedback_type = 'bug'`
+- Status filter: `AND f.status = 'resolved'`
+- Keyword: `AND f.description ILIKE '%search-keyword%'`
 
-**With status filter** — replace status list:
-```sql
-AND f.status = 'resolved'  -- or 'new', 'triaged', 'in_progress'
-```
-
-**With keyword search** — add to WHERE clause:
-```sql
-AND f.description ILIKE '%search-keyword%'
-```
-
----
-
-## Step 4: Get Summary Stats
+### Step 4: Get Summary Stats
 
 ```sql
 SELECT
@@ -106,11 +91,7 @@ GROUP BY feedback_type, status
 ORDER BY feedback_type, status;
 ```
 
----
-
-## Step 5: Display Results
-
-Format the output:
+### Step 5: Display Results
 
 ```
 FEEDBACK - [Project Name]
@@ -125,55 +106,22 @@ Open Items Summary:
 
 --- BUGS ---
   [FB1] Description... (new, created: 2026-01-15)
-  [FB2] Description... (in_progress, created: 2026-01-10)
-
---- CHANGES ---
-  [FB3] Description... (triaged, created: 2026-01-12)
 
 --- IDEAS ---
   [FB4] Description... (new, created: 2026-01-08)
-
----
-View item: SELECT * FROM claude.feedback WHERE feedback_id = 'id'::uuid
-Create new: /feedback-create
-```
-
-**If no results:**
-```
-No feedback items match your filters.
-- Broaden status filter (include resolved items)
-- Remove type filter
-- Check project name
 ```
 
 ---
 
-## Step 6: Offer Actions
+## Create Feedback
 
-After displaying results, present options:
+### Interactive Creation
 
-```
-Next actions:
-1. View details of a specific item (provide ID)
-2. Create new feedback: /feedback-create
-3. Show recently resolved (last 7 days)
-```
-
-**Recently resolved query (if requested):**
-
-```sql
-SELECT
-    feedback_id::text,
-    feedback_type,
-    description,
-    updated_at as resolved_at
-FROM claude.feedback
-WHERE project_id = 'PROJECT-ID'::uuid
-  AND status = 'resolved'
-  AND updated_at > NOW() - INTERVAL '7 days'
-ORDER BY updated_at DESC
-LIMIT 10;
-```
+1. Detect current project from working directory
+2. Ask user for feedback type: bug, design, question, change, idea
+3. Ask for description (detailed)
+4. Use `mcp__project-tools__create_feedback` with project, type, description, priority
+5. Confirm creation with short_code
 
 ---
 
@@ -213,22 +161,7 @@ LIMIT 10;
 
 ---
 
-## Error Handling
-
-**Project not found:**
-- Check `workspaces.json` for correct project mapping
-- Query `SELECT project_code, project_name FROM claude.projects ORDER BY project_name`
-
-**No open feedback:**
-- Display: "No open feedback items for this project."
-
-**Database connection fails:**
-- Check postgres MCP configuration
-- Test: `SELECT 1;`
-
----
-
 **Version**: 1.0
-**Created**: 2026-02-28
-**Updated**: 2026-02-28
-**Location**: .claude/commands/feedback.md
+**Created**: 2026-03-15
+**Updated**: 2026-03-15
+**Location**: .claude/skills/feedback/SKILL.md

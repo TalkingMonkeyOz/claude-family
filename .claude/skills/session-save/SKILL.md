@@ -1,12 +1,17 @@
-**CHECKPOINT SESSION PROGRESS (Without Closing)**
+---
+name: session-save
+description: "Checkpoint session progress mid-session without closing — saves notes, facts, and knowledge"
+user-invocable: true
+disable-model-invocation: true
+---
+
+# Session Save (Checkpoint)
 
 Save current progress mid-session. Use this when you want to preserve state without ending the session.
 
 ---
 
-## Execute These Steps
-
-### Step 1: Review Current Work
+## Step 1: Review Current Work
 
 Check what's been done this session:
 
@@ -17,14 +22,14 @@ git diff --stat
 
 Review your task list (TaskList) for completed/pending items.
 
-### Step 2: Save Session Notes (MCP)
+## Step 2: Save Session Notes (MCP)
 
 Call `mcp__project-tools__store_session_notes` with:
 - `progress`: What has been completed so far (bullet points)
 - `decisions`: Key decisions made (if any)
 - `blockers`: Any blockers encountered (if any)
 
-### Step 3: Store Key Findings as Session Facts
+## Step 3: Store Key Findings as Session Facts
 
 For any important discoveries, decisions, or credentials found during the session:
 
@@ -34,18 +39,15 @@ Call `mcp__project-tools__store_session_fact` with:
 - `fact_type`: One of: credential, config, endpoint, decision, note, data, reference
 - `is_sensitive`: true for credentials/secrets
 
-### Step 4: Store Knowledge (If Applicable)
+## Step 4: Store Knowledge (If Applicable)
 
 If you discovered a reusable pattern, gotcha, or solution:
 
-Call `mcp__project-tools__store_knowledge` with:
-- `title`: Clear name
+Call `mcp__project-tools__remember` with:
 - `content`: What was learned
-- `knowledge_type`: pattern, gotcha, solution, fact, or procedure
-- `topic`: Relevant topic
-- `confidence`: 1-100
+- `memory_type`: pattern, gotcha, solution, fact, or procedure
 
-### Step 5: Confirm
+## Step 5: Confirm
 
 Display a brief checkpoint summary:
 - Tasks completed so far
@@ -65,6 +67,6 @@ Display a brief checkpoint summary:
 ---
 
 **Version**: 1.0
-**Created**: 2026-02-14
-**Updated**: 2026-02-14
-**Location**: .claude/commands/session-save.md
+**Created**: 2026-03-15
+**Updated**: 2026-03-15
+**Location**: .claude/skills/session-save/SKILL.md
