@@ -605,8 +605,13 @@ def deploy_skills(
     for skill in skills:
         name = skill.get("name", "").strip()
         content = skill.get("content", "") or ""
+        scope = skill.get("scope", "global")
         if not name or not content:
             logger.debug("Skipping skill with missing name or content")
+            continue
+        # Skip global skills — they already live in ~/.claude/skills/
+        # Deploying them to .claude/skills/ causes Claude Code to show duplicates
+        if scope == "global":
             continue
 
         skill_dir = skills_dir / name
