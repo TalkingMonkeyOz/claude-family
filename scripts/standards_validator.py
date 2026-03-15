@@ -362,6 +362,17 @@ def main():
                 f"Manual edits will be overwritten."
             )
 
+        # GOVERNANCE: Block direct CLAUDE.md edits — must use update_claude_md() MCP tool
+        if file_basename == 'CLAUDE.md' or file_basename == 'claude.md':
+            logger.warning(f"BLOCKED: Direct edit to CLAUDE.md: {file_path}")
+            block_with_reason(
+                f"BLOCKED: CLAUDE.md is version-tracked in the database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_claude_md(project, section, content, mode='replace'|'append')\n"
+                f"This updates the file, syncs to profiles DB, and creates a version snapshot.\n"
+                f"Example: update_claude_md('my-project', 'Recent Changes', '| 2026-03-15 | New feature |', mode='append')"
+            )
+
         # Get proposed content
         content = None
         if tool_name == 'Write':
