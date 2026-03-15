@@ -5400,7 +5400,7 @@ def send_message(
         # Validate to_project against workspaces if specified
         if to_project:
             cur.execute(
-                "SELECT project_name FROM claude.workspaces WHERE project_name = %s",
+                "SELECT project_name FROM claude.workspaces WHERE LOWER(project_name) = LOWER(%s)",
                 (to_project,),
             )
             if not cur.fetchone():

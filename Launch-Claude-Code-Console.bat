@@ -57,7 +57,7 @@ REM Sync settings configuration from database (generates settings.local.json)
 python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_NAME%" "%PROJECT_PATH%" --skip-change-detection 2>nul
 
 REM Launch WezTerm with Claude (use cmd /k to keep window open)
-start "" "C:\Program Files\WezTerm\wezterm-gui.exe" start --cwd "%PROJECT_PATH%" -- cmd /k claude
+start "" "C:\Program Files\WezTerm\wezterm-gui.exe" start --cwd "%PROJECT_PATH%" -- cmd /k "title Claude - %PROJECT_NAME% && claude"
 goto :END
 
 :WINTERMINAL
@@ -70,7 +70,9 @@ REM Sync settings configuration from database (generates settings.local.json)
 python "C:\Projects\claude-family\scripts\generate_project_settings.py" "%PROJECT_NAME%" "%PROJECT_PATH%" --skip-change-detection 2>nul
 
 REM Launch Windows Terminal with Claude
-start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_PATH%" cmd /k claude
+REM --title sets the tab name, --suppressApplicationTitle prevents claude CLI from overwriting it
+REM NOTE: suppressApplicationTitle must NOT be in the WT profile settings - it blocks --title too
+start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_NAME%" --suppressApplicationTitle -p "Claude Code" cmd /k claude
 goto :END
 
 :DIRECT

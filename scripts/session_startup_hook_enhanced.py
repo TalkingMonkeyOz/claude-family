@@ -157,55 +157,141 @@ def log_session_start(project_name: str, identity_id: str) -> tuple:
     except Exception as e:
         return (None, str(e))
 
-def get_outstanding_todo_count(project_name: str) -> tuple:
-    """Get count of outstanding todos, auto-archiving stale pending items.
+def get_pending_tasks(project_name: str) -> list:
+    """Get ALL pending/in_progress todos for this project with content.
 
-    Stale = pending items not updated in >7 days. These are zombie todos that
-    would otherwise be restored every session forever.
+    No time-based archival — tasks persist until explicitly completed or archived.
+    Holiday-safe: going away for weeks doesn't lose tasks.
 
-    Returns:
-        (active_count, archived_count) - active remaining and how many were archived.
+    Returns list of dicts: [{content, status, created_at_str}]
     """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-
-        # Auto-archive stale todos (per task_lifecycle BPMN check_staleness step):
-        #   - pending > 7 days → archived
-        #   - in_progress > 3 days → archived (safety net, session_end_hook should have demoted these)
         cur.execute("""
-            UPDATE claude.todos t
-            SET status = 'archived', updated_at = NOW()
-            FROM claude.projects p
-            WHERE t.project_id = p.project_id
-              AND p.project_name = %s
-              AND NOT t.is_deleted
-              AND (
-                  (t.status = 'pending' AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '7 days')
-                  OR
-                  (t.status = 'in_progress' AND COALESCE(t.updated_at, t.created_at) < NOW() - INTERVAL '3 days')
-              )
-            RETURNING t.todo_id
-        """, (project_name,))
-        archived_count = len(cur.fetchall())
-        conn.commit()
-
-        # Count remaining active todos
-        cur.execute("""
-            SELECT COUNT(*) as count
+            SELECT t.content, t.status, t.created_at::date::text AS created_date
             FROM claude.todos t
             JOIN claude.projects p ON t.project_id = p.project_id
             WHERE p.project_name = %s
               AND t.status IN ('pending', 'in_progress')
               AND NOT t.is_deleted
+            ORDER BY t.status DESC, t.created_at DESC
+            LIMIT 30
         """, (project_name,))
-        result = cur.fetchone()
+        rows = cur.fetchall()
         cur.close()
         conn.close()
-        active_count = result['count'] if result else 0
-        return (active_count, archived_count)
+        return rows
     except Exception:
-        return (0, 0)
+        return []
+
+
+def get_recently_completed_tasks(project_name: str) -> list:
+    """Get tasks completed in the last closed session for this project.
+
+    Provides "what did we finish?" context without restoring as active tasks.
+
+    Returns list of dicts: [{content, completed_at_str}]
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        # Get recently completed todos — try session-scoped first, fall back to time-based
+        cur.execute("""
+            SELECT t.content, t.completed_at::date::text AS completed_date
+            FROM claude.todos t
+            JOIN claude.projects p ON t.project_id = p.project_id
+            WHERE p.project_name = %s
+              AND t.status = 'completed'
+              AND NOT t.is_deleted
+              AND t.completed_at IS NOT NULL
+              AND t.completed_at > NOW() - INTERVAL '48 hours'
+            ORDER BY t.completed_at DESC
+            LIMIT 10
+        """, (project_name,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def get_unactioned_messages(project_name: str) -> list:
+    """Get unactioned messages for this project (pending/read/acknowledged).
+
+    Injects into startup context so Claude sees messages without being asked.
+    Also auto-defers messages from projects inactive 90+ days.
+
+    Returns list of dicts: [{from_project, subject, message_type, priority, created_date, message_id}]
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Auto-defer messages FROM inactive projects (no session in 90+ days)
+        cur.execute("""
+            UPDATE claude.messages m
+            SET status = 'deferred'
+            WHERE m.to_project = %s
+              AND m.status IN ('pending', 'read', 'acknowledged')
+              AND m.from_project IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM claude.sessions s
+                  WHERE s.project_name = m.from_project
+                    AND s.session_start > NOW() - INTERVAL '90 days'
+              )
+        """, (project_name,))
+        stale_deferred = cur.rowcount
+        if stale_deferred > 0:
+            conn.commit()
+            logger.info(f"Auto-deferred {stale_deferred} messages from inactive projects")
+
+        # Get unactioned messages (urgent first, then by date)
+        cur.execute("""
+            SELECT m.message_id::text, m.from_project, m.subject, m.message_type,
+                   m.priority, m.created_at::date::text AS created_date
+            FROM claude.messages m
+            WHERE (m.to_project = %s OR (m.to_project IS NULL AND m.message_type = 'broadcast'))
+              AND m.status NOT IN ('actioned', 'deferred')
+            ORDER BY
+                CASE m.priority WHEN 'urgent' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END,
+                m.created_at DESC
+            LIMIT 10
+        """, (project_name,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
+
+def get_valid_recipients() -> list:
+    """Get list of valid messaging recipients (active workspaces).
+
+    Returns list of dicts: [{project_name, last_session_date}]
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT w.project_name,
+                   MAX(s.session_start)::date::text AS last_active
+            FROM claude.workspaces w
+            LEFT JOIN claude.sessions s ON LOWER(s.project_name) = LOWER(w.project_name)
+            WHERE w.is_active = true
+            GROUP BY w.project_name
+            ORDER BY MAX(s.session_start) DESC NULLS LAST
+            LIMIT 20
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return rows
+    except Exception:
+        return []
+
 
 def _reset_task_map(project_name: str, session_id: str):
     """Reset task_map with new session_id.
@@ -419,14 +505,14 @@ def main():
             sync_script = Path(__file__).parent / "sync_project.py"
             if sync_script.exists():
                 import subprocess
-                result = subprocess.run(
+                sync_result = subprocess.run(
                     [sys.executable, str(sync_script), "--no-interactive"],
                     capture_output=True, text=True, timeout=30, cwd=cwd
                 )
-                if result.returncode == 0:
+                if sync_result.returncode == 0:
                     logger.info("Self-heal: sync_project.py completed successfully")
                 else:
-                    logger.warning(f"Self-heal: sync_project.py returned {result.returncode}")
+                    logger.warning(f"Self-heal: sync_project.py returned {sync_result.returncode}")
         except Exception as e:
             logger.warning(f"Self-heal sync skipped: {e}")
 
@@ -476,13 +562,41 @@ def main():
             except Exception as e:
                 logger.warning(f"Zombie cleanup failed (non-fatal): {e}")
 
-            # Count outstanding todos + auto-archive stale ones
-            todo_count, archived_count = get_outstanding_todo_count(project_name)
-            if archived_count > 0:
-                context_lines.append(f"Auto-archived {archived_count} stale todo(s) (pending >7d or in_progress >3d)")
-            if todo_count > 0:
+            # Read tasks back from DB → inject into context (task_lifecycle BPMN v4)
+            # No time-based archival. Tasks persist until explicitly completed/archived.
+            pending_tasks = get_pending_tasks(project_name)
+            completed_tasks = get_recently_completed_tasks(project_name)
+
+            if pending_tasks:
                 context_lines.append("")
-                context_lines.append(f"You have {todo_count} outstanding tasks from previous sessions. Restore them by calling start_session() and creating TaskCreate entries for each outstanding todo.")
+                context_lines.append(f"EXISTING TASKS ({len(pending_tasks)} pending/in_progress):")
+                for task in pending_tasks:
+                    marker = ">>" if task['status'] == 'in_progress' else "  "
+                    context_lines.append(f"  {marker} [{task['status']}] {task['content']} (created {task['created_date']})")
+                context_lines.append("Check these before creating new tasks - avoid duplicates.")
+
+            if completed_tasks:
+                context_lines.append("")
+                context_lines.append(f"LAST SESSION COMPLETED ({len(completed_tasks)}):")
+                for task in completed_tasks:
+                    context_lines.append(f"  [done] {task['content']} ({task['completed_date']})")
+
+            # Read unactioned messages from DB (messaging lifecycle v2)
+            unactioned_messages = get_unactioned_messages(project_name)
+            if unactioned_messages:
+                context_lines.append("")
+                context_lines.append(f"UNACTIONED MESSAGES ({len(unactioned_messages)}):")
+                for msg in unactioned_messages:
+                    pri_marker = "[URGENT] " if msg['priority'] == 'urgent' else ""
+                    from_proj = msg['from_project'] or 'broadcast'
+                    context_lines.append(f"  {pri_marker}{msg['message_type']}: {msg['subject']} (from {from_proj}, {msg['created_date']})")
+                context_lines.append("Use check_inbox() to see full details. Use acknowledge() to action or defer.")
+
+            # Show valid recipients for messaging
+            recipients = get_valid_recipients()
+            if recipients:
+                names = [r['project_name'] for r in recipients[:10]]
+                context_lines.append(f"Messaging recipients: {', '.join(names)}")
 
             # F130: Run periodic memory consolidation (24h cooldown)
             try:

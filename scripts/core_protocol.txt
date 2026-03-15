@@ -1,5 +1,6 @@
 STOP STOP STOP!!! YOU MUST DO POINT 1 BELOW BEFORE ANYTHING!
 1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+Every task MUST have a description (not just a subject). Include: what to do, where in the code, and why. Future-you has no context — make tasks self-contained.
 If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
 2. Verify before claiming - read files, query DB, do research. Never guess.

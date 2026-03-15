@@ -10,17 +10,23 @@
   <bpmn:process id="task_lifecycle" name="Task Lifecycle" isExecutable="true">
 
     <!--
-      Full task lifecycle including session boundaries.
+      Full task lifecycle including session startup read-back and session boundaries.
+
+      v4 Changes (2026-03-15):
+        - Added session startup phase: read_tasks_from_db → inject_context
+        - Added dedup_check before create_task
+        - Removed time-based staleness (holiday-safe) — staleness now user-driven
+        - Added read_completed_history for "what did we finish?" context
 
       Paths:
-        1. Happy: Create → MoreTasks? → Bridge → Sync → InProgress → Work → Complete → FeatureCheck → End(Completed)
-        2. Multi-task: Create → MoreTasks? → (yes: loop) → ... → InProgress → Work → Complete
-        3. Discipline block: Create → Sync → No tasks → Blocked → End(Blocked)
-        4. Block+Resolve: Work → Block → Resolve → Complete → End(Completed)
+        1. Startup: SessionStart → ReadFromDB → InjectContext → (existing tasks?) → Resume or Create
+        2. Create: DedupCheck → (exists? reuse : create) → Sync → Bridge → Work
+        3. Work: InProgress → Work → Complete → FeatureCheck → End(Completed)
+        4. Block+Resolve: Work → Block → Resolve → Complete
         5. Midway update: Work → update → MidwayUpdate → Work (loop)
-        6. Session end → fresh → resume: Work → SessionEnd → Demote → NotStale → Resume → InProgress → Work
-        7. Session end → stale: Work → SessionEnd → Demote → Stale → Archive → End(Archived)
-        8. Session end → abandon: Work → SessionEnd → Demote → NotStale → Abandon → Archive → End(Archived)
+        6. Session end → resume: Work → SessionEnd → Demote → Resume → InProgress → Work
+        7. Session end → abandon: Work → SessionEnd → Demote → Abandon → Archive → End(Archived)
+        8. Discipline block: No tasks → Blocked → End(Blocked)
 
       Actors:
         [CLAUDE] = userTask (decisions, work)
@@ -31,26 +37,72 @@
     <!-- ================================================================== -->
     <!-- START EVENT                                                         -->
     <!-- ================================================================== -->
-    <bpmn:startEvent id="start_event" name="Start">
-      <bpmn:outgoing>flow_start_create</bpmn:outgoing>
+    <bpmn:startEvent id="start_event" name="Session Start">
+      <bpmn:outgoing>flow_start_read_db</bpmn:outgoing>
     </bpmn:startEvent>
 
     <!-- ================================================================== -->
-    <!-- TASK CREATION PHASE                                                 -->
+    <!-- SESSION STARTUP PHASE (NEW v4)                                     -->
+    <!-- ================================================================== -->
+
+    <!-- Startup hook queries claude.todos for ALL pending/in_progress tasks (no time limit) -->
+    <bpmn:scriptTask id="read_tasks_from_db" name="[HOOK] Read Tasks from DB" scriptFormat="python">
+      <bpmn:incoming>flow_start_read_db</bpmn:incoming>
+      <bpmn:outgoing>flow_read_completed</bpmn:outgoing>
+      <bpmn:script>tasks_read = True
+tasks_loaded = tasks_loaded if 'tasks_loaded' in dir() else False</bpmn:script>
+      <bpmn:documentation>session_startup_hook_enhanced.py queries ALL pending/in_progress todos
+for this project from claude.todos. No time limit — tasks persist until
+explicitly completed or archived. Holiday-safe: going on holiday for 2 weeks
+does not lose tasks.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Also query recently completed tasks from last session -->
+    <bpmn:scriptTask id="read_completed_history" name="[HOOK] Read Completed History" scriptFormat="python">
+      <bpmn:incoming>flow_read_completed</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_context</bpmn:outgoing>
+      <bpmn:script>completed_read = True</bpmn:script>
+      <bpmn:documentation>Queries completed todos from the last closed session for this project.
+Provides "what did we finish?" context without restoring them as active tasks.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Inject both into additionalContext so Claude sees existing tasks -->
+    <bpmn:scriptTask id="inject_task_context" name="[HOOK] Inject Task Context" scriptFormat="python">
+      <bpmn:incoming>flow_inject_context</bpmn:incoming>
+      <bpmn:outgoing>flow_context_to_existing_check</bpmn:outgoing>
+      <bpmn:script>context_injected = True</bpmn:script>
+      <bpmn:documentation>Formats pending tasks and completed history into additionalContext.
+Claude sees: "You have N pending tasks: [list]. Last session you completed: [list]."
+This prevents duplicate task creation — Claude knows what already exists.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Does Claude need to create new tasks or work on existing ones? -->
+    <bpmn:exclusiveGateway id="existing_tasks_gw" name="Existing Tasks?" default="flow_no_existing">
+      <bpmn:incoming>flow_context_to_existing_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_existing</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_existing</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- TASK CREATION PHASE (with dedup check)                             -->
     <!-- ================================================================== -->
 
     <!-- Claude creates tasks via TaskCreate tool -->
     <bpmn:userTask id="create_task" name="[CLAUDE] Create Task">
-      <bpmn:incoming>flow_start_create</bpmn:incoming>
+      <bpmn:incoming>flow_no_existing</bpmn:incoming>
       <bpmn:incoming>flow_more_tasks_loop</bpmn:incoming>
       <bpmn:outgoing>flow_create_sync</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- task_sync_hook.py inserts into claude.todos -->
-    <bpmn:scriptTask id="sync_to_db" name="[HOOK] Sync to DB" scriptFormat="python">
+    <!-- task_sync_hook.py inserts into claude.todos (with dedup check built in) -->
+    <bpmn:scriptTask id="sync_to_db" name="[HOOK] Sync to DB (dedup)" scriptFormat="python">
       <bpmn:incoming>flow_create_sync</bpmn:incoming>
       <bpmn:outgoing>flow_sync_bridge</bpmn:outgoing>
       <bpmn:script>synced = True</bpmn:script>
+      <bpmn:documentation>task_sync_hook.py checks find_existing_todo() before inserting.
+Uses substring match (20+ chars) and fuzzy match (75% threshold).
+If existing todo found, reuses it instead of creating duplicate.
+Increments restore_count on reuse.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Maps native tasks to claude.build_tasks when a feature is active -->
@@ -59,9 +111,7 @@
       <bpmn:outgoing>flow_bridge_more_tasks</bpmn:outgoing>
       <bpmn:script>bridge_attempted = True</bpmn:script>
       <bpmn:documentation>Maps native Claude Code task to claude.build_tasks when a feature
-is active (feature_code set in session context). Called by task_sync_hook.py
-after inserting into claude.todos. Enables start_work / complete_work MCP
-tools to track progress against feature build tasks.</bpmn:documentation>
+is active. Called by task_sync_hook.py after inserting into claude.todos.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Multi-task support: loop back to create_task until all tasks created -->
@@ -74,6 +124,7 @@ tools to track progress against feature build tasks.</bpmn:documentation>
     <!-- Discipline gate: must have tasks before tools are allowed -->
     <bpmn:exclusiveGateway id="has_tasks_gw" name="Has Tasks?" default="flow_no_tasks">
       <bpmn:incoming>flow_no_more_tasks</bpmn:incoming>
+      <bpmn:incoming>flow_has_existing</bpmn:incoming>
       <bpmn:outgoing>flow_yes_tasks</bpmn:outgoing>
       <bpmn:outgoing>flow_no_tasks</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -82,7 +133,6 @@ tools to track progress against feature build tasks.</bpmn:documentation>
     <!-- WORK PHASE                                                          -->
     <!-- ================================================================== -->
 
-    <!-- Mark task as in_progress in DB (TaskUpdate status=in_progress) -->
     <bpmn:scriptTask id="mark_in_progress" name="[HOOK] Mark In Progress" scriptFormat="python">
       <bpmn:incoming>flow_yes_tasks</bpmn:incoming>
       <bpmn:incoming>flow_do_resume</bpmn:incoming>
@@ -90,14 +140,12 @@ tools to track progress against feature build tasks.</bpmn:documentation>
       <bpmn:script>status = "in_progress"</bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Claude does the actual work -->
     <bpmn:userTask id="work_on_task" name="[CLAUDE] Work on Task">
       <bpmn:incoming>flow_progress_work</bpmn:incoming>
       <bpmn:incoming>flow_midway_back</bpmn:incoming>
       <bpmn:outgoing>flow_work_outcome</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- What happened? Four possible actions -->
     <bpmn:exclusiveGateway id="outcome_gw" name="Task Action?" default="flow_outcome_complete">
       <bpmn:incoming>flow_work_outcome</bpmn:incoming>
       <bpmn:outgoing>flow_outcome_complete</bpmn:outgoing>
@@ -107,21 +155,17 @@ tools to track progress against feature build tasks.</bpmn:documentation>
     </bpmn:exclusiveGateway>
 
     <!-- ================================================================== -->
-    <!-- PATH: MIDWAY STATUS UPDATE (action == update)                      -->
+    <!-- PATH: MIDWAY STATUS UPDATE                                          -->
     <!-- ================================================================== -->
 
-    <!-- Claude posts a progress update and continues working -->
     <bpmn:scriptTask id="midway_status_update" name="[CLAUDE] Update Task Status" scriptFormat="python">
       <bpmn:incoming>flow_outcome_update</bpmn:incoming>
       <bpmn:outgoing>flow_midway_back</bpmn:outgoing>
       <bpmn:script>midway_updated = True</bpmn:script>
-      <bpmn:documentation>Intermediate status update while task is still in_progress.
-Claude can call this to note progress milestones without completing the task.
-Loops back to work_on_task after updating.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- ================================================================== -->
-    <!-- PATH 1: COMPLETE                                                    -->
+    <!-- PATH: COMPLETE                                                      -->
     <!-- ================================================================== -->
 
     <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Completed" scriptFormat="python">
@@ -129,16 +173,15 @@ Loops back to work_on_task after updating.</bpmn:documentation>
       <bpmn:incoming>flow_resolve_complete</bpmn:incoming>
       <bpmn:outgoing>flow_completed_feature_check</bpmn:outgoing>
       <bpmn:script>status = "completed"</bpmn:script>
+      <bpmn:documentation>Claude Code deletes the task JSON file from disk on completion.
+task_sync_hook.py preserves the completed status in claude.todos DB.
+Next session startup reads completed history from DB.</bpmn:documentation>
     </bpmn:scriptTask>
 
-    <!-- Check if all sibling build_tasks are done to trigger feature completion -->
     <bpmn:scriptTask id="check_feature_completion" name="[DB] Check Feature Completion" scriptFormat="python">
       <bpmn:incoming>flow_completed_feature_check</bpmn:incoming>
       <bpmn:outgoing>flow_completed_end</bpmn:outgoing>
       <bpmn:script>feature_completion_checked = True</bpmn:script>
-      <bpmn:documentation>Checks if all sibling build_tasks for the same feature are completed.
-If so, triggers feature status transition to 'completed' via WorkflowEngine.
-Corresponds to the check_feature_completion side_effect in claude.workflow_transitions.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <bpmn:endEvent id="end_completed" name="Task Completed">
@@ -146,47 +189,29 @@ Corresponds to the check_feature_completion side_effect in claude.workflow_trans
     </bpmn:endEvent>
 
     <!-- ================================================================== -->
-    <!-- PATH 2: BLOCKED → RESOLVE → COMPLETE                               -->
+    <!-- PATH: BLOCKED → RESOLVE → COMPLETE                                  -->
     <!-- ================================================================== -->
 
     <bpmn:userTask id="resolve_blocker" name="[CLAUDE] Resolve Blocker">
       <bpmn:incoming>flow_outcome_block</bpmn:incoming>
       <bpmn:outgoing>flow_resolve_complete</bpmn:outgoing>
-      <bpmn:documentation>Resolving a blocker means the task is done (the resolution IS the completion).
-Goes directly to mark_completed. If the resolution spawns new tasks, Claude
-creates those separately via TaskCreate (new lifecycle instances).</bpmn:documentation>
     </bpmn:userTask>
 
     <!-- ================================================================== -->
-    <!-- PATH 3: SESSION END → DEMOTE → STALENESS CHECK → RESUME/ARCHIVE    -->
+    <!-- PATH: SESSION END → DEMOTE → RESUME/ARCHIVE                         -->
     <!-- ================================================================== -->
 
-    <!-- session_end_hook demotes in_progress → pending -->
     <bpmn:scriptTask id="demote_to_pending" name="[HOOK] Demote to Pending" scriptFormat="python">
       <bpmn:incoming>flow_outcome_session_end</bpmn:incoming>
-      <bpmn:outgoing>flow_demote_stale</bpmn:outgoing>
+      <bpmn:outgoing>flow_demote_resume</bpmn:outgoing>
       <bpmn:script>status = "pending"</bpmn:script>
+      <bpmn:documentation>No time-based auto-archive. Tasks persist indefinitely until user
+explicitly completes or archives them. Holiday-safe.</bpmn:documentation>
     </bpmn:scriptTask>
-
-    <!-- session_startup_hook checks session_id match in task_map file -->
-    <bpmn:scriptTask id="check_staleness" name="[HOOK] Check Session Staleness (session_id match)" scriptFormat="python">
-      <bpmn:incoming>flow_demote_stale</bpmn:incoming>
-      <bpmn:outgoing>flow_stale_check</bpmn:outgoing>
-      <bpmn:script>is_stale = age_days > staleness_threshold</bpmn:script>
-      <bpmn:documentation>Checks task age against staleness threshold. Also validates session_id match
-in the task_map file (~/.claude/tasks/[TASK_LIST_ID]/). Stale or orphaned tasks
-are archived rather than surfaced to the next session.</bpmn:documentation>
-    </bpmn:scriptTask>
-
-    <bpmn:exclusiveGateway id="staleness_gw" name="Stale?" default="flow_not_stale">
-      <bpmn:incoming>flow_stale_check</bpmn:incoming>
-      <bpmn:outgoing>flow_is_stale</bpmn:outgoing>
-      <bpmn:outgoing>flow_not_stale</bpmn:outgoing>
-    </bpmn:exclusiveGateway>
 
     <!-- Next session: Claude decides whether to resume or abandon -->
     <bpmn:userTask id="resume_decision" name="[CLAUDE] Resume or Abandon?">
-      <bpmn:incoming>flow_not_stale</bpmn:incoming>
+      <bpmn:incoming>flow_demote_resume</bpmn:incoming>
       <bpmn:outgoing>flow_resume_choice</bpmn:outgoing>
     </bpmn:userTask>
 
@@ -196,9 +221,8 @@ are archived rather than surfaced to the next session.</bpmn:documentation>
       <bpmn:outgoing>flow_do_abandon</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <!-- Archive (reached from staleness OR abandonment) -->
+    <!-- Archive (reached from abandonment only — no auto-staleness) -->
     <bpmn:scriptTask id="archive_task" name="[HOOK] Archive Task" scriptFormat="python">
-      <bpmn:incoming>flow_is_stale</bpmn:incoming>
       <bpmn:incoming>flow_do_abandon</bpmn:incoming>
       <bpmn:outgoing>flow_archive_end</bpmn:outgoing>
       <bpmn:script>status = "archived"</bpmn:script>
@@ -209,7 +233,7 @@ are archived rather than surfaced to the next session.</bpmn:documentation>
     </bpmn:endEvent>
 
     <!-- ================================================================== -->
-    <!-- PATH 4: DISCIPLINE GATE BLOCKED (no tasks created)                  -->
+    <!-- PATH: DISCIPLINE GATE BLOCKED                                       -->
     <!-- ================================================================== -->
 
     <bpmn:scriptTask id="mark_gate_blocked" name="[HOOK] Discipline Gate (Write/Edit/Bash/Task blocked)" scriptFormat="python">
@@ -217,8 +241,7 @@ are archived rather than surfaced to the next session.</bpmn:documentation>
       <bpmn:outgoing>flow_blocked_end</bpmn:outgoing>
       <bpmn:script>gate_blocked = True</bpmn:script>
       <bpmn:documentation>task_discipline_hook.py blocks GATED_TOOLS = {Write, Edit, Bash, Task}
-when no tasks have been created in the current session. Returns exit code 0
-with JSON permissionDecision="deny" to Claude Code's PreToolUse hook.</bpmn:documentation>
+when no tasks have been created in the current session.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <bpmn:endEvent id="end_blocked" name="Blocked by Discipline Gate">
@@ -229,8 +252,19 @@ with JSON permissionDecision="deny" to Claude Code's PreToolUse hook.</bpmn:docu
     <!-- SEQUENCE FLOWS                                                      -->
     <!-- ================================================================== -->
 
+    <!-- Startup phase (NEW v4) -->
+    <bpmn:sequenceFlow id="flow_start_read_db" sourceRef="start_event" targetRef="read_tasks_from_db"/>
+    <bpmn:sequenceFlow id="flow_read_completed" sourceRef="read_tasks_from_db" targetRef="read_completed_history"/>
+    <bpmn:sequenceFlow id="flow_inject_context" sourceRef="read_completed_history" targetRef="inject_task_context"/>
+    <bpmn:sequenceFlow id="flow_context_to_existing_check" sourceRef="inject_task_context" targetRef="existing_tasks_gw"/>
+
+    <!-- Existing tasks path -->
+    <bpmn:sequenceFlow id="flow_has_existing" sourceRef="existing_tasks_gw" targetRef="has_tasks_gw">
+      <bpmn:conditionExpression>tasks_loaded == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_existing" sourceRef="existing_tasks_gw" targetRef="create_task"/>
+
     <!-- Creation phase -->
-    <bpmn:sequenceFlow id="flow_start_create" sourceRef="start_event" targetRef="create_task"/>
     <bpmn:sequenceFlow id="flow_create_sync" sourceRef="create_task" targetRef="sync_to_db"/>
     <bpmn:sequenceFlow id="flow_sync_bridge" sourceRef="sync_to_db" targetRef="bridge_to_build_task"/>
     <bpmn:sequenceFlow id="flow_bridge_more_tasks" sourceRef="bridge_to_build_task" targetRef="has_more_tasks_gw"/>
@@ -268,22 +302,13 @@ with JSON permissionDecision="deny" to Claude Code's PreToolUse hook.</bpmn:docu
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_midway_back" sourceRef="midway_status_update" targetRef="work_on_task"/>
 
-    <!-- Outcome: session end -->
+    <!-- Outcome: session end (no staleness check — holiday-safe) -->
     <bpmn:sequenceFlow id="flow_outcome_session_end" sourceRef="outcome_gw" targetRef="demote_to_pending">
       <bpmn:conditionExpression>action == "session_end"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
 
-    <!-- Session boundary: demote → staleness check -->
-    <bpmn:sequenceFlow id="flow_demote_stale" sourceRef="demote_to_pending" targetRef="check_staleness"/>
-    <bpmn:sequenceFlow id="flow_stale_check" sourceRef="check_staleness" targetRef="staleness_gw"/>
-
-    <!-- Staleness: stale → archive -->
-    <bpmn:sequenceFlow id="flow_is_stale" sourceRef="staleness_gw" targetRef="archive_task">
-      <bpmn:conditionExpression>is_stale == True</bpmn:conditionExpression>
-    </bpmn:sequenceFlow>
-
-    <!-- Staleness: not stale → resume decision -->
-    <bpmn:sequenceFlow id="flow_not_stale" sourceRef="staleness_gw" targetRef="resume_decision"/>
+    <!-- Session boundary: demote → resume decision (no staleness gate) -->
+    <bpmn:sequenceFlow id="flow_demote_resume" sourceRef="demote_to_pending" targetRef="resume_decision"/>
 
     <!-- Resume decision -->
     <bpmn:sequenceFlow id="flow_resume_choice" sourceRef="resume_decision" targetRef="resume_gw"/>
@@ -300,225 +325,13 @@ with JSON permissionDecision="deny" to Claude Code's PreToolUse hook.</bpmn:docu
 
   </bpmn:process>
 
-  <!-- Diagram layout for visual editors -->
+  <!-- Diagram layout -->
   <bpmndi:BPMNDiagram id="BPMNDiagram_1">
     <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="task_lifecycle">
-
-      <!-- Row 1: Main happy path (y=200) -->
+      <!-- Minimal layout — visual editors will auto-arrange -->
       <bpmndi:BPMNShape id="s_start" bpmnElement="start_event">
         <dc:Bounds x="50" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_create" bpmnElement="create_task">
-        <dc:Bounds x="140" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_sync" bpmnElement="sync_to_db">
-        <dc:Bounds x="310" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_bridge" bpmnElement="bridge_to_build_task">
-        <dc:Bounds x="480" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_has_more_tasks" bpmnElement="has_more_tasks_gw" isMarkerVisible="true">
-        <dc:Bounds x="650" y="193" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_has_tasks" bpmnElement="has_tasks_gw" isMarkerVisible="true">
-        <dc:Bounds x="750" y="193" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_in_progress" bpmnElement="mark_in_progress">
-        <dc:Bounds x="850" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_work" bpmnElement="work_on_task">
-        <dc:Bounds x="1020" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_outcome" bpmnElement="outcome_gw" isMarkerVisible="true">
-        <dc:Bounds x="1190" y="193" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_completed" bpmnElement="mark_completed">
-        <dc:Bounds x="1290" y="180" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_feature_check" bpmnElement="check_feature_completion">
-        <dc:Bounds x="1460" y="180" width="140" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_end_completed" bpmnElement="end_completed">
-        <dc:Bounds x="1650" y="200" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Row 2: Multi-task loop (y=80) -->
-      <bpmndi:BPMNShape id="s_midway" bpmnElement="midway_status_update">
-        <dc:Bounds x="1190" y="330" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Row 3: Block/resolve path (y=400) -->
-      <bpmndi:BPMNShape id="s_resolve" bpmnElement="resolve_blocker">
-        <dc:Bounds x="1290" y="410" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Row 4: Session end path (y=550) -->
-      <bpmndi:BPMNShape id="s_demote" bpmnElement="demote_to_pending">
-        <dc:Bounds x="1190" y="540" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_stale_check" bpmnElement="check_staleness">
-        <dc:Bounds x="1020" y="540" width="140" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_stale_gw" bpmnElement="staleness_gw" isMarkerVisible="true">
-        <dc:Bounds x="870" y="553" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_resume_dec" bpmnElement="resume_decision">
-        <dc:Bounds x="720" y="540" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_resume_gw" bpmnElement="resume_gw" isMarkerVisible="true">
-        <dc:Bounds x="580" y="553" width="50" height="50"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Row 5: Archive path (y=700) -->
-      <bpmndi:BPMNShape id="s_archive" bpmnElement="archive_task">
-        <dc:Bounds x="720" y="690" width="120" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_end_archived" bpmnElement="end_archived">
-        <dc:Bounds x="900" y="710" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Row 6: Gate blocked (y=80) -->
-      <bpmndi:BPMNShape id="s_gate_blocked" bpmnElement="mark_gate_blocked">
-        <dc:Bounds x="750" y="60" width="160" height="80"/>
-      </bpmndi:BPMNShape>
-      <bpmndi:BPMNShape id="s_end_blocked" bpmnElement="end_blocked">
-        <dc:Bounds x="960" y="80" width="36" height="36"/>
-      </bpmndi:BPMNShape>
-
-      <!-- Edges: Creation phase -->
-      <bpmndi:BPMNEdge id="e_start_create" bpmnElement="flow_start_create">
-        <di:waypoint x="86" y="218"/>
-        <di:waypoint x="140" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_create_sync" bpmnElement="flow_create_sync">
-        <di:waypoint x="260" y="220"/>
-        <di:waypoint x="310" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_sync_bridge" bpmnElement="flow_sync_bridge">
-        <di:waypoint x="430" y="220"/>
-        <di:waypoint x="480" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_bridge_more_tasks" bpmnElement="flow_bridge_more_tasks">
-        <di:waypoint x="600" y="220"/>
-        <di:waypoint x="650" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Multi-task loop -->
-      <bpmndi:BPMNEdge id="e_more_tasks_loop" bpmnElement="flow_more_tasks_loop">
-        <di:waypoint x="675" y="193"/>
-        <di:waypoint x="675" y="140"/>
-        <di:waypoint x="200" y="140"/>
-        <di:waypoint x="200" y="180"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_no_more_tasks" bpmnElement="flow_no_more_tasks">
-        <di:waypoint x="700" y="218"/>
-        <di:waypoint x="750" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Discipline gate -->
-      <bpmndi:BPMNEdge id="e_yes_tasks" bpmnElement="flow_yes_tasks">
-        <di:waypoint x="800" y="218"/>
-        <di:waypoint x="850" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_no_tasks" bpmnElement="flow_no_tasks">
-        <di:waypoint x="775" y="193"/>
-        <di:waypoint x="775" y="140"/>
-        <di:waypoint x="750" y="100"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_blocked_end" bpmnElement="flow_blocked_end">
-        <di:waypoint x="910" y="100"/>
-        <di:waypoint x="960" y="98"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Work phase -->
-      <bpmndi:BPMNEdge id="e_progress_work" bpmnElement="flow_progress_work">
-        <di:waypoint x="970" y="220"/>
-        <di:waypoint x="1020" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_work_outcome" bpmnElement="flow_work_outcome">
-        <di:waypoint x="1140" y="220"/>
-        <di:waypoint x="1190" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Complete path -->
-      <bpmndi:BPMNEdge id="e_outcome_complete" bpmnElement="flow_outcome_complete">
-        <di:waypoint x="1240" y="218"/>
-        <di:waypoint x="1290" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_completed_feature_check" bpmnElement="flow_completed_feature_check">
-        <di:waypoint x="1410" y="220"/>
-        <di:waypoint x="1460" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_completed_end" bpmnElement="flow_completed_end">
-        <di:waypoint x="1600" y="220"/>
-        <di:waypoint x="1650" y="218"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Midway update path -->
-      <bpmndi:BPMNEdge id="e_outcome_update" bpmnElement="flow_outcome_update">
-        <di:waypoint x="1215" y="243"/>
-        <di:waypoint x="1215" y="370"/>
-        <di:waypoint x="1190" y="370"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_midway_back" bpmnElement="flow_midway_back">
-        <di:waypoint x="1190" y="370"/>
-        <di:waypoint x="1080" y="370"/>
-        <di:waypoint x="1080" y="260"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Block path -->
-      <bpmndi:BPMNEdge id="e_outcome_block" bpmnElement="flow_outcome_block">
-        <di:waypoint x="1215" y="243"/>
-        <di:waypoint x="1215" y="450"/>
-        <di:waypoint x="1290" y="450"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_resolve_complete" bpmnElement="flow_resolve_complete">
-        <di:waypoint x="1350" y="410"/>
-        <di:waypoint x="1350" y="260"/>
-      </bpmndi:BPMNEdge>
-
-      <!-- Session end path -->
-      <bpmndi:BPMNEdge id="e_outcome_session" bpmnElement="flow_outcome_session_end">
-        <di:waypoint x="1215" y="243"/>
-        <di:waypoint x="1215" y="580"/>
-        <di:waypoint x="1190" y="580"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_demote_stale" bpmnElement="flow_demote_stale">
-        <di:waypoint x="1190" y="580"/>
-        <di:waypoint x="1160" y="580"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_stale_check" bpmnElement="flow_stale_check">
-        <di:waypoint x="1020" y="578"/>
-        <di:waypoint x="920" y="578"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_is_stale" bpmnElement="flow_is_stale">
-        <di:waypoint x="895" y="603"/>
-        <di:waypoint x="895" y="730"/>
-        <di:waypoint x="840" y="730"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_not_stale" bpmnElement="flow_not_stale">
-        <di:waypoint x="870" y="578"/>
-        <di:waypoint x="840" y="580"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_resume_choice" bpmnElement="flow_resume_choice">
-        <di:waypoint x="720" y="578"/>
-        <di:waypoint x="630" y="578"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_do_resume" bpmnElement="flow_do_resume">
-        <di:waypoint x="605" y="553"/>
-        <di:waypoint x="605" y="220"/>
-        <di:waypoint x="850" y="220"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_do_abandon" bpmnElement="flow_do_abandon">
-        <di:waypoint x="605" y="603"/>
-        <di:waypoint x="605" y="730"/>
-        <di:waypoint x="720" y="730"/>
-      </bpmndi:BPMNEdge>
-      <bpmndi:BPMNEdge id="e_archive_end" bpmnElement="flow_archive_end">
-        <di:waypoint x="840" y="730"/>
-        <di:waypoint x="900" y="728"/>
-      </bpmndi:BPMNEdge>
-
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 
