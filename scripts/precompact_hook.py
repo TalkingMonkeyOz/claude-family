@@ -295,6 +295,19 @@ def build_refresh_message(hook_input: Dict) -> str:
         "Then recall_memories('<what you were working on>'), unstash(component) for workfiles, and resume.",
     ])
 
+    # Re-inject storage skill content so it survives compaction
+    try:
+        skill_path = Path.home() / ".claude" / "skills" / "skill-load-memory-storage" / "SKILL.md"
+        if skill_path.exists():
+            skill_content = skill_path.read_text(encoding="utf-8", errors="replace")
+            if len(skill_content) > 100:
+                parts.append("\n<storage-guide>")
+                parts.append(skill_content)
+                parts.append("</storage-guide>")
+                logger.info("Storage skill re-injected for post-compaction context")
+    except Exception as e:
+        logger.warning(f"Failed to re-inject storage skill: {e}")
+
     return "\n".join(parts)
 
 
