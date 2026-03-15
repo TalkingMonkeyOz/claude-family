@@ -414,6 +414,22 @@ def main():
         identity_name = 'claude-code-unified'
         identity_id = IDENTITY_MAP.get(identity_name, IDENTITY_MAP['claude-code-unified'])
 
+        # === SELF-HEAL: Run sync_project.py if not launched via BAT ===
+        try:
+            sync_script = Path(__file__).parent / "sync_project.py"
+            if sync_script.exists():
+                import subprocess
+                result = subprocess.run(
+                    [sys.executable, str(sync_script), "--no-interactive"],
+                    capture_output=True, text=True, timeout=30, cwd=cwd
+                )
+                if result.returncode == 0:
+                    logger.info("Self-heal: sync_project.py completed successfully")
+                else:
+                    logger.warning(f"Self-heal: sync_project.py returned {result.returncode}")
+        except Exception as e:
+            logger.warning(f"Self-heal sync skipped: {e}")
+
         # === HEALTH CHECK ===
         health = check_system_health()
         health_icon = {'healthy': '[OK]', 'partial': '[!]', 'degraded': '[X]'}.get(health['overall'], '[?]')
