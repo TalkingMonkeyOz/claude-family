@@ -66,13 +66,19 @@ Database → sync_project.py → .claude/settings.local.json (ALL config)
 
 **Launcher integration**: `C:\claude\start-claude.bat` calls `sync_project.py --no-interactive` once at startup instead of the previous four separate script calls.
 
-**Commands and agents in DB**: The `claude.skills` table now stores all four component types via the `scope` column:
-- `scope='global'` — skills available to all projects
-- `scope='project'` — skills scoped to a single project
-- `scope='command'` — slash commands (previously loose files in `C:\claude\shared\commands\`)
-- `scope='agent'` — agent definitions
+**Commands migrated to skills (2026-03-15)**: All 24 legacy commands converted to skills with YAML frontmatter. The `claude.skills` table stores all component types via `scope`:
+- `scope='global'` — skills available to all projects (24 active)
+- `scope='project'` — skills scoped to a single project (31 active)
+- `scope='agent'` — agent definitions (19 active)
+- `scope='command'` — deprecated (deactivated, migrated to global skills)
 
-**Counts (2026-03-15)**: 20 global skills, 16 project skills, 24 commands, 19 agents, 6 rules, 9 instructions.
+**File protection**: PreToolUse hook blocks direct edits to all DB-managed files: `CLAUDE.md`, `.claude/skills/*/SKILL.md`, `.claude/rules/*.md`, `.claude/agents/*.md`, `settings.local.json`, `.mcp.json`. Redirects to proper DB update channels.
+
+**CLAUDE.md versioning**: `update_claude_md()` MCP tool now creates `profile_versions` snapshots on every edit, matching core protocol versioning pattern.
+
+**Hooks**: 10 hook types, 19 handlers (was 7/16). New: PostCompact, TaskCompleted, ConfigChange.
+
+**Counts (2026-03-15)**: 32 skills (24 global + 8 project-specific), 19 agents, 7 rules, 9 instructions.
 
 ---
 
@@ -273,14 +279,7 @@ cat .claude/settings.local.json | jq '.hooks.PreToolUse'
 
 ## Migration from Manual Config
 
-If project has manual `.claude/settings.local.json`:
-
-1. Back up: `cat .claude/settings.local.json | jq . > backup-settings.json`
-2. **Decide tier**: Common → `project_type_configs`, specific → `workspaces.startup_config`
-3. Add to database: `UPDATE claude.workspaces SET startup_config = {...}`
-4. Test: `python scripts/sync_project.py project-name`
-5. Compare: `diff backup-settings.json .claude/settings.local.json`
-6. **Verify**: Restart Claude Code, check hooks fire
+Back up existing config, add to DB (`workspaces.startup_config` for one project, `project_type_configs` for a type), run `sync_project.py`, compare output, restart Claude Code.
 
 ---
 
@@ -293,7 +292,7 @@ If project has manual `.claude/settings.local.json`:
 
 ---
 
-**Version**: 3.3 (sync_project.py replaces 3 scripts; DB-backed commands/agents; skill scope expansion)
+**Version**: 3.4 (Commands→skills migration, file protection, 10 hook types, CLAUDE.md versioning)
 **Created**: 2025-12-27
 **Updated**: 2026-03-15
 **Location**: 40-Procedures/Config Management SOP.md
