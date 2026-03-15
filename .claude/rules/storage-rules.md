@@ -1,6 +1,6 @@
 # Storage Rules
 
-## 5 Systems — Use the Right One
+## 5 Systems â€” Use the Right One
 
 | I have... | Put it in | Tool |
 |-----------|-----------|------|
@@ -22,14 +22,14 @@
 
 ## Anti-Patterns
 
-- `remember("found API key: sk-...")` → use `store_session_fact("api_key", "sk-...", "credential")`
-- `remember("task 3 done")` → use `store_session_fact("progress", "...", "note")`
-- `remember("OData entity User...")` → use `catalog("odata_entity", {...})`
-- Design notes in session facts → use `stash("component", "design-notes", content)`
-- 500-word remember() → write a vault doc instead
+- `remember("found API key: sk-...")` â†’ use `store_session_fact("api_key", "sk-...", "credential")`
+- `remember("task 3 done")` â†’ use `store_session_fact("progress", "...", "note")`
+- `remember("OData entity User...")` â†’ use `catalog("odata_entity", {...})`
+- Design notes in session facts â†’ use `stash("component", "design-notes", content)`
+- 500-word remember() â†’ write a vault doc instead
 
 ## Before Storing: Check First
 
-- `list_session_facts()` — see your notepad
-- `list_workfiles()` — check if a drawer already exists
-- `recall_memories(query)` — check if already remembered
+- `list_session_facts()` â€” see your notepad
+- `list_workfiles()` â€” check if a drawer already exists
+- `recall_memories(query)` â€” check if already remembered

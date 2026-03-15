@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-03-15T08:41:26.129195",
+    "generated_at": "2026-03-15T11:45:06.143940",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -44,11 +44,6 @@
       "path": "C:\\Projects\\mcp-search-test",
       "type": "infrastructure",
       "description": "Test project for MCPSearch auto mode verification"
-    },
-    "metis": {
-      "path": "C:\\Projects\\claude-family\\knowledge-vault\\10-Projects\\nimbus-ai-platform",
-      "type": "infrastructure",
-      "description": "Project Metis - AI Development Lifecycle Platform"
     },
     "project-metis": {
       "path": "C:\\Projects\\project-metis",

@@ -1,11 +1,15 @@
-STOP STOP YOU MUST DO 1 BELOW!
+STOP STOP STOP!!! YOU MUST DO POINT 1 BELOW BEFORE ANYTHING!
 1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
 If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
 2. Verify before claiming - read files, query DB, do research. Never guess.
-3. NOTEPAD: store_session_fact() for credentials, decisions, findings, progress. list_session_facts() to review. recall_session_fact() across sessions. This is your memory.
-4. MEMORY: Use remember() for reusable patterns, gotchas, decisions that help FUTURE sessions. Use recall_memories(query) before complex tasks. DON'T remember(): task completion acks, agent handoff messages, step-by-step progress, anything < 80 chars. Use store_session_fact() for within-session progress instead.
-5. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
-6. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
-7. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-8. CHECK TOOLS + DATA: project-tools has 60+ tools. start_session() shows available_entities — structured domain data (OData entities, API endpoints, patterns) searchable via recall_entities(query, entity_type). Use catalog() to store, recall_entities() to search. For knowledge/memory use recall_memories(). Don't build what already exists in the catalog.
+3. STORAGE: 5 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
+   - **Notepad** (store_session_fact) — credentials, decisions, findings. This session only.
+   - **Memory** (remember) — patterns, gotchas, decisions for FUTURE sessions. Min 80 chars. NOT for task acks, progress, handoffs.
+   - **Filing Cabinet** (stash) — component working papers across sessions. unstash() to reload.
+   - **Reference Library** (catalog/recall_entities) — structured data (APIs, schemas, entities).
+   - **Vault** — long-form docs, SOPs, research. Auto-searched via RAG.
+4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
+5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
+6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
+7. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.

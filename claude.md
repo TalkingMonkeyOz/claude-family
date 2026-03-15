@@ -200,11 +200,13 @@ All transitions logged to `claude.audit_log`.
 
 **Project Type**: `infrastructure` (inherits defaults from `project_type_configs`)
 
-**Config Flow**: Database → `generate_project_settings.py` → `.claude/settings.local.json` (generated)
+**Config Flow**: Database → `sync_project.py` → all project files (settings.local.json, .mcp.json, skills, commands, rules, agents)
 
-**Self-Healing**: Settings regenerate from database on every SessionStart. Manual file edits are temporary.
+**Self-Healing**: All configs regenerate from database on every launch and SessionStart. Manual file edits are temporary.
 
 **Customization**: Update `claude.workspaces.startup_config` (JSONB) to override defaults.
+
+**Components in DB**: `claude.skills` (scope: global/project/command/agent), `claude.rules`, `claude.instructions`
 
 **Details**: See [[Config Management SOP]]
 
@@ -259,54 +261,11 @@ Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 
 **Override**: Create `.claude/instructions/[name].instructions.md` for project-specific rules.
 
-
 ---
 
 ## Knowledge System
 
-```
-CAPTURE ──> EMBED (Voyage AI) ──> 3-TIER MEMORY ──> BUDGET-CAPPED RECALL
-  remember()          auto           short/mid/long       recall_memories()
-```
-
-### Memory System (F130)
-
-3-tier system replaces unbounded knowledge graph dumps:
-- **SHORT**: Session facts (credentials, configs). Auto via `store_session_fact`.
-- **MID**: Working knowledge (decisions, learned facts). Default for `remember()`.
-- **LONG**: Proven patterns (gotchas, procedures). Auto-promoted or `remember(type='pattern')`.
-- **Lifecycle**: `consolidate_memories()` promotes/decays/archives. Auto on session end + 24h periodic.
-
-- **Vault**: `knowledge-vault/` - Markdown with YAML frontmatter, Obsidian-compatible
-- **Embeddings**: Voyage AI (voyage-3, 1024 dimensions) → PostgreSQL pgvector
-- **RAG**: Automatic via `rag_query_hook.py` on UserPromptSubmit (85% token reduction)
-- **Versioning**: File hash tracking - only re-embed changed files
-- **Commands**: `/knowledge-capture`, `/session-end`
-
-### Using RAG
-
-**When to search vault**:
-- User asks "how do I..." procedural questions → Search SOPs
-- Looking for domain knowledge (APIs, DB, WinForms, etc.) → Search 20-Domains/
-- Need patterns or gotchas → Search 30-Patterns/
-- Unsure which vault doc has the answer → Use semantic search
-
-**How it works**: The `rag_query_hook.py` (UserPromptSubmit hook) automatically queries vault embeddings
-on questions/exploration prompts. Results are silently injected into context. Action prompts skip RAG.
-
-**Details**: See `knowledge-vault/Claude Family/RAG Usage Guide.md`
-
-### Maintaining Embeddings
-
-```bash
-# Update embeddings (incremental - only changed files)
-python scripts/embed_vault_documents.py
-
-# Force re-embed everything
-python scripts/embed_vault_documents.py --force
-```
-
-**Details**: See `knowledge-vault/40-Procedures/Vault Embeddings Management SOP.md`
+3-tier memory: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns). `remember()` auto-routes, `recall_memories()` retrieves with budget cap. `consolidate_memories()` promotes/decays/archives (auto on session end + 24h periodic). Vault docs in `knowledge-vault/` auto-searched via RAG hook. See `storage-rules.md` for which system to use.
 
 ---
 
@@ -314,24 +273,14 @@ python scripts/embed_vault_documents.py --force
 
 | Date | Change |
 |------|--------|
+| 2026-03-15 | **Unified Deployment System**: Created `sync_project.py` replacing 3 scripts (generate_project_settings, generate_mcp_config, deploy_project_configs) + shared folder copy. All components (skills, commands, agents, rules) now DB-backed in `claude.skills` table with new scopes (`command`, `agent`). Launcher updated to single `sync_project.py` call. Background job scheduler activated via Windows Task Scheduler. No-loose-ends rule added. |
+| 2026-03-14 | **Background Job Runner**: `job_runner.py` + `setup_scheduler.bat` + 6 new maintenance jobs (bpmn-sync, knowledge-decay, memory-consolidation, system-maintenance, vault-embeddings, insight-extraction). Removed 4 WCC tools from MCP surface. Storage skill created (`/skill-load-memory-storage`). |
 | 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables (`entity_types`, `entities`, `entity_relationships`), 2 new MCP tools (`catalog`/`recall_entities`), BPMN model + 15 tests, book data migration (49 entities). Core Protocol v12. |
-| 2026-03-10 | **Work Context Container (WCC)**: Automatic activity-based context assembly in RAG hook. New `activities` table, `wcc_assembly.py` module, 4 MCP tools (create_activity/list_activities/update_activity/assemble_context), BPMN model + 17 new tests. Replaces per-source RAG when activity detected. |
-| 2026-03-09 | **Project Workfiles**: Cross-session component-scoped working context. 4 new MCP tools (stash/unstash/list_workfiles/search_workfiles), new `project_workfiles` table with Voyage AI embeddings, BPMN model + 4 BPMN updates (precompact, cognitive retrieval, session lifecycle, working memory). |
-| 2026-02-28 | **Pre-Metis Cleanup**: Dropped 43 dead tables (101→58), removed 5 deprecated MCP tools (65→60), consolidated 3 slash commands (23→20), archived orchestrator + process_router. Schema governance + reference map documented. |
-| 2026-02-26 | **F130 Cognitive Memory**: 3-tier memory (short/mid/long) with `remember()`, `recall_memories()`, `consolidate_memories()`. Core Protocol v8. |
-| 2026-02-24 | **Orchestrator retirement**: Messaging tools migrated to project-tools. Orchestrator MCP removed. BPMN model for messaging lifecycle added. |
-| 2026-02-11 | **v3 Application Layer**: 15 new tools (config ops, knowledge, conversations, books), 3 new tables, 40+ total tools |
-| 2026-02-10 | **v2 Application Layer**: WorkflowEngine state machine, 5 new tools, audit_log, trimmed context injection |
-| 2026-01-03 | **Infrastructure Audit**: Fixed broken session commands, added 10 DB indexes, removed redundant hooks |
-| 2025-12-30 | **RAG System**: Voyage AI embeddings, automatic via hook (85% token reduction) |
-| 2025-12-21 | **Skills-First** (ADR-005): Replaced process_router, 8 core skills |
-| 2025-12-21 | **Auto-apply instructions**: 9 instruction files in `~/.claude/instructions/` |
-
-**Full changelog**: See git log or `docs/INFRASTRUCTURE_AUDIT_REPORT.md`
+**Full changelog**: See git log
 
 ---
 
-**Version**: 4.0 (Entity Catalog System - 63 tables, ~70 tools, 20 commands)
+**Version**: 4.2 (Trimmed: removed duplicates with global CLAUDE.md, condensed knowledge section)
 **Created**: 2025-10-21
-**Updated**: 2026-03-13
+**Updated**: 2026-03-15
 **Location**: C:\Projects\claude-family\CLAUDE.md
