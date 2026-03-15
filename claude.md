@@ -36,7 +36,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 -- Single project: Update workspaces.startup_config
 ```
 
-**Regenerate manually:** `python scripts/generate_project_settings.py <project-name>` (run from project directory)
+**Regenerate manually:** `python scripts/sync_project.py` (run from project directory)
 
 **Full details**: See `knowledge-vault/40-Procedures/config-management/Config Management SOP.md`
 
@@ -231,7 +231,7 @@ All transitions logged to `claude.audit_log`.
 
 ## Skills System (ADR-005)
 
-**Architecture**: Skills-First (replaced process_router)
+**Architecture**: Skills-First — 32 skills in `.claude/skills/`, all with YAML frontmatter.
 
 Core skills available:
 
@@ -249,7 +249,7 @@ Core skills available:
 
 **Usage**: When a skill applies, use the `Skill` tool to invoke it.
 
-**Legacy**: Process registry archived (25 active, 7 deprecated). See ADR-005 for migration details
+**History**: Migrated from process_router (ADR-005, 2025-12). Commands migrated to skills (2026-03-15).
 
 ---
 
