@@ -37,8 +37,13 @@ def main():
     remaining = ctx.get("remaining_percentage")
     used = ctx.get("used_percentage")
 
+    # Extract project name from workspace info
+    workspace = data.get("workspace") or {}
+    project_dir = workspace.get("project_dir") or workspace.get("current_dir") or ""
+    project_name = Path(project_dir).name if project_dir else ""
+
     if remaining is None:
-        print("CTX:?")
+        print(f"[{project_name}] CTX:?" if project_name else "CTX:?")
         return
 
     # Compute urgency level
@@ -68,7 +73,8 @@ def main():
     # Output status line display
     suffix = {"red": "!!", "orange": "!", "yellow": "~"}.get(level, "")
     used_display = used if used is not None else "?"
-    print(f"CTX:{used_display}%{suffix}")
+    prefix = f"[{project_name}] " if project_name else ""
+    print(f"{prefix}CTX:{used_display}%{suffix}")
 
 
 if __name__ == "__main__":

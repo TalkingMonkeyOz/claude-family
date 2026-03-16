@@ -626,7 +626,7 @@ def start_session(
                     SELECT COUNT(*) as count
                     FROM claude.messages
                     WHERE status = 'pending'
-                      AND (to_project = %s OR to_project IS NULL)
+                      AND to_project = %s
                 )
                 SELECT
                     (SELECT COALESCE(json_agg(row_to_json(t)), '[]') FROM todos t) as todos,
