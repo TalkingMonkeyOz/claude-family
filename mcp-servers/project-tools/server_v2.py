@@ -423,16 +423,48 @@ def _format_resume(data: dict) -> dict:
             lines.append(row(f"    ~ {t['content'][:w - 16]} ({age}d old)"))
     lines.append(div)
 
-    # Features section
+    # Features section — detect streams for build board view
+    has_streams = any(f.get('feature_type') == 'stream' for f in features)
     if features:
-        feat_parts = []
-        for f in features[:5]:
-            done = f.get("tasks_done", 0)
-            total = f.get("tasks_total", 0)
-            feat_parts.append(f"{f.get('code', '?')} {f.get('feature_name', '?')} ({done}/{total})")
-        lines.append(row("ACTIVE FEATURES:"))
-        for fp in feat_parts:
-            lines.append(row(f"  {fp[:w - 6]}"))
+        if has_streams:
+            # Build board view: streams → child features
+            lines.append(row("BUILD BOARD:"))
+            for f in features:
+                if f.get('feature_type') == 'stream':
+                    lines.append(row(f"  {f.get('code')} {f.get('feature_name')} [{f.get('status')}]"))
+                    # Show children inline
+                    children = [c for c in features
+                                if c.get('parent_feature_id') and str(c.get('parent_feature_id')) == str(f.get('feature_id', ''))]
+                    for c in children[:4]:
+                        done = c.get('tasks_done', 0)
+                        total = c.get('tasks_total', 0)
+                        lines.append(row(f"    {c.get('code')} {c.get('feature_name', '?')} ({done}/{total})"))
+            # Show standalone features too
+            stream_ids = {str(f.get('feature_id', '')) for f in features if f.get('feature_type') == 'stream'}
+            standalone = [f for f in features
+                         if f.get('feature_type') != 'stream'
+                         and not (f.get('parent_feature_id') and str(f.get('parent_feature_id')) in stream_ids)]
+            if standalone:
+                lines.append(row("  Standalone:"))
+                for f in standalone[:3]:
+                    done = f.get('tasks_done', 0)
+                    total = f.get('tasks_total', 0)
+                    lines.append(row(f"    {f.get('code')} {f.get('feature_name', '?')} ({done}/{total})"))
+        else:
+            # Flat feature view (no streams)
+            lines.append(row("ACTIVE FEATURES:"))
+            for f in features[:5]:
+                done = f.get("tasks_done", 0)
+                total = f.get("tasks_total", 0)
+                lines.append(row(f"  {f.get('code', '?')} {f.get('feature_name', '?')} ({done}/{total})"))
+        lines.append(div)
+
+    # Ready tasks (for stream-enabled projects)
+    ready_tasks = data.get("ready_tasks", [])
+    if has_streams and ready_tasks:
+        lines.append(row(f"READY TASKS ({len(ready_tasks)}):"))
+        for rt in ready_tasks[:5]:
+            lines.append(row(f"  {rt.get('task_code', '?')} {rt.get('task_name', '?')[:w - 12]}"))
         lines.append(div)
 
     # Footer
@@ -586,9 +618,12 @@ def start_session(
                 features AS (
                     SELECT
                         'F' || f.short_code as code,
+                        f.feature_id,
                         f.feature_name,
                         f.status,
                         f.priority,
+                        f.feature_type,
+                        f.parent_feature_id,
                         (SELECT COUNT(*) FROM claude.build_tasks bt
                          WHERE bt.feature_id = f.feature_id AND bt.status = 'completed') as tasks_done,
                         (SELECT COUNT(*) FROM claude.build_tasks bt
@@ -597,7 +632,7 @@ def start_session(
                     WHERE f.project_id = %s::uuid
                       AND f.status NOT IN ('completed', 'cancelled')
                     ORDER BY f.priority, f.short_code
-                    LIMIT 10
+                    LIMIT 20
                 ),
                 ready AS (
                     SELECT
@@ -1268,18 +1303,37 @@ class WorkflowEngine:
         cur = self.conn.cursor()
         try:
             if condition_name == 'all_tasks_done':
-                # All build_tasks for this feature must be completed or cancelled
+                # Check if this is a stream (has child features) or regular feature (has tasks)
                 cur.execute("""
-                    SELECT COUNT(*) as remaining
-                    FROM claude.build_tasks
-                    WHERE feature_id = %s::uuid
-                      AND status NOT IN ('completed', 'cancelled')
+                    SELECT feature_type FROM claude.features WHERE feature_id = %s::uuid
                 """, (entity_id,))
-                row = cur.fetchone()
-                remaining = row['remaining']
-                if remaining > 0:
-                    return (False, f"{remaining} task(s) still not completed")
-                return (True, "All tasks completed")
+                feat_row = cur.fetchone()
+                if feat_row and feat_row['feature_type'] == 'stream':
+                    # Stream: all child features must be completed or cancelled
+                    cur.execute("""
+                        SELECT COUNT(*) as remaining
+                        FROM claude.features
+                        WHERE parent_feature_id = %s::uuid
+                          AND status NOT IN ('completed', 'cancelled')
+                    """, (entity_id,))
+                    row = cur.fetchone()
+                    remaining = row['remaining']
+                    if remaining > 0:
+                        return (False, f"{remaining} child feature(s) still not completed")
+                    return (True, "All child features completed")
+                else:
+                    # Regular feature: all build_tasks must be completed or cancelled
+                    cur.execute("""
+                        SELECT COUNT(*) as remaining
+                        FROM claude.build_tasks
+                        WHERE feature_id = %s::uuid
+                          AND status NOT IN ('completed', 'cancelled')
+                    """, (entity_id,))
+                    row = cur.fetchone()
+                    remaining = row['remaining']
+                    if remaining > 0:
+                        return (False, f"{remaining} task(s) still not completed")
+                    return (True, "All tasks completed")
 
             if condition_name == 'has_assignee':
                 cur.execute("""
@@ -1295,6 +1349,36 @@ class WorkflowEngine:
         finally:
             cur.close()
 
+    def _check_dependencies(self, entity_uuid: str) -> tuple:
+        """Check if all predecessors of a task are completed. Returns (passed, message)."""
+        cur = self.conn.cursor()
+        try:
+            # Check both task_dependencies table AND legacy blocked_by_task_id
+            cur.execute("""
+                WITH blockers AS (
+                    -- From task_dependencies table
+                    SELECT td.predecessor_id as blocker_id, 'dependency' as source
+                    FROM claude.task_dependencies td
+                    WHERE td.successor_id = %s::uuid
+                    UNION
+                    -- From legacy blocked_by_task_id column
+                    SELECT blocked_by_task_id as blocker_id, 'blocked_by' as source
+                    FROM claude.build_tasks
+                    WHERE task_id = %s::uuid AND blocked_by_task_id IS NOT NULL
+                )
+                SELECT b.blocker_id, 'BT' || bt.short_code as code, bt.task_name, bt.status
+                FROM blockers b
+                JOIN claude.build_tasks bt ON bt.task_id = b.blocker_id
+                WHERE bt.status NOT IN ('completed', 'cancelled')
+            """, (entity_uuid, entity_uuid))
+            blockers = cur.fetchall()
+            if blockers:
+                blocker_list = [f"{b['code']} ({b['task_name']}: {b['status']})" for b in blockers]
+                return (False, f"Blocked by: {', '.join(blocker_list)}")
+            return (True, "All predecessors completed")
+        finally:
+            cur.close()
+
     def execute_side_effect(self, side_effect_name: str, entity_type: str, entity_id: str) -> str:
         """Execute a named side effect. Returns description of what happened."""
         cur = self.conn.cursor()
@@ -1303,6 +1387,7 @@ class WorkflowEngine:
                 # When a build_task completes, check if all tasks for the parent feature are done
                 cur.execute("""
                     SELECT f.feature_id::text, f.status, 'F' || f.short_code as code,
+                           f.parent_feature_id::text as parent_id,
                            (SELECT COUNT(*) FROM claude.build_tasks bt
                             WHERE bt.feature_id = f.feature_id
                               AND bt.status NOT IN ('completed', 'cancelled')) as remaining
@@ -1312,7 +1397,20 @@ class WorkflowEngine:
                 """, (entity_id,))
                 row = cur.fetchone()
                 if row and row['remaining'] == 0 and row['status'] == 'in_progress':
-                    return f"All tasks done for {row['code']}. Feature ready for completion."
+                    msg = f"All tasks done for {row['code']}. Feature ready for completion."
+                    # Also check if parent stream has all children done
+                    if row.get('parent_id'):
+                        cur.execute("""
+                            SELECT 'F' || short_code as code,
+                                   (SELECT COUNT(*) FROM claude.features
+                                    WHERE parent_feature_id = %s::uuid
+                                      AND status NOT IN ('completed', 'cancelled')) as remaining
+                            FROM claude.features WHERE feature_id = %s::uuid
+                        """, (row['parent_id'], row['parent_id']))
+                        parent = cur.fetchone()
+                        if parent and parent['remaining'] <= 1:  # <= 1 because current feature not yet completed
+                            msg += f" Parent stream {parent['code']} may also be ready for completion."
+                    return msg
                 elif row:
                     return f"{row['remaining']} task(s) remaining for {row['code']}"
                 return "No parent feature found"
@@ -1341,6 +1439,7 @@ class WorkflowEngine:
         changed_by: str = None,
         change_source: str = 'workflow_engine',
         metadata: dict = None,
+        skip_conditions: bool = False,
     ) -> dict:
         """Validate and execute a state transition.
 
@@ -1393,14 +1492,29 @@ class WorkflowEngine:
                 )
                 return result
 
-            # 3. Check conditions
-            if transition.get('requires_condition'):
-                condition = transition['requires_condition']
-                passed, message = self.check_condition(condition, entity_type, entity_uuid)
-                result['condition_results'][condition] = {'passed': passed, 'message': message}
-                if not passed:
-                    result['error'] = f"Condition '{condition}' not met: {message}"
-                    return result
+            # 3. Check conditions (skipped if override_reason provided)
+            if not skip_conditions:
+                # 3a. Check workflow-defined conditions
+                if transition.get('requires_condition'):
+                    condition = transition['requires_condition']
+                    passed, message = self.check_condition(condition, entity_type, entity_uuid)
+                    result['condition_results'][condition] = {'passed': passed, 'message': message}
+                    if not passed:
+                        result['error'] = f"Condition '{condition}' not met: {message}"
+                        return result
+
+                # 3b. Check dependency prerequisites (for build_tasks moving to in_progress)
+                if entity_type == 'build_tasks' and new_status == 'in_progress':
+                    dep_passed, dep_msg = self._check_dependencies(entity_uuid)
+                    result['condition_results']['dependencies'] = {'passed': dep_passed, 'message': dep_msg}
+                    if not dep_passed:
+                        result['error'] = f"Dependency check failed: {dep_msg}"
+                        return result
+            elif skip_conditions:
+                result['condition_results']['skipped'] = {
+                    'passed': True,
+                    'message': f"Conditions skipped via override: {(metadata or {}).get('override_reason', 'no reason given')}",
+                }
 
             # 4. Execute the status update
             table, pk_col, _ = self.ENTITY_MAP[entity_type]
@@ -1423,17 +1537,19 @@ class WorkflowEngine:
                     })
 
                 # 6. Log to audit_log
+                event_type = (metadata or {}).get('event_type', 'status_change')
                 cur.execute("""
                     INSERT INTO claude.audit_log
                     (entity_type, entity_id, entity_code, from_status, to_status,
-                     changed_by, change_source, side_effects_executed, metadata)
-                    VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s)
+                     changed_by, change_source, side_effects_executed, metadata, event_type)
+                    VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     entity_type, entity_uuid, entity_code,
                     current_status, new_status,
                     changed_by, change_source,
                     [se['name'] for se in result['side_effects']] or None,
                     json.dumps(metadata) if metadata else None,
+                    event_type,
                 ))
 
                 self.conn.commit()
@@ -1463,6 +1579,7 @@ def advance_status(
     item_type: Literal["feedback", "features", "build_tasks"],
     item_id: str,
     new_status: str,
+    override_reason: str = "",
 ) -> dict:
     """Move a work item to a new status through the workflow state machine.
 
@@ -1479,17 +1596,23 @@ def advance_status(
         item_type: Entity type: feedback, features, or build_tasks.
         item_id: Item ID or short_code (e.g., 'FB12', 'F5', 'BT23').
         new_status: Target status. Invalid transitions are rejected with valid options shown.
+        override_reason: If provided, bypasses condition checks (deps, docs) and logs justification.
     """
     session_id = os.environ.get('CLAUDE_SESSION_ID')
     conn = get_db_connection()
     try:
         engine = WorkflowEngine(conn)
+        metadata = None
+        if override_reason:
+            metadata = {'override_reason': override_reason, 'event_type': 'override'}
         return engine.execute_transition(
             entity_type=item_type,
             item_id=item_id,
             new_status=new_status,
             changed_by=session_id,
-            change_source='mcp_tool',
+            change_source='mcp_tool' if not override_reason else 'override',
+            metadata=metadata,
+            skip_conditions=bool(override_reason),
         )
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -1617,7 +1740,7 @@ def complete_work(
         if not transition_result.get('success'):
             return transition_result
 
-        # Find next ready task from same feature
+        # Find next ready task from same feature (dependency-aware)
         entity_id = transition_result.get('entity_id')
         cur = conn.cursor()
         cur.execute("""
@@ -1633,6 +1756,12 @@ def complete_work(
                    OR bt2.blocked_by_task_id IN (
                        SELECT task_id FROM claude.build_tasks WHERE status = 'completed'
                    ))
+              AND NOT EXISTS (
+                  SELECT 1 FROM claude.task_dependencies td
+                  JOIN claude.build_tasks pred ON td.predecessor_id = pred.task_id
+                  WHERE td.successor_id = bt2.task_id
+                    AND pred.status NOT IN ('completed', 'cancelled')
+              )
             ORDER BY bt2.step_order
             LIMIT 1
         """, (entity_id,))
@@ -1642,11 +1771,292 @@ def complete_work(
             transition_result['next_task'] = dict(next_task)
         else:
             transition_result['next_task'] = None
-            transition_result['message'] = "No more ready tasks for this feature."
+            # Check if all sibling tasks are done — feature may be ready for completion
+            cur.execute("""
+                SELECT f.feature_id::text, 'F' || f.short_code as code, f.feature_name, f.status,
+                       (SELECT COUNT(*) FROM claude.build_tasks bt3
+                        WHERE bt3.feature_id = f.feature_id
+                          AND bt3.status NOT IN ('completed', 'cancelled')) as remaining
+                FROM claude.build_tasks bt
+                JOIN claude.features f ON bt.feature_id = f.feature_id
+                WHERE bt.task_id = %s::uuid
+            """, (entity_id,))
+            feat = cur.fetchone()
+            if feat and feat['remaining'] == 0 and feat['status'] == 'in_progress':
+                transition_result['message'] = f"All tasks done! Feature {feat['code']} ({feat['feature_name']}) is ready for completion."
+                transition_result['feature_ready'] = feat['code']
+            else:
+                transition_result['message'] = "No more ready tasks for this feature."
 
         return transition_result
 
     except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# Build Tracking Tools
+# ============================================================================
+
+@mcp.tool()
+def get_build_board(
+    project: str = "",
+) -> dict:
+    """Get the build board: streams → features → ready tasks with dependency resolution.
+
+    One-call orientation for any Claude instance starting work on a project.
+    Shows hierarchy (streams contain features, features contain tasks) with
+    dependency-aware ready task identification.
+
+    Use when: Starting a session, planning work, or checking project status.
+    Returns: {project, streams: [{code, name, status, features: [{code, name,
+              status, tasks_done, tasks_total, ready_tasks: [{code, name, type}]}]}],
+              standalone_features: [...], summary}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+    project_id = get_project_id(project)
+    if not project_id:
+        return {"success": False, "error": f"Project '{project}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get all active features with their hierarchy
+        cur.execute("""
+            WITH active_features AS (
+                SELECT feature_id, 'F' || short_code as code, feature_name, status,
+                       feature_type, parent_feature_id, priority,
+                       (SELECT COUNT(*) FROM claude.build_tasks bt
+                        WHERE bt.feature_id = f.feature_id AND bt.status = 'completed') as tasks_done,
+                       (SELECT COUNT(*) FROM claude.build_tasks bt
+                        WHERE bt.feature_id = f.feature_id) as tasks_total
+                FROM claude.features f
+                WHERE project_id = %s::uuid
+                  AND status NOT IN ('completed', 'cancelled')
+                ORDER BY priority, short_code
+            )
+            SELECT * FROM active_features
+        """, (project_id,))
+        features = [dict(r) for r in cur.fetchall()]
+
+        # Get ready tasks (todo + all predecessors completed) with dependency awareness
+        cur.execute("""
+            SELECT bt.task_id, 'BT' || bt.short_code as code, bt.task_name, bt.task_type,
+                   bt.feature_id, bt.step_order, bt.priority,
+                   bt.blocked_by_task_id
+            FROM claude.build_tasks bt
+            WHERE bt.project_id = %s::uuid
+              AND bt.status = 'todo'
+              AND (bt.blocked_by_task_id IS NULL
+                   OR bt.blocked_by_task_id IN (
+                       SELECT task_id FROM claude.build_tasks WHERE status = 'completed'))
+              AND NOT EXISTS (
+                  SELECT 1 FROM claude.task_dependencies td
+                  JOIN claude.build_tasks pred ON td.predecessor_id = pred.task_id
+                  WHERE td.successor_id = bt.task_id
+                    AND pred.status NOT IN ('completed', 'cancelled')
+              )
+            ORDER BY bt.priority, bt.step_order
+        """, (project_id,))
+        ready_tasks = [dict(r) for r in cur.fetchall()]
+
+        # Build hierarchy
+        streams = []
+        standalone_features = []
+        feature_map = {str(f['feature_id']): f for f in features}
+
+        # Identify streams and their children
+        for f in features:
+            if f['feature_type'] == 'stream':
+                stream = {
+                    'code': f['code'],
+                    'name': f['feature_name'],
+                    'status': f['status'],
+                    'priority': f['priority'],
+                    'features': [],
+                }
+                # Find child features
+                for child in features:
+                    if child.get('parent_feature_id') and str(child['parent_feature_id']) == str(f['feature_id']):
+                        child_ready = [
+                            {'code': rt['code'], 'name': rt['task_name'], 'type': rt['task_type']}
+                            for rt in ready_tasks if str(rt['feature_id']) == str(child['feature_id'])
+                        ]
+                        stream['features'].append({
+                            'code': child['code'],
+                            'name': child['feature_name'],
+                            'status': child['status'],
+                            'tasks_done': child['tasks_done'],
+                            'tasks_total': child['tasks_total'],
+                            'ready_tasks': child_ready,
+                        })
+                streams.append(stream)
+
+        # Standalone features (not streams, not children of streams)
+        stream_ids = {str(f['feature_id']) for f in features if f['feature_type'] == 'stream'}
+        child_ids = {str(f['feature_id']) for f in features
+                     if f.get('parent_feature_id') and str(f['parent_feature_id']) in stream_ids}
+
+        for f in features:
+            fid = str(f['feature_id'])
+            if fid not in stream_ids and fid not in child_ids:
+                f_ready = [
+                    {'code': rt['code'], 'name': rt['task_name'], 'type': rt['task_type']}
+                    for rt in ready_tasks if str(rt['feature_id']) == fid
+                ]
+                standalone_features.append({
+                    'code': f['code'],
+                    'name': f['feature_name'],
+                    'status': f['status'],
+                    'tasks_done': f['tasks_done'],
+                    'tasks_total': f['tasks_total'],
+                    'ready_tasks': f_ready,
+                })
+
+        # Summary
+        total_ready = len(ready_tasks)
+        total_features = len(features)
+        total_streams = len(streams)
+
+        return {
+            'success': True,
+            'project': project,
+            'streams': streams,
+            'standalone_features': standalone_features,
+            'summary': {
+                'total_streams': total_streams,
+                'total_features': total_features,
+                'total_ready_tasks': total_ready,
+            },
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def add_dependency(
+    predecessor_type: Literal["build_task", "feature"] = "build_task",
+    predecessor_id: str = "",
+    successor_type: Literal["build_task", "feature"] = "build_task",
+    successor_id: str = "",
+) -> dict:
+    """Add a dependency: predecessor must complete before successor can start.
+
+    Supports both task-to-task and feature-to-feature dependencies.
+    Performs cycle detection before inserting — rejects circular dependencies.
+
+    Use when: Establishing ordering between tasks or features.
+    Returns: {success, dependency_id, predecessor, successor} or {success: false, error}.
+
+    Args:
+        predecessor_type: 'build_task' or 'feature'.
+        predecessor_id: Short code (e.g., 'BT3', 'F5') or UUID of the predecessor.
+        successor_type: 'build_task' or 'feature'.
+        successor_id: Short code (e.g., 'BT4', 'F6') or UUID of the successor.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Resolve IDs
+        def resolve_id(entity_type, item_id):
+            if entity_type == 'build_task':
+                prefix = 'BT'
+                table = 'claude.build_tasks'
+                pk = 'task_id'
+                sc = 'short_code'
+            else:
+                prefix = 'F'
+                table = 'claude.features'
+                pk = 'feature_id'
+                sc = 'short_code'
+
+            # Try as short code first
+            code = item_id.upper().replace(prefix, '')
+            if code.isdigit():
+                cur.execute(f"SELECT {pk}::text as id FROM {table} WHERE short_code = %s", (int(code),))
+            else:
+                cur.execute(f"SELECT {pk}::text as id FROM {table} WHERE {pk} = %s::uuid", (item_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError(f"{entity_type} '{item_id}' not found")
+            return row['id']
+
+        pred_uuid = resolve_id(predecessor_type, predecessor_id)
+        succ_uuid = resolve_id(successor_type, successor_id)
+
+        if pred_uuid == succ_uuid:
+            return {"success": False, "error": "Cannot depend on itself"}
+
+        # Cycle detection: DFS from predecessor following existing deps backwards
+        # If we can reach successor by walking predecessors of predecessor, it's a cycle
+        cur.execute("""
+            WITH RECURSIVE dep_chain AS (
+                SELECT predecessor_id, successor_id, 1 as depth
+                FROM claude.task_dependencies
+                WHERE successor_id = %s::uuid
+                UNION ALL
+                SELECT td.predecessor_id, td.successor_id, dc.depth + 1
+                FROM claude.task_dependencies td
+                JOIN dep_chain dc ON td.successor_id = dc.predecessor_id
+                WHERE dc.depth < 50
+            )
+            SELECT EXISTS(
+                SELECT 1 FROM dep_chain WHERE predecessor_id = %s::uuid
+            ) as has_cycle
+        """, (pred_uuid, succ_uuid))
+        if cur.fetchone()['has_cycle']:
+            return {"success": False, "error": "Circular dependency detected — this would create a cycle"}
+
+        # Insert dependency
+        cur.execute("""
+            INSERT INTO claude.task_dependencies (predecessor_type, predecessor_id, successor_type, successor_id, created_by)
+            VALUES (%s, %s::uuid, %s, %s::uuid, %s)
+            ON CONFLICT (predecessor_id, successor_id) DO NOTHING
+            RETURNING dependency_id
+        """, (predecessor_type, pred_uuid, successor_type, succ_uuid,
+              os.environ.get('CLAUDE_SESSION_ID')))
+
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": "Dependency already exists"}
+
+        # Log to audit_log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, entity_code, from_status, to_status,
+             changed_by, change_source, event_type, metadata)
+            VALUES ('task_dependencies', %s::uuid, %s, NULL, NULL,
+                    %s, 'add_dependency', 'dependency_change',
+                    %s)
+        """, (succ_uuid, f"{successor_type}:{successor_id}",
+              os.environ.get('CLAUDE_SESSION_ID'),
+              json.dumps({'predecessor': f"{predecessor_type}:{predecessor_id}",
+                         'successor': f"{successor_type}:{successor_id}"})))
+
+        conn.commit()
+        return {
+            "success": True,
+            "dependency_id": row['dependency_id'],
+            "predecessor": f"{predecessor_type}:{predecessor_id}",
+            "successor": f"{successor_type}:{successor_id}",
+        }
+
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return {"success": False, "error": str(e)}
     finally:
         conn.close()
@@ -3599,7 +4009,7 @@ def create_feature(
     project: str,
     feature_name: str,
     description: str,
-    feature_type: Literal["feature", "enhancement", "refactor", "infrastructure", "documentation"] = "feature",
+    feature_type: Literal["feature", "enhancement", "refactor", "infrastructure", "documentation", "stream"] = "feature",
     priority: Literal[1, 2, 3, 4, 5] = 3,
     plan_data: dict | None = None,
 ) -> dict:
