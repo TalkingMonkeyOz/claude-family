@@ -47,7 +47,7 @@ def check_existing_message(conn, project_name: str, audit_type: str) -> bool:
         WHERE to_project = %s
           AND message_type = 'task_request'
           AND subject LIKE %s
-          AND is_read = false
+          AND status = 'pending'
           AND created_at > NOW() - INTERVAL '7 days'
     """, (project_name, f'%{audit_type}%audit%'))
     result = cur.fetchone()
@@ -74,9 +74,9 @@ After completing the audit, the results will be stored in claude.compliance_audi
         cur.execute("""
             INSERT INTO claude.messages (
                 message_id, to_project, message_type, subject, body,
-                priority, is_read, created_at
+                priority, status, created_at
             )
-            VALUES (%s, %s, 'task_request', %s, %s, 'normal', false, NOW())
+            VALUES (%s, %s, 'task_request', %s, %s, 'normal', 'pending', NOW())
         """, (
             message_id,
             project_name,
