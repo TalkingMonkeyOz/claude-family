@@ -382,12 +382,11 @@ def main():
             skill_name = normalized_path.split('/.claude/skills/')[-1].split('/')[0]
             logger.warning(f"BLOCKED: Direct edit to skill: {skill_name}")
             block_with_reason(
-                f"BLOCKED: Skills are deployed from database (claude.skills table).\n"
-                f"Direct edits will be overwritten by sync_project.py on next session.\n"
-                f"To edit permanently:\n"
-                f"  1. Update claude.skills table (scope='global', name='{skill_name}')\n"
-                f"  2. Run: python scripts/sync_project.py --component skills\n"
-                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+                f"BLOCKED: Skills are deployed from database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_config(component_type='skill', project='<project>', component_name='{skill_name}', content='<content>', change_reason='<why>')\n"
+                f"This updates the DB, creates a version snapshot, and deploys to file.\n"
+                f"Example: update_config('skill', 'project-metis', '{skill_name}', '<new content>', 'Updated workflow steps')"
             )
 
         # Rules: .claude/rules/*.md
@@ -395,12 +394,11 @@ def main():
             rule_name = file_basename.replace('.md', '')
             logger.warning(f"BLOCKED: Direct edit to rule: {rule_name}")
             block_with_reason(
-                f"BLOCKED: Rules are deployed from database (claude.rules table).\n"
-                f"Direct edits will be overwritten by sync_project.py on next session.\n"
-                f"To edit permanently:\n"
-                f"  1. Update claude.rules table (name='{rule_name}')\n"
-                f"  2. Run: python scripts/sync_project.py --component rules\n"
-                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+                f"BLOCKED: Rules are deployed from database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_config(component_type='rule', project='<project>', component_name='{rule_name}', content='<content>', change_reason='<why>')\n"
+                f"This updates the DB, creates a version snapshot, and deploys to file.\n"
+                f"Example: update_config('rule', 'project-metis', '{rule_name}', '<new content>', 'Added build workflow')"
             )
 
         # Agents: .claude/agents/*.md
@@ -408,12 +406,35 @@ def main():
             agent_name = file_basename.replace('.md', '')
             logger.warning(f"BLOCKED: Direct edit to agent: {agent_name}")
             block_with_reason(
-                f"BLOCKED: Agent definitions are deployed from database (claude.skills, scope='agent').\n"
-                f"Direct edits will be overwritten by sync_project.py on next session.\n"
-                f"To edit permanently:\n"
-                f"  1. Update claude.skills table (scope='agent', name='{agent_name}')\n"
-                f"  2. Run: python scripts/sync_project.py --component agents\n"
-                f"  Or run: python scripts/import_config_to_database.py (to import from file)"
+                f"BLOCKED: Agent definitions are deployed from database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_config(component_type='skill', project='<project>', component_name='{agent_name}', content='<content>', scope='agent', change_reason='<why>')\n"
+                f"This updates the DB, creates a version snapshot, and deploys to file.\n"
+                f"Example: update_config('skill', 'claude-family', '{agent_name}', '<new content>', 'Updated agent', scope='agent')"
+            )
+
+        # Commands: .claude/commands/*.md
+        if '/.claude/commands/' in normalized_path and file_basename.endswith('.md'):
+            cmd_name = file_basename.replace('.md', '')
+            logger.warning(f"BLOCKED: Direct edit to command: {cmd_name}")
+            block_with_reason(
+                f"BLOCKED: Commands are deployed from database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_config(component_type='skill', project='<project>', component_name='{cmd_name}', content='<content>', scope='command', change_reason='<why>')\n"
+                f"This updates the DB, creates a version snapshot, and deploys to file.\n"
+                f"Example: update_config('skill', 'claude-family', '{cmd_name}', '<new content>', 'Updated command', scope='command')"
+            )
+
+        # Instructions: .claude/instructions/*.md
+        if '/.claude/instructions/' in normalized_path and file_basename.endswith('.md'):
+            inst_name = file_basename.replace('.instructions.md', '').replace('.md', '')
+            logger.warning(f"BLOCKED: Direct edit to instruction: {inst_name}")
+            block_with_reason(
+                f"BLOCKED: Instructions are deployed from database. Do not edit directly.\n"
+                f"Use the MCP tool instead:\n"
+                f"  update_config(component_type='instruction', project='<project>', component_name='{inst_name}', content='<content>', change_reason='<why>')\n"
+                f"This updates the DB, creates a version snapshot, and deploys to file.\n"
+                f"Example: update_config('instruction', 'claude-family', '{inst_name}', '<new content>', 'Updated coding standard')"
             )
 
         # Get proposed content

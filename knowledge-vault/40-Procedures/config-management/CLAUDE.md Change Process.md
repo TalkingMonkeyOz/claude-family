@@ -104,6 +104,24 @@ After making changes:
 - [ ] Check CORE_PROTOCOL wording shows in hook output (check hooks.log)
 - [ ] Verify `@` references load (markdown standard should still apply)
 
+## Routing Rule: No Hardcoded Vault Paths
+
+**CLAUDE.md must use indirect references, never hardcoded vault file paths.**
+
+Vault files get reorganized (renamed, moved to subfolders, archived). Every hardcoded path becomes a dead link. Since CLAUDE.md is injected every prompt, stale paths waste tokens and mislead.
+
+| Reference Type | Pattern | Example |
+|---------------|---------|---------|
+| Vault docs | Wiki-link `[[Name]]` | `[[Config Management SOP]]` |
+| Design docs / deliverables | `recall_entities()` | `recall_entities("data model", entity_type="gate_deliverable")` |
+| Auto-loaded rules | Plain text | "See storage-rules (auto-loaded via `.claude/rules/`)" |
+| Co-located files | Direct ref (stable) | `See ARCHITECTURE.md` |
+| Folder-level | Direct ref (stable) | `knowledge-vault/40-Procedures/` |
+
+**Rationale**: The entity catalog is the indirection layer. When a file moves, update the catalog entry — CLAUDE.md never changes.
+
+Applied 2026-03-17 to both Global and Project CLAUDE.md files.
+
 ## Common Mistakes
 
 - Adding SQL examples to CLAUDE.md (use MCP tools instead)
@@ -111,10 +129,11 @@ After making changes:
 - Editing `settings.local.json` instead of using config tools
 - Putting enforcement rules in CLAUDE.md (use hooks - they can't be ignored)
 - Adding verbose examples (link to vault docs instead)
+- **Hardcoding vault file paths** (use wiki-links `[[Name]]` or `recall_entities()` instead)
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1 (Added routing rule: no hardcoded vault paths)
 **Created**: 2026-02-14
-**Updated**: 2026-02-14
+**Updated**: 2026-03-17
 **Location**: knowledge-vault/40-Procedures/CLAUDE.md Change Process.md

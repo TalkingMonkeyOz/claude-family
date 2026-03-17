@@ -38,9 +38,7 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 **Regenerate manually:** `python scripts/sync_project.py` (run from project directory)
 
-**Full details**: See `knowledge-vault/40-Procedures/config-management/Config Management SOP.md`
-
----
+**Full details**: See [[Config Management SOP]]
 
 ## Current Phase
 
@@ -125,76 +123,15 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 | `get_work_context(scope)` | Token-budgeted context: current/feature/project |
 | `create_linked_task(feature, name, desc, verification, files)` | Add detailed task to active feature |
 
-### Config Tools (v3)
+### Config Tools (v3+)
 
 | Tool | Use When |
 |------|----------|
+| `update_config(component_type, project, name, content, reason)` | **Update ANY config (skill/rule/instruction/claude_md) with versioning + deploy** |
 | `update_claude_md(project, section, content)` | Update a CLAUDE.md section atomically |
 | `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way) |
 | `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
 | `regenerate_settings(project)` | Regenerate settings.local.json from DB |
-
-### Memory Tools (F130 - Cognitive Memory)
-
-3-tier memory system: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns).
-
-| Tool | Use When |
-|------|----------|
-| `remember(content, memory_type)` | Learn something — auto-routes to right tier, dedup/merge, auto-link |
-| `recall_memories(query, budget)` | Load context before tasks — 3-tier retrieval, budget-capped |
-| `consolidate_memories(trigger)` | Lifecycle: promote short→mid, mid→long, decay, archive |
-
-**Prefer these over** `store_knowledge` / `recall_knowledge` (legacy, still available).
-
-### Knowledge Tools (v3)
-
-| Tool | Use When |
-|------|----------|
-| `store_book(title, author, ...)` | Add book to reference library |
-| `store_book_reference(book, concept, ...)` | Add concept reference with embedding |
-| `recall_book_reference(query, ...)` | Semantic search over book references |
-| `catalog(entity_type, properties, ...)` | Store structured entity (book, API, OData, pattern) |
-| `recall_entities(query, entity_type?, ...)` | RRF search over cataloged entities |
-| `extract_insights(session_id)` | Extract knowledge from past conversations |
-| `search_conversations(query, ...)` | Full-text search across stored conversations |
-| `extract_conversation(session_id)` | Parse JSONL conversation log |
-
-### Filing Cabinet Tools (Cross-Session Component Context)
-
-Project-scoped working files that bridge sessions. Filing cabinet metaphor: project = cabinet, component = drawer, title = file.
-
-| Tool | Use When |
-|------|----------|
-| `stash(component, title, content)` | Save component working context (approach notes, findings, questions) |
-| `unstash(component, title?)` | Retrieve workfile(s) by component, updates access stats |
-| `list_workfiles(project?, component?)` | Browse cabinet — component counts, pinned status |
-| `search_workfiles(query)` | Semantic search across workfiles via Voyage AI |
-
-**Key features**: UPSERT on (project, component, title), `mode="append"` to concatenate, `is_pinned=True` for session-start surfacing. Pinned workfiles preserved in precompact.
-
-### Work Context Container (WCC) — Automatic Activity-Based Context
-
-WCC automatically detects which activity you're working on and assembles relevant context from 6 sources. Runs in the RAG hook — no manual tool calls needed.
-
-**How it works**: Every prompt → `detect_activity()` → if changed → `assemble_wcc()` queries workfiles, knowledge, features, facts, vault, BPMN → cached → injected at priority 2 → per-source RAG skipped.
-
-| Tool | Use When |
-|------|----------|
-| `create_activity(name, aliases, desc)` | Explicitly create an activity with aliases for detection |
-| `list_activities(project)` | Browse activities and access stats |
-| `update_activity(id, aliases, is_active)` | Manage aliases, deactivate stale activities |
-| `assemble_context(name, budget)` | Manual WCC assembly (debugging/inspection) |
-
-**Detection priority**: 1) `session_fact("current_activity")` override, 2) exact name/alias match, 3) word overlap, 4) workfile component fallback.
-
-**State Machines** (enforced by `claude.workflow_transitions`):
-- **Feedback**: new → triaged → in_progress → resolved
-- **Features**: draft → planned → in_progress → completed (requires all_tasks_done)
-- **Build tasks**: todo → in_progress → completed (triggers feature check)
-
-All transitions logged to `claude.audit_log`.
-
----
 
 ## Configuration (Database-Driven)
 
@@ -216,9 +153,16 @@ All transitions logged to `claude.audit_log`.
 
 **Workflow**: CLAUDE.md → Vault SOP → Skill → Done
 
-- **New project**: See `knowledge-vault/40-Procedures/New Project SOP.md`
-- **Add MCP**: See `knowledge-vault/40-Procedures/Add MCP Server SOP.md`
-- **Manage config**: See `knowledge-vault/40-Procedures/config-management/Config Management SOP.md`
+- **New project**: See [[New Project SOP]]
+- **Add MCP**: See [[Add MCP Server SOP]]
+- **Manage config**: See [[Config Management SOP]]
+
+## Key Procedures
+
+1. **Session Start** - Automatic via SessionStart hook (logs session, loads todos, checks messages)
+2. `/session-end` - Run manually to save summary and learnings
+3. Data writes - Check column_registry for valid values
+4. Config changes - Update database, files regenerate automatically
 
 ## Key Procedures
 
@@ -265,22 +209,15 @@ Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 
 ## Knowledge System
 
-3-tier memory: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns). `remember()` auto-routes, `recall_memories()` retrieves with budget cap. `consolidate_memories()` promotes/decays/archives (auto on session end + 24h periodic). Vault docs in `knowledge-vault/` auto-searched via RAG hook. See `storage-rules.md` for which system to use.
-
----
+3-tier memory: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns). `remember()` auto-routes, `recall_memories()` retrieves with budget cap. `consolidate_memories()` promotes/decays/archives (auto on session end + 24h periodic). Vault docs in `knowledge-vault/` auto-searched via RAG hook. See storage-rules (auto-loaded via `.claude/rules/`) for which system to use.
 
 ## Recent Changes
 
 | Date | Change |
 |------|--------|
-| 2026-03-15 | **Unified Deployment System**: Created `sync_project.py` replacing 3 scripts (generate_project_settings, generate_mcp_config, deploy_project_configs) + shared folder copy. All components (skills, commands, agents, rules) now DB-backed in `claude.skills` table with new scopes (`command`, `agent`). Launcher updated to single `sync_project.py` call. Background job scheduler activated via Windows Task Scheduler. No-loose-ends rule added. |
-| 2026-03-14 | **Background Job Runner**: `job_runner.py` + `setup_scheduler.bat` + 6 new maintenance jobs (bpmn-sync, knowledge-decay, memory-consolidation, system-maintenance, vault-embeddings, insight-extraction). Removed 4 WCC tools from MCP surface. Storage skill created (`/skill-load-memory-storage`). |
-| 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables (`entity_types`, `entities`, `entity_relationships`), 2 new MCP tools (`catalog`/`recall_entities`), BPMN model + 15 tests, book data migration (49 entities). Core Protocol v12. |
+| 2026-03-17 | **Routing Fix**: Replaced hardcoded vault paths in CLAUDE.md with wiki-links and tool-based routing. Entity catalog is the indirection layer — paths change in catalog, CLAUDE.md stays stable. |
+| 2026-03-15 | **Unified Deployment System**: Created `sync_project.py` replacing 3 scripts. All components DB-backed. Background job scheduler activated. No-loose-ends rule added. |
+| 2026-03-14 | **Background Job Runner**: `job_runner.py` + 6 maintenance jobs. Storage skill created (`/skill-load-memory-storage`). |
+| 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables, 2 new MCP tools (`catalog`/`recall_entities`). |
 **Full changelog**: See git log
 
----
-
-**Version**: 4.2 (Trimmed: removed duplicates with global CLAUDE.md, condensed knowledge section)
-**Created**: 2025-10-21
-**Updated**: 2026-03-15
-**Location**: C:\Projects\claude-family\CLAUDE.md

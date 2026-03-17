@@ -609,7 +609,7 @@ def deploy_skills(
         if not name or not content:
             logger.debug("Skipping skill with missing name or content")
             continue
-        # Skip global skills — they already live in ~/.claude/skills/
+        # Skip global skills in per-project deploy — they go to ~/.claude/skills/
         # Deploying them to .claude/skills/ causes Claude Code to show duplicates
         if scope == "global":
             continue
@@ -634,7 +634,58 @@ def deploy_skills(
         return result.warn(f"{count} deployed, {len(failed)} failed: {failed}")
     if dry_run:
         return result.ok(f"[dry-run] would deploy {count} skills")
+    # Also deploy global skills to ~/.claude/skills/
+    global_result = deploy_global_skills(conn, dry_run=dry_run)
+    if global_result.status == "OK":
+        logger.info("Global skills: %s", global_result.detail)
+
     return result.ok(f"{count} deployed") if count else result.skip("none matched scope")
+
+
+def deploy_global_skills(conn, *, dry_run: bool = False) -> DeployResult:
+    """Deploy global-scope skills to ~/.claude/skills/{name}/SKILL.md."""
+    result = DeployResult("Global Skills")
+    global_dir = Path.home() / ".claude" / "skills"
+    count = 0
+    failed: List[str] = []
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name, content FROM claude.skills "
+            "WHERE is_active = true AND scope = 'global' AND content IS NOT NULL AND content != ''"
+        )
+        rows = [_row_to_dict(row) for row in cur.fetchall()]
+    except Exception as exc:
+        return result.warn(f"Query failed: {exc}")
+
+    for row in rows:
+        name = row.get("name", "").strip()
+        content = row.get("content", "") or ""
+        if not name or not content:
+            continue
+
+        skill_dir = global_dir / name
+        skill_file = skill_dir / "SKILL.md"
+
+        if dry_run:
+            count += 1
+            continue
+
+        try:
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            _atomic_write(skill_file, content)
+            count += 1
+            logger.debug("Wrote global skill: %s", name)
+        except Exception as exc:
+            logger.error("Failed to write global skill '%s': %s", name, exc)
+            failed.append(name)
+
+    if failed:
+        return result.warn(f"{count} deployed, {len(failed)} failed: {failed}")
+    if dry_run:
+        return result.ok(f"[dry-run] would deploy {count} global skills")
+    return result.ok(f"{count} deployed") if count else result.skip("none in DB")
 
 
 def deploy_commands(
