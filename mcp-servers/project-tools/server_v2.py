@@ -3477,37 +3477,45 @@ def deploy_project(
 
         # Component: skills
         if 'skills' in components:
+            # Get project type for scope filtering
+            cur.execute(
+                "SELECT project_type FROM claude.workspaces WHERE project_id = %s::uuid",
+                (project_id,),
+            )
+            pt_row = cur.fetchone()
+            project_type = pt_row['project_type'] if pt_row else 'infrastructure'
+
             cur.execute("""
-                SELECT EXISTS (
-                    SELECT FROM information_schema.tables
-                    WHERE table_schema = 'claude' AND table_name = 'skill_content'
-                )
-            """)
-            if cur.fetchone()['exists']:
-                cur.execute("""
-                    SELECT skill_name, content
-                    FROM claude.skill_content
-                    WHERE project_id = %s::uuid OR project_id IS NULL
-                """, (project_id,))
-                skills = cur.fetchall()
+                SELECT name, content, scope
+                FROM claude.skills
+                WHERE is_active = true
+                  AND (
+                    scope = 'global'
+                    OR (scope = 'project_type' AND scope_ref = %s)
+                    OR (scope = 'project' AND (scope_ref = %s OR scope_ref = %s::text))
+                  )
+                  AND scope NOT IN ('command', 'agent')
+            """, (project_type, project_name, project_id))
+            skills = cur.fetchall()
 
-                if skills:
-                    skills_dir = project_path / ".claude" / "skills"
-                    skills_dir.mkdir(parents=True, exist_ok=True)
+            # Filter out global skills (they live in ~/.claude/skills/, deploying causes duplicates)
+            project_skills = [s for s in skills if s['scope'] != 'global']
 
-                    for skill in skills:
-                        skill_dir = skills_dir / skill['skill_name']
-                        skill_dir.mkdir(parents=True, exist_ok=True)
-                        skill_file = skill_dir / "SKILL.md"
-                        with open(skill_file, 'w', encoding='utf-8') as f:
-                            f.write(skill['content'])
+            if project_skills:
+                skills_dir = project_path / ".claude" / "skills"
+                skills_dir.mkdir(parents=True, exist_ok=True)
 
-                    deployed.append('skills')
-                    changes_summary.append(f"skills: {len(skills)} skills → {skills_dir}")
-                else:
-                    changes_summary.append("skills: No skills found for this project")
+                for skill in project_skills:
+                    skill_dir = skills_dir / skill['name']
+                    skill_dir.mkdir(parents=True, exist_ok=True)
+                    skill_file = skill_dir / "SKILL.md"
+                    with open(skill_file, 'w', encoding='utf-8') as f:
+                        f.write(skill['content'])
+
+                deployed.append('skills')
+                changes_summary.append(f"skills: {len(project_skills)} skills → {skills_dir}")
             else:
-                changes_summary.append("skills: Table 'claude.skill_content' does not exist")
+                changes_summary.append("skills: No project-scoped skills found")
 
         # Component: instructions
         if 'instructions' in components:
@@ -3699,24 +3707,30 @@ def update_config(
     change_reason: str = "",
     section: str = "",
     mode: Literal["replace", "append"] = "replace",
+    scope: str = "",
+    description: str = "",
 ) -> dict:
-    """Update any deployable config component with versioning and filesystem deployment.
+    """Create or update a deployable config component with versioning and filesystem deployment.
 
-    Unified tool extending the update_claude_md() pattern to all config.
-    Validates component exists, creates version snapshot, updates DB, deploys to file, logs audit.
+    Unified tool for managing skills, rules, instructions, and CLAUDE.md sections.
+    If the component exists: creates version snapshot, updates content, deploys to file.
+    If the component doesn't exist: creates it in the database and deploys to file.
 
-    Use when: Updating skills, rules, instructions, or CLAUDE.md from any project.
-    Replaces the need to message claude-family for config changes — projects can self-serve.
-    Returns: {success, component_type, component_name, version, file_path, change_reason}.
+    Use when: Creating or updating skills, rules, instructions, or CLAUDE.md from any project.
+    Projects can self-serve config changes without messaging claude-family.
+    Returns: {success, action: 'created'|'updated', component_type, component_name, version, file_path}.
 
     Args:
-        component_type: What to update: skill, rule, instruction, or claude_md.
+        component_type: What to manage: skill, rule, instruction, or claude_md.
         project: Project name (for scoping and file deployment).
-        component_name: Name of the skill/rule/instruction to update. Not needed for claude_md.
-        content: New content to write.
+        component_name: Name of the skill/rule/instruction. Not needed for claude_md.
+        content: Content to write.
         change_reason: Why this change was made (stored in version history).
         section: For claude_md only — which section to update.
         mode: replace (default) or append. For claude_md, passed to update_claude_md logic.
+        scope: For creating new components — 'global', 'project_type', 'project', 'command', 'agent'.
+               If omitted for new skills, defaults to 'project'. Ignored for updates (keeps existing scope).
+        description: For creating new components — optional description text.
     """
     # Delegate claude_md to existing tool
     if component_type == "claude_md":
@@ -3759,70 +3773,99 @@ def update_config(
     try:
         cur = conn.cursor()
 
-        # Step 1: Validate — find the component
+        # Step 1: Find the component (or create it)
         cur.execute(
             f"SELECT {cfg['id_col']}::text, content, scope FROM {cfg['table']} "
             f"WHERE LOWER({cfg['name_col']}) = LOWER(%s) AND is_active = true",
             (component_name,),
         )
         row = cur.fetchone()
-        if not row:
-            # List available components for helpful error
+        is_create = row is None
+
+        if is_create:
+            # CREATE path — insert new component
+            effective_scope = scope or ("project" if component_type == "skill" else "global")
+
+            # Resolve scope_ref for project-scoped components
+            scope_ref = None
+            if effective_scope == "project":
+                cur.execute(
+                    "SELECT project_id::text FROM claude.projects WHERE LOWER(project_name) = LOWER(%s)",
+                    (project,),
+                )
+                proj_row = cur.fetchone()
+                if proj_row:
+                    scope_ref = proj_row['project_id']
+            elif effective_scope == "project_type":
+                scope_ref = project  # project_type string
+
+            # Build INSERT — columns vary by table but all have name, content, scope, is_active
+            if component_type == "skill":
+                cur.execute(
+                    "INSERT INTO claude.skills (name, scope, scope_ref, content, description, is_active) "
+                    "VALUES (%s, %s, %s, %s, %s, true) RETURNING skill_id::text",
+                    (component_name, effective_scope, scope_ref, content, description or None),
+                )
+            elif component_type == "rule":
+                cur.execute(
+                    "INSERT INTO claude.rules (name, scope, scope_ref, content, description, is_active) "
+                    "VALUES (%s, %s, %s, %s, %s, true) RETURNING rule_id::text",
+                    (component_name, effective_scope, scope_ref, content, description or None),
+                )
+            elif component_type == "instruction":
+                cur.execute(
+                    "INSERT INTO claude.instructions (name, scope, scope_ref, content, description, is_active) "
+                    "VALUES (%s, %s, %s, %s, %s, true) RETURNING instruction_id::text",
+                    (component_name, effective_scope, scope_ref, content, description or None),
+                )
+
+            component_id = cur.fetchone()[cfg['id_col']]
+            old_content = ""
+            final_scope = effective_scope
+            next_version = 1
+        else:
+            # UPDATE path — existing component
+            component_id = row[cfg['id_col']]
+            old_content = row['content'] or ""
+            final_scope = row['scope']
+
+            # Version — create snapshot of old content
             cur.execute(
-                f"SELECT {cfg['name_col']} FROM {cfg['table']} WHERE is_active = true ORDER BY {cfg['name_col']}",
+                f"SELECT COALESCE(MAX(version_number), 0) + 1 AS next_ver "
+                f"FROM {cfg['version_table']} WHERE {cfg['version_fk']} = %s::uuid",
+                (component_id,),
             )
-            available = [r[cfg['name_col']] for r in cur.fetchall()]
-            conn.close()
-            return {
-                "success": False,
-                "error": f"{component_type} '{component_name}' not found",
-                "available": available[:20],
-            }
+            next_version = cur.fetchone()['next_ver']
 
-        component_id = row[cfg['id_col']]
-        old_content = row['content'] or ""
-        scope = row['scope']
+            cur.execute(
+                f"INSERT INTO {cfg['version_table']} "
+                f"(version_id, {cfg['version_fk']}, version_number, content, changed_by, change_reason, created_at) "
+                f"VALUES (gen_random_uuid(), %s::uuid, %s, %s, 'update_config', %s, NOW())",
+                (component_id, next_version, old_content, change_reason or "Updated via update_config"),
+            )
 
-        # Step 2: Version — create snapshot
-        cur.execute(
-            f"SELECT COALESCE(MAX(version_number), 0) + 1 AS next_ver "
-            f"FROM {cfg['version_table']} WHERE {cfg['version_fk']} = %s::uuid",
-            (component_id,),
-        )
-        next_version = cur.fetchone()['next_ver']
+            # Update content
+            final_content = content if mode == "replace" else (old_content + "\n" + content)
+            cur.execute(
+                f"UPDATE {cfg['table']} SET content = %s, updated_at = NOW() "
+                f"WHERE {cfg['id_col']} = %s::uuid",
+                (final_content, component_id),
+            )
+            content = final_content  # Use merged content for file deploy
 
-        cur.execute(
-            f"INSERT INTO {cfg['version_table']} "
-            f"(version_id, {cfg['version_fk']}, version_number, content, changed_by, change_reason, created_at) "
-            f"VALUES (gen_random_uuid(), %s::uuid, %s, %s, 'update_config', %s, NOW())",
-            (component_id, next_version, old_content, change_reason or f"Updated via update_config"),
-        )
-
-        # Step 3: Update — write new content
-        final_content = content if mode == "replace" else (old_content + "\n" + content)
-        cur.execute(
-            f"UPDATE {cfg['table']} SET content = %s, updated_at = NOW() "
-            f"WHERE {cfg['id_col']} = %s::uuid",
-            (final_content, component_id),
-        )
-
-        # Step 4: Deploy — write to filesystem
-        # Determine project path from workspaces
+        # Deploy — write to filesystem
         cur.execute(
             "SELECT project_path FROM claude.workspaces WHERE LOWER(project_name) = LOWER(%s)",
             (project,),
         )
         ws_row = cur.fetchone()
-        if ws_row:
-            project_path = ws_row['project_path']
-        else:
-            project_path = os.getcwd()
+        project_path = ws_row['project_path'] if ws_row else os.getcwd()
 
         # Determine deploy path based on scope
         if component_type == "skill":
-            if scope == "command":
+            if final_scope == "command":
                 deploy_path = os.path.join(project_path, ".claude", "commands", f"{component_name}.md")
-            elif scope == "agent":
+            elif final_scope == "agent":
                 deploy_path = os.path.join(project_path, ".claude", "agents", f"{component_name}.md")
             else:
                 deploy_dir = os.path.join(project_path, ".claude", "skills", component_name)
@@ -3835,18 +3878,18 @@ def update_config(
 
         os.makedirs(os.path.dirname(deploy_path), exist_ok=True)
         with open(deploy_path, 'w', encoding='utf-8') as f:
-            f.write(final_content)
+            f.write(content)
 
-        # Step 5: Audit
+        # Audit
         cur.execute("""
             INSERT INTO claude.audit_log
             (entity_type, entity_id, entity_code, change_source, from_status, to_status)
             VALUES (%s, %s::uuid, %s, 'update_config', %s, %s)
         """, (
-            cfg['table'].split('.')[1],  # 'skills', 'rules', 'instructions'
+            cfg['table'].split('.')[1],
             component_id,
             component_name,
-            f"v{next_version - 1}" if next_version > 1 else "initial",
+            "new" if is_create else (f"v{next_version - 1}" if next_version > 1 else "initial"),
             f"v{next_version}",
         ))
 
@@ -3855,9 +3898,10 @@ def update_config(
 
         return {
             "success": True,
+            "action": "created" if is_create else "updated",
             "component_type": component_type,
             "component_name": component_name,
-            "scope": scope,
+            "scope": final_scope,
             "version": next_version,
             "file_path": deploy_path,
             "change_reason": change_reason,

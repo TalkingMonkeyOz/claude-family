@@ -102,18 +102,32 @@ update_config(component_type, project, name, content, reason)
         └── entity_type, entity_id, change_source='update_config', from→to
 ```
 
-## Next Steps
+## Status: IMPLEMENTED (2026-03-16)
 
 1. ~~Write requirements doc~~ (this document)
-2. Consolidate skill_content → skills table
-3. BPMN model the update_config lifecycle
-4. Implement the tool in server_v2.py
-5. Test: update a skill from another project
-6. Update file protection hook messages to reference update_config()
+2. ~~Consolidate skill_content → skills table~~ — skill_content view dropped, deploy_project fixed to use claude.skills
+3. BPMN model the update_config lifecycle — TODO
+4. ~~Implement the tool in server_v2.py~~ — Done, with UPSERT support (create + update)
+5. ~~Test: update a skill from another project~~ — METIS skill created via tool
+6. ~~Update file protection hook messages to reference update_config()~~ — Already done
+
+### UPSERT Enhancement (2026-03-16)
+
+Original design only supported UPDATE. Enhanced to UPSERT:
+- If component exists → version snapshot + update (original behavior)
+- If component doesn't exist → INSERT with scope/description + deploy
+- New params: `scope` (global/project_type/project/command/agent), `description`
+- For project-scoped skills, auto-resolves project UUID from project name
+- Filed as FB187, resolved same session
+
+### deploy_project Fix (2026-03-16)
+
+Fixed FB188: deploy_project's skills component referenced dropped `skill_content` view.
+Now queries `claude.skills` directly with proper scope filtering (mirrors sync_project.py).
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-15
-**Updated**: 2026-03-15
+**Updated**: 2026-03-16
 **Location**: knowledge-vault/10-Projects/claude-family/unified-config-tool-requirements.md

@@ -3463,14 +3463,14 @@ async def list_tools() -> List[Tool]:
         ),
         Tool(
             name="update_config",
-            description="Update any deployable config component (skill, rule, instruction, or CLAUDE.md) with versioning and filesystem deployment. Extends the update_claude_md pattern to all config. Projects can self-serve config changes without messaging claude-family.",
+            description="Create or update a deployable config component (skill, rule, instruction, or CLAUDE.md section) with versioning and filesystem deployment. If the component exists, updates it with version snapshot. If it doesn't exist, creates it. Use this instead of raw SQL for managing skills, rules, and instructions.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "component_type": {
                         "type": "string",
                         "enum": ["skill", "rule", "instruction", "claude_md"],
-                        "description": "What to update."
+                        "description": "What to create or update."
                     },
                     "project": {
                         "type": "string",
@@ -3482,7 +3482,7 @@ async def list_tools() -> List[Tool]:
                     },
                     "content": {
                         "type": "string",
-                        "description": "New content to write."
+                        "description": "Content to write."
                     },
                     "change_reason": {
                         "type": "string",
@@ -3497,6 +3497,15 @@ async def list_tools() -> List[Tool]:
                         "enum": ["replace", "append"],
                         "description": "Replace content (default) or append to existing.",
                         "default": "replace"
+                    },
+                    "scope": {
+                        "type": "string",
+                        "enum": ["global", "project_type", "project", "command", "agent"],
+                        "description": "For creating new components — scope level. Defaults to 'project' for skills, 'global' for rules/instructions. Ignored when updating existing components."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "For creating new components — optional description text."
                     }
                 },
                 "required": ["component_type", "project"]
@@ -3651,6 +3660,8 @@ async def call_tool(name: str, arguments: dict) -> List[TextContent]:
                 change_reason=arguments.get('change_reason', ''),
                 section=arguments.get('section', ''),
                 mode=arguments.get('mode', 'replace'),
+                scope=arguments.get('scope', ''),
+                description=arguments.get('description', ''),
             )
         # WCC tools removed from MCP surface (2026-03-14) — functions still available internally
         else:

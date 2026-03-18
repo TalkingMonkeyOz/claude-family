@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "10-Projects/Project-Metis/CATALOG_EXPORT.md",
+                "file": "10-Projects/claude-family/hook-system-requirements.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "CATALOG_EXPORT"
+              "title": "hook-system-requirements"
             }
           }
         ]
@@ -53,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "tag:area/bpmn-sop-enforcement",
+                "query": "",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "10-Projects/Project-Metis/CATALOG_EXPORT.md",
+                "file": "10-Projects/claude-family/hook-system-requirements.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for CATALOG_EXPORT"
+              "title": "Backlinks for hook-system-requirements"
             }
           },
           {
@@ -182,43 +182,43 @@
       "bases:Create new base": false
     }
   },
-  "active": "0a1e735fe9a416ce",
+  "active": "0ec48af0ac01a6f0",
   "lastOpenFiles": [
-    "10-Projects/Project-Metis/bpmn-maps/bpmn-process-map-architecture.md",
-    "10-Projects/Project-Metis/bpmn-maps/bpmn-process-map.md",
-    "10-Projects/Project-Metis/gates/gate-zero/problem-statement.md",
-    "10-Projects/Project-Metis/CATALOG_EXPORT.md",
-    "10-Projects/Project-Metis/CATALOG_EXPORT.md.tmp.47316.1773411360716",
-    "10-Projects/Project-Metis/README.md.tmp.47316.1773411321256",
-    "10-Projects/Project-Metis/_archive/handoffs/handoff-wcc-design-request.md",
-    "10-Projects/Project-Metis/_archive/handoffs/handoff-gate1-consolidation.md",
-    "10-Projects/Project-Metis/_archive/handoffs/handoff-data-model-response.md",
-    "10-Projects/Project-Metis/_archive/handoffs/handoff-data-model-request.md",
-    "10-Projects/Project-Metis/_archive/handoffs",
-    "10-Projects/Project-Metis/_archive/superseded/consolidation-gaps.md",
-    "10-Projects/Project-Metis/_archive/superseded/stocktake-2026-02-23.md",
-    "10-Projects/Project-Metis/_archive/superseded/gap-resolution-summary.md",
-    "10-Projects/Project-Metis/_archive/superseded/gap-tracker.md",
-    "10-Projects/Project-Metis/_archive/superseded/plan-of-attack.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-system-analysis-part2.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-system-analysis-part1.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-audit-part3.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-audit-part2.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-audit-part1.md",
-    "10-Projects/Project-Metis/_archive/audits/storage-audit-findings.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-systems-audit.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-operations.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-mcp.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-knowledge.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-hooks.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-database.md",
-    "10-Projects/Project-Metis/_archive/audits/claude-family-audit-bpmn.md",
-    "10-Projects/Project-Metis/_archive/superseded",
-    "10-Projects/Project-Metis/_archive/session-handoffs",
-    "10-Projects/Project-Metis/_archive/audits",
-    "10-Projects/Project-Metis/_archive",
-    "10-Projects/claude-family/knowledge-pipeline-gaps.md.tmp.10676.1773202775622",
-    "10-Projects/claude-family/knowledge-pipeline-lifecycle.md.tmp.10676.1773202734160",
-    "10-Projects/claude-family/knowledge-pipeline-recall.md.tmp.10676.1773202693293"
+    "10-Projects/Project-Metis/executive-proposal-brief.md",
+    "10-Projects/Project-Metis/executive-proposal-brief.md.tmp.36352.1773569214016",
+    "10-Projects/Project-Metis/research/competitive-analysis-detail-2026-03-15.md",
+    "10-Projects/Project-Metis/research/competitive-analysis-detail-2026-03-15.md.tmp.36352.1773569124823",
+    "10-Projects/Project-Metis/research/competitive-analysis-2026-03-15.md",
+    "10-Projects/Project-Metis/research/competitive-analysis-2026-03-15.md.tmp.36352.1773569067933",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-wcc.md",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-rag-hook.md",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-persistence.md",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-index.md",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-cross-cutting.md",
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-cognitive-memory.md",
+    "10-Projects/Project-Metis/_archive/superseded/plan-of-attack-rewrite-brief.md",
+    "10-Projects/Project-Metis/audits/project-tools-functional-test-detail-2026-03-14.md",
+    "10-Projects/Project-Metis/audits/project-tools-functional-test-2026-03-14.md",
+    "10-Projects/Project-Metis/audits/bpmn-coverage-audit-2026-03-14-detail.md",
+    "10-Projects/Project-Metis/_archive/superseded/decisions-README.md",
+    "10-Projects/Project-Metis/_archive/superseded/day-1-readiness.md",
+    "10-Projects/Project-Metis/_archive/superseded/phase-0-task-list.md",
+    "10-Projects/Project-Metis/_archive/superseded/user-experience.md",
+    "10-Projects/Project-Metis/_archive/superseded/autonomous-operations.md",
+    "10-Projects/Project-Metis/_archive/superseded/infra-decisions-api-git-auth.md",
+    "10-Projects/Project-Metis/_archive/superseded/dev-decisions-agents-workflow-handoff.md",
+    "10-Projects/Project-Metis/_archive/superseded/session-memory-context-persistence.md",
+    "10-Projects/Project-Metis/_archive/superseded/cicd-pipeline-spec.md",
+    "10-Projects/Project-Metis/_archive/superseded/monitoring-alerting-design.md",
+    "10-Projects/Project-Metis/_archive/superseded/azure-infrastructure-recommendation.md",
+    "10-Projects/Project-Metis/_archive/superseded/wcc-mechanics-feedback-design.md",
+    "10-Projects/Project-Metis/_archive/superseded/wcc-activity-space-design.md",
+    "10-Projects/claude-family/unified-config-tool-requirements.md.tmp.35552.1773568208862",
+    "10-Projects/Project-Metis/vault-cleanup-2026-03-15.md.tmp.36352.1773568158578",
+    "10-Projects/Project-Metis/vault-audit-2026-03-15.md.tmp.36352.1773568084650",
+    "10-Projects/Project-Metis/plan-of-attack-phase1.md.tmp.36352.1773566982084",
+    "10-Projects/Project-Metis/plan-of-attack.md.tmp.36352.1773566981409",
+    "10-Projects/claude-family/messaging-system-requirements.md.tmp.35552.1773566323147",
+    "10-Projects/claude-family/hook-system-requirements.md.tmp.35552.1773566312578"
   ]
 }
