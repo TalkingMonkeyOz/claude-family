@@ -1,0 +1,399 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/vault-librarian"
+    id="Definitions_VaultLibrarian">
+
+  <bpmn:process id="vault_librarian" name="Vault Librarian: Health Audit and Auto-Repair" isExecutable="true">
+
+    <!--
+      Vault Librarian — Entity catalog gap detection and vault health coordinator.
+
+      Trigger:
+        * Weekly background job (claude.scheduled_jobs)
+        * Manual via /skills-librarian skill
+        * CLI: python scripts/vault_librarian.py [flags: json, fix, check TYPE]
+
+      4 parallel checks:
+        1. Uncataloged files: vault .md files not in entity catalog
+        2. Orphaned entries: catalog entries pointing to missing vault files
+        3. Missing frontmatter: vault files without YAML frontmatter or required fields
+        4. Missing embeddings: vault files not in vault_embeddings table
+
+      Phases:
+        1. Trigger   * Timer (weekly) or manual invocation
+        2. Scan      * Connect to DB, enumerate vault files
+        3. Check     * 4 parallel checks (independent, no ordering dependency)
+        4. Converge  * Merge findings from all checks
+        5. Decide    * Any issues found?
+        6. Report    * Generate JSON or human-readable report
+        7. Fix       * Optionally auto-file feedback for high/critical findings
+
+      Key tables:
+        * claude.entities + claude.entity_types: Entity catalog
+        * claude.vault_embeddings: RAG embeddings for vault docs
+        * claude.feedback: Auto-filed issues (fix mode)
+
+      Implementation:
+        * scripts/vault_librarian.py (main detection + fix script)
+        * .claude/skills/vault-librarian.md (interactive skill)
+        * claude.scheduled_jobs (weekly timer)
+
+      Existing complementary scripts (NOT part of this process):
+        * reviewer_doc_staleness.py (staleness detection)
+        * link_checker.py (broken link detection)
+        * orphan_report.py (orphan document detection)
+        * reviewer_doc_quality.py (quality scoring)
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Vault Librarian Triggered">
+      <bpmn:outgoing>flow_start_to_init</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: INITIALIZE                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="init_scan" name="[TOOL] Connect DB and Enumerate Vault Files" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_init</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_db_check</bpmn:outgoing>
+      <bpmn:script>
+# Connect to database using DATABASE_URL from .env
+# Enumerate all .md files in knowledge-vault/, excluding:
+#   _templates/, _archive/, .obsidian/, attachments/
+# Store file list for parallel checks
+#
+# db_connected = get_db_connection() is not None
+# vault_files = get_vault_files()  -> list of Path objects
+# vault_file_count = len(vault_files)
+db_connected = True
+vault_file_count = 0
+trigger_mode = "manual"
+fix_mode = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="db_check_gw" name="DB Connected?" default="flow_db_failed">
+      <bpmn:incoming>flow_init_to_db_check</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_db_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_db_error" name="Abort: DB Connection Failed">
+      <bpmn:incoming>flow_db_failed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: PARALLEL CHECKS (4 independent checks)                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:parallelGateway id="check_split" name="Parallel Vault Checks">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_split_to_catalog</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_orphaned</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_frontmatter</bpmn:outgoing>
+      <bpmn:outgoing>flow_split_to_embeddings</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Check 1: Uncataloged files -->
+    <bpmn:scriptTask id="check_uncataloged" name="[DB] Check Uncataloged Vault Files" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_catalog</bpmn:incoming>
+      <bpmn:outgoing>flow_catalog_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.entities for all cataloged source_files
+# (entity types: design_document, gate_deliverable, knowledge_pattern, decision)
+# Compare vault files against cataloged set
+# Files not in catalog = uncataloged findings (severity: medium)
+#
+# SELECT e.properties->>'source_file' FROM claude.entities e
+#   JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+#   WHERE et.type_name IN ('design_document','gate_deliverable','knowledge_pattern','decision')
+uncataloged_count = 0
+uncataloged_findings = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 2: Orphaned catalog entries -->
+    <bpmn:scriptTask id="check_orphaned" name="[DB] Check Orphaned Catalog Entries" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_orphaned</bpmn:incoming>
+      <bpmn:outgoing>flow_orphaned_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Query catalog entries with source_file property
+# Check if each referenced file exists on disk
+# Missing file = orphaned entry (severity: high)
+# File found at different path = moved file (severity: low)
+#
+# SELECT entity_id, display_name, properties->>'source_file'
+#   FROM claude.entities WHERE properties->>'source_file' IS NOT NULL
+orphaned_count = 0
+moved_count = 0
+orphaned_findings = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 3: Missing frontmatter -->
+    <bpmn:scriptTask id="check_frontmatter" name="[FS] Check Missing YAML Frontmatter" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_frontmatter</bpmn:incoming>
+      <bpmn:outgoing>flow_frontmatter_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Read each vault file, check for --- delimited YAML frontmatter
+# Required fields: tags, projects
+# Missing frontmatter = severity: medium
+# Malformed frontmatter (no closing ---) = severity: medium
+# Missing required field = severity: low
+missing_frontmatter_count = 0
+malformed_frontmatter_count = 0
+missing_field_count = 0
+frontmatter_findings = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Check 4: Missing embeddings -->
+    <bpmn:scriptTask id="check_embeddings" name="[DB] Check Missing Vault Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_split_to_embeddings</bpmn:incoming>
+      <bpmn:outgoing>flow_embeddings_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Query claude.vault_embeddings for all embedded file paths
+# Compare vault files against embedded set
+# Files not in vault_embeddings = missing embedding (severity: low)
+#
+# SELECT file_path FROM claude.vault_embeddings WHERE file_path IS NOT NULL
+missing_embedding_count = 0
+embedding_findings = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Join: wait for all 4 checks to complete -->
+    <bpmn:parallelGateway id="check_join" name="All Checks Complete">
+      <bpmn:incoming>flow_catalog_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_orphaned_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_frontmatter_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_embeddings_to_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_aggregate</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: AGGREGATE RESULTS                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="aggregate_findings" name="[TOOL] Aggregate All Findings" scriptFormat="python">
+      <bpmn:incoming>flow_join_to_aggregate</bpmn:incoming>
+      <bpmn:outgoing>flow_aggregate_to_decide</bpmn:outgoing>
+      <bpmn:script>
+# Merge findings from all 4 checks into unified report
+# Compute summary: total_findings, by_severity, by_type
+total_findings = uncataloged_count + orphaned_count + moved_count + missing_frontmatter_count + malformed_frontmatter_count + missing_field_count + missing_embedding_count
+has_issues = total_findings > 0
+has_critical_or_high = orphaned_count > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: DECIDE                                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="issues_found_gw" name="Any Issues Found?" default="flow_no_issues">
+      <bpmn:incoming>flow_aggregate_to_decide</bpmn:incoming>
+      <bpmn:outgoing>flow_has_issues</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_issues</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: REPORT AND OPTIONAL FIX                                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="generate_report" name="[TOOL] Generate Report (JSON or Human-Readable)" scriptFormat="python">
+      <bpmn:incoming>flow_has_issues</bpmn:incoming>
+      <bpmn:outgoing>flow_report_to_fix_check</bpmn:outgoing>
+      <bpmn:script>
+# Format report based on output mode:
+#   --json: JSON with timestamp, vault_files_scanned, total_findings,
+#           by_severity, by_type, findings[]
+#   default: Human-readable table with severity/type breakdown
+# Output to stdout or return to caller
+report_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="fix_mode_gw" name="Fix Mode Enabled?" default="flow_skip_fix">
+      <bpmn:incoming>flow_report_to_fix_check</bpmn:incoming>
+      <bpmn:outgoing>flow_do_fix</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_fix</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="auto_fix" name="[DB] Auto-File Feedback for Critical/High Findings" scriptFormat="python">
+      <bpmn:incoming>flow_do_fix</bpmn:incoming>
+      <bpmn:outgoing>flow_fix_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Filter findings to critical/high severity only
+# INSERT INTO claude.feedback for each (project_id=claude-family, type=bug)
+# ON CONFLICT DO NOTHING to avoid duplicates
+# Log count of filed items
+feedback_filed_count = 0
+fix_applied = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 6: CLEAN EXIT                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="report_clean" name="[TOOL] Report: Vault Clean" scriptFormat="python">
+      <bpmn:incoming>flow_no_issues</bpmn:incoming>
+      <bpmn:outgoing>flow_clean_to_end</bpmn:outgoing>
+      <bpmn:script>
+# No issues found — report vault is clean
+report_generated = True
+vault_clean = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_complete" name="Librarian Complete">
+      <bpmn:incoming>flow_fix_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_skip_fix</bpmn:incoming>
+      <bpmn:incoming>flow_clean_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Start to init -->
+    <bpmn:sequenceFlow id="flow_start_to_init" sourceRef="start" targetRef="init_scan"/>
+
+    <!-- Init to DB check -->
+    <bpmn:sequenceFlow id="flow_init_to_db_check" sourceRef="init_scan" targetRef="db_check_gw"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="db_check_gw" targetRef="check_split">
+      <bpmn:conditionExpression>db_connected == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_db_failed" sourceRef="db_check_gw" targetRef="end_db_error"/>
+
+    <!-- Phase 2: Fan out to 4 checks -->
+    <bpmn:sequenceFlow id="flow_split_to_catalog" sourceRef="check_split" targetRef="check_uncataloged"/>
+    <bpmn:sequenceFlow id="flow_split_to_orphaned" sourceRef="check_split" targetRef="check_orphaned"/>
+    <bpmn:sequenceFlow id="flow_split_to_frontmatter" sourceRef="check_split" targetRef="check_frontmatter"/>
+    <bpmn:sequenceFlow id="flow_split_to_embeddings" sourceRef="check_split" targetRef="check_embeddings"/>
+
+    <!-- Phase 2: Converge all checks -->
+    <bpmn:sequenceFlow id="flow_catalog_to_join" sourceRef="check_uncataloged" targetRef="check_join"/>
+    <bpmn:sequenceFlow id="flow_orphaned_to_join" sourceRef="check_orphaned" targetRef="check_join"/>
+    <bpmn:sequenceFlow id="flow_frontmatter_to_join" sourceRef="check_frontmatter" targetRef="check_join"/>
+    <bpmn:sequenceFlow id="flow_embeddings_to_join" sourceRef="check_embeddings" targetRef="check_join"/>
+
+    <!-- Phase 3: Aggregate -->
+    <bpmn:sequenceFlow id="flow_join_to_aggregate" sourceRef="check_join" targetRef="aggregate_findings"/>
+
+    <!-- Phase 4: Decide -->
+    <bpmn:sequenceFlow id="flow_aggregate_to_decide" sourceRef="aggregate_findings" targetRef="issues_found_gw"/>
+    <bpmn:sequenceFlow id="flow_has_issues" sourceRef="issues_found_gw" targetRef="generate_report">
+      <bpmn:conditionExpression>has_issues == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_issues" sourceRef="issues_found_gw" targetRef="report_clean"/>
+
+    <!-- Phase 5: Report and fix -->
+    <bpmn:sequenceFlow id="flow_report_to_fix_check" sourceRef="generate_report" targetRef="fix_mode_gw"/>
+    <bpmn:sequenceFlow id="flow_do_fix" sourceRef="fix_mode_gw" targetRef="auto_fix">
+      <bpmn:conditionExpression>fix_mode == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_fix" sourceRef="fix_mode_gw" targetRef="end_complete"/>
+    <bpmn:sequenceFlow id="flow_fix_to_end" sourceRef="auto_fix" targetRef="end_complete"/>
+
+    <!-- Phase 6: Clean exit -->
+    <bpmn:sequenceFlow id="flow_clean_to_end" sourceRef="report_clean" targetRef="end_complete"/>
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- Diagram layout                                                      -->
+  <!-- ================================================================== -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="vault_librarian">
+
+      <!-- Start -->
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="218" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Init -->
+      <bpmndi:BPMNShape id="s_init_scan" bpmnElement="init_scan">
+        <dc:Bounds x="140" y="196" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- DB check gateway -->
+      <bpmndi:BPMNShape id="s_db_check_gw" bpmnElement="db_check_gw" isMarkerVisible="true">
+        <dc:Bounds x="368" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- DB error end -->
+      <bpmndi:BPMNShape id="s_end_db_error" bpmnElement="end_db_error">
+        <dc:Bounds x="375" y="340" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Parallel check split -->
+      <bpmndi:BPMNShape id="s_check_split" bpmnElement="check_split">
+        <dc:Bounds x="468" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- 4 check tasks -->
+      <bpmndi:BPMNShape id="s_check_uncataloged" bpmnElement="check_uncataloged">
+        <dc:Bounds x="570" y="60" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_orphaned" bpmnElement="check_orphaned">
+        <dc:Bounds x="570" y="160" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_frontmatter" bpmnElement="check_frontmatter">
+        <dc:Bounds x="570" y="260" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_check_embeddings" bpmnElement="check_embeddings">
+        <dc:Bounds x="570" y="360" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Parallel check join -->
+      <bpmndi:BPMNShape id="s_check_join" bpmnElement="check_join">
+        <dc:Bounds x="808" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Aggregate -->
+      <bpmndi:BPMNShape id="s_aggregate_findings" bpmnElement="aggregate_findings">
+        <dc:Bounds x="910" y="196" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Issues decision -->
+      <bpmndi:BPMNShape id="s_issues_found_gw" bpmnElement="issues_found_gw" isMarkerVisible="true">
+        <dc:Bounds x="1140" y="211" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Generate report -->
+      <bpmndi:BPMNShape id="s_generate_report" bpmnElement="generate_report">
+        <dc:Bounds x="1240" y="120" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Fix mode gateway -->
+      <bpmndi:BPMNShape id="s_fix_mode_gw" bpmnElement="fix_mode_gw" isMarkerVisible="true">
+        <dc:Bounds x="1470" y="133" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Auto fix -->
+      <bpmndi:BPMNShape id="s_auto_fix" bpmnElement="auto_fix">
+        <dc:Bounds x="1570" y="40" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- Report clean -->
+      <bpmndi:BPMNShape id="s_report_clean" bpmnElement="report_clean">
+        <dc:Bounds x="1240" y="280" width="180" height="70"/>
+      </bpmndi:BPMNShape>
+
+      <!-- End -->
+      <bpmndi:BPMNShape id="s_end_complete" bpmnElement="end_complete">
+        <dc:Bounds x="1800" y="218" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

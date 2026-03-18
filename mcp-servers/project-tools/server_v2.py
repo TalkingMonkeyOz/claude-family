@@ -3699,6 +3699,31 @@ def regenerate_settings(
         conn.close()
 
 
+def _validate_config_content(content: str, component_type: str) -> str | None:
+    """Scan config content for dangerous patterns. Returns error message if blocked, None if clean."""
+    import re
+    DANGEROUS_PATTERNS = [
+        (r'(?i)ignore\s+(all\s+)?previous\s+instructions', 'Prompt injection attempt'),
+        (r'(?i)(rm\s+-rf\s+/|del\s+/[sq]\s+|format\s+[a-z]:)', 'Destructive shell command'),
+        (r'(?i)DROP\s+(TABLE|DATABASE|SCHEMA)\s+', 'Destructive SQL command'),
+        (r'(?i)(sk-[a-zA-Z0-9]{20,}|password\s*[:=]\s*\S{8,})', 'Embedded secret/credential'),
+        (r'(?i)disableAllHooks\s*:\s*true', 'Hook bypass attempt'),
+    ]
+    for pattern, desc in DANGEROUS_PATTERNS:
+        match = re.search(pattern, content)
+        if match:
+            return f"Content blocked — {desc} (matched: '{match.group()[:40]}')"
+
+    # Size limit: skills 500 lines, rules 150 lines, instructions 300 lines
+    MAX_LINES = {"skill": 500, "rule": 150, "instruction": 300}
+    limit = MAX_LINES.get(component_type, 500)
+    line_count = content.count('\n') + 1
+    if line_count > limit:
+        return f"Content exceeds {limit}-line limit for {component_type} ({line_count} lines)"
+
+    return None
+
+
 def update_config(
     component_type: Literal["skill", "rule", "instruction", "claude_md"],
     project: str,
@@ -3742,6 +3767,16 @@ def update_config(
         return {"success": False, "error": "component_name is required for skill/rule/instruction updates"}
     if not content:
         return {"success": False, "error": "content is required"}
+
+    # Content security validation (FB194)
+    content_error = _validate_config_content(content, component_type)
+    if content_error:
+        return {"success": False, "error": content_error, "blocked_by": "content_validation"}
+
+    # Scope permission check — only claude-family can create global components
+    effective_scope = scope or ("project" if component_type == "skill" else "global")
+    if effective_scope == "global" and project != "claude-family":
+        return {"success": False, "error": f"Only claude-family can create global-scoped {component_type}s. Use scope='project' for project-scoped components."}
 
     # Map component_type to table/column/version_table/deploy_path
     CONFIG_MAP = {
