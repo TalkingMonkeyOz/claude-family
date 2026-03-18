@@ -1,0 +1,62 @@
+**QUICK STATUS CHECK - Read-Only View**
+
+Get instant visibility into project state. NO database writes, NO session logging.
+
+---
+
+## Execute These Steps
+
+### Step 1: Get Work Context (MCP)
+
+Use `mcp__project-tools__get_work_context` with `scope="current"`.
+
+This returns: active feature, in-progress tasks, last session summary, todo count.
+
+### Step 2: Get Active Todos (MCP)
+
+Use `mcp__project-tools__get_incomplete_todos` with the current project name.
+
+### Step 3: Check Messages (MCP)
+
+Use `mcp__project-tools__check_inbox` with `project_name` parameter.
+
+### Step 4: Check Git Status
+
+```bash
+git status --short
+```
+
+---
+
+## Display Format
+
+```
++==================================================================+
+|  STATUS CHECK - {project_name} (read-only)                       |
++==================================================================+
+|  Last Session: {date} - {summary}                                |
+|  Phase: {phase}                                                  |
++------------------------------------------------------------------+
+|  TODOS ({count}):                                                |
+|  In Progress: {items}                                            |
+|  Pending: {items by priority}                                    |
++------------------------------------------------------------------+
+|  MESSAGES: {count} pending                                       |
+|  UNCOMMITTED: {count} files                                      |
++==================================================================+
+```
+
+---
+
+## Notes
+
+- **Read-only**: Does NOT create session records or log anything
+- **Source of truth**: Database (claude.todos, claude.sessions)
+- **For full resume with context**: Use `/session-resume` instead
+
+---
+
+**Version**: 3.1 (Replaced deprecated get_project_context with get_work_context)
+**Created**: 2025-12-27
+**Updated**: 2026-02-28
+**Location**: .claude/commands/session-status.md
