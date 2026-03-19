@@ -43,7 +43,7 @@
     </bpmn:exclusiveGateway>
 
     <!-- Gated path: discipline check with cascading logic -->
-    <bpmn:scriptTask id="discipline_check" name="[HOOK] Task Discipline Gate (Write/Edit/Task/Bash)" scriptFormat="python">
+    <bpmn:scriptTask id="discipline_check" name="[HOOK] Task Discipline Gate (Write/Edit/Task/Bash/SequentialThinking)" scriptFormat="python">
       <bpmn:incoming>flow_gated</bpmn:incoming>
       <bpmn:outgoing>f3</bpmn:outgoing>
       <bpmn:script>discipline_checked = True</bpmn:script>

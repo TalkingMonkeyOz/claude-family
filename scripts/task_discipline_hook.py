@@ -7,7 +7,7 @@ Blocks tool calls when no tasks have been created, ensuring Claude plans before 
 Also tracks unique files edited per session and issues a delegation advisory at 3+ files.
 
 Hook Event: PreToolUse
-Matchers: Write, Edit, Task, Bash (registered separately per tool)
+Matchers: Write, Edit, Task, Bash, mcp__sequential-thinking__sequentialthinking (registered separately per tool)
 
 How it works (5-way cascade - FB108 + FB109):
 0. Read-only Bash commands (git status, git log, etc.) bypass task check entirely
@@ -69,7 +69,7 @@ logger = logging.getLogger('task_discipline')
 # Tools that REQUIRE tasks to exist before use.
 # Action tools + Bash (most investigation work goes through Bash).
 # Read/Grep/Glob are passive and ungated to allow initial exploration.
-GATED_TOOLS = {'Write', 'Edit', 'Task', 'Bash'}
+GATED_TOOLS = {'Write', 'Edit', 'Task', 'Bash', 'mcp__sequential-thinking__sequentialthinking'}
 
 # Read-only Bash commands that are ungated (like Read/Grep/Glob).
 # These are investigation/orientation commands, not actions.

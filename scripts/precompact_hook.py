@@ -16,7 +16,7 @@ Output: systemMessage injected into post-compact context
 
 Author: Claude Family
 Date: 2025-12-29
-Updated: 2026-02-07 (Enhanced with session state injection)
+Updated: 2026-03-20 (Core protocol reinforcement on compaction)
 """
 
 import sys
@@ -307,6 +307,20 @@ def build_refresh_message(hook_input: Dict) -> str:
                 logger.info("Storage skill re-injected for post-compaction context")
     except Exception as e:
         logger.warning(f"Failed to re-inject storage skill: {e}")
+
+    # Re-inject core protocol rules so enforcement survives compaction
+    try:
+        protocol_path = Path(__file__).parent / "core_protocol.txt"
+        if protocol_path.exists():
+            protocol_content = protocol_path.read_text(encoding="utf-8", errors="replace").strip()
+            if len(protocol_content) > 50:
+                parts.append("\n<core-protocol-reinforcement>")
+                parts.append("CRITICAL: These rules MUST be followed in every interaction:")
+                parts.append(protocol_content)
+                parts.append("</core-protocol-reinforcement>")
+                logger.info("Core protocol re-injected for post-compaction enforcement")
+    except Exception as e:
+        logger.warning(f"Failed to re-inject core protocol: {e}")
 
     return "\n".join(parts)
 
