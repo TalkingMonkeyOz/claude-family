@@ -61,6 +61,35 @@ This will:
 
 **Verify**: Run `/check-compliance` to ensure 100% governance
 
+### Post-Setup Steps (After Project Init)
+
+These are NOT automated by `/project-init` — do them manually:
+
+| Step | Command | Why |
+|------|---------|-----|
+| **Index codebase** | `index_codebase(project, path)` | Enable CKG collision detection and symbol search |
+| **Sync config** | `python scripts/sync_project.py <path>` | Deploy hooks, MCP, skills, rules, agents, CLAUDE.md from DB |
+| **Create vault folder** | `knowledge-vault/10-Projects/{name}/` | Project-specific knowledge storage |
+
+**Note**: `sync_project.py` replaces the old `generate_project_settings.py`. It deploys 7 components: settings, mcp, skills, commands, rules, agents, claude_md. Runs automatically on SessionStart (self-healing).
+
+### What Every Project Gets Automatically
+
+Via the `hooks-base` template (config_templates, template_id=1):
+- **Task discipline hook** — blocks Write/Edit/Bash/SequentialThinking without tasks
+- **Context injector** — injects coding standards before writing
+- **Standards validator** — validates content against standards
+- **Collision hook** — warns about CKG symbol name collisions
+- **SQL governance** — blocks non-infra projects from modifying infra tables
+
+### CLAUDE.md Routing Pattern
+
+All CLAUDE.md files MUST use wiki-links for vault references:
+- `[[Config Management SOP]]` — wiki-link (correct)
+- `knowledge-vault/40-Procedures/Config Management SOP.md` — hardcoded path (wrong)
+
+See [[CLAUDE.md Routing Pattern]] for details.
+
 ---
 
 ## Manual Method (If Skill Not Available)
@@ -133,7 +162,7 @@ WHERE project_name = 'project-name';
 ```bash
 # Generate settings.local.json from project type defaults
 cd C:\Projects\project-name
-python C:\Projects\claude-family\scripts\generate_project_settings.py project-name
+python C:\Projects\claude-family\scripts\sync_project.py C:\Projects\project-name --no-interactive
 ```
 
 This creates `.claude/settings.local.json` with:
@@ -397,7 +426,7 @@ Use the Skill tool with skill="project-ops" and args="init project-name"
 **Solution**:
 1. Check project exists in `claude.workspaces`
 2. Check project type is valid (run `SELECT * FROM claude.project_type_configs`)
-3. Run generator manually: `python scripts/generate_project_settings.py project-name`
+3. Run sync manually: `python scripts/sync_project.py C:\Projects\project-name --no-interactive`
 
 **Problem**: Compliance check fails
 
@@ -412,12 +441,13 @@ Create missing documents using templates above.
 
 ---
 
-**Version**: 1.2
+**Version**: 1.3
 **Created**: 2025-12-27
-**Updated**: 2026-03-09
+**Updated**: 2026-03-20
 **Location**: 40-Procedures/New Project SOP.md
 
 **Changelog**:
+- v1.3 (2026-03-20): Added post-setup steps (CKG indexing, sync_project.py, vault folder), CLAUDE.md routing pattern, hooks-base auto-includes, replaced generate_project_settings.py with sync_project.py
 - v1.2 (2026-03-09): Updated infrastructure MCP list (removed orchestrator, added sequential-thinking, bpmn-engine, python-repl); added bpmn-modeling skill
 - v1.1 (2025-12-28): Added Section 6 - Configure Project-Specific MCPs (.mcp.json, database registration, workspaces update)
 - v1.0 (2025-12-27): Initial version

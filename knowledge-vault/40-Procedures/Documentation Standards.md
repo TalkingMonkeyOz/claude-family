@@ -1,8 +1,7 @@
 ---
 projects:
 - claude-family
-synced: true
-synced_at: '2025-12-20T23:29:45.919068'
+synced: false
 tags:
 - standards
 - documentation
@@ -28,6 +27,20 @@ Standards for creating and maintaining documentation across the Claude Family ec
 | **CLAUDE.md** | Project root | AI constitution, quick reference |
 | **Code comments** | Source files | Implementation-specific notes |
 
+### 5-System Storage Architecture
+
+Documents are just ONE of five storage systems. Use the right one:
+
+| I have... | System | Tool |
+|-----------|--------|------|
+| Credential, endpoint, config | **Notepad** | `store_session_fact()` |
+| Pattern, gotcha, lesson learned | **Memory** | `remember()` |
+| Component working notes | **Filing Cabinet** | `stash()` |
+| Structured data (APIs, schemas) | **Reference Library** | `catalog()` |
+| Procedure, SOP, research doc | **Vault** | Write to `knowledge-vault/` |
+
+> **Full routing guide**: See `storage-rules.md` (auto-loaded via `.claude/rules/`) or `/skill-load-memory-storage`
+
 ### Decision Guide
 
 ```
@@ -44,6 +57,13 @@ Is this knowledge reusable across sessions?
          ├── Development standard? → docs/standards/
          └── Project plan/spec? → docs/ (root)
 ```
+
+### CLAUDE.md Routing Pattern
+
+All references to vault docs in CLAUDE.md files MUST use wiki-links:
+- `[[Config Management SOP]]` — wiki-link (correct)
+- `knowledge-vault/40-Procedures/...` — hardcoded path (wrong, breaks on reorganization)
+- For structured data lookups, use `recall_entities()` instead of hardcoded paths
 
 ---
 
@@ -267,7 +287,7 @@ Move project doc to vault when:
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2025-12-20
-**Updated**: 2025-12-26
+**Updated**: 2026-03-20
 **Location**: knowledge-vault/40-Procedures/Documentation Standards.md
