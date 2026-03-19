@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             id="Definitions_GateLifecycle"
+             targetNamespace="http://metis.ai/bpmn/gate-lifecycle">
+
+  <process id="Process_GateLifecycle" name="METIS Gate Lifecycle" isExecutable="false">
+    <documentation>
+      Phase gate review process for METIS project lifecycle.
+      Applies to: building METIS itself AND customer project phases.
+      Dual-lens: same process, different instances.
+
+      Participants: Project Team (Claude instances), Stakeholder (John/human reviewer)
+      Triggers: Phase work is believed complete
+      Outputs: Phase advanced OR rework items identified
+    </documentation>
+
+    <!-- Start -->
+    <startEvent id="Start_PhaseOpen" name="Phase Opened">
+      <documentation>A new phase stream is set to 'in_progress'. Entry criteria must be checked.</documentation>
+    </startEvent>
+
+    <!-- Check Entry Criteria -->
+    <task id="Task_CheckEntry" name="Check Entry Criteria">
+      <documentation>
+        Verify all prerequisites for this phase are met:
+        - Predecessor phase stream status = 'completed'
+        - All blocking dependencies resolved
+        - Required input documents/artifacts exist
+        Tool: get_build_board() to check stream deps
+        Data: entry_criteria from stream plan_data JSON
+      </documentation>
+    </task>
+
+    <exclusiveGateway id="GW_EntryMet" name="Entry Criteria Met?" />
+
+    <task id="Task_BlockEntry" name="Block: List Unmet Criteria">
+      <documentation>
+        Phase cannot start. Document which criteria are unmet.
+        Tool: advance_status() will BLOCK with reason
+        Output: List of unmet prerequisites
+      </documentation>
+    </task>
+
+    <intermediateCatchEvent id="Event_WaitEntry" name="Wait for Prerequisites">
+      <documentation>Wait until predecessor work completes. Re-check periodically.</documentation>
+      <timerEventDefinition />
+    </intermediateCatchEvent>
+
+    <!-- Work Phase -->
+    <task id="Task_ExecuteWork" name="Execute Build Tasks">
+      <documentation>
+        Work through build tasks in dependency order:
+        1. get_build_board() to find ready tasks
+        2. start_work("BT###") — enforces deps
+        3. Do the work (code, design, test)
+        4. complete_work("BT###") — reports next task
+        5. Repeat until all tasks in phase complete
+
+        Mandatory during work:
+        - Catalog new decisions immediately (entity catalog)
+        - Update build board (automatic via tools)
+        - save_checkpoint() after each task group
+      </documentation>
+    </task>
+
+    <!-- Check Exit Criteria -->
+    <task id="Task_CheckExit" name="Check Exit Criteria">
+      <documentation>
+        Verify all phase outputs are complete:
+        - All build tasks in stream = 'completed'
+        - All deliverables written and cataloged
+        - Documentation updated (routing table current)
+        - No open blockers
+        Tool: get_build_board() stream completion %
+        Data: exit_criteria from stream plan_data JSON
+      </documentation>
+    </task>
+
+    <exclusiveGateway id="GW_ExitMet" name="Exit Criteria Met?" />
+
+    <task id="Task_IdentifyGaps" name="Identify Remaining Gaps">
+      <documentation>
+        Not all exit criteria met. List what's missing:
+        - Incomplete build tasks
+        - Missing deliverables
+        - Uncataloged decisions
+        - Stale documentation
+        Create tasks for each gap, return to work phase.
+      </documentation>
+    </task>
+
+    <!-- Gate Documentation (Mandatory) -->
+    <task id="Task_GateDocumentation" name="Update Documentation (Mandatory)">
+      <documentation>
+        MANDATORY before gate review. Cannot skip.
+        1. All new decisions cataloged in entity catalog
+        2. Build board reflects actual state
+        3. Vault design docs have frozen-reference headers where execution state moved
+        4. Routing table in CLAUDE.md is current
+        5. Session handoff written
+
+        This step enforces the Information Architecture two-layer model.
+      </documentation>
+    </task>
+
+    <!-- Gate Review -->
+    <task id="Task_GateReview" name="Gate Review with Stakeholder">
+      <documentation>
+        Human checkpoint. Stakeholder (John) reviews:
+        - Deliverables quality
+        - Decisions alignment with ethos
+        - Risks and mitigations
+        - Readiness for next phase
+
+        Output: Approved / Rework needed
+        Tool: advance_status(item_type="features", item_id="F###", new_status="completed")
+      </documentation>
+    </task>
+
+    <exclusiveGateway id="GW_Approved" name="Gate Approved?" />
+
+    <task id="Task_Rework" name="Rework: Address Feedback">
+      <documentation>
+        Stakeholder identified issues. Create build tasks for each rework item.
+        Return to work phase. Do not re-review until all rework complete.
+      </documentation>
+    </task>
+
+    <!-- Phase Complete -->
+    <task id="Task_AdvancePhase" name="Advance Phase Status">
+      <documentation>
+        Phase approved. Actions:
+        1. advance_status() on stream to 'completed'
+        2. Freeze vault docs for this phase (add frozen-reference header)
+        3. Catalog phase completion as decision
+        4. Update CLAUDE.md current state
+        5. Next phase stream auto-unblocks via dependency resolution
+      </documentation>
+    </task>
+
+    <endEvent id="End_PhaseComplete" name="Phase Complete" />
+
+    <!-- Sequence Flows -->
+    <sequenceFlow id="Flow_1" sourceRef="Start_PhaseOpen" targetRef="Task_CheckEntry" />
+    <sequenceFlow id="Flow_2" sourceRef="Task_CheckEntry" targetRef="GW_EntryMet" />
+    <sequenceFlow id="Flow_3" sourceRef="GW_EntryMet" targetRef="Task_BlockEntry" name="No" />
+    <sequenceFlow id="Flow_4" sourceRef="GW_EntryMet" targetRef="Task_ExecuteWork" name="Yes" />
+    <sequenceFlow id="Flow_5" sourceRef="Task_BlockEntry" targetRef="Event_WaitEntry" />
+    <sequenceFlow id="Flow_6" sourceRef="Event_WaitEntry" targetRef="Task_CheckEntry" />
+    <sequenceFlow id="Flow_7" sourceRef="Task_ExecuteWork" targetRef="Task_CheckExit" />
+    <sequenceFlow id="Flow_8" sourceRef="Task_CheckExit" targetRef="GW_ExitMet" />
+    <sequenceFlow id="Flow_9" sourceRef="GW_ExitMet" targetRef="Task_IdentifyGaps" name="No" />
+    <sequenceFlow id="Flow_10" sourceRef="GW_ExitMet" targetRef="Task_GateDocumentation" name="Yes" />
+    <sequenceFlow id="Flow_11" sourceRef="Task_IdentifyGaps" targetRef="Task_ExecuteWork" />
+    <sequenceFlow id="Flow_12" sourceRef="Task_GateDocumentation" targetRef="Task_GateReview" />
+    <sequenceFlow id="Flow_13" sourceRef="Task_GateReview" targetRef="GW_Approved" />
+    <sequenceFlow id="Flow_14" sourceRef="GW_Approved" targetRef="Task_Rework" name="No" />
+    <sequenceFlow id="Flow_15" sourceRef="GW_Approved" targetRef="Task_AdvancePhase" name="Yes" />
+    <sequenceFlow id="Flow_16" sourceRef="Task_Rework" targetRef="Task_ExecuteWork" />
+    <sequenceFlow id="Flow_17" sourceRef="Task_AdvancePhase" targetRef="End_PhaseComplete" />
+  </process>
+</definitions>

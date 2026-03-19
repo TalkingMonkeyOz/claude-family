@@ -4,7 +4,7 @@ tags:
   - scope/system
   - type/process
 created: 2026-02-28
-updated: 2026-03-11
+updated: 2026-03-15
 ---
 
 # METIS Design Lifecycle
@@ -160,39 +160,53 @@ Where METIS itself stands against each gate. Updated per session.
 
 **Gate Zero gap addressed:** Security architecture conversation completed 2026-03-08. Constraint 6 (data isolation) now addressed by `security-architecture.md`. Feeds into Gate 2 Doc 8 (Security & Access Model).
 
-### Gate 1 — DRAFT COMPLETE (5/5 documents) ✅
+### Gate 1 — COMPLETE ✅
 
-All 5 Gate 1 documents now exist. Consolidated from ~97 source files (2026-03-11). Ready for human review and validation.
+All 5 Gate 1 documents validated and accepted (2026-03-15). Docs 1-2 walked through topic by topic. Docs 3-5 accepted as-is (prototyping rationale — directional, will evolve as we build).
 
 | # | Document | Status | Notes |
 |---|---|---|---|
-| 1 | Process Inventory | ✅ Draft | `gate-one/process-inventory.md` — 2026-03-11. 54 processes across 9 SPD areas + cross-cutting. Deduplicated from 175 raw extractions. |
-| 2 | Actor Map | ✅ Validated | `gate-one/actor-map.md` — 2026-03-08. 6 human actors, 3 AI agent categories (project/event-driven/system-level), 4 external systems. |
-| 3 | Data Entity Map | ✅ Draft | `gate-one/data-entity-map.md` — 2026-03-11. 45 entities in 7 bounded contexts. Deduplicated from 132 raw extractions. |
-| 4 | Business Rules Inventory | ✅ Draft | `gate-one/business-rules-inventory.md` — 2026-03-11. Rules across 7 categories (data governance, security, agent, architecture, process, commercial, quality). |
-| 5 | Integration Points | ✅ Draft | `gate-one/integration-points.md` — 2026-03-11. External systems with maturity markers (proven/designed/named). |
+| 1 | Process Inventory | ✅ Validated | `gate-one/process-inventory.md` — 54 processes across 9 areas |
+| 2 | Actor Map | ✅ Validated | `gate-one/actor-map.md` — 6 human actors, 3 AI agent categories |
+| 3 | Data Entity Map | ✅ Validated | `gate-one/data-entity-map.md` — 45 entities, 7 bounded contexts |
+| 4 | Business Rules Inventory | ✅ Validated | `gate-one/business-rules-inventory.md` — 52 rules, 7 categories |
+| 5 | Integration Points | ✅ Validated | `gate-one/integration-points.md` — 27 integration points |
 
-**Gate 1 check: Can you list what processes exist, who acts, what data moves, what rules apply, and what connects?** YES — all five inventory documents exist. Needs human review for completeness and accuracy before advancing to Gate 2.
+### Gate 2 — IN PROGRESS (9/12 deliverables written)
 
-### Gate 2 — MATERIAL INDEXED (formal work not started)
+26 design decisions made across 6 clusters (2026-03-14/15). 9 of 12 deliverables written as formal documents. 3 remaining are autonomous work (BPMN, C4 L3, DMN).
 
-Material index created 2026-03-11: `gate-two/README.md`. 12 deliverables assessed with honest completeness estimates (5%–75%). Substantial informal design exists across brainstorm files, session handoffs, and research papers. Key highlights:
-- Security & Access Model: ~75% (12 validated decisions from 2026-03-08)
-- Tech Stack Decisions: ~70% (most choices made, ADRs not written)
-- Data Model: ~50% (substantial entity design, no DDL)
-- API / Interface Design: ~45% (13 REST endpoints specified)
-- Detailed Process Models (BPMN): ~15% (no `.bpmn` XML files authored for METIS)
-- C4 Level 3 Diagrams: ~5% (L1/L2 complete, L3 not started)
+| # | Document | Status | Notes |
+|---|---|---|---|
+| 1 | BPMN Process Models | Partial (~25%) | gate-lifecycle.bpmn added (2026-03-17). More autonomous work needed. |
+| 2 | C4 Level 3 Diagrams | Partial (~15%) | Autonomous — decompose 9 containers |
+| 3 | Domain Model (DDD) | ✅ Written (~90%) | 10 bounded contexts, aggregate roots, domain events |
+| 4 | Decision Models (DMN) | Partial (~15%) | Autonomous — formalise 7 tables |
+| 5 | Data Model | ✅ COMPLETE | 32 tables across 4 docs: 05 (13), 05a RBAC+audit (7), 05b platform (9), 05c integration (3) + master index |
+| 6 | Tech Stack | ✅ Written (~95%) | All technology choices made |
+| 7 | API / Interface | ✅ Written (~80%) | 13 endpoints, MCP tools, LLM abstraction |
+| 8 | Security & Access | ✅ Written (~90%) | 19 security decisions, credential delegation |
+| 9 | Test Strategy | ✅ Written (~80%) | RAG metrics, BPMN-to-test loop, coverage |
+| 10 | Journey Maps | ✅ Written (~70%) | 7 journeys inc. tool-builder |
+| 11 | Deployment Architecture | ✅ Written (~75%) | Instance model, environments, residency |
+| 12 | Monitoring & Observability | ✅ Written (~80%) | Monitoring stack, token budgets, SLOs |
 
-### Gate 3 — MATERIAL INDEXED (formal work not started)
+See `gate-two/README.md` for full index and decision documents.
 
-Material index created 2026-03-11: `gate-three/README.md`. 8 deliverables assessed with completeness estimates (5%–70%). Key highlights:
-- Development Standards: ~70% (conventions decided, formal doc not written)
-- Agent Protocols: ~50% (supervisor pattern decided, formal protocol doc not written)
-- Environment Setup: ~45% (4 environments named, IaC not started)
-- Documentation Standards: ~40% (RAG-readable approach decided)
-- Build Plan: ~30% (phase structure validated, plan-of-attack UNVALIDATED)
-- Definition of Done: ~5% (no consolidated DoD document)
+### Gate 3 — IN PROGRESS (3/8 substantially addressed)
+
+Material index created 2026-03-11: `gate-three/README.md`. Build tracking design session (2026-03-16) substantially addressed 3 of 8 deliverables.
+
+| # | Document | Status | Notes |
+|---|---|---|---|
+| 1 | Development Standards | ~70% | Conventions decided, formal doc not written |
+| 2 | Environment Setup | ~45% | 4 environments named, IaC not started |
+| 3 | Build Plan | ~85% ⬆ | Build tracking LIVE: 3 streams, 16 features, 8 tasks with deps. Info architecture deployed. See `project-governance/build-tracking-design.md` + `orchestration-infra/information-architecture.md` |
+| 4 | Definition of Done | ~50% ⬆ | Mandatory docs per feature level defined, status-gated enforcement designed. See `project-governance/doc-lifecycle-bpmn.md` |
+| 5 | Agent Protocols | ~50% | Supervisor pattern decided, formal protocol doc not written |
+| 6 | Documentation Standards | ~80% ⬆ | Templates, lifecycle, enforcement all designed. See `project-governance/doc-templates.md` + `doc-lifecycle-bpmn.md` |
+| 7 | Risk Register | ~10% | Not started formally |
+| 8 | Project Delivery Framework | ~30% | Phase structure validated, plan-of-attack UNVALIDATED |
 
 ### Gate 4 — NOT APPLICABLE YET
 
@@ -233,12 +247,19 @@ The following phases were the original design discovery process before the gate 
 - Design coherence skill: `skills/design-coherence/SKILL.md`
 - Ethos document: `ethos.md`
 - Security architecture: `security-architecture.md` (cross-cutting, addresses Gate 0 Constraint 6)
+- Build tracking design: `project-governance/build-tracking-design.md` (Gate 3 Doc 3)
+- Build tracking BPMN: `project-governance/build-tracking-bpmn*.md` (4 files — overview, processes, compliance, doc lifecycle)
+- Doc templates: `project-governance/doc-templates.md` (Gate 3 Doc 6)
+- Doc lifecycle: `project-governance/doc-lifecycle-bpmn.md` (Gate 3 Doc 4+6)
+- Data model (complete): `gate-two/deliverable-05*.md` (05, 05a, 05b, 05c, 05-index — 32 tables)
+- Information architecture: `orchestration-infra/information-architecture.md` (two-layer model, routing table)
+- Gate lifecycle BPMN: `bpmn-maps/gate-lifecycle.bpmn` (phase gate review process)
 
 ---
-*Created: 2026-02-28 | Updated: 2026-03-11 — Gate 1 DRAFT COMPLETE (5/5 docs). Gate 2/3 material indexed. Consolidation gaps documented.*
+*Created: 2026-02-28 | Updated: 2026-03-17 — Gate 1 COMPLETE. Gate 2: 26 decisions, 10/12 written (data model COMPLETE — 32 tables). Gate 3: 3/8 substantially addressed.*
 
 ---
-**Version**: 1.0
+**Version**: 2.2
 **Created**: 2026-02-28
-**Updated**: 2026-03-11
+**Updated**: 2026-03-17
 **Location**: knowledge-vault/10-Projects/Project-Metis/gates/design-lifecycle.md
