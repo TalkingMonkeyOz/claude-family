@@ -1,0 +1,635 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/code-knowledge-graph"
+    id="Definitions_CodeKnowledgeGraph">
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 1: CODE INDEXING PIPELINE                                   -->
+  <!-- ================================================================== -->
+  <bpmn:process id="code_indexing_pipeline" name="Code Knowledge Graph: Indexing Pipeline" isExecutable="true">
+
+    <!--
+      Indexes a project's codebase into claude.code_symbols and
+      claude.code_references tables for structural code search.
+
+      Uses tree-sitter for multi-language parsing (Python, TypeScript,
+      C#, Rust). Incremental re-index via file hash comparison.
+
+      Trigger: Manual (MCP tool), git commit hook, or periodic job
+      Scope: Single project per invocation
+
+      Paths:
+        1. Happy: Discover -> Hash(changed) -> Parse(ok) -> Extract -> Store -> Embed -> Done
+        2. No files: Discover -> None found -> End(empty)
+        3. Parse error: Parse(fail) -> Log + Skip -> Continue
+        4. Incremental: Hash(unchanged) -> Skip -> Continue
+        5. Full reindex: Clear existing symbols -> run full pipeline
+        6. Multi-file: Loop iterates all source files
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="idx_start" name="Index Requested">
+      <bpmn:outgoing>flow_start_mode</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 0: DETERMINE MODE                                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="determine_mode" name="[TOOL] Determine Index Mode" scriptFormat="python">
+      <bpmn:incoming>flow_start_mode</bpmn:incoming>
+      <bpmn:outgoing>flow_mode_check</bpmn:outgoing>
+      <bpmn:script>
+# Input: project_id, force_full (bool, default False)
+# Check if project has existing symbols in DB
+# Output: mode ('full' or 'incremental'), file_extensions
+import os
+mode = 'full' if force_full or existing_symbol_count == 0 else 'incremental'
+# Determine languages from project config or auto-detect
+file_extensions = detect_project_languages(project_path)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="mode_gw" name="Index Mode?" default="flow_incremental">
+      <bpmn:incoming>flow_mode_check</bpmn:incoming>
+      <bpmn:outgoing>flow_full_reindex</bpmn:outgoing>
+      <bpmn:outgoing>flow_incremental</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="clear_existing" name="[DB] Clear Existing Symbols" scriptFormat="python">
+      <bpmn:incoming>flow_full_reindex</bpmn:incoming>
+      <bpmn:outgoing>flow_cleared_discover</bpmn:outgoing>
+      <bpmn:script>
+# DELETE FROM claude.code_references WHERE from_symbol_id IN (SELECT symbol_id FROM claude.code_symbols WHERE project_id = ?)
+# DELETE FROM claude.code_symbols WHERE project_id = ?
+# Cascading delete: references first, then symbols
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: DISCOVER SOURCE FILES                                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="discover_files" name="[TOOL] Discover Source Files" scriptFormat="python">
+      <bpmn:incoming>flow_cleared_discover</bpmn:incoming>
+      <bpmn:incoming>flow_incremental</bpmn:incoming>
+      <bpmn:outgoing>flow_discover_check</bpmn:outgoing>
+      <bpmn:script>
+# Glob for source files matching file_extensions in project directory
+# Exclude: node_modules, .git, __pycache__, bin, obj, target, dist
+# Input: project_path, file_extensions
+# Output: file_list, file_count, current_index, counters
+file_count = len(file_list)
+current_index = 0
+indexed_count = 0
+skipped_count = 0
+error_count = 0
+symbols_found = 0
+refs_found = 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_files_gw" name="Files Found?" default="flow_no_files">
+      <bpmn:incoming>flow_discover_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_files</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_files</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_empty" name="No Source Files">
+      <bpmn:incoming>flow_no_files</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: FILE PROCESSING LOOP                                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="pick_file" name="[TOOL] Pick Next File" scriptFormat="python">
+      <bpmn:incoming>flow_has_files</bpmn:incoming>
+      <bpmn:incoming>flow_continue_next</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_hash</bpmn:outgoing>
+      <bpmn:script>
+# Get file at current_index from file_list
+current_file = file_list[current_index]
+current_index += 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_hash" name="[TOOL] Check File Hash" scriptFormat="python">
+      <bpmn:incoming>flow_pick_hash</bpmn:incoming>
+      <bpmn:outgoing>flow_hash_result</bpmn:outgoing>
+      <bpmn:script>
+# Compute SHA-256 of current_file
+# Compare against stored hash in claude.code_symbols (last_indexed_hash)
+# Output: file_changed (bool)
+import hashlib
+with open(current_file, 'rb') as f:
+    current_hash = hashlib.sha256(f.read()).hexdigest()
+file_changed = (current_hash != stored_hash) or mode == 'full'
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="changed_gw" name="File Changed?" default="flow_unchanged">
+      <bpmn:incoming>flow_hash_result</bpmn:incoming>
+      <bpmn:outgoing>flow_changed</bpmn:outgoing>
+      <bpmn:outgoing>flow_unchanged</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="skip_unchanged" name="[TOOL] Skip (Unchanged)" scriptFormat="python">
+      <bpmn:incoming>flow_unchanged</bpmn:incoming>
+      <bpmn:outgoing>flow_unchanged_advance</bpmn:outgoing>
+      <bpmn:script>
+skipped_count += 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: PARSE AND EXTRACT                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="parse_file" name="[TOOL] Parse File (tree-sitter)" scriptFormat="python">
+      <bpmn:incoming>flow_changed</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_result</bpmn:outgoing>
+      <bpmn:script>
+# Use tree-sitter to parse source file into AST
+# Select language grammar based on file extension
+# Output: ast_tree, parse_success (bool), parse_error (str or None)
+language = extension_to_language(current_file)
+parser = get_parser(language)
+ast_tree = parser.parse(source_bytes)
+parse_success = not ast_tree.root_node.has_error
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="parse_gw" name="Parse OK?" default="flow_parse_fail">
+      <bpmn:incoming>flow_parse_result</bpmn:incoming>
+      <bpmn:outgoing>flow_parse_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_parse_fail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="log_parse_error" name="[TOOL] Log Parse Error" scriptFormat="python">
+      <bpmn:incoming>flow_parse_fail</bpmn:incoming>
+      <bpmn:outgoing>flow_error_advance</bpmn:outgoing>
+      <bpmn:script>
+# Log error for this file, continue with next
+error_count += 1
+errors.append({'file': current_file, 'error': parse_error})
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="extract_symbols" name="[TOOL] Extract Symbols" scriptFormat="python">
+      <bpmn:incoming>flow_parse_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_refs</bpmn:outgoing>
+      <bpmn:script>
+# Walk AST to extract:
+#   - Functions/methods (name, params, return type, line, scope)
+#   - Classes/structs (name, bases, line)
+#   - Modules/namespaces
+#   - Constants/exports
+#   - Decorators/attributes
+# Build parent-child relationships (method belongs to class)
+# Output: symbols (list of dicts)
+symbols = extract_from_ast(ast_tree, language, current_file)
+symbols_found += len(symbols)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="extract_references" name="[TOOL] Extract References" scriptFormat="python">
+      <bpmn:incoming>flow_extract_refs</bpmn:incoming>
+      <bpmn:outgoing>flow_refs_store</bpmn:outgoing>
+      <bpmn:script>
+# Walk AST to extract cross-references:
+#   - Function calls (caller -> callee)
+#   - Imports (file -> imported module/symbol)
+#   - Class inheritance (child -> parent)
+#   - Type references
+# Output: references (list of {from_symbol, to_symbol, ref_type})
+# Note: to_symbol may be unresolved (name only) - resolved in store phase
+references = extract_references_from_ast(ast_tree, language, current_file)
+refs_found += len(references)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: STORE IN DATABASE                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="clear_file_symbols" name="[DB] Clear Old Symbols for File" scriptFormat="python">
+      <bpmn:incoming>flow_refs_store</bpmn:incoming>
+      <bpmn:outgoing>flow_cleared_upsert</bpmn:outgoing>
+      <bpmn:script>
+# DELETE existing symbols + references for this file (incremental replace)
+# DELETE FROM claude.code_references WHERE from_symbol_id IN
+#   (SELECT symbol_id FROM claude.code_symbols WHERE file_path = ? AND project_id = ?)
+# DELETE FROM claude.code_symbols WHERE file_path = ? AND project_id = ?
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="upsert_symbols" name="[DB] Insert Symbols + References" scriptFormat="python">
+      <bpmn:incoming>flow_cleared_upsert</bpmn:incoming>
+      <bpmn:outgoing>flow_upsert_embed</bpmn:outgoing>
+      <bpmn:script>
+# Batch INSERT into claude.code_symbols
+# Then resolve references: match to_symbol names to symbol_ids
+# INSERT into claude.code_references (resolved refs only, log unresolved)
+# UPDATE file hash for next incremental check
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="generate_embeddings" name="[TOOL] Generate Embeddings" scriptFormat="python">
+      <bpmn:incoming>flow_upsert_embed</bpmn:incoming>
+      <bpmn:outgoing>flow_embed_advance</bpmn:outgoing>
+      <bpmn:script>
+# Generate Voyage AI embeddings for symbol signatures/descriptions
+# Batch embed: "{kind} {name} in {file_path}: {signature}"
+# UPDATE claude.code_symbols SET embedding = ? WHERE symbol_id = ?
+indexed_count += 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- LOOP CONTROL                                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="advance_gw" name="More Files?" default="flow_done">
+      <bpmn:incoming>flow_embed_advance</bpmn:incoming>
+      <bpmn:incoming>flow_unchanged_advance</bpmn:incoming>
+      <bpmn:incoming>flow_error_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_continue_next</bpmn:outgoing>
+      <bpmn:outgoing>flow_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: RESOLVE CROSS-FILE REFERENCES                              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="resolve_cross_refs" name="[DB] Resolve Cross-File References" scriptFormat="python">
+      <bpmn:incoming>flow_done</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_cleanup</bpmn:outgoing>
+      <bpmn:script>
+# After all files indexed, resolve unresolved references:
+# Match unresolved to_symbol names against all known symbols in project
+# INSERT newly resolved references into claude.code_references
+# Log still-unresolved references (external deps, stdlib)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 6: CLEANUP STALE SYMBOLS                                      -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="cleanup_stale" name="[DB] Cleanup Stale Symbols" scriptFormat="python">
+      <bpmn:incoming>flow_resolve_cleanup</bpmn:incoming>
+      <bpmn:outgoing>flow_cleanup_summarize</bpmn:outgoing>
+      <bpmn:script>
+# In incremental mode: find symbols for files that no longer exist
+# DELETE FROM claude.code_references WHERE from_symbol_id IN stale OR to_symbol_id IN stale
+# DELETE FROM claude.code_symbols WHERE file_path NOT IN current file_list AND project_id = ?
+# Output: stale_removed_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- SUMMARY                                                             -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="summarize" name="[TOOL] Summarize Results" scriptFormat="python">
+      <bpmn:incoming>flow_cleanup_summarize</bpmn:incoming>
+      <bpmn:outgoing>flow_summarize_end</bpmn:outgoing>
+      <bpmn:script>
+# Return: {project, mode, files_discovered, indexed, skipped, errors,
+#          symbols_total, refs_total, stale_removed, duration_ms}
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_indexed" name="Indexing Complete">
+      <bpmn:incoming>flow_summarize_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+    <bpmn:sequenceFlow id="flow_start_mode" sourceRef="idx_start" targetRef="determine_mode" />
+    <bpmn:sequenceFlow id="flow_mode_check" sourceRef="determine_mode" targetRef="mode_gw" />
+    <bpmn:sequenceFlow id="flow_full_reindex" sourceRef="mode_gw" targetRef="clear_existing">
+      <bpmn:conditionExpression>mode == 'full'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_incremental" sourceRef="mode_gw" targetRef="discover_files" />
+    <bpmn:sequenceFlow id="flow_cleared_discover" sourceRef="clear_existing" targetRef="discover_files" />
+    <bpmn:sequenceFlow id="flow_discover_check" sourceRef="discover_files" targetRef="has_files_gw" />
+    <bpmn:sequenceFlow id="flow_has_files" sourceRef="has_files_gw" targetRef="pick_file">
+      <bpmn:conditionExpression>file_count > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_files" sourceRef="has_files_gw" targetRef="end_empty" />
+    <bpmn:sequenceFlow id="flow_pick_hash" sourceRef="pick_file" targetRef="check_hash" />
+    <bpmn:sequenceFlow id="flow_hash_result" sourceRef="check_hash" targetRef="changed_gw" />
+    <bpmn:sequenceFlow id="flow_changed" sourceRef="changed_gw" targetRef="parse_file">
+      <bpmn:conditionExpression>file_changed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_unchanged" sourceRef="changed_gw" targetRef="skip_unchanged" />
+    <bpmn:sequenceFlow id="flow_parse_result" sourceRef="parse_file" targetRef="parse_gw" />
+    <bpmn:sequenceFlow id="flow_parse_ok" sourceRef="parse_gw" targetRef="extract_symbols">
+      <bpmn:conditionExpression>parse_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_parse_fail" sourceRef="parse_gw" targetRef="log_parse_error" />
+    <bpmn:sequenceFlow id="flow_extract_refs" sourceRef="extract_symbols" targetRef="extract_references" />
+    <bpmn:sequenceFlow id="flow_refs_store" sourceRef="extract_references" targetRef="clear_file_symbols" />
+    <bpmn:sequenceFlow id="flow_cleared_upsert" sourceRef="clear_file_symbols" targetRef="upsert_symbols" />
+    <bpmn:sequenceFlow id="flow_upsert_embed" sourceRef="upsert_symbols" targetRef="generate_embeddings" />
+    <bpmn:sequenceFlow id="flow_embed_advance" sourceRef="generate_embeddings" targetRef="advance_gw" />
+    <bpmn:sequenceFlow id="flow_unchanged_advance" sourceRef="skip_unchanged" targetRef="advance_gw" />
+    <bpmn:sequenceFlow id="flow_error_advance" sourceRef="log_parse_error" targetRef="advance_gw" />
+    <bpmn:sequenceFlow id="flow_continue_next" sourceRef="advance_gw" targetRef="pick_file">
+      <bpmn:conditionExpression>current_index &lt; file_count</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_done" sourceRef="advance_gw" targetRef="resolve_cross_refs" />
+    <bpmn:sequenceFlow id="flow_resolve_cleanup" sourceRef="resolve_cross_refs" targetRef="cleanup_stale" />
+    <bpmn:sequenceFlow id="flow_cleanup_summarize" sourceRef="cleanup_stale" targetRef="summarize" />
+    <bpmn:sequenceFlow id="flow_summarize_end" sourceRef="summarize" targetRef="end_indexed" />
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 2: COLLISION CHECK HOOK                                     -->
+  <!-- ================================================================== -->
+  <bpmn:process id="code_collision_check" name="Code Knowledge Graph: Collision Check Hook" isExecutable="true">
+
+    <!--
+      PreToolUse hook on Write/Edit operations. Checks if new/renamed
+      symbols would collide with existing symbols in the project.
+
+      Lightweight: only checks function/class name collisions, not
+      full semantic analysis. Warns but does not block.
+
+      Trigger: PreToolUse on Write or Edit tools
+      Scope: Current project's indexed symbols
+
+      Paths:
+        1. Not indexed: Project has no symbols -> Skip (allow)
+        2. No new symbols: Edit doesn't add/rename symbols -> Allow
+        3. No collisions: New symbols are unique -> Allow
+        4. Collision found: Warn user, allow with advisory
+    -->
+
+    <bpmn:startEvent id="hook_start" name="Write/Edit Detected">
+      <bpmn:outgoing>flow_hook_check_indexed</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="check_project_indexed" name="[DB] Check Project Indexed" scriptFormat="python">
+      <bpmn:incoming>flow_hook_check_indexed</bpmn:incoming>
+      <bpmn:outgoing>flow_indexed_check</bpmn:outgoing>
+      <bpmn:script>
+# SELECT COUNT(*) FROM claude.code_symbols WHERE project_id = ?
+# Output: is_indexed (bool)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="indexed_gw" name="Project Indexed?" default="flow_not_indexed">
+      <bpmn:incoming>flow_indexed_check</bpmn:incoming>
+      <bpmn:outgoing>flow_is_indexed</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_indexed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skip" name="Skip (Not Indexed)">
+      <bpmn:incoming>flow_not_indexed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="extract_new_symbols" name="[TOOL] Extract Symbols from Diff" scriptFormat="python">
+      <bpmn:incoming>flow_is_indexed</bpmn:incoming>
+      <bpmn:outgoing>flow_extracted_check</bpmn:outgoing>
+      <bpmn:script>
+# Parse the new_string (Edit) or content (Write) to find symbol definitions
+# Use lightweight regex or tree-sitter parse of the snippet
+# Output: new_symbols (list of {name, kind})
+# Compare against old_string to identify truly NEW symbols (not existing ones being modified)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_new_symbols_gw" name="New Symbols?" default="flow_no_new_symbols">
+      <bpmn:incoming>flow_extracted_check</bpmn:incoming>
+      <bpmn:outgoing>flow_has_new_symbols</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_new_symbols</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_new" name="Allow (No New Symbols)">
+      <bpmn:incoming>flow_no_new_symbols</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="check_collisions" name="[DB] Check Symbol Collisions" scriptFormat="python">
+      <bpmn:incoming>flow_has_new_symbols</bpmn:incoming>
+      <bpmn:outgoing>flow_collision_result</bpmn:outgoing>
+      <bpmn:script>
+# For each new_symbol, query:
+# SELECT name, kind, file_path, line FROM claude.code_symbols
+#   WHERE project_id = ? AND name = ? AND file_path != ?
+# Output: collisions (list of {new_symbol, existing_symbol, file, line})
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="collision_gw" name="Collisions Found?" default="flow_no_collisions">
+      <bpmn:incoming>flow_collision_result</bpmn:incoming>
+      <bpmn:outgoing>flow_has_collisions</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_collisions</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_clean" name="Allow (No Collisions)">
+      <bpmn:incoming>flow_no_collisions</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="warn_collision" name="[HOOK] Warn: Symbol Collision" scriptFormat="python">
+      <bpmn:incoming>flow_has_collisions</bpmn:incoming>
+      <bpmn:outgoing>flow_warn_end</bpmn:outgoing>
+      <bpmn:script>
+# Format warning message with collision details
+# Output via hook advisory (permissionDecision: "allow" with message)
+# Example: "Warning: function 'process_data' already exists in src/utils.py:45"
+# Does NOT block the operation — advisory only
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_warned" name="Allow (With Warning)">
+      <bpmn:incoming>flow_warn_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_hook_check_indexed" sourceRef="hook_start" targetRef="check_project_indexed" />
+    <bpmn:sequenceFlow id="flow_indexed_check" sourceRef="check_project_indexed" targetRef="indexed_gw" />
+    <bpmn:sequenceFlow id="flow_is_indexed" sourceRef="indexed_gw" targetRef="extract_new_symbols">
+      <bpmn:conditionExpression>is_indexed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_indexed" sourceRef="indexed_gw" targetRef="end_skip" />
+    <bpmn:sequenceFlow id="flow_extracted_check" sourceRef="extract_new_symbols" targetRef="has_new_symbols_gw" />
+    <bpmn:sequenceFlow id="flow_has_new_symbols" sourceRef="has_new_symbols_gw" targetRef="check_collisions">
+      <bpmn:conditionExpression>len(new_symbols) > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_new_symbols" sourceRef="has_new_symbols_gw" targetRef="end_no_new" />
+    <bpmn:sequenceFlow id="flow_collision_result" sourceRef="check_collisions" targetRef="collision_gw" />
+    <bpmn:sequenceFlow id="flow_has_collisions" sourceRef="collision_gw" targetRef="warn_collision">
+      <bpmn:conditionExpression>len(collisions) > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_collisions" sourceRef="collision_gw" targetRef="end_clean" />
+    <bpmn:sequenceFlow id="flow_warn_end" sourceRef="warn_collision" targetRef="end_warned" />
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 3: MCP QUERY TOOLS                                          -->
+  <!-- ================================================================== -->
+  <bpmn:process id="code_query_tools" name="Code Knowledge Graph: MCP Query Tools" isExecutable="true">
+
+    <!--
+      Five MCP tools exposed via project-tools server for querying
+      the code knowledge graph. All are read-only queries against
+      claude.code_symbols and claude.code_references.
+
+      Tools:
+        1. find_symbol(query, project, kind) - Semantic search via embeddings + exact name match
+        2. check_collision(name, project, file_path) - Check if symbol name exists elsewhere
+        3. get_module_map(project, file_path) - List all symbols in a file or project overview
+        4. find_similar(symbol_id, project) - Find semantically similar symbols (embedding cosine)
+        5. get_dependency_graph(symbol_id, depth) - Walk references graph from a symbol
+
+      This process models the tool dispatch and common query patterns.
+    -->
+
+    <bpmn:startEvent id="query_start" name="MCP Tool Called">
+      <bpmn:outgoing>flow_query_dispatch</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="validate_project" name="[DB] Validate Project Indexed" scriptFormat="python">
+      <bpmn:incoming>flow_query_dispatch</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_check</bpmn:outgoing>
+      <bpmn:script>
+# Check claude.code_symbols has entries for this project
+# If not indexed, return helpful error: "Project not indexed. Run index_codebase(project) first."
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="project_valid_gw" name="Project Valid?" default="flow_not_valid">
+      <bpmn:incoming>flow_validate_check</bpmn:incoming>
+      <bpmn:outgoing>flow_valid</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_valid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_not_indexed_error" name="Error: Not Indexed">
+      <bpmn:incoming>flow_not_valid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:exclusiveGateway id="tool_dispatch_gw" name="Which Tool?">
+      <bpmn:incoming>flow_valid</bpmn:incoming>
+      <bpmn:outgoing>flow_find_symbol</bpmn:outgoing>
+      <bpmn:outgoing>flow_check_collision</bpmn:outgoing>
+      <bpmn:outgoing>flow_module_map</bpmn:outgoing>
+      <bpmn:outgoing>flow_find_similar</bpmn:outgoing>
+      <bpmn:outgoing>flow_dep_graph</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Tool 1: find_symbol -->
+    <bpmn:scriptTask id="find_symbol" name="[DB] find_symbol(query, kind)" scriptFormat="python">
+      <bpmn:incoming>flow_find_symbol</bpmn:incoming>
+      <bpmn:outgoing>flow_find_symbol_end</bpmn:outgoing>
+      <bpmn:script>
+# Hybrid search: exact name match UNION embedding similarity
+# SELECT * FROM claude.code_symbols WHERE project_id = ?
+#   AND (name ILIKE ? OR embedding cosine_distance query_embedding below threshold)
+#   AND (kind = ? OR ? IS NULL)
+# ORDER BY similarity DESC LIMIT 20
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Tool 2: check_collision -->
+    <bpmn:scriptTask id="check_collision_tool" name="[DB] check_collision(name, file)" scriptFormat="python">
+      <bpmn:incoming>flow_check_collision</bpmn:incoming>
+      <bpmn:outgoing>flow_check_collision_end</bpmn:outgoing>
+      <bpmn:script>
+# SELECT name, kind, file_path, line FROM claude.code_symbols
+# WHERE project_id = ? AND name = ? AND file_path != ?
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Tool 3: get_module_map -->
+    <bpmn:scriptTask id="module_map" name="[DB] get_module_map(file_path)" scriptFormat="python">
+      <bpmn:incoming>flow_module_map</bpmn:incoming>
+      <bpmn:outgoing>flow_module_map_end</bpmn:outgoing>
+      <bpmn:script>
+# If file_path given: list all symbols in that file with hierarchy
+# If no file_path: return project overview (files with symbol counts, top-level symbols)
+# SELECT * FROM claude.code_symbols WHERE project_id = ? AND file_path = ?
+# ORDER BY line ASC
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Tool 4: find_similar -->
+    <bpmn:scriptTask id="find_similar" name="[DB] find_similar(symbol_id)" scriptFormat="python">
+      <bpmn:incoming>flow_find_similar</bpmn:incoming>
+      <bpmn:outgoing>flow_find_similar_end</bpmn:outgoing>
+      <bpmn:script>
+# Get embedding of source symbol, find nearest neighbors
+# SELECT s2.* FROM claude.code_symbols s1
+# JOIN claude.code_symbols s2 ON s2.project_id = s1.project_id
+# WHERE s1.symbol_id = ? AND s2.symbol_id != s1.symbol_id
+# ORDER BY s1.embedding cosine_distance s2.embedding ASC LIMIT 10
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Tool 5: get_dependency_graph -->
+    <bpmn:scriptTask id="dep_graph" name="[DB] get_dependency_graph(symbol, depth)" scriptFormat="python">
+      <bpmn:incoming>flow_dep_graph</bpmn:incoming>
+      <bpmn:outgoing>flow_dep_graph_end</bpmn:outgoing>
+      <bpmn:script>
+# Recursive CTE to walk references graph
+# WITH RECURSIVE deps AS (
+#   SELECT to_symbol_id, ref_type, 1 as depth FROM claude.code_references WHERE from_symbol_id = ?
+#   UNION ALL
+#   SELECT r.to_symbol_id, r.ref_type, d.depth + 1
+#   FROM claude.code_references r JOIN deps d ON r.from_symbol_id = d.to_symbol_id
+#   WHERE d.depth &lt; max_depth
+# )
+# Also walk reverse (who calls this symbol)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_query" name="Result Returned">
+      <bpmn:incoming>flow_find_symbol_end</bpmn:incoming>
+      <bpmn:incoming>flow_check_collision_end</bpmn:incoming>
+      <bpmn:incoming>flow_module_map_end</bpmn:incoming>
+      <bpmn:incoming>flow_find_similar_end</bpmn:incoming>
+      <bpmn:incoming>flow_dep_graph_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="flow_query_dispatch" sourceRef="query_start" targetRef="validate_project" />
+    <bpmn:sequenceFlow id="flow_validate_check" sourceRef="validate_project" targetRef="project_valid_gw" />
+    <bpmn:sequenceFlow id="flow_valid" sourceRef="project_valid_gw" targetRef="tool_dispatch_gw">
+      <bpmn:conditionExpression>is_indexed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_valid" sourceRef="project_valid_gw" targetRef="end_not_indexed_error" />
+    <bpmn:sequenceFlow id="flow_find_symbol" sourceRef="tool_dispatch_gw" targetRef="find_symbol">
+      <bpmn:conditionExpression>tool == 'find_symbol'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_check_collision" sourceRef="tool_dispatch_gw" targetRef="check_collision_tool">
+      <bpmn:conditionExpression>tool == 'check_collision'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_module_map" sourceRef="tool_dispatch_gw" targetRef="module_map">
+      <bpmn:conditionExpression>tool == 'get_module_map'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_find_similar" sourceRef="tool_dispatch_gw" targetRef="find_similar">
+      <bpmn:conditionExpression>tool == 'find_similar'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_dep_graph" sourceRef="tool_dispatch_gw" targetRef="dep_graph">
+      <bpmn:conditionExpression>tool == 'get_dependency_graph'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_find_symbol_end" sourceRef="find_symbol" targetRef="end_query" />
+    <bpmn:sequenceFlow id="flow_check_collision_end" sourceRef="check_collision_tool" targetRef="end_query" />
+    <bpmn:sequenceFlow id="flow_module_map_end" sourceRef="module_map" targetRef="end_query" />
+    <bpmn:sequenceFlow id="flow_find_similar_end" sourceRef="find_similar" targetRef="end_query" />
+    <bpmn:sequenceFlow id="flow_dep_graph_end" sourceRef="dep_graph" targetRef="end_query" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

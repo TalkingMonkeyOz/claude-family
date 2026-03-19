@@ -150,7 +150,7 @@ def get_file_type(file_path: str) -> str:
     # Check patterns — order matters: reports before generic docs/
     if 'TODO' in base_name or 'PLAN' in base_name:
         return 'working'
-    if 'docs/' in file_path and any(kw in base_name.lower() for kw in ['audit', 'report', 'analysis', 'review', 'test']):
+    if 'docs/' in file_path and any(kw in base_name.lower() for kw in ['audit', 'report', 'analysis', 'review', 'test', 'research']):
         return 'report'
     if 'docs/' in file_path:
         return 'working'

@@ -1642,8 +1642,9 @@ def start_work(
     conn = get_db_connection()
     try:
         engine = WorkflowEngine(conn)
+        cur = conn.cursor()
 
-        # Transition to in_progress
+        # Transition to in_progress (WorkflowEngine._check_dependencies handles blocking)
         transition_result = engine.execute_transition(
             entity_type='build_tasks',
             item_id=task_code,
@@ -1657,7 +1658,6 @@ def start_work(
 
         # Load task context + parent feature plan_data
         entity_id = transition_result.get('entity_id')
-        cur = conn.cursor()
         cur.execute("""
             SELECT
                 bt.task_name,
@@ -7169,6 +7169,437 @@ def recall_entities(
     finally:
         if cur:
             cur.close()
+        conn.close()
+
+
+# ============================================================================
+# Code Knowledge Graph Tools
+# ============================================================================
+
+
+@mcp.tool()
+def index_codebase(project: str = "", project_path: str = "", force_full: bool = False) -> dict:
+    """Index a project's codebase into the Code Knowledge Graph.
+
+    Parses source files using tree-sitter, extracts symbols (functions, classes,
+    methods) and cross-references (calls, imports, extends), stores in DB with
+    Voyage AI embeddings for semantic search.
+
+    Use when: Setting up code intelligence for a project, or after major code changes.
+    First run does full index; subsequent runs are incremental (only changed files).
+    Returns: {files_scanned, files_indexed, symbols_extracted, refs_extracted,
+              refs_resolved, symbols_embedded, stale_deleted}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+        project_path: Path to project root. Auto-detected from workspaces if empty.
+        force_full: Force full re-index (ignore file hashes).
+    """
+    import sys
+    scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'scripts')
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from code_indexer import index_project
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        proj_name = project or os.path.basename(os.getcwd())
+        if not project_path:
+            cur.execute(
+                "SELECT config->>'workspace_path' as path FROM claude.workspaces WHERE project_name = %s AND is_active = true",
+                (proj_name,)
+            )
+            row = cur.fetchone()
+            if row and row['path']:
+                project_path = row['path']
+            else:
+                project_path = os.getcwd()
+        conn.close()
+
+        result = index_project(proj_name, project_path, force_full=force_full)
+        return {"success": True, **result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool()
+def find_symbol(query: str, project: str = "", kind: str = "", limit: int = 20) -> dict:
+    """Search for code symbols by name or semantic meaning.
+
+    Hybrid search combining exact name matching and Voyage AI embedding similarity.
+    Finds functions, classes, methods, and other symbols across the indexed codebase.
+
+    Use when: Looking for a specific function/class, or finding symbols related to a concept.
+    Returns: {success, query, result_count, symbols: [{symbol_id, name, kind, file_path,
+              line_number, signature, similarity}]}.
+
+    Args:
+        query: Search text — matched against symbol names and embeddings.
+        project: Project name filter. If empty, searches all indexed projects.
+        kind: Filter by symbol kind (function, class, method, interface, enum).
+        limit: Maximum results (default 20).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        project_id = None
+        if project:
+            cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (project,))
+            row = cur.fetchone()
+            if row:
+                project_id = row['project_id']
+
+        params = []
+        where_clauses = ["name ILIKE %s"]
+        params.append(f"%{query}%")
+        if project_id:
+            where_clauses.append("project_id = %s")
+            params.append(project_id)
+        if kind:
+            where_clauses.append("kind = %s")
+            params.append(kind)
+
+        where_sql = " AND ".join(where_clauses)
+        cur.execute(f"""
+            SELECT symbol_id::text, name, kind, file_path, line_number,
+                   signature, visibility, language, scope,
+                   1.0 as similarity
+            FROM claude.code_symbols
+            WHERE {where_sql}
+            ORDER BY
+                CASE WHEN name = %s THEN 0
+                     WHEN name ILIKE %s THEN 1
+                     ELSE 2 END,
+                name
+            LIMIT %s
+        """, params + [query, f"{query}%", limit])
+
+        exact_results = cur.fetchall()
+
+        if len(exact_results) < limit:
+            try:
+                import voyageai
+                vo = voyageai.Client()
+                embedding = vo.embed([query], model="voyage-code-3").embeddings[0]
+                embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+
+                embed_params = [embedding_str]
+                embed_where = []
+                if project_id:
+                    embed_where.append("project_id = %s")
+                    embed_params.append(project_id)
+                if kind:
+                    embed_where.append("kind = %s")
+                    embed_params.append(kind)
+                embed_where.append("embedding IS NOT NULL")
+
+                found_ids = [r['symbol_id'] for r in exact_results]
+                if found_ids:
+                    embed_where.append("symbol_id::text != ALL(%s)")
+                    embed_params.append(found_ids)
+
+                embed_where_sql = " AND ".join(embed_where)
+                remaining = limit - len(exact_results)
+                embed_params.append(remaining)
+
+                cur.execute(f"""
+                    SELECT symbol_id::text, name, kind, file_path, line_number,
+                           signature, visibility, language, scope,
+                           1 - (embedding <=> %s::vector) as similarity
+                    FROM claude.code_symbols
+                    WHERE {embed_where_sql}
+                    ORDER BY embedding <=> %s::vector ASC
+                    LIMIT %s
+                """, [embedding_str] + embed_params[1:] + [embedding_str])
+
+                embed_results = [r for r in cur.fetchall() if r['similarity'] > 0.3]
+                exact_results.extend(embed_results)
+            except Exception:
+                pass  # Embedding search is optional enhancement
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(exact_results),
+            "symbols": exact_results,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def check_collision(name: str, project: str = "", file_path: str = "") -> dict:
+    """Check if a symbol name already exists in the project codebase.
+
+    Use when: Before creating a new function/class to avoid name collisions.
+    Returns: {success, name, has_collision, collisions: [{name, kind, file_path,
+              line_number, signature, visibility}]}.
+
+    Args:
+        name: Symbol name to check for collisions.
+        project: Project name. Defaults to current directory.
+        file_path: Exclude this file from results (the file being edited).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        proj_name = project or os.path.basename(os.getcwd())
+        cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (proj_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": True, "name": name, "has_collision": False, "collisions": [], "message": "Project not indexed"}
+
+        project_id = row['project_id']
+
+        params = [project_id, name]
+        exclude = ""
+        if file_path:
+            exclude = " AND file_path != %s"
+            params.append(file_path)
+
+        cur.execute(f"""
+            SELECT name, kind, file_path, line_number, signature, visibility
+            FROM claude.code_symbols
+            WHERE project_id = %s AND name = %s{exclude}
+            ORDER BY file_path, line_number
+        """, params)
+
+        collisions = cur.fetchall()
+        return {
+            "success": True,
+            "name": name,
+            "has_collision": len(collisions) > 0,
+            "collisions": collisions,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_module_map(project: str = "", file_path: str = "") -> dict:
+    """Get a structural map of symbols in a file or project.
+
+    With file_path: lists all symbols in that file with parent-child hierarchy.
+    Without file_path: returns project overview (files with symbol counts).
+
+    Use when: Understanding code structure, reviewing a module, or getting
+    a project-level overview of the codebase.
+    Returns: {success, scope, symbols: [{name, kind, line_number, signature, children}]}
+    or {success, scope, files: [{file_path, language, symbol_count, symbols}]}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+        file_path: Specific file to map. If empty, returns project overview.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        proj_name = project or os.path.basename(os.getcwd())
+        cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (proj_name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Project '{proj_name}' not found or not indexed"}
+        project_id = row['project_id']
+
+        if file_path:
+            cur.execute("""
+                SELECT symbol_id::text, name, kind, line_number, end_line,
+                       signature, visibility, scope, parent_symbol_id::text
+                FROM claude.code_symbols
+                WHERE project_id = %s AND file_path = %s
+                ORDER BY line_number
+            """, (project_id, file_path))
+            symbols = cur.fetchall()
+
+            by_id = {s['symbol_id']: {**s, 'children': []} for s in symbols}
+            roots = []
+            for s in symbols:
+                if s['parent_symbol_id'] and s['parent_symbol_id'] in by_id:
+                    by_id[s['parent_symbol_id']]['children'].append(by_id[s['symbol_id']])
+                else:
+                    roots.append(by_id[s['symbol_id']])
+
+            return {
+                "success": True,
+                "scope": "file",
+                "file_path": file_path,
+                "symbol_count": len(symbols),
+                "symbols": roots,
+            }
+        else:
+            cur.execute("""
+                SELECT file_path, language, count(*) as symbol_count,
+                       array_agg(kind || ' ' || name ORDER BY line_number) as symbol_list
+                FROM claude.code_symbols
+                WHERE project_id = %s
+                GROUP BY file_path, language
+                ORDER BY file_path
+            """, (project_id,))
+            files = cur.fetchall()
+            return {
+                "success": True,
+                "scope": "project",
+                "project": proj_name,
+                "file_count": len(files),
+                "total_symbols": sum(f['symbol_count'] for f in files),
+                "files": files,
+            }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def find_similar(symbol_id: str, limit: int = 10) -> dict:
+    """Find symbols that are semantically similar to a given symbol.
+
+    Uses Voyage AI code embeddings to find functions/classes with similar
+    purpose or signature, useful for detecting potential duplicates or
+    finding related code.
+
+    Use when: Checking for duplicate implementations, finding related functions,
+    or understanding similar patterns across the codebase.
+    Returns: {success, source_symbol, similar: [{name, kind, file_path,
+              line_number, signature, similarity}]}.
+
+    Args:
+        symbol_id: UUID of the source symbol.
+        limit: Maximum similar symbols to return (default 10).
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT symbol_id::text, name, kind, file_path, line_number, signature, embedding
+            FROM claude.code_symbols WHERE symbol_id = %s::uuid
+        """, (symbol_id,))
+        source = cur.fetchone()
+        if not source:
+            return {"success": False, "error": f"Symbol {symbol_id} not found"}
+        if source['embedding'] is None:
+            return {"success": False, "error": "Source symbol has no embedding"}
+
+        cur.execute("""
+            SELECT symbol_id::text, name, kind, file_path, line_number, signature,
+                   visibility, language,
+                   1 - (embedding <=> (SELECT embedding FROM claude.code_symbols WHERE symbol_id = %s::uuid)) as similarity
+            FROM claude.code_symbols
+            WHERE symbol_id != %s::uuid AND embedding IS NOT NULL
+                AND project_id = (SELECT project_id FROM claude.code_symbols WHERE symbol_id = %s::uuid)
+            ORDER BY embedding <=> (SELECT embedding FROM claude.code_symbols WHERE symbol_id = %s::uuid) ASC
+            LIMIT %s
+        """, (symbol_id, symbol_id, symbol_id, symbol_id, limit))
+
+        similar = cur.fetchall()
+        return {
+            "success": True,
+            "source_symbol": {"name": source['name'], "kind": source['kind'], "file_path": source['file_path']},
+            "result_count": len(similar),
+            "similar": similar,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_dependency_graph(symbol_id: str, depth: int = 2, direction: str = "both") -> dict:
+    """Walk the code reference graph from a symbol to find dependencies.
+
+    Shows what a symbol calls (outgoing), what calls it (incoming), or both.
+    Recursive to specified depth for transitive dependencies.
+
+    Use when: Understanding how a function is used, what it depends on,
+    or tracing call chains through the codebase.
+    Returns: {success, root, direction, edges: [{from_name, from_file, to_name,
+              to_file, ref_type, depth}]}.
+
+    Args:
+        symbol_id: UUID of the root symbol.
+        depth: How many hops to traverse (default 2, max 5).
+        direction: 'outgoing' (what this calls), 'incoming' (what calls this), or 'both'.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        depth = min(depth, 5)
+
+        cur.execute("""
+            SELECT symbol_id::text, name, kind, file_path, line_number, signature
+            FROM claude.code_symbols WHERE symbol_id = %s::uuid
+        """, (symbol_id,))
+        root = cur.fetchone()
+        if not root:
+            return {"success": False, "error": f"Symbol {symbol_id} not found"}
+
+        edges = []
+
+        if direction in ('outgoing', 'both'):
+            cur.execute("""
+                WITH RECURSIVE deps(from_id, to_id, ref_type, depth) AS (
+                    SELECT from_symbol_id, to_symbol_id, ref_type, 1
+                    FROM claude.code_references
+                    WHERE from_symbol_id = %s::uuid AND to_symbol_id IS NOT NULL
+                    UNION ALL
+                    SELECT r.from_symbol_id, r.to_symbol_id, r.ref_type, d.depth + 1
+                    FROM claude.code_references r
+                    JOIN deps d ON r.from_symbol_id = d.to_id
+                    WHERE d.depth < %s AND r.to_symbol_id IS NOT NULL
+                )
+                SELECT DISTINCT
+                    fs.name as from_name, fs.kind as from_kind, fs.file_path as from_file,
+                    ts.name as to_name, ts.kind as to_kind, ts.file_path as to_file,
+                    d.ref_type, d.depth, 'outgoing' as direction
+                FROM deps d
+                JOIN claude.code_symbols fs ON fs.symbol_id = d.from_id
+                JOIN claude.code_symbols ts ON ts.symbol_id = d.to_id
+                ORDER BY d.depth, fs.name
+            """, (symbol_id, depth))
+            edges.extend(cur.fetchall())
+
+        if direction in ('incoming', 'both'):
+            cur.execute("""
+                WITH RECURSIVE callers(from_id, to_id, ref_type, depth) AS (
+                    SELECT from_symbol_id, to_symbol_id, ref_type, 1
+                    FROM claude.code_references
+                    WHERE to_symbol_id = %s::uuid
+                    UNION ALL
+                    SELECT r.from_symbol_id, r.to_symbol_id, r.ref_type, c.depth + 1
+                    FROM claude.code_references r
+                    JOIN callers c ON r.to_symbol_id = c.from_id
+                    WHERE c.depth < %s
+                )
+                SELECT DISTINCT
+                    fs.name as from_name, fs.kind as from_kind, fs.file_path as from_file,
+                    ts.name as to_name, ts.kind as to_kind, ts.file_path as to_file,
+                    c.ref_type, c.depth, 'incoming' as direction
+                FROM callers c
+                JOIN claude.code_symbols fs ON fs.symbol_id = c.from_id
+                JOIN claude.code_symbols ts ON ts.symbol_id = c.to_id
+                ORDER BY c.depth, fs.name
+            """, (symbol_id, depth))
+            edges.extend(cur.fetchall())
+
+        return {
+            "success": True,
+            "root": {"name": root['name'], "kind": root['kind'], "file_path": root['file_path']},
+            "direction": direction,
+            "depth": depth,
+            "edge_count": len(edges),
+            "edges": edges,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
         conn.close()
 
 

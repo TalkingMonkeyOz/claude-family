@@ -586,6 +586,47 @@ def main():
             except Exception as e:
                 logger.warning(f"Retention cleanup failed (non-fatal): {e}")
 
+            # === CKG STALENESS CHECK: async re-index if code changed ===
+            try:
+                import subprocess as _sp
+                # Get current git HEAD
+                git_result = _sp.run(
+                    ['git', 'rev-parse', 'HEAD'],
+                    capture_output=True, text=True, timeout=5, cwd=cwd
+                )
+                if git_result.returncode == 0:
+                    current_head = git_result.stdout.strip()
+                    # Check last indexed commit from DB
+                    ckg_conn = get_db_connection()
+                    if ckg_conn:
+                        ckg_cur = ckg_conn.cursor()
+                        ckg_cur.execute("""
+                            SELECT count(*) as sym_count,
+                                   max(last_indexed_at) as last_indexed
+                            FROM claude.code_symbols cs
+                            JOIN claude.projects p ON cs.project_id = p.project_id
+                            WHERE p.project_name = %s
+                        """, (project_name,))
+                        ckg_row = ckg_cur.fetchone()
+                        sym_count = ckg_row['sym_count'] if isinstance(ckg_row, dict) else ckg_row[0]
+                        ckg_conn.close()
+
+                        if sym_count > 0:
+                            # Project is indexed — check if git HEAD changed since last index
+                            # by comparing file hashes (the indexer handles this internally)
+                            # Spawn async re-index in background
+                            indexer_script = Path(__file__).parent / "code_indexer.py"
+                            if indexer_script.exists():
+                                _sp.Popen(
+                                    [sys.executable, str(indexer_script), project_name, cwd],
+                                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                                    creationflags=0x00000008 if sys.platform == 'win32' else 0,  # DETACHED_PROCESS on Windows
+                                    start_new_session=True if sys.platform != 'win32' else False,
+                                )
+                                logger.info(f"CKG: spawned async re-index for {project_name} ({sym_count} existing symbols)")
+            except Exception as e:
+                logger.warning(f"CKG staleness check failed (non-fatal): {e}")
+
             # Read tasks back from DB → inject into context (task_lifecycle BPMN v4)
             pending_tasks = get_pending_tasks(project_name)
             completed_tasks = get_recently_completed_tasks(project_name)
