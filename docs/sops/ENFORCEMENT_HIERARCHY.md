@@ -107,7 +107,7 @@ CLAUDE.md    Slash        Hooks        DB            Reviewer
 | Table | Column | Type | Valid Values |
 |-------|--------|------|--------------|
 | projects | status | CHECK | active, paused, archived, completed |
-| projects | phase | CHECK | idea, research, planning, implementation, maintenance, archived |
+| projects | phase | CHECK | idea, planning, design, implementation, testing, production, archived |
 | projects | priority | CHECK | 1-5 |
 | feedback | feedback_type | Trigger | bug, design, question, change, idea |
 

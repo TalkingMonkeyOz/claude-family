@@ -97,18 +97,20 @@ INSERT INTO claude.projects (
 ### Phase Progression
 
 ```
-planning → design → implementation → testing → production
+idea → planning → design → implementation → testing → production → archived
 ```
 
 ### Phase Characteristics
 
 | Phase | Focus | Deliverables |
 |-------|-------|--------------|
-| **Planning** | Requirements, feasibility | PROBLEM_STATEMENT.md, rough estimates |
+| **Idea** | Problem identification | Rough problem statement, stakeholder identified |
+| **Planning** | Requirements, feasibility | PROBLEM_STATEMENT.md, success criteria, constraints |
 | **Design** | Architecture, API design | ARCHITECTURE.md, ADRs, wireframes |
 | **Implementation** | Code, tests | Working features, test coverage |
 | **Testing** | QA, performance | Test reports, bug fixes |
 | **Production** | Deploy, monitor | Live system, monitoring |
+| **Archived** | Retired | Final docs, archive reason |
 
 ### Advancing Phases
 
@@ -258,11 +260,13 @@ WHERE is_archived = false
 GROUP BY phase
 ORDER BY
     CASE phase
-        WHEN 'planning' THEN 1
-        WHEN 'design' THEN 2
-        WHEN 'implementation' THEN 3
-        WHEN 'testing' THEN 4
-        WHEN 'production' THEN 5
+        WHEN 'idea' THEN 1
+        WHEN 'planning' THEN 2
+        WHEN 'design' THEN 3
+        WHEN 'implementation' THEN 4
+        WHEN 'testing' THEN 5
+        WHEN 'production' THEN 6
+        WHEN 'archived' THEN 7
     END;
 
 -- Project activity (recent sessions)
@@ -288,8 +292,7 @@ templates/
 ├── CLAUDE.md.template.md
 ├── PROBLEM_STATEMENT.template.md
 ├── ARCHITECTURE.template.md
-├── README.template.md
-└── llms.txt.template.md
+└── README.template.md
 ```
 
 **Usage**: `/project-init` automatically uses these templates

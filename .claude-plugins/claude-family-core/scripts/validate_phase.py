@@ -37,7 +37,7 @@ except ImportError:
     except ImportError:
         DB_AVAILABLE = False
 
-ALLOWED_PHASES = ['planning', 'implementation']
+ALLOWED_PHASES = ['planning', 'design', 'implementation', 'testing']
 
 
 def get_db_connection():

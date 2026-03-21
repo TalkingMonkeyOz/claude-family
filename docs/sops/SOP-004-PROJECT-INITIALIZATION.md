@@ -122,7 +122,7 @@ After requirements/design work, advance to next phase:
 ### Phase Progression
 
 ```
-idea → research → planning → implementation → maintenance
+idea → planning → design → implementation → testing → production → archived
 ```
 
 Each transition has requirements - see `/phase-advance` command for details.

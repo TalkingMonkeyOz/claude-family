@@ -297,7 +297,7 @@ For project detail page:
 interface GovernanceCompliance {
   project_id: string;
   project_name: string;
-  phase: 'idea' | 'research' | 'planning' | 'implementation' | 'maintenance' | 'archived';
+  phase: 'idea' | 'planning' | 'design' | 'implementation' | 'testing' | 'production' | 'archived';
   has_claude_md: boolean;
   has_problem_statement: boolean;
   has_architecture: boolean;

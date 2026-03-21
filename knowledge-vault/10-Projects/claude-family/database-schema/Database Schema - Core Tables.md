@@ -208,7 +208,7 @@ WHERE identity_id = 'YOUR-IDENTITY-ID'::uuid;
 ### Phase Values (from column_registry)
 
 ```
-idea → research → planning → implementation → maintenance → archived
+idea → planning → design → implementation → testing → production → archived
 ```
 
 ### Example Queries

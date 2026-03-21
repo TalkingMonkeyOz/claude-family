@@ -137,7 +137,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 | Table.Column | Valid Values |
 |--------------|--------------|
 | `projects.status` | active, paused, archived, completed |
-| `projects.phase` | idea, research, planning, implementation, maintenance, archived |
+| `projects.phase` | idea, planning, design, implementation, testing, production, archived |
 | `projects.priority` | 1, 2, 3, 4, 5 |
 | `feedback.feedback_type` | bug, design, question, change |
 | `feedback.status` | new, in_progress, resolved, wont_fix, duplicate |

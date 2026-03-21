@@ -7,16 +7,20 @@
     targetNamespace="http://claude-family/bpmn/project-lifecycle"
     id="Definitions_PL">
 
+  <!-- ====================================================================== -->
+  <!-- PROCESS 1: Project Lifecycle (Init to Maturity)                        -->
+  <!-- The overall project lifecycle from creation through work to retirement -->
+  <!-- ====================================================================== -->
   <bpmn:process id="project_lifecycle" name="Project Lifecycle: Init to Maturity" isExecutable="true">
 
     <!--
       Full project lifecycle from creation through phases to retirement.
 
       Paths:
-        1. New project: Init → Register → Generate Config → Governance Docs → Setup Phase
-        2. Existing project: Load → Compliance Check → Fix or Continue
-        3. Phase advancement: Setup → Implementation → Mature → Retired
-        4. Config change: Update DB → Regenerate Files → Verify
+        1. New project: Init -> Register -> Generate Config -> Governance Docs -> Setup Phase
+        2. Existing project: Load -> Compliance Check -> Fix or Continue
+        3. Phase advancement: Assess readiness -> Advance via phase_advancement subprocess
+        4. Config change: Update DB -> Regenerate Files -> Verify
 
       Actors:
         [CLAUDE]  = userTask (decisions, authoring)
@@ -26,9 +30,9 @@
         [MCP]     = scriptTask (project-tools MCP calls)
 
       Implementation:
-        - /project-init skill → SQL inserts + generate_project_settings.py
+        - /project-init skill -> SQL inserts + generate_project_settings.py
         - Config Management SOP (knowledge-vault/40-Procedures/)
-        - generate_project_settings.py (3-layer merge: config_templates + project_type_configs + workspaces.startup_config)
+        - generate_project_settings.py (3-layer merge)
         - v_project_governance view for compliance checks
     -->
 
@@ -57,21 +61,20 @@
     <!-- PATH A: NEW PROJECT CREATION                                       -->
     <!-- ================================================================== -->
 
-    <!-- Step A1: Define project parameters -->
     <bpmn:userTask id="define_project" name="[CLAUDE] Define Project (name, type, description)">
       <bpmn:incoming>flow_new_project</bpmn:incoming>
       <bpmn:outgoing>flow_define_to_register</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- Step A2: Register in database (projects + workspaces + identities) -->
     <bpmn:scriptTask id="register_in_db" name="[DB] Register Project (projects, workspaces, identities)" scriptFormat="python">
       <bpmn:incoming>flow_define_to_register</bpmn:incoming>
       <bpmn:outgoing>flow_register_to_generate</bpmn:outgoing>
       <bpmn:script>
-# INSERT claude.projects (project_id, project_name, status='active')
+# INSERT claude.projects (project_id, project_name, phase='idea', status='active')
 # INSERT claude.workspaces (project_type from: infrastructure, csharp-desktop, csharp-winforms, web-app, tauri-react)
 # INSERT claude.identities (linked to project)
 # workspace.startup_config = {} (JSONB for project-specific overrides)
+# New projects start in 'idea' phase
 try:
     if registered is None:
         registered = True
@@ -80,7 +83,6 @@ except NameError:
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Step A3: Generate settings from 3-layer merge -->
     <bpmn:scriptTask id="generate_settings" name="[SCRIPT] Generate Settings (3-layer merge)" scriptFormat="python">
       <bpmn:incoming>flow_register_to_generate</bpmn:incoming>
       <bpmn:outgoing>flow_generate_to_docs</bpmn:outgoing>
@@ -99,13 +101,11 @@ except NameError:
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Step A4: Create governance documents -->
     <bpmn:userTask id="create_governance_docs" name="[CLAUDE] Create Governance Docs (CLAUDE.md, PROBLEM_STATEMENT.md, ARCHITECTURE.md)">
       <bpmn:incoming>flow_generate_to_docs</bpmn:incoming>
       <bpmn:outgoing>flow_docs_to_mcp</bpmn:outgoing>
     </bpmn:userTask>
 
-    <!-- Step A5: Register MCP configuration -->
     <bpmn:scriptTask id="register_mcp" name="[DB] Register MCP Config (.mcp.json + claude.mcp_configs)" scriptFormat="python">
       <bpmn:incoming>flow_docs_to_mcp</bpmn:incoming>
       <bpmn:outgoing>flow_mcp_to_compliance</bpmn:outgoing>
@@ -190,6 +190,7 @@ except NameError:
     <bpmn:userTask id="do_work" name="[CLAUDE] Do Work (feature development)">
       <bpmn:incoming>flow_to_work</bpmn:incoming>
       <bpmn:incoming>flow_config_to_work</bpmn:incoming>
+      <bpmn:incoming>flow_advance_to_work</bpmn:incoming>
       <bpmn:outgoing>flow_work_to_action</bpmn:outgoing>
     </bpmn:userTask>
 
@@ -226,9 +227,9 @@ except NameError:
       <bpmn:incoming>flow_db_to_regen</bpmn:incoming>
       <bpmn:outgoing>flow_regen_to_verify</bpmn:outgoing>
       <bpmn:script>
-# regenerate_settings(project) → .claude/settings.local.json
-# deploy_claude_md(project) → CLAUDE.md from profiles.config->'behavior'
-# deploy_project(project, components) → rules, skills, instructions
+# regenerate_settings(project) -> .claude/settings.local.json
+# deploy_claude_md(project) -> CLAUDE.md from profiles.config->'behavior'
+# deploy_project(project, components) -> rules, skills, instructions
 # Logged to config_deployment_log
 try:
     if files_regenerated is None:
@@ -250,31 +251,13 @@ config_verified = True
     </bpmn:scriptTask>
 
     <!-- ================================================================== -->
-    <!-- PHASE ADVANCEMENT                                                  -->
+    <!-- PHASE ADVANCEMENT (calls phase_advancement process)                -->
     <!-- ================================================================== -->
 
-    <bpmn:userTask id="assess_phase" name="[CLAUDE] Assess Phase Readiness">
+    <bpmn:callActivity id="assess_and_advance_phase" name="[SUBPROCESS] Phase Advancement" calledElement="phase_advancement">
       <bpmn:incoming>flow_phase_advance</bpmn:incoming>
-      <bpmn:outgoing>flow_assess_to_advance</bpmn:outgoing>
-    </bpmn:userTask>
-
-    <bpmn:scriptTask id="advance_phase" name="[DB] Advance Project Phase" scriptFormat="python">
-      <bpmn:incoming>flow_assess_to_advance</bpmn:incoming>
       <bpmn:outgoing>flow_advance_to_work</bpmn:outgoing>
-      <bpmn:script>
-# Phases: setup → implementation → mature → retired
-# Requirements per phase:
-#   setup→implementation: governance docs complete, config working
-#   implementation→mature: core features done, tests passing, stable
-#   mature→retired: user decision, archive data
-# UPDATE claude.projects SET phase = new_phase
-try:
-    if phase_advanced is None:
-        phase_advanced = True
-except NameError:
-    phase_advanced = True
-      </bpmn:script>
-    </bpmn:scriptTask>
+    </bpmn:callActivity>
 
     <!-- ================================================================== -->
     <!-- RETIREMENT                                                         -->
@@ -284,7 +267,7 @@ except NameError:
       <bpmn:incoming>flow_retire</bpmn:incoming>
       <bpmn:outgoing>flow_archive_to_end</bpmn:outgoing>
       <bpmn:script>
-# UPDATE claude.projects SET status = 'archived'
+# UPDATE claude.projects SET status = 'archived', phase = 'archived'
 # Close all open features, build_tasks
 # Archive session data
 project_archived = True
@@ -307,7 +290,6 @@ project_archived = True
     <!-- SEQUENCE FLOWS                                                     -->
     <!-- ================================================================== -->
 
-    <!-- Start to classification -->
     <bpmn:sequenceFlow id="flow_start_to_classify" sourceRef="start" targetRef="classify_project"/>
     <bpmn:sequenceFlow id="flow_classify_to_gw" sourceRef="classify_project" targetRef="new_or_existing_gw"/>
 
@@ -348,17 +330,261 @@ project_archived = True
     <bpmn:sequenceFlow id="flow_config_to_work" sourceRef="verify_config" targetRef="do_work"/>
 
     <!-- Phase advancement -->
-    <bpmn:sequenceFlow id="flow_phase_advance" sourceRef="action_gw" targetRef="assess_phase">
+    <bpmn:sequenceFlow id="flow_phase_advance" sourceRef="action_gw" targetRef="assess_and_advance_phase">
       <bpmn:conditionExpression>action == "phase_advance"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="flow_assess_to_advance" sourceRef="assess_phase" targetRef="advance_phase"/>
-    <bpmn:sequenceFlow id="flow_advance_to_work" sourceRef="advance_phase" targetRef="do_work"/>
+    <bpmn:sequenceFlow id="flow_advance_to_work" sourceRef="assess_and_advance_phase" targetRef="do_work"/>
 
     <!-- Retirement -->
     <bpmn:sequenceFlow id="flow_retire" sourceRef="action_gw" targetRef="archive_project">
       <bpmn:conditionExpression>action == "retire"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_archive_to_end" sourceRef="archive_project" targetRef="end_archived"/>
+
+  </bpmn:process>
+
+  <!-- ====================================================================== -->
+  <!-- PROCESS 2: Phase Advancement (7-Stage Model + Gate Overlay)            -->
+  <!--                                                                        -->
+  <!-- Unified phase model merging project-ops (5 phases), phase-advance      -->
+  <!-- (6 phases), and column_registry (6 values) into a single 7-stage       -->
+  <!-- lifecycle. Metis gates overlay as optional quality checkpoints.         -->
+  <!--                                                                        -->
+  <!-- Stages: idea -> planning -> design -> implementation ->                -->
+  <!--         testing -> production -> archived                              -->
+  <!--                                                                        -->
+  <!-- Gate overlay (optional, for structured projects):                       -->
+  <!--   planning:       Gate 0 (understand problem), Gate 1 (understand domain) -->
+  <!--   design:         Gate 2 (solution designed)                            -->
+  <!--   implementation: Gate 3 (ready to build)                               -->
+  <!--   testing:        Gate 4 (ready to release)                             -->
+  <!--   production/archived: no gates (operational, not developmental)        -->
+  <!--                                                                        -->
+  <!-- Enforcement: Option C (Hybrid) - column_registry validates values,     -->
+  <!-- skill documents transitions, no WorkflowEngine enforcement.            -->
+  <!-- Phase changes via SQL in /phase-advance skill.                         -->
+  <!-- ====================================================================== -->
+  <bpmn:process id="phase_advancement" name="Phase Advancement: 7-Stage Unified Model" isExecutable="true">
+
+    <bpmn:startEvent id="pa_start" name="Phase Advance Requested">
+      <bpmn:outgoing>flow_pa_start</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Step 1: Get current phase from DB -->
+    <bpmn:scriptTask id="get_current_phase" name="[DB] Get Current Phase" scriptFormat="python">
+      <bpmn:incoming>flow_pa_start</bpmn:incoming>
+      <bpmn:outgoing>flow_to_determine_next</bpmn:outgoing>
+      <bpmn:script>
+# SELECT phase FROM claude.projects WHERE project_name = project_name
+# Valid phases: idea, planning, design, implementation, testing, production, archived
+try:
+    if current_phase is None:
+        current_phase = "idea"
+except NameError:
+    current_phase = "idea"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Step 2: Determine target phase -->
+    <bpmn:userTask id="determine_next_phase" name="[CLAUDE] Determine Target Phase">
+      <bpmn:incoming>flow_to_determine_next</bpmn:incoming>
+      <bpmn:outgoing>flow_to_phase_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Step 3: Route to correct requirements check -->
+    <bpmn:exclusiveGateway id="phase_target_gw" name="Target Phase?">
+      <bpmn:incoming>flow_to_phase_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_to_planning</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_design</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_implementation</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_testing</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_production</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_archived</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- PHASE REQUIREMENTS CHECKS                                          -->
+    <!-- ================================================================== -->
+
+    <!-- idea -> planning -->
+    <bpmn:userTask id="check_planning_reqs" name="[CLAUDE] Check Planning Requirements">
+      <bpmn:documentation>
+        Requirements to enter PLANNING:
+        - Problem statement exists (even rough)
+        - User/stakeholder identified
+        - Project registered in claude.projects
+        Optional gate overlay: Gate 0 (understand problem)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_planning</bpmn:incoming>
+      <bpmn:outgoing>flow_planning_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- planning -> design -->
+    <bpmn:userTask id="check_design_reqs" name="[CLAUDE] Check Design Requirements">
+      <bpmn:documentation>
+        Requirements to enter DESIGN:
+        - PROBLEM_STATEMENT.md complete
+        - Success criteria defined
+        - Constraints documented
+        - At least one feature in claude.features
+        Optional gate overlay: Gate 1 (understand domain)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_design</bpmn:incoming>
+      <bpmn:outgoing>flow_design_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- design -> implementation -->
+    <bpmn:userTask id="check_implementation_reqs" name="[CLAUDE] Check Implementation Requirements">
+      <bpmn:documentation>
+        Requirements to enter IMPLEMENTATION:
+        - CLAUDE.md exists and is current
+        - ARCHITECTURE.md exists
+        - At least one feature with build tasks
+        - Build tasks created for first feature
+        Optional gate overlay: Gate 2 (solution designed)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_implementation</bpmn:incoming>
+      <bpmn:outgoing>flow_impl_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- implementation -> testing -->
+    <bpmn:userTask id="check_testing_reqs" name="[CLAUDE] Check Testing Requirements">
+      <bpmn:documentation>
+        Requirements to enter TESTING:
+        - Core functionality complete
+        - Unit tests exist and pass
+        - No critical bugs open
+        Optional gate overlay: Gate 3 (ready to build - all built)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_testing</bpmn:incoming>
+      <bpmn:outgoing>flow_testing_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- testing -> production -->
+    <bpmn:userTask id="check_production_reqs" name="[CLAUDE] Check Production Requirements">
+      <bpmn:documentation>
+        Requirements to enter PRODUCTION:
+        - All tests passing
+        - Documentation updated
+        - All critical features completed
+        - User has approved for production use
+        Optional gate overlay: Gate 4 (ready to release)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_production</bpmn:incoming>
+      <bpmn:outgoing>flow_production_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- production/any -> archived -->
+    <bpmn:userTask id="check_archived_reqs" name="[CLAUDE] Check Archive Requirements">
+      <bpmn:documentation>
+        Requirements to ARCHIVE:
+        - User confirms project should be archived
+        - Final documentation updated
+        - Archive reason documented
+        - No gates apply (archival is an operational decision)
+      </bpmn:documentation>
+      <bpmn:incoming>flow_to_archived</bpmn:incoming>
+      <bpmn:outgoing>flow_archived_to_ready</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ================================================================== -->
+    <!-- READINESS CHECK (all phase checks converge)                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="ready_merge" name="Requirements Merge">
+      <bpmn:incoming>flow_planning_to_ready</bpmn:incoming>
+      <bpmn:incoming>flow_design_to_ready</bpmn:incoming>
+      <bpmn:incoming>flow_impl_to_ready</bpmn:incoming>
+      <bpmn:incoming>flow_testing_to_ready</bpmn:incoming>
+      <bpmn:incoming>flow_production_to_ready</bpmn:incoming>
+      <bpmn:incoming>flow_archived_to_ready</bpmn:incoming>
+      <bpmn:outgoing>flow_to_ready_gw</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:exclusiveGateway id="ready_gw" name="Requirements Met?" default="flow_not_ready">
+      <bpmn:incoming>flow_to_ready_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_ready</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_ready</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Not ready: show gaps -->
+    <bpmn:userTask id="show_gaps" name="[CLAUDE] Show Missing Requirements">
+      <bpmn:incoming>flow_not_ready</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end_blocked</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="end_blocked" name="Phase Advance Blocked">
+      <bpmn:incoming>flow_to_end_blocked</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Ready: confirm and advance -->
+    <bpmn:userTask id="confirm_advance" name="[CLAUDE] Confirm Phase Advance with User">
+      <bpmn:incoming>flow_ready</bpmn:incoming>
+      <bpmn:outgoing>flow_to_update_phase</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="update_phase" name="[DB] Update Project Phase" scriptFormat="python">
+      <bpmn:incoming>flow_to_update_phase</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end_advanced</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.projects SET phase = target_phase, updated_at = NOW()
+# WHERE project_name = project_name
+# Log transition in audit_log
+phase_advanced = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_advanced" name="Phase Advanced">
+      <bpmn:incoming>flow_to_end_advanced</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                     -->
+    <!-- ================================================================== -->
+
+    <bpmn:sequenceFlow id="flow_pa_start" sourceRef="pa_start" targetRef="get_current_phase"/>
+    <bpmn:sequenceFlow id="flow_to_determine_next" sourceRef="get_current_phase" targetRef="determine_next_phase"/>
+    <bpmn:sequenceFlow id="flow_to_phase_gw" sourceRef="determine_next_phase" targetRef="phase_target_gw"/>
+
+    <!-- Target phase routing -->
+    <bpmn:sequenceFlow id="flow_to_planning" sourceRef="phase_target_gw" targetRef="check_planning_reqs">
+      <bpmn:conditionExpression>target_phase == "planning"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_design" sourceRef="phase_target_gw" targetRef="check_design_reqs">
+      <bpmn:conditionExpression>target_phase == "design"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_implementation" sourceRef="phase_target_gw" targetRef="check_implementation_reqs">
+      <bpmn:conditionExpression>target_phase == "implementation"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_testing" sourceRef="phase_target_gw" targetRef="check_testing_reqs">
+      <bpmn:conditionExpression>target_phase == "testing"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_production" sourceRef="phase_target_gw" targetRef="check_production_reqs">
+      <bpmn:conditionExpression>target_phase == "production"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_archived" sourceRef="phase_target_gw" targetRef="check_archived_reqs">
+      <bpmn:conditionExpression>target_phase == "archived"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- All checks merge -->
+    <bpmn:sequenceFlow id="flow_planning_to_ready" sourceRef="check_planning_reqs" targetRef="ready_merge"/>
+    <bpmn:sequenceFlow id="flow_design_to_ready" sourceRef="check_design_reqs" targetRef="ready_merge"/>
+    <bpmn:sequenceFlow id="flow_impl_to_ready" sourceRef="check_implementation_reqs" targetRef="ready_merge"/>
+    <bpmn:sequenceFlow id="flow_testing_to_ready" sourceRef="check_testing_reqs" targetRef="ready_merge"/>
+    <bpmn:sequenceFlow id="flow_production_to_ready" sourceRef="check_production_reqs" targetRef="ready_merge"/>
+    <bpmn:sequenceFlow id="flow_archived_to_ready" sourceRef="check_archived_reqs" targetRef="ready_merge"/>
+
+    <!-- Readiness decision -->
+    <bpmn:sequenceFlow id="flow_to_ready_gw" sourceRef="ready_merge" targetRef="ready_gw"/>
+    <bpmn:sequenceFlow id="flow_ready" sourceRef="ready_gw" targetRef="confirm_advance">
+      <bpmn:conditionExpression>requirements_met == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_ready" sourceRef="ready_gw" targetRef="show_gaps"/>
+    <bpmn:sequenceFlow id="flow_to_end_blocked" sourceRef="show_gaps" targetRef="end_blocked"/>
+
+    <!-- Advance -->
+    <bpmn:sequenceFlow id="flow_to_update_phase" sourceRef="confirm_advance" targetRef="update_phase"/>
+    <bpmn:sequenceFlow id="flow_to_end_advanced" sourceRef="update_phase" targetRef="end_advanced"/>
 
   </bpmn:process>
 

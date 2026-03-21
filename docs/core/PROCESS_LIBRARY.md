@@ -136,16 +136,17 @@ This library catalogs all documented processes in the Claude Family ecosystem. E
 
 **Phase Progression**:
 ```
-idea → research → planning → implementation → maintenance → archived
+idea → planning → design → implementation → testing → production → archived
 ```
 
 **Steps**:
 1. Identify current phase
 2. Check requirements for next phase:
-   - idea→research: Problem statement, user identified
-   - research→planning: PROBLEM_STATEMENT.md complete
-   - planning→implementation: CLAUDE.md, ARCHITECTURE.md, features defined
-   - implementation→maintenance: Core functionality complete
+   - idea→planning: Problem statement, user identified
+   - planning→design: PROBLEM_STATEMENT.md complete
+   - design→implementation: CLAUDE.md, ARCHITECTURE.md, features defined
+   - implementation→testing: Core functionality complete
+   - testing→production: Tests passing, quality gates met
 3. If met: Update phase, log transition
 4. If not met: Report blockers, offer help
 
