@@ -170,7 +170,7 @@ When you encounter a process failure (hook error, state machine violation, unexp
 1. File feedback: `create_feedback(type='bug', description='...')`
 2. Search if the failing system is modeled in BPMN
 3. Model the fix in BPMN first, then implement
-4. Store the finding as knowledge: `store_knowledge(type='gotcha')`
+4. Store the finding as knowledge: `remember(content, "gotcha")`
 
 This creates a self-improving loop: failures drive model improvements.
 

@@ -1,6 +1,6 @@
 ---
 name: sa-plan
-description: "Structured Autonomy Phase 1 — research codebase and create a structured implementation plan for a feature"
+description: "Structured Autonomy Phase 1 â€” research codebase and create a structured implementation plan for a feature"
 user-invocable: true
 disable-model-invocation: true
 ---
@@ -20,7 +20,7 @@ Phase 1 of the **Structured Autonomy Workflow** - research and planning for cost
 
 **Pattern**: Plan -> Generate -> Implement (73% cheaper than all-premium approach)
 
-See: `knowledge-vault/30-Patterns/Structured Autonomy Workflow.md`
+See: `knowledge-vault/30-Patterns/workflows/Structured Autonomy Workflow.md`
 
 ---
 
@@ -104,7 +104,7 @@ See the full template structure below for populating plan files:
 - `/sa-generate {feature-name}` - Phase 2: Generate implementation specs
 - `/sa-implement {feature-name}` - Phase 3: Execute implementation
 
-**Reference**: `knowledge-vault/30-Patterns/Structured Autonomy Workflow.md`
+**Reference**: `knowledge-vault/30-Patterns/workflows/Structured Autonomy Workflow.md`
 
 ---
 

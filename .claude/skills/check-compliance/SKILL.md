@@ -50,7 +50,7 @@ LIMIT 1;
 | governance | CLAUDE.md, ARCHITECTURE.md, PROBLEM_STATEMENT.md, hooks, commands |
 | documentation | docs/ folder, file count, recent updates |
 | data_quality | Test data in sessions, session counts |
-| standards | Standards docs exist, process router configured |
+| standards | Standards docs exist, skills system configured |
 | all | All of the above |
 
 ---

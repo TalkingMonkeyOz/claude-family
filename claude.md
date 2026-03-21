@@ -50,15 +50,13 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 ## Architecture Overview
 
 Infrastructure for the Claude Family ecosystem:
-- **Database**: PostgreSQL `ai_company_foundation`, schema `claude` (58 tables)
+- **Database**: PostgreSQL `ai_company_foundation`, schema `claude` (60+ tables)
 - **MCP Servers**: postgres, project-tools (~60 tools), python-repl, sequential-thinking, bpmn-engine
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: Vault embeddings (RAG) for semantic search
 - **UI**: Mission Control Web (MCW) for visibility
 
 **Full details**: See `ARCHITECTURE.md`
-
----
 
 ## Project Structure
 
@@ -111,7 +109,9 @@ claude-family/
 
 **Data Gateway**: Before writing, check `claude.column_registry` for valid values.
 
-### Workflow Tools (v3 Application Layer)
+**Task tool preference**: Use `create_linked_task` by default (enforces quality: description >=100 chars, verification, files). Use `add_build_task` only for quick/informal tasks.
+
+### Workflow Tools (Application Layer)
 
 Status changes go through the **WorkflowEngine** state machine. Invalid transitions are rejected.
 
@@ -156,13 +156,6 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 - **New project**: See [[New Project SOP]]
 - **Add MCP**: See [[Add MCP Server SOP]]
 - **Manage config**: See [[Config Management SOP]]
-
-## Key Procedures
-
-1. **Session Start** - Automatic via SessionStart hook (logs session, loads todos, checks messages)
-2. `/session-end` - Run manually to save summary and learnings
-3. Data writes - Check column_registry for valid values
-4. Config changes - Update database, files regenerate automatically
 
 ## Key Procedures
 
@@ -217,7 +210,7 @@ Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 |------|--------|
 | 2026-03-17 | **Routing Fix**: Replaced hardcoded vault paths in CLAUDE.md with wiki-links and tool-based routing. Entity catalog is the indirection layer — paths change in catalog, CLAUDE.md stays stable. |
 | 2026-03-15 | **Unified Deployment System**: Created `sync_project.py` replacing 3 scripts. All components DB-backed. Background job scheduler activated. No-loose-ends rule added. |
-| 2026-03-14 | **Background Job Runner**: `job_runner.py` + 6 maintenance jobs. Storage skill created (`/skill-load-memory-storage`). |
+| 2026-03-14 | **Background Job Runner**: `job_runner.py` + 6 maintenance jobs. Storage skill created (see `storage-rules` for usage). |
 | 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables, 2 new MCP tools (`catalog`/`recall_entities`). |
 **Full changelog**: See git log
 

@@ -38,4 +38,3 @@ When a process failure occurs (hook error, state machine violation, unexpected b
 
 - Process BPMN: `processes/development/system_change_process.bpmn`
 - Skill: `/bpmn-modeling`
-- Feature: F113 (BPMN Process Coverage + Self-Enforcement)

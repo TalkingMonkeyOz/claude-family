@@ -137,7 +137,7 @@ INSERT INTO claude.features (
 );
 ```
 
-**Status values**: `planned`, `in_progress`, `completed`, `on_hold`, `cancelled`
+**Status values**: `planned`, `in_progress`, `completed`, `cancelled`
 
 ---
 

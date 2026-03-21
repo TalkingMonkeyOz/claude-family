@@ -227,7 +227,7 @@ acknowledge(message_id, action='acknowledged')
 **Unactioned messages will:**
 - Persist in database
 - Show in next session-start
-- Appear in TODO_NEXT_SESSION.md
+- Appear in next session's DB-backed todo list (via `store_session_notes()`)
 - Count toward "carryover" metrics
 
 ---
@@ -242,7 +242,7 @@ acknowledge(message_id, action='acknowledged')
 |--------|-------|------------|----------|
 | **TodoWrite** | Session-only | Current conversation | Active work during session |
 | **claude.todos** | Cross-session | Database + CFM UI | Work that persists beyond session |
-| **TODO_NEXT_SESSION.md** | Session handoff | File system | Human-readable context |
+| **store_session_notes()** | Session handoff | DB-backed | Notes persist via MCP tool |
 
 ### At Session Start
 
@@ -278,7 +278,7 @@ Users have two options:
 1. Check current TodoWrite items
 2. Prompt user: "Save any items to persist?"
 3. User manually runs `/todo add` for items to keep
-4. Generate TODO_NEXT_SESSION.md with:
+4. Save session notes via `store_session_notes(content, section)`:
    - Active todos from claude.todos
    - Completed work summary
    - Unactioned messages
@@ -341,7 +341,7 @@ Before ending session, verify:
    - [ ] Stored reusable knowledge via `remember()` (if any)
 
 4. **Handoff**
-   - [ ] Generated TODO_NEXT_SESSION.md
+   - [ ] Saved session notes via `store_session_notes()`
    - [ ] Included context for next session
    - [ ] Listed unactioned messages and pending todos
 

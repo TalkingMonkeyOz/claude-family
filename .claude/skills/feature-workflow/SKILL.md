@@ -73,6 +73,19 @@ INSERT INTO claude.feedback (
 
 When an idea is approved for implementation:
 
+**Preferred**: Use the MCP tool (handles state machine transitions automatically):
+
+```python
+mcp__project-tools__promote_feedback(
+    feedback_id="FB42",  # Feedback short code or UUID
+    feature_name="Optional override name",  # Defaults to feedback title
+    feature_type="feature",
+    priority=2
+)
+```
+
+**Alternative** (raw SQL — only when MCP unavailable):
+
 ```sql
 -- Create feature
 INSERT INTO claude.features (
@@ -86,9 +99,9 @@ INSERT INTO claude.features (
     'planned'
 );
 
--- Link and close feedback
+-- Link and close feedback (use status='resolved', NOT 'implemented')
 UPDATE claude.feedback 
-SET status = 'implemented', 
+SET status = 'resolved', 
     resolved_at = NOW()
 WHERE feedback_id = 'feedback-uuid';
 ```
@@ -136,9 +149,11 @@ Use TodoWrite for session-level tracking:
 
 ### Feedback Status
 - `new` - Just created
+- `triaged` - Reviewed and prioritised
 - `in_progress` - Being worked on
-- `fixed` - Issue resolved
+- `resolved` - Issue resolved
 - `wont_fix` - Won't be addressed
+- `duplicate` - Already tracked elsewhere
 
 ### Feature Status
 - `planned` - Approved for development

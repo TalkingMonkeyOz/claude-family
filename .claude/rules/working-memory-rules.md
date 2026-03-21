@@ -15,8 +15,10 @@ Use `store_session_fact` to persist important context that survives compaction.
 
 Use `list_session_facts()` to see your notepad at any time.
 
+For decisions future sessions need, see storage-rules.md and use `remember()`.
+
 ## Config Files are Generated
 
 - `.claude/settings.local.json` regenerates from DB on SessionStart
 - NEVER manually edit it - changes will be overwritten
-- To change permanently: update DB, run `generate_project_settings.py`
+- To change permanently: update DB, run `sync_project.py`

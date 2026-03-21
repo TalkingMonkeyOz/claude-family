@@ -27,5 +27,5 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 ## Common Constraints
 
 - `status` fields: Check registry (varies by table)
-- `priority`: Always 1-5 (1=critical, 5=low)
-- `feedback_type`: bug, design, question, change, idea
+- `priority`: Always 1-5 (1=critical, 2=high, 3=normal, 4=low, 5=backlog)
+- `feedback_type`: bug, design, question, change, idea, improvement

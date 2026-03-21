@@ -21,7 +21,7 @@ Maintain accuracy of documentation, vault entries, and configuration registries.
 
 ### 1. MCP Registry Verification
 
-Check `knowledge-vault/Claude Family/MCP Registry.md` against:
+Check `knowledge-vault/Claude Family/mcp-and-tools/MCP Registry.md` against:
 - `~/.claude.json` global mcpServers
 - Per-project mcpServers in projects section
 - Individual `.mcp.json` files
@@ -36,7 +36,7 @@ Check `.claude/agents/` directory for:
 ### 3. Skill Path Verification
 
 Check all skills in `.claude/skills/` exist and have content:
-- Each skill folder has skill.md
+- Each skill folder has SKILL.md
 - References in docs match actual skill locations
 
 ### 4. Vault Entry Staleness
@@ -56,7 +56,7 @@ Use built-in Read/Glob/Grep tools (filesystem MCP retired Jan 2026):
 3. Glob("**/.mcp.json", path="C:/Projects/") to list project MCP configs
 4. Compare and flag discrepancies
 5. Glob(".claude/agents/*.md") to list current agent definitions
-6. Verify skill paths with Glob(".claude/skills/*/skill.md")
+6. Verify skill paths with Glob(".claude/skills/*/SKILL.md")
 7. Output findings
 ```
 
@@ -91,13 +91,13 @@ Use built-in Read/Glob/Grep tools (filesystem MCP retired Jan 2026):
 
 ## Related
 
-- MCP Registry: `knowledge-vault/Claude Family/MCP Registry.md`
+- MCP Registry: `knowledge-vault/Claude Family/mcp-and-tools/MCP Registry.md`
 - Agent Definitions: `.claude/agents/` (orchestrator retired 2026-02-24)
 - Skills: `.claude/skills/`
 
 ---
 
-**Version**: 1.1 (Fix retired refs: mcp__filesystem__*→built-in tools, orchestrator agent_specs.json→.claude/agents/)
+**Version**: 1.1 (Fix retired refs: mcp__filesystem__*â†’built-in tools, orchestrator agent_specs.jsonâ†’.claude/agents/)
 **Created**: 2026-01-08
 **Updated**: 2026-03-09
-**Location**: .claude/skills/doc-keeper/skill.md
+**Location**: .claude/skills/doc-keeper/SKILL.md

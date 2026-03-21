@@ -11,7 +11,7 @@ tags:
 # Memory and Storage Cheat Sheet
 
 **Use this when**: Deciding where to save something during or between sessions.
-**Architecture overview**: See [[storage-architecture-guide]] for how the 5 systems (session facts, cognitive memory, workfile dossiers, entity catalog, vault) fit together and WHY each exists.
+**Architecture overview**: See [[storage-architecture-guide]] for how the 5 systems (Notepad, Memory, Filing Cabinet, Reference Library, Vault) fit together and WHY each exists.
 
 ---
 
@@ -31,7 +31,7 @@ tags:
 | Search structured reference data                       | `recall_entities(query, entity_type)`          | find OData entity by name              |
 | Save working notes on a component across sessions      | `stash(component, title, content)`             | design decisions for rag-hook          |
 | Load component working notes                           | `unstash(component)`                           | resume work on rag-hook                |
-| Browse available dossiers                              | `list_workfiles()`                             | see all active components              |
+| Browse available workfiles                             | `list_workfiles()`                             | see all active components              |
 | Track a todo for this session                          | `TodoWrite` (native)                           | task list in current session           |
 | Persist a todo to the DB                               | `claude.todos` via task_sync_hook              | automatic on TaskCreate                |
 | Track a feature                                        | `create_feature(name, desc)`                   | new capability to build                |
@@ -52,7 +52,7 @@ tags:
 | Next session (priority signal) | `session_state.next_steps` | — | Yes |
 | Next session (full handoff) | `stash("session-handoff")` | — | Yes |
 | Component work across sessions | `stash(component, title)` | — | Yes (pinned = surfaced at start) |
-| Future sessions (patterns) | `remember()` → mid/long tier | — | Yes (cognitive memory DB) |
+| Future sessions (patterns) | `remember()` → mid/long tier | — | Yes (Memory system DB) |
 | Structured reference data | `catalog()` → entity table | — | Yes (searchable via `recall_entities`) |
 
 ---
@@ -61,10 +61,10 @@ tags:
 
 ### Session Start (automatic)
 - Hook logs to `claude.sessions`
-- `check_workfiles()` → surfaces active dossiers
+- `check_workfiles()` → surfaces active workfiles (Filing Cabinet)
 - `surface_entities()` → surfaces cataloged entity types
 - If prior state: shows "NEXT PRIORITIES" from `session_state.next_steps`
-- If prior state: shows "ACTIVE DOSSIERS" from `list_workfiles()`
+- If prior state: shows "ACTIVE WORKFILES" from `list_workfiles()`
 
 ### During Work (automatic)
 - `TodoWrite` → synced to `claude.todos` by `todo_sync_hook.py`
@@ -84,7 +84,7 @@ tags:
 
 ### Session Auto-Close (hook on process exit)
 - `session_end_hook.py` closes `claude.sessions` row
-- `consolidate_memories()` runs for cognitive memory lifecycle
+- `consolidate_memories()` runs memory lifecycle (promote, decay, archive)
 
 ---
 
@@ -98,7 +98,7 @@ tags:
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-14
-**Updated**: 2026-03-14
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/30-Patterns/memory-storage-cheat-sheet.md

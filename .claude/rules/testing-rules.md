@@ -30,7 +30,3 @@ dotnet test
 - New features: Add tests for happy path + edge cases
 - Bug fixes: Add test that would have caught the bug
 - Refactoring: Ensure existing tests still pass
-
-## Stop Hook Reminder
-
-The stop hook will remind you to test after modifying 3+ code files.

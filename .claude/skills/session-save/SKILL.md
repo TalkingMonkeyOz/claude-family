@@ -45,7 +45,7 @@ If you discovered a reusable pattern, gotcha, or solution:
 
 Call `mcp__project-tools__remember` with:
 - `content`: What was learned
-- `memory_type`: pattern, gotcha, solution, fact, or procedure
+- `memory_type`: pattern, gotcha, decision, fact, or procedure
 
 ## Step 5: Confirm
 

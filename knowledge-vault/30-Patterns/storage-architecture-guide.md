@@ -23,7 +23,7 @@ tags:
 **Lifecycle**: Created mid-session -> injected into context on compaction -> gone after session ends (unless promoted).
 **Tools**: `store_session_fact()`, `recall_session_fact()`, `list_session_facts()`
 
-### 2. Cognitive Memory (MID + LONG tiers — persistent)
+### 2. Memory (MID + LONG tiers — persistent)
 
 **What**: Learned knowledge that accumulates over time. Patterns, gotchas, decisions.
 **Metaphor**: Your professional expertise — things you've learned from experience.
@@ -35,9 +35,9 @@ tags:
 
 **Tools**: `remember()`, `recall_memories()`, `consolidate_memories()`
 
-### 3. Workfile Dossiers — The Filing Cabinet
+### 3. Workfiles — The Filing Cabinet
 
-**What**: Component-scoped working notes that bridge sessions.
+**What**: Component-scoped working notes that bridge sessions. The data type stored in the Filing Cabinet.
 **Metaphor**: A physical filing cabinet.
 - **Project** = the cabinet (which project are we in?)
 - **Component** = the drawer (e.g., "auth-flow", "rag-hook", "session-continuity")
@@ -77,13 +77,13 @@ Ephemeral      Session Facts (notepad)       Session Notes (progress)
 (this session)      |                              |
                     | promote                      | extract
                     v                              v
-Persistent     Entity Catalog <---- Cognitive Memory (MID/LONG)
+Persistent     Entity Catalog <---- Memory (MID/LONG)
 (cross-session)  (typed schemas)     (patterns, decisions, gotchas)
                     |                              |
                     |                              |
                     v                              v
-Working        ---------- Workfile Dossiers ----------
-Context          (filing cabinet: project/component/title)
+Working        ---------- Filing Cabinet (Workfiles) ----------
+Context          (project/component/title)
                                    |
                                    |
                                    v
@@ -103,7 +103,7 @@ The key insight from library science research: **you need both prospective organ
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-14
-**Updated**: 2026-03-14
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/30-Patterns/storage-architecture-guide.md
