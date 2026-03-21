@@ -17,14 +17,16 @@ status: draft
 
 # Gate 2 Deliverable 5b: Data Model — Platform Core
 
-Extension of [[deliverable-05-data-model|Deliverable 5]]. Covers 9 tables for Phase 1 core platform: session management, agent orchestration, LLM tracking, token budgets, and cognitive memory.
+Extension of [[deliverable-05-data-model|Deliverable 5]]. Covers 11 tables for Phase 1 core platform: session management, agent orchestration, LLM tracking, token budgets, cognitive memory, and code intelligence.
 
 **Key decisions informing this model:**
 - Augmentation Layer is core Phase 1 (D3) — sessions, context assembly, memory
 - Agent orchestration with sub-agent cap (P7)
 - Single ranking pipeline with 6 signals (D10) — context snapshots track which signals were used
 - Event-driven freshness (D11) — cognitive memory promotion feeds knowledge freshness
-- Content-aware chunking (D8) — cognitive memory uses same embedding dimension as knowledge_chunks
+- Content-aware chunking (D8) — cognitive memory and code_symbols use same embedding dimension as knowledge_chunks
+- Extensible parser pipeline (coding intelligence decision #4) — code is a content type alongside documents
+- Flat tables + recursive CTEs over Apache AGE (coding intelligence decision #2) — backup-safe, faster, cloud-compatible
 
 **References:** [[deliverable-05a-data-model-rbac|Deliverable 5a]] for users/audit FKs.
 
@@ -252,7 +254,66 @@ METIS's working memory — facts, decisions, observations from sessions. Promoti
 
 ---
 
-## Cross-References (All 9 Tables)
+## 13. Code Intelligence
+
+### `code_symbols`
+
+Parsed code symbols from tree-sitter AST analysis. Same scope chain as all METIS tables. Embeddings in shared Voyage AI vector space for cross-content-type semantic search.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| org_id | uuid FK → organisations | Scope chain |
+| product_id | uuid FK → products | Nullable |
+| client_id | uuid FK → clients | Nullable |
+| engagement_id | uuid FK → engagements | Nullable |
+| project_name | text NOT NULL | Repository/project identifier |
+| name | text NOT NULL | Symbol name (function, class, variable) |
+| kind | text NOT NULL | function, class, method, interface, variable, type, enum, module |
+| file_path | text NOT NULL | Relative path within project |
+| line_number | int NOT NULL | Start line |
+| end_line | int | End line (nullable for single-line symbols) |
+| scope | text | Enclosing scope (e.g. module path) |
+| visibility | text | public, private, protected, internal |
+| signature | text | Full signature (params, return type) |
+| parent_symbol_id | uuid FK → code_symbols | Self-referencing: method→class, nested→parent |
+| language | text NOT NULL | python, typescript, javascript, csharp, rust |
+| file_hash | text | SHA-256 of source file at index time — skip re-parse if unchanged |
+| embedding | vector(1024) | Voyage AI, same dimension as knowledge_chunks |
+| last_indexed_at | timestamptz | When this symbol was last parsed |
+| created_at | timestamptz DEFAULT now() | |
+| updated_at | timestamptz DEFAULT now() | |
+
+**Indexes:**
+- `(project_name, name)` BTREE — symbol lookup by name within project
+- `(file_path)` BTREE — all symbols in a file
+- `(parent_symbol_id)` BTREE — children of a class/module
+- HNSW on `embedding` — semantic similarity search (same pattern as knowledge_chunks)
+
+**Design rationale:** Dedicated table rather than reusing `knowledge_items` because code has structural relationships (calls, imports, extends, parent symbols) that document chunks don't model. Validated in Claude Family CKG prototype (3,759 symbols, 19,517 references). Apache AGE rejected for graph storage — flat tables + recursive CTEs are faster (0.8ms vs 1.5-3.7ms), pg_dump-safe, and cloud-compatible (D6).
+
+### `code_references`
+
+Directional edges between symbols — calls, imports, extends, implements.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| from_symbol_id | uuid FK → code_symbols | Source of the reference |
+| to_symbol_id | uuid FK → code_symbols | Target (nullable if unresolved) |
+| to_symbol_name | text NOT NULL | Name of target — kept for unresolved refs |
+| ref_type | text NOT NULL | calls, imports, extends, implements, uses, instantiates |
+| created_at | timestamptz DEFAULT now() | |
+
+**Indexes:**
+- `(from_symbol_id)` BTREE — "what does this symbol reference?"
+- `(to_symbol_id)` BTREE — "what references this symbol?"
+
+**Graph traversal:** Use recursive CTEs for call chain / dependency analysis (depth-limited, typically 3-5 hops). No Apache AGE dependency.
+
+---
+
+## Cross-References (All 11 Tables)
 
 | This table | References | Via |
 |------------|------------|-----|
@@ -268,10 +329,13 @@ METIS's working memory — facts, decisions, observations from sessions. Promoti
 | token_budget_alerts | → token_budgets, users (05a) | FKs |
 | cognitive_memory | → sessions, knowledge_items (05) | FKs |
 | cognitive_memory | → cognitive_memory (self) | superseded_by_id |
+| code_symbols | → scope chain (05) | org/product/client/engagement FKs |
+| code_symbols | → code_symbols (self) | parent_symbol_id |
+| code_references | → code_symbols (×2) | from_symbol_id, to_symbol_id FKs |
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-17
-**Updated**: 2026-03-17
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/10-Projects/Project-Metis/gates/gate-two/deliverable-05b-data-model-platform.md

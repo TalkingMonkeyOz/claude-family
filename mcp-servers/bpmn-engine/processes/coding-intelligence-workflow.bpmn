@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn2:definitions xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.omg.org/bpmn20" xmlns:bpmn2="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:di="http://www.omg.org/spec/DD/20100524/DI" xsi:schemaLocation="http://www.omg.org/spec/BPMN/20100524/MODEL BPMN20.xsd" id="Definitions_1" name="Coding Intelligence Workflow" targetNamespace="http://example.org/coding-intelligence-workflow">
+  <bpmn2:process id="coding_intelligence_workflow" name="Coding Intelligence Workflow" isExecutable="true">
+    <bpmn2:documentation>L0 Process: Coding Intelligence System - the three-intensity workflow orchestrating context assembly for AI-assisted code development. Routes tasks by file count and complexity to appropriate research/plan/implement flow. Automatically populates dossier hub from CKG, standards, memory, and module maps.</bpmn2:documentation>
+
+    <!-- Start -->
+    <bpmn2:startEvent id="start_task" name="Task Starts">
+      <bpmn2:outgoing>flow_to_assess</bpmn2:outgoing>
+    </bpmn2:startEvent>
+
+    <!-- Assess Complexity -->
+    <bpmn2:exclusiveGateway id="assess_complexity" name="Assess Scope: How many files?">
+      <bpmn2:incoming>flow_to_assess</bpmn2:incoming>
+      <bpmn2:outgoing>flow_small</bpmn2:outgoing>
+      <bpmn2:outgoing>flow_medium</bpmn2:outgoing>
+      <bpmn2:outgoing>flow_large</bpmn2:outgoing>
+    </bpmn2:exclusiveGateway>
+
+    <!-- SMALL PATH: 1 file -->
+    <bpmn2:task id="small_ckg_check" name="[CKG] Check for similar symbols">
+      <bpmn2:documentation>Single file task: invoke find_symbol() for main function/class, check_collision() for naming, find_similar() for existing implementations. Load 5-10 related symbols.</bpmn2:documentation>
+      <bpmn2:incoming>flow_small</bpmn2:incoming>
+      <bpmn2:outgoing>flow_small_dossier</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="small_dossier" name="[Dossier] Assemble from CKG results">
+      <bpmn2:documentation>Populate dossier: CKG symbols + related patterns (check memory for decisions), existing code patterns in file. Single unstash() call.</bpmn2:documentation>
+      <bpmn2:incoming>flow_small_dossier</bpmn2:incoming>
+      <bpmn2:outgoing>flow_small_implement</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="small_implement" name="Implement">
+      <bpmn2:documentation>Write code using dossier context. When done, hooks validate (coding standards, syntax, basic patterns).</bpmn2:documentation>
+      <bpmn2:incoming>flow_small_implement</bpmn2:incoming>
+      <bpmn2:outgoing>flow_to_merge</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <!-- MEDIUM PATH: 2-3 files -->
+    <bpmn2:task id="medium_research" name="[Research] Analyze file relationships">
+      <bpmn2:documentation>Research phase: Run get_dependency_graph() for root file, identify shared state/logic, review existing implementations. Query vault for related patterns. Check memory for decisions. Build a 200-500 word analysis.</bpmn2:documentation>
+      <bpmn2:incoming>flow_medium</bpmn2:incoming>
+      <bpmn2:outgoing>flow_medium_plan</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="medium_plan" name="[Plan] Create brief design">
+      <bpmn2:documentation>Planning phase: Write 5-10 point plan showing what changes in each file, where state lives, how files coordinate. Include: decisions made, edge cases identified, assumptions.</bpmn2:documentation>
+      <bpmn2:incoming>flow_medium_plan</bpmn2:incoming>
+      <bpmn2:outgoing>flow_medium_dossier</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="medium_dossier" name="[Dossier] Populate from research + plan">
+      <bpmn2:documentation>Dossier now contains: research findings, plan points, related CKG symbols from each file, module maps, existing patterns. Use stash(component, research_findings) to persist across sessions if needed.</bpmn2:documentation>
+      <bpmn2:incoming>flow_medium_plan</bpmn2:incoming>
+      <bpmn2:outgoing>flow_medium_implement</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="medium_implement" name="Implement per plan">
+      <bpmn2:documentation>Implement the design points. Dossier prevents context loss — all files' patterns already identified. Review after completion before merging.</bpmn2:documentation>
+      <bpmn2:incoming>flow_medium_implement</bpmn2:incoming>
+      <bpmn2:outgoing>flow_to_review</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <!-- LARGE PATH: 3+ files or high complexity -->
+    <bpmn2:callActivity id="large_structured_autonomy" name="[DELEGATE] Structured Autonomy Workflow" calledElement="structured_autonomy">
+      <bpmn2:documentation>Spawn three specialist agents (analyst-sonnet, coder-sonnet, reviewer-sonnet) in sequence. Analyst researches and produces specs. Coder implements. Reviewer checks quality and testing. See structured_autonomy_workflow.bpmn.</bpmn2:documentation>
+      <bpmn2:incoming>flow_large</bpmn2:incoming>
+      <bpmn2:outgoing>flow_to_merge</bpmn2:outgoing>
+    </bpmn2:callActivity>
+
+    <!-- Merge Gate -->
+    <bpmn2:task id="review_merge" name="[HOOK] Review + merge">
+      <bpmn2:documentation>Hook validates: coding standards pass, tests added (if applicable), no duplication introduced (CKG check_collision passes), design decisions logged to memory.</bpmn2:documentation>
+      <bpmn2:incoming>flow_to_review</bpmn2:incoming>
+      <bpmn2:outgoing>flow_to_merge</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <bpmn2:task id="merge_commit" name="Commit with context references">
+      <bpmn2:documentation>Commit message includes: what was added/changed, which files, reference to dossier/memory entries for future context preservation. Example: [F156] Add caching layer — see dossier/caching-research, memory/caching-decision.</bpmn2:documentation>
+      <bpmn2:incoming>flow_to_merge</bpmn2:incoming>
+      <bpmn2:outgoing>flow_to_end</bpmn2:outgoing>
+    </bpmn2:task>
+
+    <!-- End -->
+    <bpmn2:endEvent id="end_task" name="Task Complete">
+      <bpmn2:incoming>flow_to_end</bpmn2:incoming>
+    </bpmn2:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn2:sequenceFlow id="flow_to_assess" sourceRef="start_task" targetRef="assess_complexity"/>
+    <bpmn2:sequenceFlow id="flow_small" sourceRef="assess_complexity" targetRef="small_ckg_check" name="1 file">
+      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">file_count == 1</bpmn2:conditionExpression>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="flow_medium" sourceRef="assess_complexity" targetRef="medium_research" name="2-3 files">
+      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">file_count >= 2 and file_count &lt;= 3</bpmn2:conditionExpression>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="flow_large" sourceRef="assess_complexity" targetRef="large_structured_autonomy" name="3+ files or complex">
+      <bpmn2:conditionExpression xsi:type="bpmn2:tFormalExpression">file_count > 3 or complexity == "high"</bpmn2:conditionExpression>
+    </bpmn2:sequenceFlow>
+    <bpmn2:sequenceFlow id="flow_small_dossier" sourceRef="small_ckg_check" targetRef="small_dossier"/>
+    <bpmn2:sequenceFlow id="flow_small_implement" sourceRef="small_dossier" targetRef="small_implement"/>
+    <bpmn2:sequenceFlow id="flow_medium_plan" sourceRef="medium_research" targetRef="medium_plan"/>
+    <bpmn2:sequenceFlow id="flow_medium_dossier" sourceRef="medium_plan" targetRef="medium_dossier"/>
+    <bpmn2:sequenceFlow id="flow_medium_implement" sourceRef="medium_dossier" targetRef="medium_implement"/>
+    <bpmn2:sequenceFlow id="flow_to_review" sourceRef="medium_implement" targetRef="review_merge"/>
+    <bpmn2:sequenceFlow id="flow_to_merge" sourceRef="small_implement" targetRef="merge_commit"/>
+    <bpmn2:sequenceFlow id="flow_to_merge_large" sourceRef="large_structured_autonomy" targetRef="merge_commit"/>
+    <bpmn2:sequenceFlow id="flow_to_merge_review" sourceRef="review_merge" targetRef="merge_commit"/>
+    <bpmn2:sequenceFlow id="flow_to_end" sourceRef="merge_commit" targetRef="end_task"/>
+  </bpmn2:process>
+
+  <!-- Diagram -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1" name="Coding Intelligence Workflow">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="coding_intelligence_workflow">
+      <bpmndi:BPMNShape id="Shape_start_task" bpmnElement="start_task">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_assess_complexity" bpmnElement="assess_complexity">
+        <dc:Bounds x="130" y="180" width="60" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_small_ckg_check" bpmnElement="small_ckg_check">
+        <dc:Bounds x="250" y="50" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_small_dossier" bpmnElement="small_dossier">
+        <dc:Bounds x="380" y="50" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_small_implement" bpmnElement="small_implement">
+        <dc:Bounds x="510" y="50" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_medium_research" bpmnElement="medium_research">
+        <dc:Bounds x="250" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_medium_plan" bpmnElement="medium_plan">
+        <dc:Bounds x="380" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_medium_dossier" bpmnElement="medium_dossier">
+        <dc:Bounds x="510" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_medium_implement" bpmnElement="medium_implement">
+        <dc:Bounds x="640" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_large_structured_autonomy" bpmnElement="large_structured_autonomy">
+        <dc:Bounds x="250" y="310" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_review_merge" bpmnElement="review_merge">
+        <dc:Bounds x="770" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_merge_commit" bpmnElement="merge_commit">
+        <dc:Bounds x="900" y="180" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="Shape_end_task" bpmnElement="end_task">
+        <dc:Bounds x="1050" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn2:definitions>

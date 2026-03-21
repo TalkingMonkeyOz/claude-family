@@ -387,10 +387,10 @@ def _format_resume(data: dict) -> dict:
             lines.append(row(f"  {i}. {step_text[:w - 8]}"))
         lines.append(div)
 
-    # Active dossiers (workfile components) — populated by start_session()
+    # Active workfiles (filing cabinet components) — populated by start_session()
     active_workfiles = data.get("active_workfiles", [])
     if active_workfiles:
-        lines.append(row(f"ACTIVE DOSSIERS ({len(active_workfiles)}):"))
+        lines.append(row(f"ACTIVE WORKFILES ({len(active_workfiles)}):"))
         for wf in active_workfiles[:5]:
             pin = " [pinned]" if wf.get("pinned_count", 0) > 0 else ""
             lines.append(row(f"  - {wf['component']} ({wf['file_count']} files){pin}"))

@@ -20,9 +20,11 @@ Full step tables for all 9 processes. Parent doc: [[gate-two/deliverable-01-bpmn
 | Step | Actor | Action | Output |
 |------|-------|--------|--------|
 | 1 | System | Receive content submission | Content in queue |
-| 2 | Ingestion Agent | Determine content type (8 types) | Type assigned |
+| 2 | Ingestion Agent | Determine content type (9 types: 8 document + code) | Type assigned |
 | 3 | Ingestion Agent | Route to type-specific parser | Parsed content |
 | → G1 | — | Content type deterministic? | — |
+| → G1a | — | Content type = code? | — |
+| **Document path (G1a = false):** | | | |
 | 4 | Ingestion Agent | Chunk at natural boundaries per type | Chunks |
 | 5 | Embedding Service | Generate 1024-dim embedding (Voyage AI) | Embedding vector |
 | → G4 | — | Embedding succeeded? | — |
@@ -34,6 +36,17 @@ Full step tables for all 9 processes. Parent doc: [[gate-two/deliverable-01-bpmn
 | 8b | Domain Expert | Queue for human review (Tier 2+) | Review task created |
 | 9 | System | Store KnowledgeItem + audit trail | `KnowledgeIngested` event |
 | 10 | System | Suggest knowledge relationships | Relationship candidates |
+| **Code path (G1a = true) — Sub-process P1-Code:** | | | |
+| C1 | Code Ingestion Agent | List source files in repository, compute file hashes | File manifest |
+| → G5 | — | File hash unchanged since last index? | — |
+| C2 | Code Ingestion Agent | Parse file via tree-sitter AST (Python, TS, JS, C#, Rust) | AST |
+| C3 | Code Ingestion Agent | Extract symbols (functions, classes, methods, interfaces, types) | Symbol set |
+| C4 | Code Ingestion Agent | Extract references (calls, imports, extends, implements) | Reference edges |
+| C5 | Embedding Service | Generate 1024-dim embedding per symbol (Voyage AI, shared space) | Embedding vectors |
+| → G4 | — | Embedding succeeded? | — |
+| C6 | Code Ingestion Agent | Upsert symbols to `code_symbols`, references to `code_references` | Symbols stored |
+| C7 | System | Update file_hash + last_indexed_at | Index metadata updated |
+| C8 | System | Emit `CodeIndexed` event + audit trail | `CodeIndexed` event |
 
 ---
 
@@ -44,9 +57,11 @@ Full step tables for all 9 processes. Parent doc: [[gate-two/deliverable-01-bpmn
 | 1 | User/Agent | Submit natural-language query | Query string |
 | 2 | Classifier | Gate query (in-scope check, Haiku model) | Pass/reject |
 | → G1 | — | Query in scope? | — |
-| 3 | Knowledge Engine | Vector search (embeddings only) — top-N chunks | Ranked chunks |
+| 3 | Knowledge Engine | Vector search (embeddings only) — top-N chunks from `knowledge_chunks` | Ranked chunks |
 | → G2 | — | Results above similarity threshold? | — |
-| 4 | Knowledge Engine | Walk graph 1–2 hops from top-N items (Apache AGE on PG18 — Phase 1) | Additional items |
+| → G2a | — | Query relates to code? | — |
+| 3a | Knowledge Engine | Also search `code_symbols` (shared embedding space) | Code symbols |
+| 4 | Knowledge Engine | Walk graph: recursive CTEs for code refs, Apache AGE for knowledge graph (Phase 1) | Additional items |
 | → G3 | — | Graph walk adds relevant items? | — |
 | 5 | Knowledge Engine | Merge and re-rank (6-signal ranking pipeline) | Final ranked set |
 | → G4 | — | LLM synthesis requested? | — |
@@ -217,7 +232,7 @@ Full step tables for all 9 processes. Parent doc: [[gate-two/deliverable-01-bpmn
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-03-15
-**Updated**: 2026-03-15
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/10-Projects/Project-Metis/gates/gate-two/deliverable-01-bpmn-processes-detail.md

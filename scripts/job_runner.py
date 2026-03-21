@@ -186,6 +186,11 @@ def run_job(job: dict, conn) -> dict:
     started_at = datetime.now()
 
     try:
+        # CREATE_NO_WINDOW prevents console flash on Windows
+        creationflags = 0
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags = subprocess.CREATE_NO_WINDOW
+
         result = subprocess.run(
             command,
             shell=True,
@@ -194,6 +199,7 @@ def run_job(job: dict, conn) -> dict:
             timeout=timeout,
             cwd=working_dir if working_dir and os.path.isdir(working_dir) else None,
             env={**os.environ, "DATABASE_URL": DB_URL} if DB_URL else None,
+            creationflags=creationflags,
         )
 
         completed_at = datetime.now()

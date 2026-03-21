@@ -662,6 +662,66 @@ def main():
                 names = [r['project_name'] for r in recipients[:10]]
                 context_lines.append(f"Messaging recipients: {', '.join(names)}")
 
+            # F156: Auto-detect and load dossier from git branch or active tasks
+            try:
+                import subprocess as _git_sp
+                branch_result = _git_sp.run(
+                    ['git', 'branch', '--show-current'],
+                    capture_output=True, text=True, timeout=5, cwd=cwd
+                )
+                branch_name = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
+
+                # Extract component hint from branch: feature/F156-dossier-system → dossier-system
+                dossier_component = None
+                if branch_name and '/' in branch_name:
+                    branch_suffix = branch_name.split('/', 1)[1]
+                    # Strip feature code prefix (F123-, FB45-, BT67-)
+                    import re
+                    component_hint = re.sub(r'^[A-Z]+\d+-', '', branch_suffix)
+                    if component_hint:
+                        dossier_component = component_hint
+
+                # Also check active in_progress tasks for component hints
+                if not dossier_component and pending_tasks:
+                    in_progress = [t for t in pending_tasks if t.get('status') == 'in_progress']
+                    if in_progress:
+                        # Use first in-progress task content as search hint
+                        task_hint = in_progress[0].get('content', '')
+                        if len(task_hint) > 10:
+                            dossier_component = task_hint[:50].lower().replace(' ', '-')
+
+                if dossier_component:
+                    dossier_conn = get_db_connection()
+                    if dossier_conn:
+                        dossier_cur = dossier_conn.cursor()
+                        dossier_cur.execute("""
+                            SELECT component, title, LEFT(content, 300) as preview
+                            FROM claude.project_workfiles pw
+                            JOIN claude.projects p ON pw.project_id = p.project_id
+                            WHERE p.project_name = %s
+                              AND pw.is_active = TRUE
+                              AND (pw.component ILIKE %s OR pw.component ILIKE %s)
+                            ORDER BY pw.updated_at DESC
+                            LIMIT 3
+                        """, (project_name, f"%{dossier_component}%", f"%{dossier_component.split('-')[0]}%"))
+                        dossiers = dossier_cur.fetchall()
+                        dossier_conn.close()
+
+                        if dossiers:
+                            context_lines.append("")
+                            context_lines.append(f"ACTIVE WORKFILE (auto-detected from branch/task):")
+                            for d in dossiers:
+                                comp = d['component'] if isinstance(d, dict) else d[0]
+                                title = d['title'] if isinstance(d, dict) else d[1]
+                                preview = d['preview'] if isinstance(d, dict) else d[2]
+                                context_lines.append(f"  [{comp}] {title}")
+                                if preview:
+                                    context_lines.append(f"    {preview[:150]}...")
+                            context_lines.append("  Use unstash(component) to load full workfile content")
+                            logger.info(f"F156: Auto-detected {len(dossiers)} dossier(s) for component '{dossier_component}'")
+            except Exception as e:
+                logger.warning(f"Dossier auto-detection skipped (non-fatal): {e}")
+
             # F130: Run periodic memory consolidation (24h cooldown)
             try:
                 consolidation_conn = get_db_connection()

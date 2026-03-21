@@ -17,19 +17,23 @@ updated: 2026-03-07
 
 **Who:** Everyone — consultants, support staff, project managers, developers.
 
-**What they see:** Chat-style interface. Type a question, get an answer with source citations and confidence indicator. Sources are clickable.
+**What they see:** Chat-style interface. Type a question, get an answer with source citations and confidence indicator. Sources are clickable. For code queries, results include symbol signatures, file locations, and dependency context.
 
 **Behind the scenes:**
 1. Haiku classifier checks on-topic (Layer 3 constrained deployment)
 2. Query to /ask endpoint
-3. Vector search finds top-N relevant knowledge items
-4. Graph walk (1-2 hops) finds structurally connected items
-5. Claude assembles answer from retrieved context
+3. Vector search finds top-N relevant knowledge items AND code symbols (shared embedding space)
+4. Graph walk (1-2 hops) finds structurally connected items; for code, recursive CTE traverses call chains and dependencies
+5. Claude assembles answer from retrieved context (documents + code)
 6. Confidence score from similarity scores + source count
 7. Response with source citations, confidence badge, feedback button
 8. Query, results, feedback logged for evaluation
 
-**nimbus/Monash example:** Consultant asks: "How do I configure penalty rates for casual academics under the Monash EA?" Engine retrieves: Monash EA rule types, time2work API endpoint for penalty rate config, two implementation patterns from previous higher-ed setups. Answer explains which rule types, which parameters, links to API docs. Confidence: HIGH. Consultant completes in 20 min instead of 2 hours.
+**Content types:** The Knowledge Engine supports pluggable content types (Decision #4). Documents and code share the same pipeline pattern (parse → chunk/extract → embed → store → search → rank) with different parsers per type. Documents use sentence-boundary chunking; code uses tree-sitter AST parsing into `code_symbols` with structural `code_references`. Both use Voyage AI embeddings in the same vector space, enabling cross-content-type semantic search.
+
+**nimbus/Monash example (documents):** Consultant asks: "How do I configure penalty rates for casual academics under the Monash EA?" Engine retrieves: Monash EA rule types, time2work API endpoint for penalty rate config, two implementation patterns from previous higher-ed setups. Answer explains which rule types, which parameters, links to API docs. Confidence: HIGH. Consultant completes in 20 min instead of 2 hours.
+
+**nimbus/Monash example (code):** Developer asks: "Where is holiday loading calculated?" Engine retrieves: `calculateHolidayLoading()` in payroll-engine, its callers, the Award rule type it implements, plus the Monash EA business rule. Developer sees both the code AND the business logic in one answer.
 
 ---
 
@@ -40,15 +44,19 @@ updated: 2026-03-07
 **What they see:** Ingestion form or API call. Select knowledge type, paste/upload content, add tags. System shows category, validation tier, next steps.
 
 **Behind the scenes:**
-1. Content received, type determined
-2. Chunking applied per type (natural boundaries)
-3. Voyage AI generates embeddings
-4. Stored in knowledge_items with metadata
+1. Content received, type determined (document, API spec, code repository, etc.)
+2. Parser selected per content type: sentence-boundary chunking for documents, tree-sitter AST parsing for code
+3. Voyage AI generates embeddings (shared vector space across all content types)
+4. Documents stored in `knowledge_items`/`knowledge_chunks`; code stored in `code_symbols`/`code_references`
 5. Validation tier routing: T1 auto-approve, T2 senior review queue, T3 searchable with low-confidence flag, T4 always flagged
-6. AI suggests relationships to existing knowledge (background)
+6. AI suggests relationships to existing knowledge (background); for code, cross-references (calls, imports, extends) auto-extracted from AST
 7. Audit trail logged
 
-**nimbus/Monash example:** time2work v14.2 releases new bulk rostering API endpoint. Swagger spec uploaded, auto-chunked per endpoint, Tier 1 auto-approved. Minutes later, any consultant asking about bulk rosters gets the new endpoint. Separately, a senior consultant documents a semester scheduling pattern — goes in as Tier 2, queued for peer validation.
+**Code ingestion specifics:** When a code repository is onboarded, tree-sitter parses source files into symbols (functions, classes, methods, interfaces). Structural references between symbols are extracted automatically. File hashes enable incremental re-indexing — unchanged files are skipped. Auto-indexed on project onboard (Decision #3: opt-in = forgotten). Multi-language: Python, TypeScript, JavaScript, C#, Rust.
+
+**nimbus/Monash example (documents):** time2work v14.2 releases new bulk rostering API endpoint. Swagger spec uploaded, auto-chunked per endpoint, Tier 1 auto-approved. Minutes later, any consultant asking about bulk rosters gets the new endpoint. Separately, a senior consultant documents a semester scheduling pattern — goes in as Tier 2, queued for peer validation.
+
+**nimbus/Monash example (code):** Nimbus onboards their time2work integration codebase. Tree-sitter indexes 2,400 symbols across 180 files. METIS discovers 3 duplicate implementations of penalty rate calculation, flags them via collision detection. Next developer session, METIS automatically provides the canonical implementation instead of letting a 4th copy be written.
 
 ---
 
@@ -215,4 +223,7 @@ updated: 2026-03-07
 | F10: Constrained Deploy | ✅ Basic | Monash-specific | Multi-role |
 
 ---
-*Created: 2026-02-26*
+**Version**: 1.1
+**Created**: 2026-02-26
+**Updated**: 2026-03-22
+**Location**: knowledge-vault/10-Projects/Project-Metis/feature-catalogue.md

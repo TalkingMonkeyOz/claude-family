@@ -27,7 +27,7 @@ status: draft
 
 | # | Context | Aggregate Root | Entity Count | Maps to Area |
 |---|---------|---------------|-------------|-------------|
-| 1 | **Knowledge Store** | `KnowledgeItem` | 10 | F119 (Knowledge Engine) |
+| 1 | **Knowledge Store** | `KnowledgeItem` | 12 | F119 (Knowledge Engine) |
 | 2 | **Tenant & Scope** | `Organisation` | 7 | Cross-cutting |
 | 3 | **Delivery Pipeline** | `DeliveryPipeline` | 9 | F121 (Delivery Accelerator) |
 | 4 | **Work Management** | `Initiative` | 6 | F126 (Project Governance) |
@@ -55,13 +55,15 @@ status: draft
 
 ### Knowledge Store → `KnowledgeItem`
 
-**Owns:** KnowledgeChunk, KnowledgeRelation, KnowledgePromotion, KnowledgeType, ValidationTier, DecisionRecord, VaultDocument, BPMNProcess, QueryLog, QueryFeedback
+**Owns:** KnowledgeChunk, KnowledgeRelation, KnowledgePromotion, KnowledgeType, ValidationTier, DecisionRecord, VaultDocument, BPMNProcess, QueryLog, QueryFeedback, CodeSymbol, CodeReference
 
 **Invariants:**
 - Every chunk belongs to exactly one item
 - Promotions require Tier 2 human approval
 - Superseded items link to their replacement
 - Scope chain always populated per C2-2
+- Code symbols live in dedicated tables (`code_symbols`, `code_references`) but share the same embedding space and ranking pipeline as document chunks
+- Code references are directional edges (calls, imports, extends) — traversed via recursive CTEs, not Apache AGE
 
 ### Tenant & Scope → `Organisation`
 
@@ -155,7 +157,9 @@ See [[gate-two/deliverable-03-domain-events|Domain Events Detail]] for full even
 
 ```
 Integration ──SourceDataChanged──→ Knowledge Store
+Integration ──CodeRepositoryChanged──→ Knowledge Store (code re-index)
 Knowledge Store ──KnowledgeIngested──→ Work Context, Test Assets
+Knowledge Store ──CodeIndexed──→ Work Context (dossier refresh)
 Delivery Pipeline ──GateFailed──→ Defect Intelligence
 Delivery Pipeline ──ReleaseDeployed──→ Knowledge Store (freshness)
 Test Assets ──TestFailed──→ Defect Intelligence
@@ -188,7 +192,7 @@ Commercial ──EngagementCreated──→ Tenant & Scope, Delivery Pipeline
 - [ ] Multi-product knowledge sharing rules across contexts
 
 ---
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-15
-**Updated**: 2026-03-15
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/10-Projects/Project-Metis/gates/gate-two/deliverable-03-domain-model.md

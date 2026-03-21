@@ -206,6 +206,11 @@ def run_job(job: Dict[str, Any], conn) -> Dict[str, Any]:
             error = agent_result.get('error', '')[:5000] if agent_result.get('error') else None
         else:
             # Execute via subprocess
+            # CREATE_NO_WINDOW prevents console flash on Windows
+            creationflags = 0
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                creationflags = subprocess.CREATE_NO_WINDOW
+
             result = subprocess.run(
                 command,
                 shell=True,
@@ -214,7 +219,8 @@ def run_job(job: Dict[str, Any], conn) -> Dict[str, Any]:
                 text=True,
                 timeout=timeout,
                 encoding='utf-8',
-                errors='replace'
+                errors='replace',
+                creationflags=creationflags,
             )
 
             completed_at = datetime.now()

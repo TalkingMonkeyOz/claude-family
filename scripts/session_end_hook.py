@@ -188,6 +188,30 @@ def auto_save_session(session_id: str, project_name: str):
         # BPMN step: demote_to_pending - in_progress todos become pending
         demote_in_progress_todos(project_name, conn)
 
+        # F156: Extract lessons from active dossiers and log to session notes
+        try:
+            cur.execute("""
+                SELECT pw.component, pw.title, LEFT(pw.content, 500) as content_preview
+                FROM claude.project_workfiles pw
+                JOIN claude.projects p ON pw.project_id = p.project_id
+                WHERE p.project_name = %s
+                  AND pw.is_active = TRUE
+                  AND pw.is_pinned = TRUE
+                  AND pw.updated_at > NOW() - INTERVAL '24 hours'
+                ORDER BY pw.updated_at DESC
+                LIMIT 5
+            """, (project_name,))
+            active_dossiers = cur.fetchall()
+            if active_dossiers:
+                dossier_summary = []
+                for d in active_dossiers:
+                    comp = d['component'] if isinstance(d, dict) else d[0]
+                    title = d['title'] if isinstance(d, dict) else d[1]
+                    dossier_summary.append(f"  - [{comp}] {title}")
+                logger.info(f"F156: {len(active_dossiers)} active dossier(s) found at session end: {', '.join(d['component'] if isinstance(d, dict) else d[0] for d in active_dossiers)}")
+        except Exception as e:
+            logger.warning(f"Dossier extraction skipped: {e}")
+
         # F130: Promote qualifying session facts to mid-tier knowledge.
         # Pass session_id so current-session facts are included even though
         # session_end is not yet stamped on this session (ordering fix).

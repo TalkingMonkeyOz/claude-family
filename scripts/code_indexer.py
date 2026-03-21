@@ -574,6 +574,76 @@ def _extract_typescript(
                     language=language,
                 ))
 
+            elif t in ("lexical_declaration", "variable_declaration"):
+                # Handle const/let/var declarations — critical for:
+                # - Arrow function components: const Trading = () => { ... }
+                # - Custom hooks: const useToggleKillSwitch = () => { ... }
+                # - HOCs and wrappers: const withAuth = (Component) => ...
+                for declarator in child.children:
+                    if declarator.type != "variable_declarator":
+                        continue
+                    decl_name_node = _child_by_type(declarator, "identifier")
+                    if not decl_name_node:
+                        continue
+                    decl_name = _node_text(decl_name_node, source_bytes)
+                    # Find the value (right side of =)
+                    value_node = declarator.child_by_field_name("value")
+                    if not value_node:
+                        continue
+                    # Arrow functions and function expressions → extract as function
+                    if value_node.type in ("arrow_function", "function_expression", "function"):
+                        params = _child_by_type(value_node, "formal_parameters")
+                        ret = value_node.child_by_field_name("return_type")
+                        ret_text = (": " + _node_text(ret, source_bytes).lstrip(": ")) if ret else ""
+                        sig = f"const {decl_name} = ({_params_text(params)}){ret_text} => ..."
+                        exported = _is_exported(child)
+                        sym_id = str(uuid.uuid4())
+                        symbols.append(_new_symbol(
+                            symbol_id=sym_id,
+                            project_id=project_id,
+                            name=decl_name,
+                            kind="function",
+                            file_path=file_path,
+                            line_number=child.start_point[0] + 1,
+                            end_line=child.end_point[0] + 1,
+                            scope=scope,
+                            visibility="public" if exported else "private",
+                            signature=sig,
+                            parent_symbol_id=parent_class_id,
+                            file_hash=file_hash,
+                            language=language,
+                        ))
+                        body = _child_by_type(value_node, "statement_block")
+                        if body:
+                            _collect_calls_ts(body, sym_id, refs, source_bytes)
+                    # Call expressions assigned to const (e.g., const router = createRouter(...))
+                    elif value_node.type == "call_expression":
+                        exported = _is_exported(child)
+                        sym_id = str(uuid.uuid4())
+                        func_node = value_node.child_by_field_name("function")
+                        func_name = _node_text(func_node, source_bytes) if func_node else "?"
+                        symbols.append(_new_symbol(
+                            symbol_id=sym_id,
+                            project_id=project_id,
+                            name=decl_name,
+                            kind="variable",
+                            file_path=file_path,
+                            line_number=child.start_point[0] + 1,
+                            end_line=child.end_point[0] + 1,
+                            scope=scope,
+                            visibility="public" if exported else "private",
+                            signature=f"const {decl_name} = {func_name}(...)",
+                            parent_symbol_id=parent_class_id,
+                            file_hash=file_hash,
+                            language=language,
+                        ))
+                        refs.append(_new_ref(
+                            from_symbol_id=sym_id,
+                            to_symbol_id=None,
+                            to_symbol_name=func_name,
+                            ref_type="calls",
+                        ))
+
             elif t == "export_statement":
                 # Recurse into export_statement to catch exported declarations
                 _process_node(child, parent_class_id=parent_class_id, scope=scope)

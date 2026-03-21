@@ -53,13 +53,17 @@ Structured process models for 9 core METIS processes, written in BPMN-style mark
 | Gateway | Condition | True Path | False Path |
 |---------|-----------|-----------|------------|
 | G1 | Content type deterministic? | Route to type-specific parser | Flag for manual classification |
+| G1a | Content type = code? | **Sub-process P1-Code** (tree-sitter AST path) | Continue document path (Steps 4-9) |
 | G2 | Validation tier? | Tier 1 → auto-approve | Tier 2/3 → queue review |
 | G3 | Semantic duplicate exists? | Merge / link | Create new item |
 | G4 | Embedding succeeded? | Index item | Retry → dead-letter queue |
+| G5 | File hash unchanged? (code path only) | Skip file (incremental) | Re-parse file |
 
-**End events:** `KnowledgeIngested` (success), `IngestionFailed` (dead-letter)
+**Sub-process P1-Code:** When G1a routes to code, tree-sitter parses source files into AST → extracts symbols (functions, classes, methods) → resolves cross-references (calls, imports, extends) → generates embeddings (same Voyage AI, same vector space) → stores in `code_symbols` + `code_references` (not `knowledge_items`). File hash enables incremental re-indexing. Rejoins main flow at embedding validation (G4).
 
-**Constraints:** Every item stores embedding_model + embedding_dimensions. Tier 2 requires human approval — no exception. See [[deliverable-01-bpmn-processes-detail#p1|P1 step table]].
+**End events:** `KnowledgeIngested` (document success), `CodeIndexed` (code success), `IngestionFailed` (dead-letter)
+
+**Constraints:** Every item stores embedding_model + embedding_dimensions. Tier 2 requires human approval — no exception. Code ingestion auto-indexes on project onboard (opt-in = forgotten, Decision #3). See [[deliverable-01-bpmn-processes-detail#p1|P1 step table]].
 
 ---
 
@@ -75,7 +79,8 @@ Structured process models for 9 core METIS processes, written in BPMN-style mark
 |---------|-----------|-----------|------------|
 | G1 | Classifier: query in scope? | Proceed | Reject with reason |
 | G2 | Top-N results above threshold? | Continue to graph walk | Return low-confidence flag |
-| G3 | Graph walk adds items? (Apache AGE on PG18 — Phase 1) | Merge at lower priority | Skip graph step |
+| G2a | Query relates to code? | Also search `code_symbols` (shared embedding space) | Document-only results |
+| G3 | Graph walk adds items? (recursive CTEs for code refs, Apache AGE for knowledge graph — Phase 1) | Merge at lower priority | Skip graph step |
 | G4 | LLM synthesis requested? | Assemble answer + citations | Return ranked chunks only |
 | G5 | Confidence score ≥ threshold? | Return answer | Flag for human review |
 
@@ -285,7 +290,7 @@ Structured process models for 9 core METIS processes, written in BPMN-style mark
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-03-15
-**Updated**: 2026-03-15
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/10-Projects/Project-Metis/gates/gate-two/deliverable-01-bpmn-processes.md
