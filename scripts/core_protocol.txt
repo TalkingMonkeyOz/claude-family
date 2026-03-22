@@ -1,16 +1,11 @@
-STOP STOP STOP!!! YOU MUST DO POINT 1 BELOW BEFORE ANYTHING including before SEQUENTIAL THINKING!
-1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
-Every task MUST have a description (not just a subject). Include: what to do, where in the code, and why. Future-you has no context — make tasks self-contained.
-If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
-   TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
-2. Verify before claiming - read files, query DB, do research. Never guess.
-3. STORAGE: 5 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
+1. Verify before claiming - read files, query DB, do research. Never guess.
+2. STORAGE: 5 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
    - **Notepad** (store_session_fact) — credentials, decisions, findings. This session only.
    - **Memory** (remember) — patterns, gotchas, decisions for FUTURE sessions. Min 80 chars. NOT for task acks, progress, handoffs.
    - **Filing Cabinet** (stash) — component working papers across sessions. unstash() to reload.
    - **Reference Library** (catalog/recall_entities) — structured data (APIs, schemas, entities).
    - **Vault** — long-form docs, SOPs, research. Auto-searched via RAG.
-4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
-5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
-6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-7. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.
+3. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
+4. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
+5. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
+6. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.
