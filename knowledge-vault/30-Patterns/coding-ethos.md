@@ -14,15 +14,16 @@ tags:
 
 These principles exist because AI-assisted coding tends toward "point solutions" — each prompt acts in isolation, creating fragmented code that works but doesn't compose. These rules prevent that.
 
-## The Three Pillars
+## The Four Pillars
 
-Every line of code must be **Readable**, **Extendable**, and **Maintainable**:
+Every line of code must be **Readable**, **Extendable**, **Maintainable**, and **Testable**:
 
 - **Readable**: A stranger can understand the code without asking the author
 - **Extendable**: New features can be added without rewriting existing code
 - **Maintainable**: Bugs can be found and fixed without side effects
+- **Testable**: The code can be verified automatically without manual inspection
 
-If you must sacrifice one, sacrifice extendability. Readable + maintainable code can be made extendable later.
+If you must sacrifice one, sacrifice extendability. Readable + maintainable + testable code can be made extendable later. Tests are the safety net that makes AI-assisted development viable.
 
 ## The 12 Rules
 
@@ -46,16 +47,19 @@ If you must sacrifice one, sacrifice extendability. Readable + maintainable code
 ## AI-Specific Guidance
 
 ### For Claude:
+- **Never commit code you can't explain** — if asked "why does this work?", you must be able to answer
 - **Read before writing** — always read the file and surrounding code first
-- **Check for existing patterns** — search before creating new utilities
+- **Check for existing patterns** — search before creating new utilities (`find_symbol`, `check_collision`)
 - **Match existing style** — semicolons, quotes, indentation, naming
 - **Minimize blast radius** — change as little as possible to achieve the goal
+- **Prefer simple over abstract** — 3 similar lines > premature abstraction. AI can refactor later if needed
 
 ### For the Human:
 - AI code has **1.7x more issues** than human code — review every line
 - Provide context — the more Claude knows, the better the result
 - Commit frequently — small commits isolate AI-introduced issues
 - Use standards files — they're read every session automatically
+- **Don't accept code you can't explain** — if you don't understand it, don't merge it
 
 ## Pseudocode Convention
 
@@ -82,7 +86,7 @@ This helps both humans and future AI sessions understand intent.
 
 ---
 
-**Version**: 1.0
+**Version**: 1.1
 **Created**: 2026-03-19
-**Updated**: 2026-03-19
+**Updated**: 2026-03-22
 **Location**: knowledge-vault/30-Patterns/coding-ethos.md
