@@ -1,0 +1,426 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/prompt-context-injection"
+    id="Definitions_PromptContextInjection">
+
+  <bpmn:process id="prompt_context_injection" name="Prompt Context Injection: Pre-compute, Inject, and On-Demand RAG" isExecutable="true">
+
+    <!--
+      Three-flow architecture for context injection into Claude Code prompts.
+
+      Flow 1 — Session Start (context pre-computation):
+        SessionStart hook fires → read features from DB → load pinned workfiles
+        → load previous session facts → write session_context_cache.txt → done
+
+      Flow 2 — Per-Prompt Injection (fast path, no network):
+        UserPromptSubmit hook fires → read core_protocol.txt (file, <1ms)
+        → read session_context_cache.txt if exists (file, <1ms)
+        → combine into additionalContext JSON → return to Claude Code → done
+
+      Flow 3 — On-Demand RAG (Claude calls MCP):
+        Claude decides to search → call recall_memories()/assemble_context()
+        → Voyage AI embedding (warm) → pgvector similarity search
+        → return results to Claude → done
+
+      Key design principle: Flow 2 is the HOT PATH and must never call
+      Voyage AI or any network service. All expensive work is pre-computed
+      in Flow 1 (once per session) or deferred to Flow 3 (on-demand via MCP).
+
+      Actors:
+        [HOOK]   = scriptTask (hook scripts, file I/O only)
+        [CLAUDE]  = userTask (Claude's decision to search)
+        [MCP]    = scriptTask (MCP server operations)
+        [DB]     = scriptTask (database operations)
+    -->
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start_event" name="Start">
+      <bpmn:outgoing>flow_start_to_select</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- User Task: Select Flow
+         Sets flow_type and all downstream gateway variables so every
+         gateway can evaluate without KeyError. -->
+    <bpmn:userTask id="select_flow" name="Select Flow">
+      <bpmn:incoming>flow_start_to_select</bpmn:incoming>
+      <bpmn:outgoing>flow_select_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Exclusive Gateway: Which Flow? -->
+    <bpmn:exclusiveGateway id="flow_gateway" name="Which Flow?" default="flow_to_per_prompt">
+      <bpmn:incoming>flow_select_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_to_session_start</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_per_prompt</bpmn:outgoing>
+      <bpmn:outgoing>flow_to_on_demand_rag</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================== -->
+    <!-- FLOW 1: SESSION START (context pre-computation)                     -->
+    <!-- Trigger: SessionStart hook fires (once per session)                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="read_active_features" name="[HOOK] Read Active Project Features from DB" scriptFormat="python">
+      <bpmn:incoming>flow_to_session_start</bpmn:incoming>
+      <bpmn:outgoing>flow_features_to_workfiles</bpmn:outgoing>
+      <bpmn:script>features_loaded = True</bpmn:script>
+      <bpmn:documentation>SessionStart hook queries claude.features WHERE status IN ('planned','in_progress')
+AND project_id matches current project. Returns feature codes, names, and status
+for inclusion in the pre-computed session context cache.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="load_pinned_workfiles" name="[HOOK] Load Pinned Workfiles for Project" scriptFormat="python">
+      <bpmn:incoming>flow_features_to_workfiles</bpmn:incoming>
+      <bpmn:outgoing>flow_workfiles_to_facts</bpmn:outgoing>
+      <bpmn:script>workfiles_loaded = True</bpmn:script>
+      <bpmn:documentation>Queries claude.project_workfiles WHERE is_pinned=true AND project matches.
+Pinned workfiles contain critical component context that should be available
+on every prompt without explicit unstash() calls.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="load_previous_session_facts" name="[HOOK] Load Session Facts from Previous Sessions" scriptFormat="python">
+      <bpmn:incoming>flow_workfiles_to_facts</bpmn:incoming>
+      <bpmn:outgoing>flow_facts_to_write_cache</bpmn:outgoing>
+      <bpmn:script>session_facts_loaded = True</bpmn:script>
+      <bpmn:documentation>Queries claude.session_facts from the last N sessions (typically 3) for the
+project. Recovers credentials, endpoints, decisions, and notes that were stored
+via store_session_fact() in prior sessions.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="write_session_cache" name="[HOOK] Write session_context_cache.txt to Temp Dir" scriptFormat="python">
+      <bpmn:incoming>flow_facts_to_write_cache</bpmn:incoming>
+      <bpmn:outgoing>flow_write_cache_to_end</bpmn:outgoing>
+      <bpmn:script>cache_written = True</bpmn:script>
+      <bpmn:documentation>Serializes the combined context (features + workfiles + session facts) to a
+plain text file in the system temp directory. This file is read by the per-prompt
+hook (Flow 2) on every UserPromptSubmit — a simple file read (&lt;1ms) instead of
+DB queries on every prompt.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_cache_ready" name="Cache Ready">
+      <bpmn:incoming>flow_write_cache_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- FLOW 2: PER-PROMPT INJECTION (fast path, file reads only)           -->
+    <!-- Trigger: UserPromptSubmit hook fires (every prompt)                 -->
+    <!-- No Voyage AI, no DB queries — pure file I/O for speed              -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="read_core_protocol" name="[HOOK] Read core_protocol.txt (file read, &lt;1ms)" scriptFormat="python">
+      <bpmn:incoming>flow_to_per_prompt</bpmn:incoming>
+      <bpmn:outgoing>flow_protocol_to_cache</bpmn:outgoing>
+      <bpmn:script>core_protocol_read = True</bpmn:script>
+      <bpmn:documentation>Reads scripts/core_protocol.txt from disk. This file contains the 7 core
+protocol rules injected on every prompt. File read is &lt;1ms, no network
+or database access required.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="read_session_cache" name="[HOOK] Read session_context_cache.txt if Exists (file read, &lt;1ms)" scriptFormat="python">
+      <bpmn:incoming>flow_protocol_to_cache</bpmn:incoming>
+      <bpmn:outgoing>flow_cache_to_combine</bpmn:outgoing>
+      <bpmn:script>session_cache_read = True</bpmn:script>
+      <bpmn:documentation>Reads the session_context_cache.txt written by Flow 1 at session start.
+If the file does not exist (e.g., session start hook failed or first prompt
+arrived before cache was written), gracefully returns empty string.
+File read is &lt;1ms — no Voyage AI, no DB.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="combine_context" name="[HOOK] Combine into additionalContext JSON" scriptFormat="python">
+      <bpmn:incoming>flow_cache_to_combine</bpmn:incoming>
+      <bpmn:outgoing>flow_combine_to_return</bpmn:outgoing>
+      <bpmn:script>context_combined = True</bpmn:script>
+      <bpmn:documentation>Merges core protocol text and session context cache into the additionalContext
+JSON structure expected by Claude Code's hook response format. The combined
+payload is typically 500-2000 tokens depending on project complexity.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="return_json" name="[HOOK] Return JSON to Claude Code" scriptFormat="python">
+      <bpmn:incoming>flow_combine_to_return</bpmn:incoming>
+      <bpmn:outgoing>flow_return_to_end</bpmn:outgoing>
+      <bpmn:script>json_returned = True</bpmn:script>
+      <bpmn:documentation>Outputs the additionalContext JSON to stdout for Claude Code to consume.
+This is the final step of the per-prompt fast path. Total latency target:
+&lt;5ms for the entire Flow 2 pipeline.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_context_injected" name="Context Injected">
+      <bpmn:incoming>flow_return_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- FLOW 3: ON-DEMAND RAG (Claude calls MCP — separate from per-prompt) -->
+    <!-- Trigger: Claude decides to search knowledge via MCP tools           -->
+    <!-- This flow uses Voyage AI + pgvector — NOT on the per-prompt path   -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="call_mcp_tools" name="[CLAUDE] Call recall_memories() or assemble_context() via MCP" scriptFormat="python">
+      <bpmn:incoming>flow_to_on_demand_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_mcp_to_embedding</bpmn:outgoing>
+      <bpmn:script>mcp_called = True</bpmn:script>
+      <bpmn:documentation>Claude explicitly invokes recall_memories(query, budget) or
+assemble_context(activity_name) via the project-tools MCP server.
+This is a deliberate action by Claude, NOT triggered by the per-prompt hook.
+The MCP server process keeps Voyage AI loaded in memory (warm).</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="voyage_embedding" name="[MCP] Voyage AI Embedding (warm — already loaded in MCP process)" scriptFormat="python">
+      <bpmn:incoming>flow_mcp_to_embedding</bpmn:incoming>
+      <bpmn:outgoing>flow_embedding_to_search</bpmn:outgoing>
+      <bpmn:script>embedding_generated = True</bpmn:script>
+      <bpmn:documentation>The project-tools MCP server generates a Voyage AI embedding for the search
+query. The voyageai client is already loaded in the MCP process memory (warm),
+so this is a single API call (~50-100ms) rather than cold-start initialization.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="pgvector_search" name="[MCP] pgvector Similarity Search" scriptFormat="python">
+      <bpmn:incoming>flow_embedding_to_search</bpmn:incoming>
+      <bpmn:outgoing>flow_search_to_return_results</bpmn:outgoing>
+      <bpmn:script>search_completed = True</bpmn:script>
+      <bpmn:documentation>Executes a cosine similarity search against pgvector indexes in PostgreSQL.
+Queries claude.vault_embeddings, claude.knowledge, and/or claude.project_workfiles
+depending on the MCP tool invoked. Returns top-K results within token budget.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="return_results" name="[MCP] Return Results to Claude" scriptFormat="python">
+      <bpmn:incoming>flow_search_to_return_results</bpmn:incoming>
+      <bpmn:outgoing>flow_results_to_end</bpmn:outgoing>
+      <bpmn:script>results_returned = True</bpmn:script>
+      <bpmn:documentation>MCP server returns the search results as structured JSON to Claude.
+Results include content snippets, similarity scores, and source metadata.
+Claude incorporates these into its response generation.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_knowledge_retrieved" name="Knowledge Retrieved">
+      <bpmn:incoming>flow_results_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- Sequence Flows                                                       -->
+    <!-- ================================================================== -->
+
+    <bpmn:sequenceFlow id="flow_start_to_select" sourceRef="start_event" targetRef="select_flow"/>
+    <bpmn:sequenceFlow id="flow_select_to_gateway" sourceRef="select_flow" targetRef="flow_gateway"/>
+
+    <!-- Flow gateway branches -->
+    <bpmn:sequenceFlow id="flow_to_session_start" sourceRef="flow_gateway" targetRef="read_active_features">
+      <bpmn:conditionExpression>flow_type == "session_start"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_to_per_prompt" sourceRef="flow_gateway" targetRef="read_core_protocol"/>
+    <bpmn:sequenceFlow id="flow_to_on_demand_rag" sourceRef="flow_gateway" targetRef="call_mcp_tools">
+      <bpmn:conditionExpression>flow_type == "on_demand_rag"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Flow 1: Session Start -->
+    <bpmn:sequenceFlow id="flow_features_to_workfiles" sourceRef="read_active_features" targetRef="load_pinned_workfiles"/>
+    <bpmn:sequenceFlow id="flow_workfiles_to_facts" sourceRef="load_pinned_workfiles" targetRef="load_previous_session_facts"/>
+    <bpmn:sequenceFlow id="flow_facts_to_write_cache" sourceRef="load_previous_session_facts" targetRef="write_session_cache"/>
+    <bpmn:sequenceFlow id="flow_write_cache_to_end" sourceRef="write_session_cache" targetRef="end_cache_ready"/>
+
+    <!-- Flow 2: Per-Prompt Injection -->
+    <bpmn:sequenceFlow id="flow_protocol_to_cache" sourceRef="read_core_protocol" targetRef="read_session_cache"/>
+    <bpmn:sequenceFlow id="flow_cache_to_combine" sourceRef="read_session_cache" targetRef="combine_context"/>
+    <bpmn:sequenceFlow id="flow_combine_to_return" sourceRef="combine_context" targetRef="return_json"/>
+    <bpmn:sequenceFlow id="flow_return_to_end" sourceRef="return_json" targetRef="end_context_injected"/>
+
+    <!-- Flow 3: On-Demand RAG -->
+    <bpmn:sequenceFlow id="flow_mcp_to_embedding" sourceRef="call_mcp_tools" targetRef="voyage_embedding"/>
+    <bpmn:sequenceFlow id="flow_embedding_to_search" sourceRef="voyage_embedding" targetRef="pgvector_search"/>
+    <bpmn:sequenceFlow id="flow_search_to_return_results" sourceRef="pgvector_search" targetRef="return_results"/>
+    <bpmn:sequenceFlow id="flow_results_to_end" sourceRef="return_results" targetRef="end_knowledge_retrieved"/>
+
+  </bpmn:process>
+
+  <!-- Minimal diagram data for visual rendering -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="prompt_context_injection">
+
+      <!-- Start and flow selector -->
+      <bpmndi:BPMNShape id="shape_start_event" bpmnElement="start_event">
+        <dc:Bounds x="80" y="340" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_select_flow" bpmnElement="select_flow">
+        <dc:Bounds x="170" y="320" width="100" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_flow_gateway" bpmnElement="flow_gateway" isMarkerVisible="true">
+        <dc:Bounds x="335" y="333" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- FLOW 1: SESSION START (top row, y=100)                        -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNShape id="shape_read_active_features" bpmnElement="read_active_features">
+        <dc:Bounds x="450" y="80" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_load_pinned_workfiles" bpmnElement="load_pinned_workfiles">
+        <dc:Bounds x="640" y="80" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_load_previous_session_facts" bpmnElement="load_previous_session_facts">
+        <dc:Bounds x="830" y="80" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_write_session_cache" bpmnElement="write_session_cache">
+        <dc:Bounds x="1020" y="80" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_cache_ready" bpmnElement="end_cache_ready">
+        <dc:Bounds x="1210" y="98" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- FLOW 2: PER-PROMPT INJECTION (middle row, y=320)              -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNShape id="shape_read_core_protocol" bpmnElement="read_core_protocol">
+        <dc:Bounds x="450" y="300" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_read_session_cache" bpmnElement="read_session_cache">
+        <dc:Bounds x="640" y="300" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_combine_context" bpmnElement="combine_context">
+        <dc:Bounds x="830" y="300" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_return_json" bpmnElement="return_json">
+        <dc:Bounds x="1020" y="300" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_context_injected" bpmnElement="end_context_injected">
+        <dc:Bounds x="1210" y="318" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- FLOW 3: ON-DEMAND RAG (bottom row, y=540)                     -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNShape id="shape_call_mcp_tools" bpmnElement="call_mcp_tools">
+        <dc:Bounds x="450" y="520" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_voyage_embedding" bpmnElement="voyage_embedding">
+        <dc:Bounds x="640" y="520" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_pgvector_search" bpmnElement="pgvector_search">
+        <dc:Bounds x="830" y="520" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_return_results" bpmnElement="return_results">
+        <dc:Bounds x="1020" y="520" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_knowledge_retrieved" bpmnElement="end_knowledge_retrieved">
+        <dc:Bounds x="1210" y="538" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+
+      <!-- ============================================================ -->
+      <!-- Edges                                                          -->
+      <!-- ============================================================ -->
+
+      <bpmndi:BPMNEdge id="edge_flow_start_to_select" bpmnElement="flow_start_to_select">
+        <di:waypoint x="116" y="358"/>
+        <di:waypoint x="170" y="360"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_select_to_gateway" bpmnElement="flow_select_to_gateway">
+        <di:waypoint x="270" y="360"/>
+        <di:waypoint x="335" y="358"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Gateway to Flow 1 (session start - top) -->
+      <bpmndi:BPMNEdge id="edge_flow_to_session_start" bpmnElement="flow_to_session_start">
+        <di:waypoint x="360" y="333"/>
+        <di:waypoint x="360" y="120"/>
+        <di:waypoint x="450" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Gateway to Flow 2 (per-prompt - middle, default) -->
+      <bpmndi:BPMNEdge id="edge_flow_to_per_prompt" bpmnElement="flow_to_per_prompt">
+        <di:waypoint x="385" y="358"/>
+        <di:waypoint x="450" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Gateway to Flow 3 (on-demand RAG - bottom) -->
+      <bpmndi:BPMNEdge id="edge_flow_to_on_demand_rag" bpmnElement="flow_to_on_demand_rag">
+        <di:waypoint x="360" y="383"/>
+        <di:waypoint x="360" y="560"/>
+        <di:waypoint x="450" y="560"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Flow 1 edges -->
+      <bpmndi:BPMNEdge id="edge_flow_features_to_workfiles" bpmnElement="flow_features_to_workfiles">
+        <di:waypoint x="590" y="120"/>
+        <di:waypoint x="640" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_workfiles_to_facts" bpmnElement="flow_workfiles_to_facts">
+        <di:waypoint x="780" y="120"/>
+        <di:waypoint x="830" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_facts_to_write_cache" bpmnElement="flow_facts_to_write_cache">
+        <di:waypoint x="970" y="120"/>
+        <di:waypoint x="1020" y="120"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_write_cache_to_end" bpmnElement="flow_write_cache_to_end">
+        <di:waypoint x="1160" y="120"/>
+        <di:waypoint x="1210" y="116"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Flow 2 edges -->
+      <bpmndi:BPMNEdge id="edge_flow_protocol_to_cache" bpmnElement="flow_protocol_to_cache">
+        <di:waypoint x="590" y="340"/>
+        <di:waypoint x="640" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_cache_to_combine" bpmnElement="flow_cache_to_combine">
+        <di:waypoint x="780" y="340"/>
+        <di:waypoint x="830" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_combine_to_return" bpmnElement="flow_combine_to_return">
+        <di:waypoint x="970" y="340"/>
+        <di:waypoint x="1020" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_return_to_end" bpmnElement="flow_return_to_end">
+        <di:waypoint x="1160" y="340"/>
+        <di:waypoint x="1210" y="336"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- Flow 3 edges -->
+      <bpmndi:BPMNEdge id="edge_flow_mcp_to_embedding" bpmnElement="flow_mcp_to_embedding">
+        <di:waypoint x="590" y="560"/>
+        <di:waypoint x="640" y="560"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_embedding_to_search" bpmnElement="flow_embedding_to_search">
+        <di:waypoint x="780" y="560"/>
+        <di:waypoint x="830" y="560"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_search_to_return_results" bpmnElement="flow_search_to_return_results">
+        <di:waypoint x="970" y="560"/>
+        <di:waypoint x="1020" y="560"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_results_to_end" bpmnElement="flow_results_to_end">
+        <di:waypoint x="1160" y="560"/>
+        <di:waypoint x="1210" y="556"/>
+      </bpmndi:BPMNEdge>
+
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

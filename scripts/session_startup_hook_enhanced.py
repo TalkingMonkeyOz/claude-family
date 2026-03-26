@@ -14,6 +14,7 @@ Full context loading is deferred to start_session() MCP tool.
 import json
 import logging
 import os
+import tempfile
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -773,6 +774,80 @@ def main():
             logger.debug(f"Storage skill not found at {skill_path}")
     except Exception as e:
         logger.warning(f"Failed to auto-load storage skill: {e}")
+
+    # === SESSION CONTEXT CACHE for protocol_inject_hook.py ===
+    # Pre-compute context that gets injected on every prompt via the lightweight hook.
+    # This replaces the old rag_query_hook.py per-prompt RAG (which timed out due to voyageai 8s import).
+    try:
+        cache_parts = []
+        cache_conn = get_db_connection()
+        if cache_conn:
+            cache_cur = cache_conn.cursor()
+            # Active features for this project
+            cache_cur.execute("""
+                SELECT f.short_code, f.feature_name, f.status
+                FROM claude.features f
+                JOIN claude.projects p ON f.project_id = p.project_id
+                WHERE p.project_name = %s AND f.status IN ('planned', 'in_progress')
+                ORDER BY f.priority, f.created_at
+                LIMIT 5
+            """, (project_name,))
+            features = cache_cur.fetchall()
+            if features:
+                cache_parts.append("ACTIVE FEATURES:")
+                for f in features:
+                    code = f['short_code'] if isinstance(f, dict) else f[0]
+                    name = f['feature_name'] if isinstance(f, dict) else f[1]
+                    status = f['status'] if isinstance(f, dict) else f[2]
+                    cache_parts.append(f"  {code} {name} ({status})")
+
+            # Pinned workfiles
+            cache_cur.execute("""
+                SELECT pw.component, pw.title
+                FROM claude.project_workfiles pw
+                JOIN claude.projects p ON pw.project_id = p.project_id
+                WHERE p.project_name = %s AND pw.is_pinned = true AND pw.is_active = true
+                LIMIT 5
+            """, (project_name,))
+            workfiles = cache_cur.fetchall()
+            if workfiles:
+                cache_parts.append("PINNED WORKFILES:")
+                for w in workfiles:
+                    comp = w['component'] if isinstance(w, dict) else w[0]
+                    title = w['title'] if isinstance(w, dict) else w[1]
+                    cache_parts.append(f"  {comp}/{title}")
+
+            # Session facts from recent sessions (credentials masked)
+            cache_cur.execute("""
+                SELECT fact_key, fact_type
+                FROM claude.session_facts
+                WHERE project_name = %s
+                  AND fact_type IN ('credential', 'config', 'endpoint')
+                ORDER BY created_at DESC
+                LIMIT 10
+            """, (project_name,))
+            facts = cache_cur.fetchall()
+            if facts:
+                cache_parts.append("SESSION FACTS AVAILABLE:")
+                for sf in facts:
+                    key = sf['fact_key'] if isinstance(sf, dict) else sf[0]
+                    ftype = sf['fact_type'] if isinstance(sf, dict) else sf[1]
+                    cache_parts.append(f"  [{ftype}] {key}")
+                cache_parts.append("  Use recall_session_fact(key) to retrieve values.")
+
+            cache_conn.close()
+
+        # Write cache file
+        if cache_parts:
+            cache_file = os.path.join(
+                tempfile.gettempdir(),
+                f"claude_session_context_{project_name}.txt",
+            )
+            with open(cache_file, "w", encoding="utf-8") as f:
+                f.write("\n".join(cache_parts))
+            logger.info(f"Session context cache written: {len(cache_parts)} lines -> {cache_file}")
+    except Exception as e:
+        logger.warning(f"Session context cache generation failed (non-fatal): {e}")
 
     result["additionalContext"] = "\n".join(context_lines)
     result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database."
