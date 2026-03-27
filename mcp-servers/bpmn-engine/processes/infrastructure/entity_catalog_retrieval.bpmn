@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    id="Definitions_ECR"
+    targetNamespace="http://claude-family/bpmn/entity-catalog-retrieval">
+
+  <!--
+    Entity Catalog: Progressive Disclosure Workflow
+
+    Two independent paths modeled as separate processes:
+
+    Path 1 — catalog() (Write):
+      Claude provides entity properties → validate against json_schema →
+      upsert into claude.entities → compute summary from properties →
+      store summary on row → generate/update embedding → done.
+
+    Path 2 — recall_entities() (Read with Progressive Disclosure):
+      Search requested → generate query embedding → RRF fusion search →
+      gateway on detail_level:
+        "summary" (default): return summary + entity_id per match
+        "full": return full properties per match
+        "entity_id": return single entity full properties
+      → update access stats → done.
+
+    Actors:
+      [CLAUDE] = userTask (Claude provides input)
+      [HOOK]   = scriptTask (server-side logic in project-tools)
+      [DB]     = scriptTask (direct database interaction, claude.entities)
+
+    Key tables: claude.entities, claude.entity_types
+    Implementation: mcp-servers/project-tools/server_v2.py
+  -->
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 1: catalog() — Write with Summary Generation               -->
+  <!-- ================================================================== -->
+  <bpmn:process id="entity_catalog_write" name="Entity Catalog: Write with Summary Generation" isExecutable="true">
+
+    <bpmn:startEvent id="Start_entity_cataloged" name="Entity Cataloged">
+      <bpmn:outgoing>Flow_start_to_provide</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="Task_provide_properties" name="[CLAUDE] Provide entity properties">
+      <bpmn:incoming>Flow_start_to_provide</bpmn:incoming>
+      <bpmn:outgoing>Flow_provide_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="Task_validate_schema" name="[HOOK] Validate against entity_type json_schema">
+      <bpmn:incoming>Flow_provide_to_validate</bpmn:incoming>
+      <bpmn:outgoing>Flow_validate_to_upsert</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_upsert_entity" name="[DB] Upsert entity in claude.entities">
+      <bpmn:incoming>Flow_validate_to_upsert</bpmn:incoming>
+      <bpmn:outgoing>Flow_upsert_to_summary</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_compute_summary" name="[HOOK] Compute summary from properties">
+      <bpmn:incoming>Flow_upsert_to_summary</bpmn:incoming>
+      <bpmn:outgoing>Flow_summary_to_store</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_store_summary" name="[DB] Store summary on entity row">
+      <bpmn:incoming>Flow_summary_to_store</bpmn:incoming>
+      <bpmn:outgoing>Flow_store_to_embed</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_generate_embedding" name="[HOOK] Generate/update embedding">
+      <bpmn:incoming>Flow_store_to_embed</bpmn:incoming>
+      <bpmn:outgoing>Flow_embed_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="End_entity_stored" name="Entity Stored">
+      <bpmn:incoming>Flow_embed_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="Flow_start_to_provide" sourceRef="Start_entity_cataloged" targetRef="Task_provide_properties" />
+    <bpmn:sequenceFlow id="Flow_provide_to_validate" sourceRef="Task_provide_properties" targetRef="Task_validate_schema" />
+    <bpmn:sequenceFlow id="Flow_validate_to_upsert" sourceRef="Task_validate_schema" targetRef="Task_upsert_entity" />
+    <bpmn:sequenceFlow id="Flow_upsert_to_summary" sourceRef="Task_upsert_entity" targetRef="Task_compute_summary" />
+    <bpmn:sequenceFlow id="Flow_summary_to_store" sourceRef="Task_compute_summary" targetRef="Task_store_summary" />
+    <bpmn:sequenceFlow id="Flow_store_to_embed" sourceRef="Task_store_summary" targetRef="Task_generate_embedding" />
+    <bpmn:sequenceFlow id="Flow_embed_to_end" sourceRef="Task_generate_embedding" targetRef="End_entity_stored" />
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 2: recall_entities() — Progressive Read                    -->
+  <!-- ================================================================== -->
+  <bpmn:process id="entity_catalog_retrieval" name="Entity Catalog: Progressive Disclosure Read" isExecutable="true">
+
+    <bpmn:startEvent id="Start_search_requested" name="Entity Search Requested">
+      <bpmn:outgoing>Flow_start_to_query_embed</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="Task_query_embedding" name="[HOOK] Generate query embedding">
+      <bpmn:incoming>Flow_start_to_query_embed</bpmn:incoming>
+      <bpmn:outgoing>Flow_query_embed_to_rrf</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_rrf_search" name="[DB] RRF fusion search (vector + BM25)">
+      <bpmn:incoming>Flow_query_embed_to_rrf</bpmn:incoming>
+      <bpmn:outgoing>Flow_rrf_to_gateway</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="Gateway_detail_level" name="Detail level?">
+      <bpmn:incoming>Flow_rrf_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>Flow_gateway_to_summary</bpmn:outgoing>
+      <bpmn:outgoing>Flow_gateway_to_full</bpmn:outgoing>
+      <bpmn:outgoing>Flow_gateway_to_single</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Path A: summary (default) -->
+    <bpmn:scriptTask id="Task_return_summaries" name="[DB] Return summary + entity_id for matches">
+      <bpmn:incoming>Flow_gateway_to_summary</bpmn:incoming>
+      <bpmn:outgoing>Flow_summaries_to_join</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- Path B: full -->
+    <bpmn:scriptTask id="Task_return_full" name="[DB] Return full properties for matches">
+      <bpmn:incoming>Flow_gateway_to_full</bpmn:incoming>
+      <bpmn:outgoing>Flow_full_to_join</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- Path C: entity_id -->
+    <bpmn:scriptTask id="Task_return_single" name="[DB] Return single entity full properties">
+      <bpmn:incoming>Flow_gateway_to_single</bpmn:incoming>
+      <bpmn:outgoing>Flow_single_to_join</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <!-- Converging gateway -->
+    <bpmn:exclusiveGateway id="Gateway_rejoin" name="Rejoin after detail selection">
+      <bpmn:incoming>Flow_summaries_to_join</bpmn:incoming>
+      <bpmn:incoming>Flow_full_to_join</bpmn:incoming>
+      <bpmn:incoming>Flow_single_to_join</bpmn:incoming>
+      <bpmn:outgoing>Flow_join_to_stats</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="Task_update_access_stats" name="[DB] Update access stats">
+      <bpmn:incoming>Flow_join_to_stats</bpmn:incoming>
+      <bpmn:outgoing>Flow_stats_to_end</bpmn:outgoing>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="End_results_returned" name="Results Returned">
+      <bpmn:incoming>Flow_stats_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="Flow_start_to_query_embed" sourceRef="Start_search_requested" targetRef="Task_query_embedding" />
+    <bpmn:sequenceFlow id="Flow_query_embed_to_rrf" sourceRef="Task_query_embedding" targetRef="Task_rrf_search" />
+    <bpmn:sequenceFlow id="Flow_rrf_to_gateway" sourceRef="Task_rrf_search" targetRef="Gateway_detail_level" />
+
+    <bpmn:sequenceFlow id="Flow_gateway_to_summary" name="summary (default)" sourceRef="Gateway_detail_level" targetRef="Task_return_summaries">
+      <bpmn:conditionExpression>detail_level == "summary"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_gateway_to_full" name="full" sourceRef="Gateway_detail_level" targetRef="Task_return_full">
+      <bpmn:conditionExpression>detail_level == "full"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_gateway_to_single" name="entity_id" sourceRef="Gateway_detail_level" targetRef="Task_return_single">
+      <bpmn:conditionExpression>detail_level == "entity_id"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="Flow_summaries_to_join" sourceRef="Task_return_summaries" targetRef="Gateway_rejoin" />
+    <bpmn:sequenceFlow id="Flow_full_to_join" sourceRef="Task_return_full" targetRef="Gateway_rejoin" />
+    <bpmn:sequenceFlow id="Flow_single_to_join" sourceRef="Task_return_single" targetRef="Gateway_rejoin" />
+
+    <bpmn:sequenceFlow id="Flow_join_to_stats" sourceRef="Gateway_rejoin" targetRef="Task_update_access_stats" />
+    <bpmn:sequenceFlow id="Flow_stats_to_end" sourceRef="Task_update_access_stats" targetRef="End_results_returned" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

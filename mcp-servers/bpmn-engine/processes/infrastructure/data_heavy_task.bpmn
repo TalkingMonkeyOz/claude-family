@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/data-heavy-task"
+    id="Definitions_DHT">
+
+  <bpmn:process id="data_heavy_task" name="Data-Heavy Task Processing: Record Volume Routing" isExecutable="true">
+
+    <!--
+      Models how Claude should handle data-heavy tasks (10+ structured records).
+
+      Three paths based on data volume and query complexity:
+        1. In-context: < 10 records, process directly in conversation
+        2. Script pattern: 10-100 records with simple queries, Python script + JSON scratch
+        3. SQLite pattern: 100+ records OR complex queries, Python + SQLite scratch DB
+
+      All paths converge to a cleanup task that removes scratch files.
+
+      Implementation:
+        - All tasks are [CLAUDE] — Claude performs each step
+        - Scratch files go to .claude/scratch/ directory
+        - Script pattern outputs summary to stdout, details to JSON
+        - SQLite pattern creates task.db for ad-hoc querying
+    -->
+
+    <!-- ============ START ============ -->
+
+    <bpmn:startEvent id="start_data_heavy" name="Data-Heavy Task Identified">
+      <bpmn:outgoing>flow_to_assess</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ============ ASSESS ============ -->
+
+    <bpmn:userTask id="assess_volume" name="[CLAUDE] Assess data volume and query needs">
+      <bpmn:incoming>flow_to_assess</bpmn:incoming>
+      <bpmn:outgoing>flow_to_gateway</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ============ GATEWAY: How many records? ============ -->
+
+    <bpmn:exclusiveGateway id="gateway_record_count" name="How many records?">
+      <bpmn:incoming>flow_to_gateway</bpmn:incoming>
+      <bpmn:outgoing>flow_lt_10</bpmn:outgoing>
+      <bpmn:outgoing>flow_10_to_100</bpmn:outgoing>
+      <bpmn:outgoing>flow_100_plus</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============ PATH A: < 10 records (in-context) ============ -->
+
+    <bpmn:userTask id="process_in_context" name="[CLAUDE] Process in context directly">
+      <bpmn:incoming>flow_lt_10</bpmn:incoming>
+      <bpmn:outgoing>flow_end_in_context</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="end_in_context" name="Task Complete (in-context)">
+      <bpmn:incoming>flow_end_in_context</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============ PATH B: 10-100 records, simple queries (script pattern) ============ -->
+
+    <bpmn:userTask id="write_python_script" name="[CLAUDE] Write Python processing script">
+      <bpmn:incoming>flow_10_to_100</bpmn:incoming>
+      <bpmn:outgoing>flow_script_to_json</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="script_writes_json" name="[CLAUDE] Script writes results to .claude/scratch/ JSON">
+      <bpmn:incoming>flow_script_to_json</bpmn:incoming>
+      <bpmn:outgoing>flow_json_to_run</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="run_script_read_stdout" name="[CLAUDE] Run script via Bash, read summary from stdout">
+      <bpmn:incoming>flow_json_to_run</bpmn:incoming>
+      <bpmn:outgoing>flow_run_to_read</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="read_results_selective" name="[CLAUDE] Read results file selectively if needed">
+      <bpmn:incoming>flow_run_to_read</bpmn:incoming>
+      <bpmn:outgoing>flow_script_to_cleanup</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ============ PATH C: 100+ records OR complex queries (SQLite pattern) ============ -->
+
+    <bpmn:userTask id="write_sqlite_script" name="[CLAUDE] Write Python script with SQLite scratch DB">
+      <bpmn:incoming>flow_100_plus</bpmn:incoming>
+      <bpmn:outgoing>flow_sqlite_to_create</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="create_scratch_db" name="[CLAUDE] Script creates .claude/scratch/task.db with schema">
+      <bpmn:incoming>flow_sqlite_to_create</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_query</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="query_sqlite" name="[CLAUDE] Query SQLite via Bash+Python for analysis">
+      <bpmn:incoming>flow_create_to_query</bpmn:incoming>
+      <bpmn:outgoing>flow_query_to_read</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:userTask id="read_query_results" name="[CLAUDE] Read query results selectively">
+      <bpmn:incoming>flow_query_to_read</bpmn:incoming>
+      <bpmn:outgoing>flow_sqlite_to_cleanup</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- ============ CONVERGE: Cleanup ============ -->
+
+    <bpmn:exclusiveGateway id="gateway_merge_cleanup" name="Merge before cleanup">
+      <bpmn:incoming>flow_script_to_cleanup</bpmn:incoming>
+      <bpmn:incoming>flow_sqlite_to_cleanup</bpmn:incoming>
+      <bpmn:outgoing>flow_to_cleanup</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="cleanup_scratch" name="[CLAUDE] Clean up scratch files when task complete">
+      <bpmn:incoming>flow_to_cleanup</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end_processed</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="end_script_pattern" name="Task Complete (script pattern)">
+      <bpmn:incoming>flow_end_script</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_sqlite_pattern" name="Task Complete (SQLite pattern)">
+      <bpmn:incoming>flow_end_sqlite</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Use a gateway after cleanup to route to the correct end event -->
+    <bpmn:exclusiveGateway id="gateway_end_route" name="Which pattern was used?">
+      <bpmn:incoming>flow_to_end_processed</bpmn:incoming>
+      <bpmn:outgoing>flow_end_script</bpmn:outgoing>
+      <bpmn:outgoing>flow_end_sqlite</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============ SEQUENCE FLOWS ============ -->
+
+    <!-- Start to assess -->
+    <bpmn:sequenceFlow id="flow_to_assess" sourceRef="start_data_heavy" targetRef="assess_volume" />
+    <bpmn:sequenceFlow id="flow_to_gateway" sourceRef="assess_volume" targetRef="gateway_record_count" />
+
+    <!-- Gateway branches -->
+    <bpmn:sequenceFlow id="flow_lt_10" name="&lt; 10 records" sourceRef="gateway_record_count" targetRef="process_in_context" />
+    <bpmn:sequenceFlow id="flow_10_to_100" name="10-100 records, simple queries" sourceRef="gateway_record_count" targetRef="write_python_script" />
+    <bpmn:sequenceFlow id="flow_100_plus" name="100+ records OR complex queries" sourceRef="gateway_record_count" targetRef="write_sqlite_script" />
+
+    <!-- Path A: in-context -->
+    <bpmn:sequenceFlow id="flow_end_in_context" sourceRef="process_in_context" targetRef="end_in_context" />
+
+    <!-- Path B: script pattern -->
+    <bpmn:sequenceFlow id="flow_script_to_json" sourceRef="write_python_script" targetRef="script_writes_json" />
+    <bpmn:sequenceFlow id="flow_json_to_run" sourceRef="script_writes_json" targetRef="run_script_read_stdout" />
+    <bpmn:sequenceFlow id="flow_run_to_read" sourceRef="run_script_read_stdout" targetRef="read_results_selective" />
+    <bpmn:sequenceFlow id="flow_script_to_cleanup" sourceRef="read_results_selective" targetRef="gateway_merge_cleanup" />
+
+    <!-- Path C: SQLite pattern -->
+    <bpmn:sequenceFlow id="flow_sqlite_to_create" sourceRef="write_sqlite_script" targetRef="create_scratch_db" />
+    <bpmn:sequenceFlow id="flow_create_to_query" sourceRef="create_scratch_db" targetRef="query_sqlite" />
+    <bpmn:sequenceFlow id="flow_query_to_read" sourceRef="query_sqlite" targetRef="read_query_results" />
+    <bpmn:sequenceFlow id="flow_sqlite_to_cleanup" sourceRef="read_query_results" targetRef="gateway_merge_cleanup" />
+
+    <!-- Cleanup and end routing -->
+    <bpmn:sequenceFlow id="flow_to_cleanup" sourceRef="gateway_merge_cleanup" targetRef="cleanup_scratch" />
+    <bpmn:sequenceFlow id="flow_to_end_processed" sourceRef="cleanup_scratch" targetRef="gateway_end_route" />
+    <bpmn:sequenceFlow id="flow_end_script" name="Script pattern used" sourceRef="gateway_end_route" targetRef="end_script_pattern" />
+    <bpmn:sequenceFlow id="flow_end_sqlite" name="SQLite pattern used" sourceRef="gateway_end_route" targetRef="end_sqlite_pattern" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

@@ -22,15 +22,184 @@ import os
 import sys
 import re
 import glob
+import asyncio
+import threading
 from typing import Any, Literal, Optional
 from datetime import datetime
 from pathlib import Path
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 
 # ============================================================================
 # FastMCP Setup
 # ============================================================================
 
 from mcp.server.fastmcp import FastMCP
+
+
+# ============================================================================
+# Channel Messaging — Real-time LISTEN/NOTIFY (merged from channel-messaging)
+# ============================================================================
+
+class _ChannelState:
+    """Shared state for the background PostgreSQL LISTEN/NOTIFY listener."""
+    session = None          # Captured from first tool call
+    connected: bool = False
+    project_name: str = ""
+    listening_channels: list = []
+    _thread = None
+    _conn = None
+    _stop_event = threading.Event()
+
+_channel = _ChannelState()
+
+
+def _pg_listen_thread(main_loop):
+    """Background thread: LISTEN on PostgreSQL channels using SelectorEventLoop.
+
+    psycopg3 async requires SelectorEventLoop, but Windows defaults to
+    ProactorEventLoop (which FastMCP uses). We run our own event loop in
+    a thread and dispatch notifications back to the main loop.
+    """
+    import selectors
+    loop = asyncio.SelectorEventLoop(selectors.SelectSelector())
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_pg_listen_loop_inner(main_loop))
+    except Exception as e:
+        print(f"Channel messaging thread exited: {e}", file=sys.stderr)
+    finally:
+        loop.close()
+        _channel.connected = False
+
+
+async def _pg_listen_loop_inner(main_loop):
+    """Async LISTEN loop running inside SelectorEventLoop thread."""
+    conn_string = os.environ.get('DATABASE_URI') or os.environ.get('POSTGRES_CONNECTION_STRING')
+    if not conn_string:
+        print("Channel messaging: no DATABASE_URI set, skipping", file=sys.stderr)
+        return
+
+    project = _channel.project_name
+    pg_channel = 'claude_msg_' + project.lower().replace('-', '_')
+    broadcast_channel = 'claude_msg_broadcast'
+    _channel.listening_channels = [pg_channel, broadcast_channel]
+
+    while not _channel._stop_event.is_set():
+        try:
+            import psycopg
+            _channel._conn = await psycopg.AsyncConnection.connect(
+                conn_string, autocommit=True
+            )
+            async with _channel._conn:
+                _channel.connected = True
+                await _channel._conn.execute(f"LISTEN {pg_channel}")
+                await _channel._conn.execute(f"LISTEN {broadcast_channel}")
+                print(f"Channel messaging: listening on {pg_channel}, {broadcast_channel}", file=sys.stderr)
+
+                async for notify in _channel._conn.notifies():
+                    if _channel._stop_event.is_set():
+                        return
+                    if _channel.session is None:
+                        continue  # No session yet, skip
+                    try:
+                        payload = json.loads(notify.payload)
+                        # Dispatch notification to main event loop (MCP session writes)
+                        asyncio.run_coroutine_threadsafe(
+                            _send_channel_notification(payload), main_loop
+                        )
+                    except Exception as e:
+                        print(f"Channel notification error: {e}", file=sys.stderr)
+
+        except Exception as e:
+            _channel.connected = False
+            _channel._conn = None
+            if _channel._stop_event.is_set():
+                return
+            print(f"Channel messaging reconnecting in 5s: {e}", file=sys.stderr)
+            await asyncio.sleep(5)
+
+
+async def _send_channel_notification(payload: dict):
+    """Push a real-time notification into the Claude session via MCP."""
+    session = _channel.session
+    if session is None:
+        return
+
+    from_project = payload.get('from_project', 'unknown')
+    subject = payload.get('subject', '')
+    msg_type = payload.get('message_type', 'notification')
+    subject_text = f': {subject}' if subject else ''
+    content = f"New {msg_type} from {from_project}{subject_text}. Use check_inbox() to read the full message."
+
+    try:
+        # Try experimental claude/channel notification first
+        from mcp.types import JSONRPCNotification, JSONRPCMessage
+        from mcp.shared.message import SessionMessage
+
+        notification = JSONRPCNotification(
+            jsonrpc="2.0",
+            method="notifications/claude/channel",
+            params={"content": content, "meta": {
+                "from_project": from_project,
+                "message_type": msg_type,
+                "priority": payload.get('priority', 'normal'),
+                "message_id": payload.get('message_id'),
+            }}
+        )
+        session_message = SessionMessage(
+            message=JSONRPCMessage(notification),
+            metadata=None,
+        )
+        await session._write_stream.send(session_message)
+    except Exception:
+        # Fallback: standard log message (always works)
+        try:
+            await session.send_log_message(level="info", data=content)
+        except Exception:
+            pass
+
+
+@asynccontextmanager
+async def _channel_lifespan(app: FastMCP) -> AsyncIterator[dict]:
+    """Start the PostgreSQL LISTEN/NOTIFY background listener on server startup.
+
+    Runs in a separate thread with SelectorEventLoop because psycopg3 async
+    requires it (Windows defaults to ProactorEventLoop which is incompatible).
+    """
+    _channel.project_name = os.environ.get(
+        'CLAUDE_PROJECT',
+        os.path.basename(os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd()))
+    )
+
+    # Get the main event loop for dispatching notifications back
+    main_loop = asyncio.get_running_loop()
+
+    # Launch background listener in a daemon thread
+    _channel._stop_event.clear()
+    _channel._thread = threading.Thread(
+        target=_pg_listen_thread,
+        args=(main_loop,),
+        daemon=True,
+        name="pg-channel-listener",
+    )
+    _channel._thread.start()
+
+    yield {}
+
+    # Shutdown: signal thread to stop, close connection
+    _channel._stop_event.set()
+    if _channel._conn:
+        try:
+            # Close the async connection to unblock the notifies() iterator
+            # This is safe from another thread for psycopg3
+            _channel._conn.close()
+        except Exception:
+            pass
+    if _channel._thread:
+        _channel._thread.join(timeout=3)
+    _channel.connected = False
+
 
 mcp = FastMCP(
     "claude-project-tools",
@@ -40,6 +209,7 @@ mcp = FastMCP(
         "Use get_schema when you need to understand database tables. "
         "Use end_session when finishing work."
     ),
+    lifespan=_channel_lifespan,
 )
 
 # ============================================================================
@@ -517,6 +687,9 @@ def start_session(
         "project_id": project_id,
         "session_started_at": datetime.now().isoformat(),
     }
+
+    # Capture MCP session for channel messaging (first tool call captures it)
+    _try_capture_session()
 
     conn = get_db_connection()
     try:
@@ -5878,6 +6051,46 @@ def get_active_protocol(
 
 
 # ============================================================================
+# Channel Messaging Status Tool
+# ============================================================================
+
+
+def _try_capture_session():
+    """Try to capture the MCP session for the background channel listener.
+
+    Called from within tool handlers (where request_ctx is set).
+    Only needs to succeed once — the session is the same for the entire
+    stdio transport lifetime.
+    """
+    if _channel.session is not None:
+        return True
+    try:
+        ctx = mcp._mcp_server.request_context
+        _channel.session = ctx.session
+        return True
+    except (LookupError, AttributeError):
+        return False
+
+
+@mcp.tool()
+def channel_status() -> dict:
+    """Check the real-time messaging channel connection status.
+
+    Use when: Checking if real-time push notifications are working.
+    Also captures the MCP session for the background listener (needed on first call).
+    Returns: {connected, project, listening_channels, session_captured}.
+    """
+    session_captured = _try_capture_session()
+
+    return {
+        "connected": _channel.connected,
+        "project": _channel.project_name,
+        "listening_channels": _channel.listening_channels,
+        "session_captured": session_captured,
+    }
+
+
+# ============================================================================
 # Messaging Tools (migrated from orchestrator MCP)
 # ============================================================================
 
@@ -6856,6 +7069,54 @@ def _interpolate_template(template: str, properties: dict) -> str:
     return re.sub(r'\{(\w+)\}', replacer, template).strip()
 
 
+def _compute_entity_summary(properties: dict, summary_template: str | None = None) -> str:
+    """Compute a smart summary from entity properties for progressive disclosure.
+
+    Returns a compact string (~100-200 bytes) containing entity name, key fields,
+    navigation properties, and top property names — enough for the AI to decide
+    if it needs full details. Written for machine consumption, not human readability.
+    """
+    if summary_template == 'odata_smart_summary':
+        name = properties.get('name', 'Unknown')
+        fields = properties.get('fields', [])
+        key_props = properties.get('key_properties', [])
+        description = properties.get('description', '')
+
+        # Separate navigation properties from data properties
+        nav_props = [f['name'] for f in fields if f.get('type') == 'NavigationProperty']
+        data_props = [f for f in fields if f.get('type') != 'NavigationProperty']
+        data_names = [f['name'] for f in data_props]
+
+        # Build key info
+        key_str = ', '.join(key_props) if key_props else '?'
+
+        # Build nav props (max 6)
+        nav_str = ', '.join(nav_props[:6])
+        if len(nav_props) > 6:
+            nav_str += f', ... (+{len(nav_props) - 6} more)'
+
+        # Build top data property names (max 8)
+        top_props = ', '.join(data_names[:8])
+        if len(data_names) > 8:
+            top_props += ', ...'
+
+        # Build description snippet
+        desc_str = f' {description}' if description else ''
+
+        return (
+            f"{name} (Key: {key_str}).{desc_str} "
+            f"Nav [{len(nav_props)}]: {nav_str}. "
+            f"Props [{len(data_props)}]: {top_props}. "
+            f"(use detail='full' for all properties)"
+        )
+
+    # Generic fallback for non-OData entities
+    name = properties.get('name', properties.get('title', 'Unknown'))
+    prop_count = len(properties)
+    top_keys = ', '.join(list(properties.keys())[:5])
+    return f"{name}. Fields [{prop_count}]: {top_keys}. (use detail='full' for all properties)"
+
+
 @mcp.tool()
 def catalog(
     entity_type: str,
@@ -6888,7 +7149,7 @@ def catalog(
 
         # 1. Lookup entity type
         cur.execute("""
-            SELECT type_id::text, json_schema, embedding_template, name_property
+            SELECT type_id::text, json_schema, embedding_template, name_property, summary_template
             FROM claude.entity_types
             WHERE type_name = %s AND is_active = TRUE
         """, (entity_type,))
@@ -6901,6 +7162,7 @@ def catalog(
         json_schema = type_row['json_schema']
         embedding_template = type_row['embedding_template']
         name_property = type_row['name_property']
+        summary_template = type_row.get('summary_template')
 
         # 2. Validate properties against json_schema
         if json_schema and json_schema.get('required'):
@@ -6927,15 +7189,17 @@ def catalog(
 
         if existing:
             # Merge properties into existing entity
+            summary = _compute_entity_summary(properties, summary_template)
             cur.execute("""
                 UPDATE claude.entities
                 SET properties = properties || %s,
                     tags = CASE WHEN %s::text[] != '{}' THEN %s ELSE tags END,
+                    summary = %s,
                     updated_at = NOW()
                 WHERE entity_id = %s::uuid
                 RETURNING entity_id::text,
                     COALESCE(properties->>'name', properties->>'title', 'Unnamed') AS display_name
-            """, (json.dumps(properties), tags or [], tags or [], existing['entity_id']))
+            """, (json.dumps(properties), tags or [], tags or [], summary, existing['entity_id']))
             merged = cur.fetchone()
 
             # Refresh embedding
@@ -6960,17 +7224,20 @@ def catalog(
         embed_text = _interpolate_template(embedding_template, properties)
         embedding = generate_embedding(embed_text)
 
+        # 5b. Compute summary for progressive disclosure
+        summary = _compute_entity_summary(properties, summary_template)
+
         # 6. INSERT new entity
         cur.execute("""
             INSERT INTO claude.entities (
-                entity_type_id, project_id, properties, tags, embedding,
+                entity_type_id, project_id, properties, tags, embedding, summary,
                 created_at, updated_at
             ) VALUES (
-                %s::uuid, %s, %s, %s, %s::vector, NOW(), NOW()
+                %s::uuid, %s, %s, %s, %s::vector, %s, NOW(), NOW()
             )
             RETURNING entity_id::text,
                 COALESCE(properties->>'name', properties->>'title', 'Unnamed') AS display_name
-        """, (type_id, project_id, json.dumps(properties), tags or [], embedding))
+        """, (type_id, project_id, json.dumps(properties), tags or [], embedding, summary))
         result = cur.fetchone()
 
         # 7. Create relationships if provided
@@ -7014,16 +7281,21 @@ def recall_entities(
     tags: list[str] | None = None,
     limit: int = 10,
     min_similarity: float = 0.5,
+    detail: str = "summary",
+    entity_id: str = "",
 ) -> dict:
     """Search cataloged entities using RRF fusion (vector + BM25 full-text).
 
-    Searches across all entity types (books, API endpoints, OData entities,
-    patterns, etc.) using Reciprocal Rank Fusion of Voyage AI vector similarity
-    and PostgreSQL tsvector BM25 ranking.
+    Returns summaries by default (name, key fields, nav props) — compact and
+    context-efficient. Use detail='full' for complete properties, or entity_id
+    for a single entity's full details.
+
+    Summary mode is ~87% smaller — use it for browsing/finding entities, then
+    request full detail only for the specific entities you need to work with.
 
     Use when: Looking for structured reference data previously stored via catalog().
     Returns: {success, query, result_count, results: [{entity_id, entity_type,
-              display_name, properties, tags, similarity, rrf_score}]}.
+              display_name, summary|properties, tags, similarity, rrf_score}]}.
 
     Args:
         query: Natural language search query.
@@ -7032,8 +7304,41 @@ def recall_entities(
         tags: Filter by tags overlap (optional).
         limit: Max results (default: 10).
         min_similarity: Minimum vector similarity threshold (default: 0.5).
+        detail: 'summary' (default) returns compact summaries, 'full' returns complete properties.
+        entity_id: If provided, returns full details for this specific entity (ignores query).
     """
     from server import generate_query_embedding, _get_voyage_key
+
+    # Fast path: single entity by ID (always returns full properties)
+    if entity_id:
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT e.entity_id::text, et.type_name, e.display_name,
+                    e.properties::text, e.summary, e.tags
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE e.entity_id = %s::uuid AND NOT e.is_archived
+            """, (entity_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"Entity not found: {entity_id}"}
+            cur.execute("UPDATE claude.entities SET last_accessed_at = NOW(), access_count = access_count + 1 WHERE entity_id = %s::uuid", (entity_id,))
+            conn.commit()
+            return {
+                "success": True, "query": f"entity_id={entity_id}", "result_count": 1,
+                "results": [{
+                    "entity_id": row['entity_id'], "entity_type": row['type_name'],
+                    "display_name": row['display_name'],
+                    "properties": json.loads(row['properties']) if isinstance(row['properties'], str) else row['properties'],
+                    "tags": row['tags'] or [], "similarity": 1.0, "rrf_score": 1.0,
+                }],
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
 
     if not _get_voyage_key():
         return {"error": "Embedding service not configured — semantic search unavailable"}
@@ -7076,7 +7381,7 @@ def recall_entities(
         cur.execute(f"""
             WITH entity_vec AS (
                 SELECT e.entity_id, e.properties, e.tags, e.display_name,
-                    et.type_name,
+                    et.type_name, e.summary,
                     1 - (e.embedding <=> %s::vector) AS similarity,
                     ROW_NUMBER() OVER (ORDER BY e.embedding <=> %s::vector) AS rank_vec
                 FROM claude.entities e
@@ -7103,6 +7408,7 @@ def recall_entities(
             ),
             rrf AS (
                 SELECT v.entity_id, v.properties, v.tags, v.display_name, v.type_name,
+                    v.summary,
                     v.similarity,
                     COALESCE(1.0 / (60 + v.rank_vec), 0) +
                     COALESCE(1.0 / (60 + b.rank_bm25), 0) AS rrf_score
@@ -7110,7 +7416,7 @@ def recall_entities(
                 LEFT JOIN entity_bm25 b ON v.entity_id = b.entity_id
                 UNION
                 SELECT e.entity_id, e.properties, e.tags, e.display_name,
-                    et.type_name,
+                    et.type_name, e.summary,
                     0 AS similarity,
                     COALESCE(1.0 / (60 + b.rank_bm25), 0) AS rrf_score
                 FROM entity_bm25 b
@@ -7119,7 +7425,7 @@ def recall_entities(
                 WHERE b.entity_id NOT IN (SELECT entity_id FROM entity_vec)
             )
             SELECT entity_id::text, type_name, display_name, properties::text,
-                tags, similarity, rrf_score
+                summary, tags, similarity, rrf_score
             FROM rrf
             ORDER BY rrf_score DESC
             LIMIT %s
@@ -7136,15 +7442,20 @@ def recall_entities(
         entity_ids = []
         for row in cur.fetchall():
             entity_ids.append(row['entity_id'])
-            results.append({
+            result_item = {
                 "entity_id": row['entity_id'],
                 "entity_type": row['type_name'],
                 "display_name": row['display_name'],
-                "properties": json.loads(row['properties']) if isinstance(row['properties'], str) else row['properties'],
                 "tags": row['tags'] or [],
                 "similarity": round(row['similarity'], 4) if row['similarity'] else 0,
                 "rrf_score": round(row['rrf_score'], 4),
-            })
+            }
+            if detail == "full":
+                result_item["properties"] = json.loads(row['properties']) if isinstance(row['properties'], str) else row['properties']
+            else:
+                # Summary mode (default) — return compact summary instead of full properties
+                result_item["summary"] = row['summary'] or row['display_name']
+            results.append(result_item)
 
         # Update access stats for returned entities
         if entity_ids:
