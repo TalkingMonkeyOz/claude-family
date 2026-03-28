@@ -202,7 +202,7 @@ async def _channel_lifespan(app: FastMCP) -> AsyncIterator[dict]:
 
 
 mcp = FastMCP(
-    "claude-project-tools",
+    "project-tools",
     instructions=(
         "Project-aware tooling for Claude Family development. "
         "Use start_session at the beginning of work. "
@@ -6537,6 +6537,20 @@ def reply_to(
 
     original_dict = dict(original) if not isinstance(original, dict) else original
 
+    # Auto-mark original as read when replying (pending -> read only, don't downgrade)
+    conn_ack = get_db_connection()
+    try:
+        cur_ack = conn_ack.cursor()
+        cur_ack.execute("""
+            UPDATE claude.messages
+            SET status = 'read', read_at = COALESCE(read_at, NOW())
+            WHERE message_id = %s AND status = 'pending'
+        """, (original_message_id,))
+        conn_ack.commit()
+        cur_ack.close()
+    finally:
+        conn_ack.close()
+
     # Route to from_project (preferred) or fall back to session lookup
     reply_to_project = original_dict.get('from_project') or ""
     if not reply_to_project and original_dict.get('from_session_id'):
@@ -7636,6 +7650,168 @@ def find_symbol(query: str, project: str = "", kind: str = "", limit: int = 20) 
             "result_count": len(exact_results),
             "symbols": exact_results,
         }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
+
+@mcp.tool()
+def get_context(symbol_name: str, project: str = "", depth: int = 1) -> dict:
+    """Get full context for a symbol: body, callers, callees, types, and siblings.
+
+    One call replaces 5-10 file reads. Returns everything needed to understand
+    or modify a symbol without opening any files.
+
+    Use when: About to modify a function/class, need to understand its usage,
+    or want to see what calls it and what it calls.
+    Returns: {success, symbol, body, callers: [], callees: [], siblings: [],
+              file_context: {path, language, total_symbols}}.
+
+    Args:
+        symbol_name: Exact name of the symbol (function, class, method).
+        project: Project name. Defaults to current directory basename.
+        depth: How many levels of callers/callees to follow (1=direct, 2=transitive). Max 2.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        depth = min(depth, 2)
+
+        # Resolve project
+        if not project:
+            project = os.path.basename(os.getcwd())
+        cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (project,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False, "error": f"Project '{project}' not found"}
+        project_id = row['project_id']
+
+        # Find the symbol (exact match first, then ILIKE)
+        cur.execute("""
+            SELECT symbol_id, name, kind, file_path, line_number, end_line,
+                   signature, visibility, language, scope, body, parent_symbol_id
+            FROM claude.code_symbols
+            WHERE project_id = %s AND name = %s
+            ORDER BY visibility DESC, line_number
+            LIMIT 1
+        """, (project_id, symbol_name))
+        sym = cur.fetchone()
+
+        if not sym:
+            cur.execute("""
+                SELECT symbol_id, name, kind, file_path, line_number, end_line,
+                       signature, visibility, language, scope, body, parent_symbol_id
+                FROM claude.code_symbols
+                WHERE project_id = %s AND name ILIKE %s
+                ORDER BY visibility DESC, line_number
+                LIMIT 1
+            """, (project_id, symbol_name))
+            sym = cur.fetchone()
+
+        if not sym:
+            return {"success": False, "error": f"Symbol '{symbol_name}' not found in {project}"}
+
+        symbol_id = sym['symbol_id']
+
+        # Get callees (what this symbol calls)
+        cur.execute("""
+            SELECT cr.to_symbol_name, cr.ref_type,
+                   ts.name as resolved_name, ts.kind as resolved_kind,
+                   ts.file_path as resolved_file, ts.line_number as resolved_line
+            FROM claude.code_references cr
+            LEFT JOIN claude.code_symbols ts ON cr.to_symbol_id = ts.symbol_id
+            WHERE cr.from_symbol_id = %s
+            ORDER BY cr.ref_type, cr.to_symbol_name
+        """, (symbol_id,))
+        callees = cur.fetchall()
+
+        # Get callers (what calls this symbol)
+        cur.execute("""
+            SELECT fs.name as caller_name, fs.kind as caller_kind,
+                   fs.file_path as caller_file, fs.line_number as caller_line,
+                   cr.ref_type
+            FROM claude.code_references cr
+            JOIN claude.code_symbols fs ON cr.from_symbol_id = fs.symbol_id
+            WHERE cr.to_symbol_id = %s
+               OR (cr.to_symbol_id IS NULL AND cr.to_symbol_name = %s)
+            ORDER BY fs.file_path, fs.line_number
+        """, (symbol_id, symbol_name))
+        callers = cur.fetchall()
+
+        # Get siblings (other symbols in same file)
+        cur.execute("""
+            SELECT name, kind, line_number, visibility, signature
+            FROM claude.code_symbols
+            WHERE project_id = %s AND file_path = %s AND symbol_id != %s
+            ORDER BY line_number
+        """, (project_id, sym['file_path'], symbol_id))
+        siblings = cur.fetchall()
+
+        # Get parent symbol if exists
+        parent = None
+        if sym['parent_symbol_id']:
+            cur.execute("""
+                SELECT name, kind, file_path, line_number, signature
+                FROM claude.code_symbols WHERE symbol_id = %s
+            """, (sym['parent_symbol_id'],))
+            parent = cur.fetchone()
+
+        # File context
+        cur.execute("""
+            SELECT count(*) as cnt FROM claude.code_symbols
+            WHERE project_id = %s AND file_path = %s
+        """, (project_id, sym['file_path']))
+        file_sym_count = cur.fetchone()['cnt']
+
+        # Depth 2: get transitive callers/callees
+        transitive_callers = []
+        transitive_callees = []
+        if depth >= 2 and callers:
+            caller_ids = [c['caller_name'] for c in callers[:10]]
+            if caller_ids:
+                placeholders = ','.join(['%s'] * len(caller_ids))
+                cur.execute(f"""
+                    SELECT DISTINCT fs.name as caller_name, fs.kind as caller_kind,
+                           fs.file_path as caller_file, cr.ref_type
+                    FROM claude.code_references cr
+                    JOIN claude.code_symbols fs ON cr.from_symbol_id = fs.symbol_id
+                    JOIN claude.code_symbols ts ON cr.to_symbol_id = ts.symbol_id
+                    WHERE ts.project_id = %s AND ts.name IN ({placeholders})
+                    LIMIT 20
+                """, [project_id] + caller_ids)
+                transitive_callers = cur.fetchall()
+
+        result = {
+            "success": True,
+            "symbol": {
+                "name": sym['name'],
+                "kind": sym['kind'],
+                "file_path": sym['file_path'],
+                "line_number": sym['line_number'],
+                "end_line": sym['end_line'],
+                "signature": sym['signature'],
+                "visibility": sym['visibility'],
+                "language": sym['language'],
+                "scope": sym['scope'],
+            },
+            "body": sym['body'],
+            "parent": dict(parent) if parent else None,
+            "callers": [dict(c) for c in callers],
+            "callees": [dict(c) for c in callees],
+            "siblings": [dict(s) for s in siblings[:20]],
+            "file_context": {
+                "path": sym['file_path'],
+                "language": sym['language'],
+                "total_symbols": file_sym_count,
+            },
+        }
+
+        if depth >= 2:
+            result["transitive_callers"] = [dict(c) for c in transitive_callers]
+
+        return result
+
     except Exception as e:
         return {"success": False, "error": str(e)}
     finally:
