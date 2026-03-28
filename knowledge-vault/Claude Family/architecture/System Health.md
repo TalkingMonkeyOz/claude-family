@@ -83,7 +83,7 @@ SELECT job_name, last_run FROM claude.scheduled_jobs;
 tail -20 ~/.claude/hooks.log
 
 # Hook scripts exist
-ls scripts/*hook*.py .claude-plugins/*/scripts/*hook*.py
+ls scripts/*hook*.py
 ```
 
 ---

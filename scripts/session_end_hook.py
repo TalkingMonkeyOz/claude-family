@@ -291,6 +291,15 @@ def main():
         # Auto-save session state
         auto_save_session(session_id, project_name)
 
+        # Clean up completed task files from disk
+        try:
+            from task_cleanup import cleanup_completed_tasks
+            cleaned = cleanup_completed_tasks()
+            if cleaned > 0:
+                logger.info(f"Cleaned up {cleaned} completed task file(s)")
+        except Exception as e:
+            logger.warning(f"Task cleanup failed (non-fatal): {e}")
+
         # Return reminder to run /session-end for full summary
         print(json.dumps({
             "systemMessage": "Session auto-saved. For detailed summary + knowledge capture, run /session-end before closing."

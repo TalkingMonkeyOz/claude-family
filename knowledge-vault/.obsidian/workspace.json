@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "10-Projects/claude-family/hook-system-requirements.md",
+                "file": "20-Domains/coding-intelligence/semantic-code-engine-research.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "hook-system-requirements"
+              "title": "semantic-code-engine-research"
             }
           }
         ]
@@ -53,7 +53,7 @@
             "state": {
               "type": "search",
               "state": {
-                "query": "",
+                "query": "research ckg",
                 "matchingCase": false,
                 "explainSearch": false,
                 "collapseAll": false,
@@ -94,7 +94,7 @@
             "state": {
               "type": "backlink",
               "state": {
-                "file": "10-Projects/claude-family/hook-system-requirements.md",
+                "file": "20-Domains/coding-intelligence/semantic-code-engine-research.md",
                 "collapseAll": false,
                 "extraContext": false,
                 "sortOrder": "alphabetical",
@@ -104,7 +104,7 @@
                 "unlinkedCollapsed": true
               },
               "icon": "links-coming-in",
-              "title": "Backlinks for hook-system-requirements"
+              "title": "Backlinks for semantic-code-engine-research"
             }
           },
           {
@@ -182,43 +182,43 @@
       "bases:Create new base": false
     }
   },
-  "active": "0ec48af0ac01a6f0",
+  "active": "0a1e735fe9a416ce",
   "lastOpenFiles": [
+    "20-Domains/coding-intelligence/sce-approaches-detail.md",
+    "20-Domains/coding-intelligence/sce-value-analysis.md",
+    "20-Domains/coding-intelligence/semantic-code-engine-research.md",
+    "20-Domains/coding-intelligence-research.md",
+    "20-Domains/awesome-copilot-reference/instructions/ai-prompt-engineering-safety-best-practices.instructions.md",
+    "README.md",
+    "10-Projects/Project-Metis/coding-intelligence-competitive-analysis.md",
+    "10-Projects/Project-Metis/coding-intelligence-competitive-analysis.md.tmp.35764.1774103518922",
+    "10-Projects/Project-Metis/coding-intelligence-design.md",
+    "10-Projects/Project-Metis/coding-intelligence-design.md.tmp.35764.1774103479805",
+    "30-Patterns/memory-storage-cheat-sheet.md.tmp.54660.1774102152627",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102109461",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102105329",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102099107",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102091824",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102076021",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102069767",
+    "40-Procedures/dossier-usage-guide.md.tmp.54660.1774102065067",
+    "40-Procedures/storage-naming-conventions.md",
+    "10-Projects/Claude Family Manager.md",
+    "30-Patterns/coding-ethos-detail.md",
+    "10-Projects/Project-Metis/research/code-analysis-tooling-evaluation.md",
+    "10-Projects/claude-family/info-architecture-audit.md",
+    "10-Projects/claude-family/mui-mcp-toolsearch-evaluation.md",
+    "30-Patterns/coding-ethos.md",
+    "10-Projects/claude-family/hook-system-requirements.md",
+    "40-Procedures/client-document-analysis-sop.md",
     "10-Projects/Project-Metis/executive-proposal-brief.md",
-    "10-Projects/Project-Metis/executive-proposal-brief.md.tmp.36352.1773569214016",
     "10-Projects/Project-Metis/research/competitive-analysis-detail-2026-03-15.md",
-    "10-Projects/Project-Metis/research/competitive-analysis-detail-2026-03-15.md.tmp.36352.1773569124823",
     "10-Projects/Project-Metis/research/competitive-analysis-2026-03-15.md",
-    "10-Projects/Project-Metis/research/competitive-analysis-2026-03-15.md.tmp.36352.1773569067933",
     "10-Projects/Project-Metis/_archive/superseded/impl-audit-wcc.md",
     "10-Projects/Project-Metis/_archive/superseded/impl-audit-rag-hook.md",
     "10-Projects/Project-Metis/_archive/superseded/impl-audit-persistence.md",
     "10-Projects/Project-Metis/_archive/superseded/impl-audit-index.md",
     "10-Projects/Project-Metis/_archive/superseded/impl-audit-cross-cutting.md",
-    "10-Projects/Project-Metis/_archive/superseded/impl-audit-cognitive-memory.md",
-    "10-Projects/Project-Metis/_archive/superseded/plan-of-attack-rewrite-brief.md",
-    "10-Projects/Project-Metis/audits/project-tools-functional-test-detail-2026-03-14.md",
-    "10-Projects/Project-Metis/audits/project-tools-functional-test-2026-03-14.md",
-    "10-Projects/Project-Metis/audits/bpmn-coverage-audit-2026-03-14-detail.md",
-    "10-Projects/Project-Metis/_archive/superseded/decisions-README.md",
-    "10-Projects/Project-Metis/_archive/superseded/day-1-readiness.md",
-    "10-Projects/Project-Metis/_archive/superseded/phase-0-task-list.md",
-    "10-Projects/Project-Metis/_archive/superseded/user-experience.md",
-    "10-Projects/Project-Metis/_archive/superseded/autonomous-operations.md",
-    "10-Projects/Project-Metis/_archive/superseded/infra-decisions-api-git-auth.md",
-    "10-Projects/Project-Metis/_archive/superseded/dev-decisions-agents-workflow-handoff.md",
-    "10-Projects/Project-Metis/_archive/superseded/session-memory-context-persistence.md",
-    "10-Projects/Project-Metis/_archive/superseded/cicd-pipeline-spec.md",
-    "10-Projects/Project-Metis/_archive/superseded/monitoring-alerting-design.md",
-    "10-Projects/Project-Metis/_archive/superseded/azure-infrastructure-recommendation.md",
-    "10-Projects/Project-Metis/_archive/superseded/wcc-mechanics-feedback-design.md",
-    "10-Projects/Project-Metis/_archive/superseded/wcc-activity-space-design.md",
-    "10-Projects/claude-family/unified-config-tool-requirements.md.tmp.35552.1773568208862",
-    "10-Projects/Project-Metis/vault-cleanup-2026-03-15.md.tmp.36352.1773568158578",
-    "10-Projects/Project-Metis/vault-audit-2026-03-15.md.tmp.36352.1773568084650",
-    "10-Projects/Project-Metis/plan-of-attack-phase1.md.tmp.36352.1773566982084",
-    "10-Projects/Project-Metis/plan-of-attack.md.tmp.36352.1773566981409",
-    "10-Projects/claude-family/messaging-system-requirements.md.tmp.35552.1773566323147",
-    "10-Projects/claude-family/hook-system-requirements.md.tmp.35552.1773566312578"
+    "10-Projects/Project-Metis/_archive/superseded/impl-audit-cognitive-memory.md"
   ]
 }

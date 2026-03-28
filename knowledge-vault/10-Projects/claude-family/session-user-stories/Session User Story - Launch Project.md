@@ -65,7 +65,7 @@ claude --model sonnet
   "name": "SessionStart",
   "description": "Initialize session and load context",
   "events": ["SessionStart"],
-  "command": "python C:\\Projects\\claude-family\\.claude-plugins\\claude-family-core\\scripts\\session_startup_hook.py"
+  "command": "python C:\\Projects\\claude-family\\scripts\\session_startup_hook_enhanced.py"
 }
 ```
 
@@ -73,7 +73,7 @@ claude --model sonnet
 
 ### 4. Session Startup Script Runs
 
-**File**: `.claude-plugins/claude-family-core/scripts/session_startup_hook.py`
+**File**: `scripts/session_startup_hook_enhanced.py`
 
 **Actions**:
 
@@ -224,7 +224,7 @@ Claude ready to work
 |------|---------|
 | `ClaudeLauncherWinForms\Services\LaunchService.cs` | Launches Windows Terminal with Claude |
 | `.claude/hooks.json` | SessionStart hook definition |
-| `.claude-plugins/claude-family-core/scripts/session_startup_hook.py` | Creates session, loads state |
+| `scripts/session_startup_hook_enhanced.py` | Creates session, loads state |
 | `C:\Users\johnd\.claude\CLAUDE.md` | Global instructions |
 | `C:\Projects\ATO-Tax-Agent\CLAUDE.md` | Project instructions |
 

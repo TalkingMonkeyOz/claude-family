@@ -28,7 +28,8 @@ Enforcement layer for Claude Family governance.
 | 8 | PostToolUse | `mcp_usage_logger.py` | (catch-all) | Log MCP tool usage (filters to mcp__ prefix) |
 | 9 | SubagentStart | `subagent_start_hook.py` | (all) | Log agent spawns to agent_sessions |
 | 10 | PreCompact | `precompact_hook.py` | manual, auto | Inject active todos, features, session state |
-| 11 | SessionEnd | `session_end_hook.py` | (all) | Auto-close session in database |
+| 11 | Stop | `stop_hook.py` | (all) | **Enforce** completeness — Haiku checks all user requests addressed |
+| 12 | SessionEnd | `session_end_hook.py` | (all) | Auto-close session in database |
 
 ### Infrastructure-Only Hooks (claude-family project)
 
@@ -61,9 +62,26 @@ Tool executes
     ↓
 PostToolUse (sync hooks)
     → Persist to database
+    ↓
+Claude finishes response
+    ↓
+Stop (stop_hook.py)
+    → Haiku compares user prompt vs response
+    → If requests missed: BLOCKS with "Create tasks for missed items"
+    → If all addressed: APPROVES
 ```
 
-**Key distinction**: CORE_PROTOCOL is persuasion (advisory). task_discipline_hook is enforcement (blocking).
+**Key distinction**: CORE_PROTOCOL is persuasion (advisory). task_discipline_hook is enforcement (blocking). stop_hook is enforcement (completeness — blocks if requests missed).
+
+## Hook Type Capabilities (Confirmed 2026-03-23)
+
+| Hook Type | UserPromptSubmit | Stop | PreToolUse | `-p` mode |
+|-----------|-----------------|------|------------|-----------|
+| `type: "command"` | additionalContext, replacementPrompt | decision: approve/block | permissionDecision: allow/deny | **Works** |
+| `type: "prompt"` | block/allow ONLY (no inject) | **BROKEN** (JSON errors) | block/allow | Does NOT fire |
+| `type: "agent"` | untested | untested | untested | untested |
+
+**Always use `type: "command"`**. It's the only reliable hook type. GitHub issue #37559 filed.
 
 ## GATED_TOOLS (What Gets Blocked)
 
@@ -175,7 +193,7 @@ Hooks and workflows are modeled in BPMN (SpiffWorkflow). See `mcp-servers/bpmn-e
 
 ---
 
-**Version**: 4.1 (Added shared task list mode to decision cascade)
+**Version**: 5.0 (Stop hook enforcement, hook type capability matrix, GitHub #37559)
 **Created**: 2025-12-26
-**Updated**: 2026-03-04
+**Updated**: 2026-03-23
 **Location**: Claude Family/Claude Hooks.md

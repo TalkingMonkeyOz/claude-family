@@ -39,7 +39,7 @@ Added `cleanup_mcp_processes.py` to SessionEnd hook:
 - Keeps one instance of each type
 - Terminates orphaned duplicates
 
-**Location**: `.claude-plugins/claude-family-core/scripts/cleanup_mcp_processes.py`
+**Location**: `scripts/cleanup_mcp_processes.py` (migrated from `.claude-plugins/`, removed 2026-03-28)
 
 ## Manual Cleanup
 

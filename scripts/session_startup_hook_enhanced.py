@@ -587,6 +587,16 @@ def main():
             except Exception as e:
                 logger.warning(f"Retention cleanup failed (non-fatal): {e}")
 
+            # Clean up completed task files from disk
+            try:
+                from task_cleanup import cleanup_completed_tasks
+                cleaned = cleanup_completed_tasks()
+                if cleaned > 0:
+                    context_lines.append(f"Cleaned up {cleaned} completed task file(s)")
+                    logger.info(f"Cleaned up {cleaned} completed task file(s) at startup")
+            except Exception as e:
+                logger.warning(f"Task cleanup failed (non-fatal): {e}")
+
             # === CKG STALENESS CHECK: async re-index if code changed ===
             try:
                 import subprocess as _sp

@@ -113,7 +113,7 @@ doc_source VARCHAR (vault|project)
 | `.claude/settings.local.json` | Generated config (from DB) |
 | `scripts/rag_query_hook.py` | RAG hook |
 | `scripts/todo_sync_hook.py` | Todo sync |
-| `.claude-plugins/.../session_startup_hook.py` | Session start |
+| `scripts/session_startup_hook_enhanced.py` | Session start |
 
 ---
 

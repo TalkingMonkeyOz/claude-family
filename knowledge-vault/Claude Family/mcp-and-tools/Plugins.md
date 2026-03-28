@@ -14,15 +14,11 @@ Plugin architecture distributes configurations through database-driven system.
 
 ---
 
-## Structure
+## Legacy: .claude-plugins/ (Removed 2026-03-28)
 
-```
-.claude-plugins/claude-family-core/
-├── .claude-plugin/plugin.json
-├── commands/          # Slash commands
-├── scripts/           # session_startup_hook.py, instruction_matcher.py
-└── agents/            # Specialty agents
-```
+`.claude-plugins/` was a filesystem-based plugin system (Nov 2025) superseded by DB-managed skills, hooks, and agents. The 5 plugins (ato-tax-tools, claude-family-core, mission-control-tools, nimbus-loader-tools, web-dev-toolkit) were removed. Validation scripts from claude-family-core were migrated to `scripts/` before deletion.
+
+**Current system**: All hooks live in `scripts/`, skills in `claude.skills` table, config in `config_templates` + `workspaces`.
 
 ---
 
@@ -31,10 +27,10 @@ Plugin architecture distributes configurations through database-driven system.
 ```
 1. Claude reads .claude/settings.local.json (auto-generated from DB)
 2. SessionStart hook fires
-3. session_startup_hook.py:
-   • Calls generate_project_settings.py
+3. session_startup_hook_enhanced.py:
    • Syncs config from database
    • Creates session record
+   • Loads state and messages
 4. Claude ready
 ```
 
@@ -117,7 +113,7 @@ workspaces.startup_config (project overrides)
 
 ---
 
-**Version**: 3.0 (Condensed)
+**Version**: 4.0 (.claude-plugins removed)
 **Created**: 2025-12-26
-**Updated**: 2025-12-27
-**Location**: Claude Family/Plugins.md
+**Updated**: 2026-03-28
+**Location**: Claude Family/mcp-and-tools/Plugins.md

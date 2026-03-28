@@ -26,7 +26,7 @@ See [[Session Lifecycle - Overview]] for complete context.
 "SessionStart": [{
   "hooks": [{
     "type": "command",
-    "command": "python \"C:/Projects/claude-family/.claude-plugins/claude-family-core/scripts/session_startup_hook.py\"",
+    "command": "python \"C:/Projects/claude-family/scripts/session_startup_hook_enhanced.py\"",
     "timeout": 30,
     "description": "Auto-log session and load state/messages"
   }],

@@ -86,7 +86,7 @@ The `rag_query_hook.py` surfaces pending failures on each prompt, which creates 
 |---|-----|----------|----------|
 | 1 | `session_end_hook.py` queries `session_end IS NOT NULL` before setting it — current-session facts never promoted | `session_end_hook.py` lines 292-310 | Significant |
 | 2 | `task_sync_hook.py` never stores `subject` in the task map — completion checkpoints always read "Completed: Task #N" | `task_sync_hook.py` line 457 | Minor |
-| 3 | Three DB validators (`validate_db_write.py`, `validate_phase.py`, `validate_parent_links.py`) parse CLI args for SQL but hook system passes JSON on stdin — silently fail open | `.claude-plugins/claude-family-core/scripts/` | Critical (no enforcement) |
+| 3 | Three DB validators (`validate_db_write.py`, `validate_phase.py`, `validate_parent_links.py`) parse CLI args for SQL but hook system passes JSON on stdin — silently fail open | `.claude-plugins/` (deprecated, removed 2026-03-28; migrated to `scripts/`) | Critical (no enforcement) |
 | 4 | `todo_sync_hook.py` fuzzy match has no minimum length guard (task_sync_hook has 20-char min) — false positives on short todos | `todo_sync_hook.py` line 172 | Minor |
 
 ---

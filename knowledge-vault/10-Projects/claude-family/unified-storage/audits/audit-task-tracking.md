@@ -28,7 +28,7 @@ Task tracking produces compliance theater. Tasks are created to satisfy the disc
 
 | Bug | File | Action |
 |-----|------|--------|
-| Three DB validators are non-functional (parse CLI args, receive JSON on stdin) | `.claude-plugins/.../validate_db_write.py` et al. | Fix or remove |
+| Three DB validators were non-functional (parse CLI args, receive JSON on stdin) | `.claude-plugins/...` (deprecated, removed 2026-03-28; migrated to `scripts/`) | Removed with plugin deletion |
 | `session_end_hook.py` fact promotion never fires (ordering bug) | `scripts/session_end_hook.py` | Fix ordering |
 
 ---

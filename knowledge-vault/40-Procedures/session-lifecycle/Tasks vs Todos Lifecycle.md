@@ -85,7 +85,7 @@ Claude Code has two work-tracking systems. **Both sync to `claude.todos` via hoo
 | Task sync hook | `scripts/task_sync_hook.py` |
 | Task discipline hook | `scripts/task_discipline_hook.py` |
 | Todo sync hook | `scripts/todo_sync_hook.py` |
-| Session startup | `.claude-plugins/claude-family-core/scripts/session_startup_hook.py` |
+| Session startup | `scripts/session_startup_hook_enhanced.py` |
 | PreCompact hook | `scripts/precompact_hook.py` |
 | Task map file | `%TEMP%/claude_task_map_{project}.json` |
 | Hook config (generated) | `.claude/settings.local.json` |

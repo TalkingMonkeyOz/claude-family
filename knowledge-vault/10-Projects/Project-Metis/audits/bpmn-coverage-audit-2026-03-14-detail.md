@@ -37,7 +37,7 @@ Parent: [[bpmn-coverage-audit-2026-03-14]]
 
 ## Plugin Scripts Without BPMN Coverage
 
-Registered in `settings.local.json` under PreToolUse for `mcp__postgres__execute_sql`. Live in `.claude-plugins/claude-family-core/scripts/`.
+Registered in `settings.local.json` under PreToolUse for `mcp__postgres__execute_sql`. Lived in `.claude-plugins/claude-family-core/scripts/` (deprecated, removed 2026-03-28; migrated to `scripts/`).
 
 | Script | Purpose | Gap |
 |---|---|---|

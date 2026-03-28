@@ -1,7 +1,0 @@
-{
-  "name": "web-dev-toolkit",
-  "version": "1.0.0",
-  "description": "Next.js + shadcn/ui + TypeScript development commands",
-  "author": "Claude Family",
-  "commands": "./commands"
-}

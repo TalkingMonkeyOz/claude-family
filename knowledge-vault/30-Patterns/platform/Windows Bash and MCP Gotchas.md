@@ -62,7 +62,7 @@ ls "C:/Projects/myproject"
 
 **Cause**: Command exists in both:
 - `~/.claude/commands/` (user level)
-- `.claude-plugins/*/commands/` or `.claude/commands/` (project level)
+- `.claude/commands/` (project level; `.claude-plugins/` was removed 2026-03-28)
 
 **Solution**: Remove duplicates from user level if project provides them:
 ```bash
