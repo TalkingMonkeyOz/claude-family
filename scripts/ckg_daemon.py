@@ -290,11 +290,41 @@ class CKGHandler(BaseHTTPRequestHandler):
             self._send_json({'decision': 'allow'})
 
     def _handle_reindex(self):
-        """Placeholder for F161 incremental re-indexing."""
-        self._send_json({
-            'status': 'not_implemented',
-            'message': 'Reindex endpoint reserved for F161 Enhanced CKG',
-        }, 501)
+        """Trigger incremental re-index for the project.
+
+        The indexer checks file hashes internally, so calling it after a Write
+        will only re-index files that actually changed. Runs async in background.
+        """
+        start = time.perf_counter()
+        try:
+            data = self._read_body()
+            file_path = data.get('file_path', '')
+
+            # Spawn code_indexer.py in background (incremental mode)
+            import subprocess as _sp
+            indexer_script = Path(__file__).parent / "code_indexer.py"
+            if not indexer_script.exists():
+                self._send_json({'status': 'error', 'message': 'Indexer not found'}, 500)
+                return
+
+            _sp.Popen(
+                [sys.executable, str(indexer_script),
+                 self.server.project_name, self.server.project_path],
+                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                creationflags=0x00000008 if sys.platform == 'win32' else 0,
+                start_new_session=True if sys.platform != 'win32' else False,
+            )
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            logger.info(f"Reindex triggered for {file_path or 'project'} [{elapsed_ms:.1f}ms]")
+            self._send_json({
+                'status': 'accepted',
+                'message': f'Incremental re-index spawned for {self.server.project_name}',
+                'file_hint': file_path,
+            })
+        except Exception as e:
+            logger.error(f"Reindex error: {e}")
+            self._send_json({'status': 'error', 'message': str(e)}, 500)
 
 
 # ---------------------------------------------------------------------------
