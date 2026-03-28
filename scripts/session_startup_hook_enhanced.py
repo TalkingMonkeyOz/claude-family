@@ -625,6 +625,25 @@ def main():
                                     start_new_session=True if sys.platform != 'win32' else False,
                                 )
                                 logger.info(f"CKG: spawned async re-index for {project_name} ({sym_count} existing symbols)")
+
+                        # Spawn CKG daemon if not already running (F160 perf fix)
+                        daemon_script = Path(__file__).parent / "ckg_daemon.py"
+                        if daemon_script.exists():
+                            import hashlib as _hl
+                            daemon_port = 9800 + (int(_hl.md5(project_name.encode()).hexdigest(), 16) % 100)
+                            # Quick health check — is daemon already up?
+                            import urllib.request as _ur
+                            try:
+                                _ur.urlopen(f'http://127.0.0.1:{daemon_port}/health', timeout=0.5)
+                                logger.info(f"CKG daemon already running on port {daemon_port}")
+                            except Exception:
+                                _sp.Popen(
+                                    [sys.executable, str(daemon_script), project_name, cwd],
+                                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                                    creationflags=0x00000008 if sys.platform == 'win32' else 0,
+                                    start_new_session=True if sys.platform != 'win32' else False,
+                                )
+                                logger.info(f"CKG: spawned daemon for {project_name} on port {daemon_port}")
             except Exception as e:
                 logger.warning(f"CKG staleness check failed (non-fatal): {e}")
 
