@@ -111,7 +111,14 @@ class DBPool:
 
     def get_conn(self):
         """Get connection, reconnecting if needed."""
-        if self._conn is None or self._conn.closed:
+        try:
+            if self._conn is None or self._conn.closed:
+                self._connect()
+            # Verify connection is alive with a lightweight query
+            cur = self._conn.cursor()
+            cur.execute("SELECT 1")
+            cur.close()
+        except Exception:
             self._connect()
         return self._conn
 
@@ -316,11 +323,12 @@ class CKGServer(ThreadingHTTPServer):
             conn = self.db.get_conn()
             cur = conn.cursor()
             cur.execute(
-                "SELECT count(*) FROM claude.code_symbols WHERE project_id = %s",
+                "SELECT count(*) as cnt FROM claude.code_symbols WHERE project_id = %s",
                 (self.db.project_id,)
             )
             row = cur.fetchone()
-            self.symbol_count = row[0] if row else 0
+            if row:
+                self.symbol_count = row['cnt'] if isinstance(row, dict) else row[0]
             cur.close()
         except Exception:
             pass
