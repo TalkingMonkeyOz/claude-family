@@ -68,8 +68,16 @@ WRITE_KEYWORDS = re.compile(
 
 
 def get_project_name() -> str:
-    """Get project name from CWD."""
-    return Path.cwd().name
+    """Get project name from CWD, walking up to find a directory that contains .claude/ or .git."""
+    cwd = Path.cwd()
+    # Walk up to find the project root (contains .claude/ or .git)
+    for p in [cwd, *cwd.parents]:
+        if (p / '.claude').is_dir() or (p / '.git').is_dir():
+            return p.name
+        if p == p.parent:
+            break
+    # Fallback to CWD name
+    return cwd.name
 
 
 def extract_table_refs(sql: str) -> set:
