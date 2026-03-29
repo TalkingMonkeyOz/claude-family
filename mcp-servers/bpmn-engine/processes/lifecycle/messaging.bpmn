@@ -17,7 +17,12 @@
       Columns: from_project, parent_message_id, thread_id (added for sender identity + threading)
       Statuses: pending → read → acknowledged / actioned / deferred
 
+      Channel delivery (F159): After INSERT, pg trigger fires NOTIFY.
+      Channel MCP server (if recipient online) receives via LISTEN and pushes
+      MCP channel notification. Falls back to poll-based inbox check if offline.
+
       Implementation: mcp-servers/project-tools/server_v2.py
+      Channel MCP: mcp-servers/channel-messaging/server.js
       Previous home: mcp-servers/orchestrator/server.py
     -->
 
@@ -78,7 +83,7 @@ recipient_valid = locals().get('recipient_valid', True)
       <bpmn:incoming>flow_send_valid</bpmn:incoming>
       <bpmn:incoming>flow_broadcast_to_insert</bpmn:incoming>
       <bpmn:incoming>flow_reply_to_insert</bpmn:incoming>
-      <bpmn:outgoing>flow_insert_to_end_sent</bpmn:outgoing>
+      <bpmn:outgoing>flow_insert_to_pg_notify</bpmn:outgoing>
       <bpmn:script>
 # INSERT INTO claude.messages
 #   (from_session_id, from_project, to_session_id, to_project,
@@ -89,8 +94,55 @@ message_sent = True
       </bpmn:script>
     </bpmn:scriptTask>
 
+    <!-- ================================================================== -->
+    <!-- CHANNEL DELIVERY PATH (F159)                                       -->
+    <!-- pg trigger fires NOTIFY automatically after INSERT.                -->
+    <!-- Channel MCP server receives via LISTEN and pushes to online Claude.-->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="pg_notify_trigger" name="[DB] pg_notify fires automatically" scriptFormat="python">
+      <bpmn:incoming>flow_insert_to_pg_notify</bpmn:incoming>
+      <bpmn:outgoing>flow_notify_to_channel_gw</bpmn:outgoing>
+      <bpmn:script>
+# PostgreSQL trigger: claude.notify_new_message()
+# Fires pg_notify on channels:
+#   claude_msg_{to_project_underscored} (targeted)
+#   claude_msg_broadcast (broadcasts)
+# Payload: JSON {message_id, from_project, to_project, message_type, priority, subject}
+# This is automatic — no application code needed
+pg_notify_fired = True
+# Default recipient_online to False if not already set by caller
+_ro = locals().get('recipient_online', None)
+recipient_online = _ro if _ro is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="channel_delivery_gw" name="Recipient Online?" default="flow_channel_offline">
+      <bpmn:incoming>flow_notify_to_channel_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_channel_online</bpmn:outgoing>
+      <bpmn:outgoing>flow_channel_offline</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="channel_push" name="[CHANNEL] Push MCP Notification" scriptFormat="python">
+      <bpmn:incoming>flow_channel_online</bpmn:incoming>
+      <bpmn:outgoing>flow_channel_push_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Channel MCP server (mcp-servers/channel-messaging/server.js):
+# 1. Receives pg LISTEN notification
+# 2. Formats as MCP channel notification:
+#    server.notification({
+#      method: 'notifications/claude/channel',
+#      params: { content: message_body, meta: {from_project, message_type, priority} }
+#    })
+# 3. Claude sees message in context as &lt;channel&gt; block
+# Requires: --dangerously-load-development-channels flag
+channel_delivered = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
     <bpmn:endEvent id="end_sent" name="Message Sent">
-      <bpmn:incoming>flow_insert_to_end_sent</bpmn:incoming>
+      <bpmn:incoming>flow_channel_push_to_end</bpmn:incoming>
+      <bpmn:incoming>flow_channel_offline</bpmn:incoming>
     </bpmn:endEvent>
 
     <bpmn:endEvent id="end_send_invalid" name="Send Invalid">
@@ -369,7 +421,15 @@ recipients_listed = True
       <bpmn:conditionExpression>has_required == True and recipient_valid == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_send_invalid" sourceRef="send_valid_gw" targetRef="end_send_invalid"/>
-    <bpmn:sequenceFlow id="flow_insert_to_end_sent" sourceRef="insert_message" targetRef="end_sent"/>
+
+    <!-- Channel delivery path (F159) -->
+    <bpmn:sequenceFlow id="flow_insert_to_pg_notify" sourceRef="insert_message" targetRef="pg_notify_trigger"/>
+    <bpmn:sequenceFlow id="flow_notify_to_channel_gw" sourceRef="pg_notify_trigger" targetRef="channel_delivery_gw"/>
+    <bpmn:sequenceFlow id="flow_channel_online" sourceRef="channel_delivery_gw" targetRef="channel_push">
+      <bpmn:conditionExpression>recipient_online == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_channel_offline" sourceRef="channel_delivery_gw" targetRef="end_sent"/>
+    <bpmn:sequenceFlow id="flow_channel_push_to_end" sourceRef="channel_push" targetRef="end_sent"/>
 
     <!-- Branch B: Broadcast -->
     <bpmn:sequenceFlow id="flow_broadcast_to_insert" sourceRef="prepare_broadcast" targetRef="insert_message"/>

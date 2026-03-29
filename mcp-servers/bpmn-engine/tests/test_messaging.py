@@ -3,35 +3,35 @@ Tests for the Messaging BPMN process.
 
 Inter-Claude Messaging Lifecycle (messaging):
   Models 6 messaging intents: send, broadcast, check_inbox, acknowledge, reply, discover.
+  Channel delivery (F159): After INSERT, pg_notify fires → channel push if online, else poll fallback.
 
   Key behaviors:
-    1. Send: Validate params (from_project, recipient) → INSERT into claude.messages → end_sent
-    2. Broadcast: Prepare (set to_project=None) → INSERT → end_sent
-    3. Check Inbox: Build query → SELECT (incl from_project, threading) → format → end_inbox / end_empty_inbox
-    4. Acknowledge: Determine action (read/acknowledged/actioned/deferred) → UPDATE/INSERT → end_acknowledged
-    5. Reply: Fetch original → route to from_project + set threading → INSERT → end_sent
+    1. Send: Validate → INSERT → pg_notify → channel delivery (online/offline) → end_sent
+    2. Broadcast: Prepare → INSERT → pg_notify → channel delivery → end_sent
+    3. Check Inbox: Build query → SELECT → format → end_inbox / end_empty_inbox
+    4. Acknowledge: Determine action → UPDATE/INSERT → end_acknowledged
+    5. Reply: Fetch original → route to from_project + threading → INSERT → channel delivery → end_sent
     6. Discover: Query valid recipients → format list → end_recipients
 
   Test paths:
-    1. Send valid message (with from_project) → end_sent
+    1. Send valid message → pg_notify → offline → end_sent
     2. Send invalid (missing params) → end_send_invalid
-    3. Broadcast → end_sent
+    3. Broadcast → pg_notify → offline → end_sent
     4. Check inbox with messages → end_inbox
     5. Check inbox empty → end_empty_inbox
-    6. Acknowledge: mark read → end_acknowledged
-    7. Acknowledge: mark acknowledged → end_acknowledged
-    8. Acknowledge: action (create todo) → end_acknowledged
-    9. Acknowledge: defer → end_acknowledged
-   10. Reply: original found (with threading) → end_sent
+    6-9. Acknowledge: read/acknowledged/actioned/deferred → end_acknowledged
+   10. Reply: original found → pg_notify → offline → end_sent
    11. Reply: original not found → end_reply_not_found
    12. Default intent (check_inbox) → end_empty_inbox
    13. Discover recipients → end_recipients
-   14. Send with from_project resolved → end_sent
-   15. Send with invalid recipient → end_send_invalid
-   16. Reply sets threading (parent_message_id, thread_id) → end_sent
-   17. Reply routes to from_project → end_sent
+   14-15. Send with from_project / invalid recipient
+   16-17. Reply threading and routing
+   18. Send with recipient online → pg_notify → channel_push → end_sent
+   19. Send with recipient offline → pg_notify → end_sent (no channel_push)
+   20. Broadcast with recipient online → pg_notify → channel_push → end_sent
 
 Implementation: mcp-servers/project-tools/server_v2.py
+Channel MCP: mcp-servers/channel-messaging/server.js
 """
 
 import os
@@ -638,3 +638,112 @@ class TestReplyRoutesToFromProject:
         assert wf.data.get("reply_prepared") is True
         assert wf.data.get("message_type") == "notification"
         assert wf.data.get("parent_message_id") == "msg-abc"
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Channel Delivery - Recipient Online (F159)
+# ---------------------------------------------------------------------------
+
+class TestChannelDeliveryOnline:
+    """
+    intent="send", recipient_online=True → insert → pg_notify → channel_push → end_sent.
+
+    When recipient has an active channel MCP server, the message is pushed
+    via MCP channel notification in real-time.
+    """
+
+    def test_send_with_online_recipient(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "send",
+            "message_type": "notification",
+            "body": "Real-time message",
+            "to_project": "nimbus-import",
+            "from_project": "claude-family",
+            "recipient_online": True,
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "insert_message" in names
+        assert "pg_notify_trigger" in names
+        assert "channel_push" in names
+        assert "end_sent" in names
+
+        assert wf.data.get("pg_notify_fired") is True
+        assert wf.data.get("channel_delivered") is True
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Channel Delivery - Recipient Offline (F159)
+# ---------------------------------------------------------------------------
+
+class TestChannelDeliveryOffline:
+    """
+    intent="send", recipient_online not set (default) → insert → pg_notify → offline → end_sent.
+
+    When recipient has no channel MCP server, the message is stored in DB
+    and will be picked up by poll-based inbox check.
+    """
+
+    def test_send_with_offline_recipient(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "send",
+            "message_type": "notification",
+            "body": "Queued message",
+            "to_project": "nimbus-import",
+            "from_project": "claude-family",
+            # recipient_online not set → defaults to offline path
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "insert_message" in names
+        assert "pg_notify_trigger" in names
+        assert "end_sent" in names
+
+        # Channel push should NOT have been reached
+        assert "channel_push" not in names
+
+        assert wf.data.get("pg_notify_fired") is True
+        assert wf.data.get("channel_delivered") is None or wf.data.get("channel_delivered") is not True
+
+
+# ---------------------------------------------------------------------------
+# Test 20: Channel Delivery - Broadcast Online (F159)
+# ---------------------------------------------------------------------------
+
+class TestChannelDeliveryBroadcastOnline:
+    """
+    intent="broadcast", recipient_online=True → prepare → insert → pg_notify → channel_push → end_sent.
+
+    Broadcast messages also go through channel delivery when recipients are online.
+    """
+
+    def test_broadcast_with_online_recipients(self):
+        wf = load_workflow()
+
+        wf = complete_user_task(wf, "determine_intent", {
+            "intent": "broadcast",
+            "body": "System announcement",
+            "subject": "Update",
+            "recipient_online": True,
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+
+        assert "prepare_broadcast" in names
+        assert "insert_message" in names
+        assert "pg_notify_trigger" in names
+        assert "channel_push" in names
+        assert "end_sent" in names
+
+        assert wf.data.get("broadcast_prepared") is True
+        assert wf.data.get("pg_notify_fired") is True
+        assert wf.data.get("channel_delivered") is True
