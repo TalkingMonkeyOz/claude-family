@@ -16,7 +16,7 @@ Output: systemMessage injected into post-compact context
 
 Author: Claude Family
 Date: 2025-12-29
-Updated: 2026-03-20 (Core protocol reinforcement on compaction)
+Updated: 2026-03-29 (Fix task duplication, remove unbounded re-injection)
 """
 
 import sys
@@ -137,7 +137,11 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
         todos = cur.fetchall()
 
         if todos:
-            todo_lines = ["ACTIVE TASKS (preserved from pre-compaction — use TaskList to see full state):"]
+            todo_lines = [
+                "TASK STATE (READ-ONLY REFERENCE — tasks persist natively, DO NOT re-create):",
+                "  NOTE: These tasks already exist in the task list. Use TaskList to verify.",
+                "  DO NOT call TaskCreate for any items listed below.",
+            ]
             for t in todos:
                 content = t['content'] if isinstance(t, dict) else t[0]
                 status = t['status'] if isinstance(t, dict) else t[1]
@@ -291,36 +295,11 @@ def build_refresh_message(hook_input: Dict) -> str:
     parts.extend([
         "",
         "=" * 40,
+        "IMPORTANT: Tasks persist natively — DO NOT re-create tasks listed above.",
         "RECOVERY: list_session_facts() | get_session_notes() | get_work_context('current')",
         "Then recall_memories('<what you were working on>'), unstash(component) for workfiles, and resume.",
+        "CLAUDE.md and rules are re-loaded automatically by the system prompt — no manual re-injection needed.",
     ])
-
-    # Re-inject storage skill content so it survives compaction
-    try:
-        skill_path = Path.home() / ".claude" / "skills" / "skill-load-memory-storage" / "SKILL.md"
-        if skill_path.exists():
-            skill_content = skill_path.read_text(encoding="utf-8", errors="replace")
-            if len(skill_content) > 100:
-                parts.append("\n<storage-guide>")
-                parts.append(skill_content)
-                parts.append("</storage-guide>")
-                logger.info("Storage skill re-injected for post-compaction context")
-    except Exception as e:
-        logger.warning(f"Failed to re-inject storage skill: {e}")
-
-    # Re-inject core protocol rules so enforcement survives compaction
-    try:
-        protocol_path = Path(__file__).parent / "core_protocol.txt"
-        if protocol_path.exists():
-            protocol_content = protocol_path.read_text(encoding="utf-8", errors="replace").strip()
-            if len(protocol_content) > 50:
-                parts.append("\n<core-protocol-reinforcement>")
-                parts.append("CRITICAL: These rules MUST be followed in every interaction:")
-                parts.append(protocol_content)
-                parts.append("</core-protocol-reinforcement>")
-                logger.info("Core protocol re-injected for post-compaction enforcement")
-    except Exception as e:
-        logger.warning(f"Failed to re-inject core protocol: {e}")
 
     return "\n".join(parts)
 
