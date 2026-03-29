@@ -6256,6 +6256,15 @@ def check_inbox(
         conn.close()
 
 
+VALID_CONVERSATION_MODES = [
+    "fire_and_forget",
+    "question",
+    "collaborative",
+    "task_handoff",
+    "review_request",
+]
+
+
 @mcp.tool()
 def send_message(
     message_type: Literal["task_request", "status_update", "question", "notification", "handoff", "broadcast"],
@@ -6267,6 +6276,8 @@ def send_message(
     from_session_id: str = "",
     from_project: str = "",
     parent_message_id: str = "",
+    metadata: Optional[dict] = None,
+    conversation_mode: str = "fire_and_forget",
 ) -> dict:
     """Send a message to another Claude instance or project.
 
@@ -6284,7 +6295,35 @@ def send_message(
         from_session_id: Your session ID.
         from_project: Sender project name (auto-detected from session if empty).
         parent_message_id: ID of parent message for threading (optional).
+        metadata: Optional metadata dict stored as JSONB.
+        conversation_mode: Conversation protocol mode (fire_and_forget, question,
+            collaborative, task_handoff, review_request). Default: fire_and_forget.
     """
+    # Validate conversation_mode
+    if conversation_mode not in VALID_CONVERSATION_MODES:
+        return {
+            "success": False,
+            "error": f"Invalid conversation_mode: {conversation_mode}. Valid: {VALID_CONVERSATION_MODES}",
+        }
+
+    # Mode-specific validation
+    if conversation_mode == "task_handoff" and not (metadata or {}).get("done_criteria"):
+        return {
+            "success": False,
+            "error": "task_handoff mode requires metadata.done_criteria",
+        }
+
+    if conversation_mode == "collaborative" and not (metadata or {}).get("ownership"):
+        return {
+            "success": False,
+            "error": "collaborative mode requires metadata.ownership (dict with who_develops, who_deploys)",
+        }
+
+    # Merge conversation_mode into metadata
+    if metadata is None:
+        metadata = {}
+    metadata["conversation_mode"] = conversation_mode
+
     conn = get_db_connection()
     try:
         cur = conn.cursor()
@@ -6358,7 +6397,7 @@ def send_message(
             priority,
             subject or None,
             body,
-            json.dumps({}),
+            json.dumps(metadata),
             resolved_parent_id,
             resolved_thread_id,
         ))
@@ -6526,6 +6565,8 @@ def reply_to(
     body: str,
     from_session_id: str = "",
     from_project: str = "",
+    message_type: str = "",
+    thread_status: str = "",
 ) -> dict:
     """Reply to a specific message. Routes to the sender's PROJECT (not session).
 
@@ -6539,12 +6580,18 @@ def reply_to(
         body: Reply content.
         from_session_id: Your session ID.
         from_project: Sender project name.
+        message_type: Override the reply message type. Defaults to the original
+            message's type (e.g. task_request replies stay task_request).
+            Falls back to "status_update" if the original type cannot be resolved.
+        thread_status: Optional thread lifecycle marker stored in metadata.
+            Use "resolved" or "done" to signal the thread is closed.
     """
     conn = get_db_connection()
     try:
         cur = conn.cursor()
         cur.execute("""
-            SELECT from_session_id::text, from_project, to_project, subject, thread_id::text
+            SELECT from_session_id::text, from_project, to_project, subject,
+                   thread_id::text, message_type
             FROM claude.messages
             WHERE message_id = %s
         """, (original_message_id,))
@@ -6572,6 +6619,19 @@ def reply_to(
     finally:
         conn_ack.close()
 
+    # Resolve reply message_type: caller > original type > fallback
+    VALID_MESSAGE_TYPES = [
+        "task_request", "status_update", "question", "notification", "handoff", "broadcast",
+    ]
+    resolved_message_type = message_type or original_dict.get('message_type') or "status_update"
+    if resolved_message_type not in VALID_MESSAGE_TYPES:
+        resolved_message_type = "status_update"
+
+    # Build metadata for thread_status if provided
+    reply_metadata = None
+    if thread_status:
+        reply_metadata = {"thread_status": thread_status}
+
     # Route to from_project (preferred) or fall back to session lookup
     reply_to_project = original_dict.get('from_project') or ""
     if not reply_to_project and original_dict.get('from_session_id'):
@@ -6592,13 +6652,14 @@ def reply_to(
             conn2.close()
 
     return send_message(
-        message_type="notification",
+        message_type=resolved_message_type,
         body=body,
         subject=f"Re: {original_dict['subject']}" if original_dict.get('subject') else "Reply",
         to_project=reply_to_project,
         from_session_id=from_session_id,
         from_project=from_project,
         parent_message_id=original_message_id,
+        metadata=reply_metadata,
     )
 
 
