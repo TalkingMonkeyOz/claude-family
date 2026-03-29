@@ -2493,13 +2493,24 @@ async def tool_list_session_facts(
     try:
         cur = conn.cursor()
 
+        # Include facts from current session AND recent sessions in same project
+        # (handles compaction creating a new session_id mid-CLI-invocation)
         cur.execute("""
             SELECT fact_id::text, fact_key, fact_value, fact_type, is_sensitive, created_at
             FROM claude.session_facts
             WHERE project_name = %s
-              AND (session_id = %s OR session_id IS NULL)
+              AND (
+                session_id = %s::uuid
+                OR session_id IS NULL
+                OR session_id IN (
+                    SELECT session_id FROM claude.sessions
+                    WHERE project_name = %s
+                      AND session_start > NOW() - INTERVAL '4 hours'
+                      AND session_end IS NULL
+                )
+              )
             ORDER BY created_at DESC
-        """, (project_name, session_id))
+        """, (project_name, session_id, project_name))
 
         facts = []
         for row in cur.fetchall():
