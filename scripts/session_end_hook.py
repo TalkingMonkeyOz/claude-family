@@ -94,6 +94,54 @@ def demote_in_progress_todos(project_name: str, conn):
         return 0
 
 
+def close_session_scoped_todos(project_name: str, conn):
+    """Cancel session-scoped todos at session end.
+
+    Session-scoped tasks (task_scope='session') are ephemeral by design and
+    should not survive past the session that created them. Any still pending
+    or in_progress are cancelled automatically here.
+
+    Returns the number of todos cancelled.
+    """
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE claude.todos t
+            SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+            FROM claude.projects p
+            WHERE t.project_id = p.project_id
+              AND p.project_name = %s
+              AND t.task_scope = 'session'
+              AND t.status IN ('pending', 'in_progress')
+              AND NOT t.is_deleted
+            RETURNING t.todo_id
+        """, (project_name,))
+        cancelled = cur.fetchall()
+        cancelled_count = len(cancelled)
+        if cancelled_count > 0:
+            logger.info(f"Auto-cancelled {cancelled_count} session-scoped todo(s) for {project_name}")
+            try:
+                cur.execute("""
+                    INSERT INTO claude.audit_log
+                    (entity_type, entity_id, action, changed_by, change_source, metadata)
+                    VALUES ('todo_session_cleanup', %s, 'session_scoped_cancel',
+                            'session_end_hook', 'session_end_hook', %s::jsonb)
+                """, (
+                    project_name,
+                    json.dumps({"count": cancelled_count,
+                                "reason": "Session-scoped todos auto-cancelled at session end"})
+                ))
+            except Exception as audit_err:
+                logger.warning(f"Failed to write audit log for session-scoped todo cleanup: {audit_err}")
+        return cancelled_count
+    except Exception as e:
+        if 'column' in str(e).lower() and 'task_scope' in str(e).lower():
+            logger.warning("task_scope column does not exist on claude.todos — skipping session-scoped cleanup")
+        else:
+            logger.error(f"Failed to close session-scoped todos: {e}")
+        return 0
+
+
 def consolidate_session_facts(project_name: str, conn, current_session_id: str = None):
     """Promote qualifying session facts to mid-tier knowledge (F130 Cognitive Memory).
 
@@ -187,6 +235,9 @@ def auto_save_session(session_id: str, project_name: str):
 
         # BPMN step: demote_to_pending - in_progress todos become pending
         demote_in_progress_todos(project_name, conn)
+
+        # Cancel session-scoped todos (ephemeral tasks that don't survive sessions)
+        close_session_scoped_todos(project_name, conn)
 
         # F156: Extract lessons from active dossiers and log to session notes
         try:

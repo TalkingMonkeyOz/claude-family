@@ -12,6 +12,16 @@
     <!--
       Full task lifecycle including session startup read-back and session boundaries.
 
+      v5 Changes (2026-03-29) — F182: Scope Classification + Completion Reconciliation:
+        - Added classify_scope gateway after sync_to_db: parses [S]/[P] prefix,
+          writes task_scope column ('session' or 'persistent') to claude.todos
+        - Replaced bridge_to_build_task with classify_scope (bridge was unimplemented)
+        - Added reconcile_todo step after mark_completed: when a build_task completes,
+          finds and closes the matching todo via content fuzzy match
+        - Session-end now checks task_scope: session-scoped tasks auto-close,
+          persistent tasks go to resume_decision as before
+        - Added end_session_closed for session-scoped auto-close path
+
       v4 Changes (2026-03-15):
         - Added session startup phase: read_tasks_from_db → inject_context
         - Added dedup_check before create_task
@@ -20,13 +30,14 @@
 
       Paths:
         1. Startup: SessionStart → ReadFromDB → InjectContext → (existing tasks?) → Resume or Create
-        2. Create: DedupCheck → (exists? reuse : create) → Sync → Bridge → Work
-        3. Work: InProgress → Work → Complete → FeatureCheck → End(Completed)
+        2. Create: DedupCheck → (exists? reuse : create) → Sync → ClassifyScope → Work
+        3. Work: InProgress → Work → Complete → ReconcileTodo → FeatureCheck → End(Completed)
         4. Block+Resolve: Work → Block → Resolve → Complete
         5. Midway update: Work → update → MidwayUpdate → Work (loop)
-        6. Session end → resume: Work → SessionEnd → Demote → Resume → InProgress → Work
-        7. Session end → abandon: Work → SessionEnd → Demote → Abandon → Archive → End(Archived)
-        8. Discipline block: No tasks → Blocked → End(Blocked)
+        6. Session end (session-scoped): Work → SessionEnd → ScopeCheck → AutoClose → End(SessionClosed)
+        7. Session end (persistent) → resume: Work → SessionEnd → ScopeCheck → Resume → InProgress → Work
+        8. Session end (persistent) → abandon: Work → SessionEnd → ScopeCheck → Abandon → Archive → End(Archived)
+        9. Discipline block: No tasks → Blocked → End(Blocked)
 
       Actors:
         [CLAUDE] = userTask (decisions, work)
@@ -105,13 +116,24 @@ If existing todo found, reuses it instead of creating duplicate.
 Increments restore_count on reuse.</bpmn:documentation>
     </bpmn:scriptTask>
 
-    <!-- Maps native tasks to claude.build_tasks when a feature is active -->
-    <bpmn:scriptTask id="bridge_to_build_task" name="[HOOK] Bridge to Build Task" scriptFormat="python">
-      <bpmn:incoming>flow_sync_bridge</bpmn:incoming>
-      <bpmn:outgoing>flow_bridge_more_tasks</bpmn:outgoing>
-      <bpmn:script>bridge_attempted = True</bpmn:script>
-      <bpmn:documentation>Maps native Claude Code task to claude.build_tasks when a feature
-is active. Called by task_sync_hook.py after inserting into claude.todos.</bpmn:documentation>
+    <!-- Parse [S]/[P] prefix from content, write task_scope to DB -->
+    <bpmn:scriptTask id="classify_scope" name="[HOOK] Classify Task Scope ([S]/[P])" scriptFormat="python">
+      <bpmn:incoming>flow_sync_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_classify_more_tasks</bpmn:outgoing>
+      <bpmn:script>
+# Parse prefix from content: [S] = session, [P] = persistent
+if content.startswith('[S]') or content.startswith('[s]'):
+    task_scope = 'session'
+elif content.startswith('[P]') or content.startswith('[p]'):
+    task_scope = 'persistent'
+else:
+    task_scope = 'session'  # default: session-scoped (safe — ephemeral)
+      </bpmn:script>
+      <bpmn:documentation>todo_sync_hook.py parses the [S]/[P] prefix from task content.
+[S] = session-scoped (dies when session ends) — reminders, coordination, research steps.
+[P] = persistent (survives sessions) — bugs, features, ideas, real work items.
+Default is 'session' if no prefix — safe default, ephemeral.
+Prefix is stripped from stored content. task_scope column written to claude.todos.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Multi-task support: loop back to create_task until all tasks created -->
@@ -168,18 +190,29 @@ is active. Called by task_sync_hook.py after inserting into claude.todos.</bpmn:
     <!-- PATH: COMPLETE                                                      -->
     <!-- ================================================================== -->
 
-    <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Completed" scriptFormat="python">
+    <bpmn:scriptTask id="mark_completed" name="[HOOK] Mark Completed (TaskCompleted)" scriptFormat="python">
       <bpmn:incoming>flow_outcome_complete</bpmn:incoming>
       <bpmn:incoming>flow_resolve_complete</bpmn:incoming>
-      <bpmn:outgoing>flow_completed_feature_check</bpmn:outgoing>
+      <bpmn:outgoing>flow_completed_reconcile</bpmn:outgoing>
       <bpmn:script>status = "completed"</bpmn:script>
-      <bpmn:documentation>Claude Code deletes the task JSON file from disk on completion.
-task_sync_hook.py preserves the completed status in claude.todos DB.
-Next session startup reads completed history from DB.</bpmn:documentation>
+      <bpmn:documentation>Uses TaskCompleted hook (reliable — fires on every completion).
+Claude Code deletes the task JSON file from disk on completion.
+task_completed_hook.py preserves the completed status in claude.todos DB.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- v5: Reconcile — if a build_task was completed, close matching todo -->
+    <bpmn:scriptTask id="reconcile_todo" name="[HOOK] Reconcile Todo with Build Task" scriptFormat="python">
+      <bpmn:incoming>flow_completed_reconcile</bpmn:incoming>
+      <bpmn:outgoing>flow_reconcile_feature_check</bpmn:outgoing>
+      <bpmn:script>reconciled = True</bpmn:script>
+      <bpmn:documentation>When complete_work(BT123) finishes a build_task, the task_completed_hook
+finds the matching todo in claude.todos by content fuzzy match and marks it
+completed too. This prevents "Add version history" staying open after F180/BT529
+was completed. Uses same similarity_ratio function (75% threshold) as dedup.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <bpmn:scriptTask id="check_feature_completion" name="[DB] Check Feature Completion" scriptFormat="python">
-      <bpmn:incoming>flow_completed_feature_check</bpmn:incoming>
+      <bpmn:incoming>flow_reconcile_feature_check</bpmn:incoming>
       <bpmn:outgoing>flow_completed_end</bpmn:outgoing>
       <bpmn:script>feature_completion_checked = True</bpmn:script>
     </bpmn:scriptTask>
@@ -201,12 +234,37 @@ Next session startup reads completed history from DB.</bpmn:documentation>
     <!-- PATH: SESSION END → DEMOTE → RESUME/ARCHIVE                         -->
     <!-- ================================================================== -->
 
-    <bpmn:scriptTask id="demote_to_pending" name="[HOOK] Demote to Pending" scriptFormat="python">
+    <!-- v5: Check task_scope before deciding what to do at session end -->
+    <bpmn:exclusiveGateway id="scope_check_gw" name="Task Scope?" default="flow_scope_session">
       <bpmn:incoming>flow_outcome_session_end</bpmn:incoming>
+      <bpmn:outgoing>flow_scope_session</bpmn:outgoing>
+      <bpmn:outgoing>flow_scope_persistent</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Session-scoped tasks: auto-close, no resume decision needed -->
+    <bpmn:scriptTask id="auto_close_session_task" name="[HOOK] Auto-Close Session Task" scriptFormat="python">
+      <bpmn:incoming>flow_scope_session</bpmn:incoming>
+      <bpmn:outgoing>flow_session_closed_end</bpmn:outgoing>
+      <bpmn:script>status = "cancelled"
+task_scope = "session"</bpmn:script>
+      <bpmn:documentation>session_end_hook.py auto-closes all todos where task_scope='session'.
+These are ephemeral tasks (reminders, research steps, coordination) that
+don't need to survive the session. Cancelled, not archived — they were
+never real work items.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_session_closed" name="Session Task Auto-Closed">
+      <bpmn:incoming>flow_session_closed_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Persistent tasks: demote and ask about resumption (unchanged from v4) -->
+    <bpmn:scriptTask id="demote_to_pending" name="[HOOK] Demote to Pending" scriptFormat="python">
+      <bpmn:incoming>flow_scope_persistent</bpmn:incoming>
       <bpmn:outgoing>flow_demote_resume</bpmn:outgoing>
       <bpmn:script>status = "pending"</bpmn:script>
-      <bpmn:documentation>No time-based auto-archive. Tasks persist indefinitely until user
-explicitly completes or archives them. Holiday-safe.</bpmn:documentation>
+      <bpmn:documentation>Persistent tasks survive sessions. No time-based auto-archive.
+Tasks persist indefinitely until user explicitly completes or archives.
+Holiday-safe.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Next session: Claude decides whether to resume or abandon -->
@@ -264,10 +322,10 @@ when no tasks have been created in the current session.</bpmn:documentation>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_no_existing" sourceRef="existing_tasks_gw" targetRef="create_task"/>
 
-    <!-- Creation phase -->
+    <!-- Creation phase (v5: sync → classify_scope → more_tasks) -->
     <bpmn:sequenceFlow id="flow_create_sync" sourceRef="create_task" targetRef="sync_to_db"/>
-    <bpmn:sequenceFlow id="flow_sync_bridge" sourceRef="sync_to_db" targetRef="bridge_to_build_task"/>
-    <bpmn:sequenceFlow id="flow_bridge_more_tasks" sourceRef="bridge_to_build_task" targetRef="has_more_tasks_gw"/>
+    <bpmn:sequenceFlow id="flow_sync_classify" sourceRef="sync_to_db" targetRef="classify_scope"/>
+    <bpmn:sequenceFlow id="flow_classify_more_tasks" sourceRef="classify_scope" targetRef="has_more_tasks_gw"/>
 
     <!-- Multi-task loop -->
     <bpmn:sequenceFlow id="flow_more_tasks_loop" sourceRef="has_more_tasks_gw" targetRef="create_task">
@@ -285,9 +343,10 @@ when no tasks have been created in the current session.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_progress_work" sourceRef="mark_in_progress" targetRef="work_on_task"/>
     <bpmn:sequenceFlow id="flow_work_outcome" sourceRef="work_on_task" targetRef="outcome_gw"/>
 
-    <!-- Outcome: complete (default) -->
+    <!-- Outcome: complete (default) — v5: includes reconciliation step -->
     <bpmn:sequenceFlow id="flow_outcome_complete" sourceRef="outcome_gw" targetRef="mark_completed"/>
-    <bpmn:sequenceFlow id="flow_completed_feature_check" sourceRef="mark_completed" targetRef="check_feature_completion"/>
+    <bpmn:sequenceFlow id="flow_completed_reconcile" sourceRef="mark_completed" targetRef="reconcile_todo"/>
+    <bpmn:sequenceFlow id="flow_reconcile_feature_check" sourceRef="reconcile_todo" targetRef="check_feature_completion"/>
     <bpmn:sequenceFlow id="flow_completed_end" sourceRef="check_feature_completion" targetRef="end_completed"/>
 
     <!-- Outcome: blocked -->
@@ -302,12 +361,19 @@ when no tasks have been created in the current session.</bpmn:documentation>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_midway_back" sourceRef="midway_status_update" targetRef="work_on_task"/>
 
-    <!-- Outcome: session end (no staleness check — holiday-safe) -->
-    <bpmn:sequenceFlow id="flow_outcome_session_end" sourceRef="outcome_gw" targetRef="demote_to_pending">
+    <!-- Outcome: session end — v5: check scope first -->
+    <bpmn:sequenceFlow id="flow_outcome_session_end" sourceRef="outcome_gw" targetRef="scope_check_gw">
       <bpmn:conditionExpression>action == "session_end"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
 
-    <!-- Session boundary: demote → resume decision (no staleness gate) -->
+    <!-- v5: Scope check routes session tasks to auto-close, persistent to resume -->
+    <bpmn:sequenceFlow id="flow_scope_session" sourceRef="scope_check_gw" targetRef="auto_close_session_task"/>
+    <bpmn:sequenceFlow id="flow_scope_persistent" sourceRef="scope_check_gw" targetRef="demote_to_pending">
+      <bpmn:conditionExpression>task_scope == "persistent"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_session_closed_end" sourceRef="auto_close_session_task" targetRef="end_session_closed"/>
+
+    <!-- Session boundary: persistent tasks demote → resume decision -->
     <bpmn:sequenceFlow id="flow_demote_resume" sourceRef="demote_to_pending" targetRef="resume_decision"/>
 
     <!-- Resume decision -->

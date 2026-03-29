@@ -1,6 +1,7 @@
 STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
 1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. NO TOOL CALLS until all tasks exist.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
+   SCOPE: Prefix every task with [S] (session — dies at session end: reminders, research, coordination) or [P] (persistent — survives sessions: bugs, features, ideas, real work). Default [S] if unsure.
 2. Verify before claiming - read files, query DB, do research. Never guess.
 3. STORAGE: 5 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
    - **Notepad** (store_session_fact) — credentials, decisions, findings. This session only.

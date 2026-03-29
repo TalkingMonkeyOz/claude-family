@@ -22,6 +22,7 @@ Date: 2025-12-31
 
 import json
 import os
+import re
 import sys
 import logging
 from datetime import datetime
@@ -80,6 +81,25 @@ def find_matching_todo(content: str, existing_todos: list, threshold: float = 0.
     return best_match
 
 
+def parse_scope_prefix(content: str) -> tuple:
+    """Parse [S] or [P] prefix from task content.
+
+    Returns (scope, cleaned_content) where:
+      - scope: 'session' (default) or 'persistent'
+      - cleaned_content: content with prefix stripped
+    """
+    match = re.match(r'^\[([SsPp])\]\s*', content)
+    if match:
+        prefix = match.group(1).upper()
+        cleaned = content[match.end():]
+        if not cleaned.strip():
+            # Empty content after stripping — keep original, default scope
+            return ('session', content)
+        scope = 'persistent' if prefix == 'P' else 'session'
+        return (scope, cleaned)
+    return ('session', content)
+
+
 def sync_todos_to_database(todos: list, project_id: str, session_id: str):
     """
     Sync todos to claude.todos table.
@@ -109,7 +129,8 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                 active_form,
                 status,
                 priority,
-                display_order
+                display_order,
+                task_scope
             FROM claude.todos
             WHERE project_id = %s::uuid
               AND is_deleted = false
@@ -129,6 +150,8 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
         # Process each todo from TodoWrite
         for idx, todo in enumerate(todos):
             content = todo.get('content', '')
+            task_scope, content = parse_scope_prefix(content)
+            logger.debug(f"Task scope: {task_scope} for: {content[:50]}")
             active_form = todo.get('activeForm', content)
             status = todo.get('status', 'pending')
 
@@ -155,22 +178,24 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                             SET status = %s,
                                 active_form = %s,
                                 display_order = %s,
+                                task_scope = %s,
                                 completed_at = NOW(),
                                 completed_session_id = %s::uuid,
                                 updated_at = NOW()
                             WHERE todo_id = %s::uuid
-                        """, (status, active_form, idx, session_id, todo_id))
+                        """, (status, active_form, idx, task_scope, session_id, todo_id))
                     else:
                         cur.execute("""
                             UPDATE claude.todos
                             SET status = %s,
                                 active_form = %s,
                                 display_order = %s,
+                                task_scope = %s,
                                 completed_at = NOW(),
                                 completed_session_id = NULL,
                                 updated_at = NOW()
                             WHERE todo_id = %s::uuid
-                        """, (status, active_form, idx, todo_id))
+                        """, (status, active_form, idx, task_scope, todo_id))
                 elif status != 'completed' and old_status == 'completed':
                     # Transitioning FROM completed - clear completion fields
                     cur.execute("""
@@ -178,11 +203,12 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                         SET status = %s,
                             active_form = %s,
                             display_order = %s,
+                            task_scope = %s,
                             completed_at = NULL,
                             completed_session_id = NULL,
                             updated_at = NOW()
                         WHERE todo_id = %s::uuid
-                    """, (status, active_form, idx, todo_id))
+                    """, (status, active_form, idx, task_scope, todo_id))
                 else:
                     # No status transition - just update other fields
                     cur.execute("""
@@ -190,9 +216,10 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                         SET status = %s,
                             active_form = %s,
                             display_order = %s,
+                            task_scope = %s,
                             updated_at = NOW()
                         WHERE todo_id = %s::uuid
-                    """, (status, active_form, idx, todo_id))
+                    """, (status, active_form, idx, task_scope, todo_id))
 
                 logger.debug(f"Updated todo {todo_id}: {content[:50]}... (status={status})")
 
@@ -207,10 +234,12 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                             active_form,
                             status,
                             priority,
+                            task_scope,
                             display_order
                         ) VALUES (
                             %s::uuid,
                             %s::uuid,
+                            %s,
                             %s,
                             %s,
                             %s,
@@ -225,6 +254,7 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                         active_form,
                         status,
                         3,  # default priority
+                        task_scope,
                         idx
                     ))
                 else:
@@ -236,10 +266,12 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                             active_form,
                             status,
                             priority,
+                            task_scope,
                             display_order
                         ) VALUES (
                             %s::uuid,
                             NULL,
+                            %s,
                             %s,
                             %s,
                             %s,
@@ -253,6 +285,7 @@ def sync_todos_to_database(todos: list, project_id: str, session_id: str):
                         active_form,
                         status,
                         3,  # default priority
+                        task_scope,
                         idx
                     ))
 
