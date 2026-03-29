@@ -7524,7 +7524,7 @@ def recall_entities(
 
 
 @mcp.tool()
-def index_codebase(project: str = "", project_path: str = "", force_full: bool = False) -> dict:
+def index_codebase(project: str = "", project_path: str = "", force_full: bool = False, dry_run: bool = False) -> dict:
     """Index a project's codebase into the Code Knowledge Graph.
 
     Parses source files using tree-sitter, extracts symbols (functions, classes,
@@ -7540,6 +7540,8 @@ def index_codebase(project: str = "", project_path: str = "", force_full: bool =
         project: Project name. Defaults to current directory.
         project_path: Path to project root. Auto-detected from workspaces if empty.
         force_full: Force full re-index (ignore file hashes).
+        dry_run: Report what would happen without writing to DB. Returns per-file
+                 diagnostics: skip reason, parse results, error details.
     """
     import sys
     scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'scripts')
@@ -7563,7 +7565,7 @@ def index_codebase(project: str = "", project_path: str = "", force_full: bool =
                 project_path = os.getcwd()
         conn.close()
 
-        result = index_project(proj_name, project_path, force_full=force_full)
+        result = index_project(proj_name, project_path, force_full=force_full, dry_run=dry_run)
         return {"success": True, **result}
     except Exception as e:
         return {"success": False, "error": str(e)}

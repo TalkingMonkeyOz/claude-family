@@ -1097,18 +1097,64 @@ def get_project_id(conn, project_name: str) -> Optional[str]:
         return str(row["project_id"]) if row else None
 
 
+def ensure_hash_table(conn) -> None:
+    """Create claude.code_file_hashes if it doesn't exist, and backfill from symbols."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS claude.code_file_hashes (
+                project_id UUID NOT NULL REFERENCES claude.projects(project_id),
+                file_path TEXT NOT NULL,
+                file_hash VARCHAR(64) NOT NULL,
+                symbols_count INTEGER DEFAULT 0,
+                indexed_at TIMESTAMPTZ DEFAULT now(),
+                PRIMARY KEY (project_id, file_path)
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_file_hashes_project
+                ON claude.code_file_hashes(project_id)
+        """)
+        # Backfill from existing symbols (idempotent — ON CONFLICT DO NOTHING)
+        cur.execute("""
+            INSERT INTO claude.code_file_hashes (project_id, file_path, file_hash, symbols_count)
+            SELECT project_id, file_path, file_hash, COUNT(*) as symbols_count
+            FROM claude.code_symbols
+            WHERE file_hash IS NOT NULL
+            GROUP BY project_id, file_path, file_hash
+            ON CONFLICT (project_id, file_path) DO NOTHING
+        """)
+        conn.commit()
+    logger.info("Hash table ensured (claude.code_file_hashes)")
+
+
 def get_cached_hashes(conn, project_id: str) -> dict[str, str]:
-    """Return {file_path: file_hash} for all symbols in this project."""
+    """Return {file_path: file_hash} from the dedicated hash tracking table."""
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT DISTINCT file_path, file_hash
-            FROM claude.code_symbols
+            SELECT file_path, file_hash
+            FROM claude.code_file_hashes
             WHERE project_id = %s
             """,
             (project_id,),
         )
         return {row["file_path"]: row["file_hash"] for row in cur.fetchall()}
+
+
+def upsert_file_hash(conn, project_id: str, file_path: str, file_hash: str, symbols_count: int) -> None:
+    """Record that a file was successfully processed, even if it yielded 0 symbols."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO claude.code_file_hashes (project_id, file_path, file_hash, symbols_count, indexed_at)
+            VALUES (%s, %s, %s, %s, now())
+            ON CONFLICT (project_id, file_path)
+            DO UPDATE SET file_hash = EXCLUDED.file_hash,
+                          symbols_count = EXCLUDED.symbols_count,
+                          indexed_at = now()
+            """,
+            (project_id, file_path, file_hash, symbols_count),
+        )
 
 
 def delete_symbols_for_files(conn, file_paths: list[str]) -> int:
@@ -1344,6 +1390,7 @@ def index_project(
     project_name: str,
     project_path: str,
     force_full: bool = False,
+    dry_run: bool = False,
 ) -> dict:
     """
     Index a project's codebase into claude.code_symbols and claude.code_references.
@@ -1352,10 +1399,12 @@ def index_project(
         project_name: Registered name in claude.projects.
         project_path: Filesystem root to scan.
         force_full:   When True, re-index every file regardless of hash.
+        dry_run:      When True, report what would happen without writing to DB.
 
     Returns:
         Summary dict with keys: files_scanned, files_indexed, symbols_extracted,
         refs_extracted, refs_resolved, symbols_embedded, stale_deleted.
+        In dry_run mode, adds: files_skipped, files_errored, file_details[].
     """
     root = Path(project_path)
     if not root.exists():
@@ -1365,6 +1414,9 @@ def index_project(
     voyage_key = get_voyage_key()
 
     try:
+        # Ensure hash tracking table exists (idempotent)
+        ensure_hash_table(conn)
+
         project_id = get_project_id(conn, project_name)
         if project_id is None:
             raise ValueError(
@@ -1372,7 +1424,9 @@ def index_project(
                 "Register it first."
             )
 
-        logger.info("Indexing project '%s' (id=%s) at %s", project_name, project_id, root)
+        logger.info("Indexing project '%s' (id=%s) at %s%s",
+                     project_name, project_id, root,
+                     " [DRY RUN]" if dry_run else "")
 
         # Discover all source files
         all_files = discover_files(root)
@@ -1385,6 +1439,8 @@ def index_project(
         stats = {
             "files_scanned": len(all_files),
             "files_indexed": 0,
+            "files_skipped": 0,
+            "files_errored": 0,
             "symbols_extracted": 0,
             "refs_extracted": 0,
             "refs_resolved": 0,
@@ -1392,16 +1448,43 @@ def index_project(
             "stale_deleted": 0,
         }
 
+        # Dry run collects per-file diagnostics
+        file_details: list[dict] = [] if dry_run else []
+
         for file_path in all_files:
             str_fp = str(file_path)
             try:
                 new_hash = compute_sha256(file_path)
             except OSError as exc:
                 logger.warning("Cannot read %s: %s", str_fp, exc)
+                stats["files_errored"] += 1
+                if dry_run:
+                    file_details.append({"file": str_fp, "status": "read_error", "error": str(exc)})
                 continue
 
             if not force_full and cached_hashes.get(str_fp) == new_hash:
                 logger.debug("Skip (unchanged): %s", file_path.name)
+                stats["files_skipped"] += 1
+                if dry_run:
+                    file_details.append({"file": str_fp, "status": "skip_unchanged"})
+                continue
+
+            # Dry run: parse but don't write
+            if dry_run:
+                try:
+                    file_symbols, file_refs = parse_file(file_path, project_id, new_hash)
+                    file_details.append({
+                        "file": str_fp,
+                        "status": "would_index",
+                        "symbols": len(file_symbols),
+                        "refs": len(file_refs),
+                    })
+                    stats["files_indexed"] += 1
+                    stats["symbols_extracted"] += len(file_symbols)
+                    stats["refs_extracted"] += len(file_refs)
+                except Exception as exc:
+                    file_details.append({"file": str_fp, "status": "parse_error", "error": str(exc)})
+                    stats["files_errored"] += 1
                 continue
 
             logger.info("Indexing: %s", str_fp)
@@ -1413,15 +1496,19 @@ def index_project(
                 file_symbols, file_refs = parse_file(file_path, project_id, new_hash)
             except Exception as exc:
                 logger.warning("Parse failed for %s: %s", str_fp, exc)
+                stats["files_errored"] += 1
                 continue
 
             try:
                 insert_symbols(conn, file_symbols)
                 insert_refs(conn, file_refs)
+                # Record hash AFTER successful parse — even for 0-symbol files
+                upsert_file_hash(conn, project_id, str_fp, new_hash, len(file_symbols))
                 conn.commit()
             except Exception as exc:
                 conn.rollback()
                 logger.warning("DB insert failed for %s: %s", str_fp, exc)
+                stats["files_errored"] += 1
                 continue
 
             stats["files_indexed"] += 1
@@ -1432,6 +1519,11 @@ def index_project(
                 len(file_symbols), len(file_refs),
             )
 
+        if dry_run:
+            stats["file_details"] = file_details
+            logger.info("Dry run complete: %s", {k: v for k, v in stats.items() if k != "file_details"})
+            return stats
+
         # Cross-file reference resolution
         logger.info("Resolving cross-file references...")
         resolved = resolve_cross_file_refs(conn, project_id)
@@ -1439,8 +1531,19 @@ def index_project(
         stats["refs_resolved"] = resolved
         logger.info("Resolved %d cross-file references", resolved)
 
-        # Stale cleanup
+        # Stale cleanup (also clean hash table)
         stale_deleted = cleanup_stale_symbols(conn, project_id, live_paths)
+        # Also remove stale hashes for deleted files
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM claude.code_file_hashes
+                WHERE project_id = %s AND file_path NOT IN (
+                    SELECT unnest(%s::text[])
+                )
+                """,
+                (project_id, list(live_paths)),
+            )
         if stale_deleted:
             conn.commit()
         stats["stale_deleted"] = stale_deleted
