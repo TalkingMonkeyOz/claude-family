@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/skill-lifecycle"
+    id="Definitions_SkillLifecycle">
+
+  <bpmn:process id="skill_lifecycle" name="Skill Lifecycle Management" isExecutable="true">
+
+    <!--
+      Models the full lifecycle of creating or updating a skill.
+
+      Two paths via exclusive gateway:
+        CREATE: scope → permission check → insert skill → version 1 → deploy
+        UPDATE: lookup → snapshot version → increment version → update content → deploy
+
+      Common tail: validate deployment → end
+
+      Actors:
+        [MCP]  = scriptTask (tool/orchestration logic)
+        [DB]   = scriptTask (database operations)
+        [FILE] = scriptTask (filesystem deployment)
+    -->
+
+    <bpmn:startEvent id="start" name="Skill Change Requested">
+      <bpmn:outgoing>flow_start_to_action_gw</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Gateway: create or update? -->
+    <bpmn:exclusiveGateway id="action_gw" name="Create or Update?" default="flow_action_update">
+      <bpmn:incoming>flow_start_to_action_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_action_create</bpmn:outgoing>
+      <bpmn:outgoing>flow_action_update</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ==================== CREATE PATH ==================== -->
+
+    <bpmn:scriptTask id="determine_scope" name="[MCP] Determine Scope" scriptFormat="python">
+      <bpmn:incoming>flow_action_create</bpmn:incoming>
+      <bpmn:outgoing>flow_scope_to_permission</bpmn:outgoing>
+      <bpmn:script>scope_determined = scope in ('global', 'project', 'command', 'agent')</bpmn:script>
+      <bpmn:documentation>Determine the skill scope from the request:
+- global: available to all projects (restricted creation)
+- project: available to a specific project
+- command: slash command skill
+- agent: agent-specific skill
+Sets scope_determined = True if valid scope provided.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="permission_check" name="[MCP] Permission Check" scriptFormat="python">
+      <bpmn:incoming>flow_scope_to_permission</bpmn:incoming>
+      <bpmn:outgoing>flow_permission_to_gw</bpmn:outgoing>
+      <bpmn:script>permission_granted = (scope != 'global') or (requesting_project == 'claude-family')</bpmn:script>
+      <bpmn:documentation>Enforce permission rules:
+- Global skills can only be created by the claude-family project.
+- Project/command/agent scoped skills can be created by any project.
+Sets permission_granted = True/False.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="permission_gw" name="Permission Granted?" default="flow_permission_denied">
+      <bpmn:incoming>flow_permission_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_permission_granted</bpmn:outgoing>
+      <bpmn:outgoing>flow_permission_denied</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_permission_denied" name="Permission Denied">
+      <bpmn:incoming>flow_permission_denied</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="insert_skill" name="[DB] Insert Skill Record" scriptFormat="python">
+      <bpmn:incoming>flow_permission_granted</bpmn:incoming>
+      <bpmn:outgoing>flow_insert_to_version</bpmn:outgoing>
+      <bpmn:script>skill_inserted = True</bpmn:script>
+      <bpmn:documentation>INSERT INTO claude.skills (name, scope, content, project_id, created_at, updated_at)
+VALUES (skill_name, scope, content, project_id, NOW(), NOW()).
+Returns skill_id for the new record.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_initial_version" name="[DB] Create Version 1" scriptFormat="python">
+      <bpmn:incoming>flow_insert_to_version</bpmn:incoming>
+      <bpmn:outgoing>flow_create_version_to_deploy</bpmn:outgoing>
+      <bpmn:script>version_created = True; version_number = 1</bpmn:script>
+      <bpmn:documentation>INSERT INTO claude.skills_versions (skill_id, version_number, content, changed_by, change_reason)
+VALUES (skill_id, 1, content, session_id, 'Initial creation').
+Establishes version 1 as the baseline.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- ==================== UPDATE PATH ==================== -->
+
+    <bpmn:scriptTask id="lookup_skill" name="[DB] Lookup Skill" scriptFormat="python">
+      <bpmn:incoming>flow_action_update</bpmn:incoming>
+      <bpmn:outgoing>flow_lookup_to_found_gw</bpmn:outgoing>
+      <bpmn:script>skill_found = skill_id is not None</bpmn:script>
+      <bpmn:documentation>SELECT * FROM claude.skills WHERE name = skill_name AND scope = scope.
+If multiple matches, disambiguate by project_id.
+Sets skill_found = True/False and loads current content + version_number.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="found_gw" name="Skill Found?" default="flow_not_found">
+      <bpmn:incoming>flow_lookup_to_found_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_found</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_found</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_not_found" name="Skill Not Found">
+      <bpmn:incoming>flow_not_found</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="snapshot_version" name="[DB] Snapshot Current Version" scriptFormat="python">
+      <bpmn:incoming>flow_found</bpmn:incoming>
+      <bpmn:outgoing>flow_snapshot_to_increment</bpmn:outgoing>
+      <bpmn:script>version_snapshot_created = True</bpmn:script>
+      <bpmn:documentation>INSERT INTO claude.skills_versions (skill_id, version_number, content, changed_by, change_reason)
+VALUES (skill_id, current_version + 1, new_content, session_id, change_reason).
+Preserves the new content as a versioned snapshot.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="increment_version" name="[DB] Increment Version Number" scriptFormat="python">
+      <bpmn:incoming>flow_snapshot_to_increment</bpmn:incoming>
+      <bpmn:outgoing>flow_increment_to_update</bpmn:outgoing>
+      <bpmn:script>version_incremented = True</bpmn:script>
+      <bpmn:documentation>UPDATE claude.skills SET version_number = version_number + 1
+WHERE skill_id = skill_id.
+Bumps the main record's version counter.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="update_content" name="[DB] Update Skill Content" scriptFormat="python">
+      <bpmn:incoming>flow_increment_to_update</bpmn:incoming>
+      <bpmn:outgoing>flow_update_to_deploy</bpmn:outgoing>
+      <bpmn:script>content_updated = True</bpmn:script>
+      <bpmn:documentation>UPDATE claude.skills SET content = new_content, updated_at = NOW()
+WHERE skill_id = skill_id.
+Writes the new content to the main skills table.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- ==================== COMMON TAIL ==================== -->
+
+    <!-- Merge point before deploy -->
+    <bpmn:exclusiveGateway id="merge_to_deploy" name="Merge Before Deploy">
+      <bpmn:incoming>flow_create_version_to_deploy</bpmn:incoming>
+      <bpmn:incoming>flow_update_to_deploy</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_deploy_file</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="deploy_file" name="[FILE] Deploy to Filesystem" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_deploy_file</bpmn:incoming>
+      <bpmn:outgoing>flow_deploy_to_validate</bpmn:outgoing>
+      <bpmn:script>file_deployed = True</bpmn:script>
+      <bpmn:documentation>Write skill content to the correct filesystem location:
+- scope=project/global → .claude/skills/{name}/SKILL.md
+- scope=command → .claude/commands/{name}.md
+- scope=agent → .claude/agents/{name}.md
+Creates directories if they don't exist.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="validate_deployment" name="[FILE] Validate Deployment" scriptFormat="python">
+      <bpmn:incoming>flow_deploy_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_end</bpmn:outgoing>
+      <bpmn:script>deployment_valid = file_deployed == True</bpmn:script>
+      <bpmn:documentation>Verify the deployed file:
+1. File exists at expected path
+2. File content matches what was written
+3. File is readable
+Sets deployment_valid = True/False.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_success" name="Skill Deployed Successfully">
+      <bpmn:incoming>flow_validate_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ==================== SEQUENCE FLOWS ==================== -->
+
+    <!-- Start to action gateway -->
+    <bpmn:sequenceFlow id="flow_start_to_action_gw" sourceRef="start" targetRef="action_gw"/>
+
+    <!-- Action gateway branches -->
+    <bpmn:sequenceFlow id="flow_action_create" sourceRef="action_gw" targetRef="determine_scope">
+      <bpmn:conditionExpression>action == 'create'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_action_update" sourceRef="action_gw" targetRef="lookup_skill"/>
+
+    <!-- Create path flows -->
+    <bpmn:sequenceFlow id="flow_scope_to_permission" sourceRef="determine_scope" targetRef="permission_check"/>
+    <bpmn:sequenceFlow id="flow_permission_to_gw" sourceRef="permission_check" targetRef="permission_gw"/>
+    <bpmn:sequenceFlow id="flow_permission_granted" sourceRef="permission_gw" targetRef="insert_skill">
+      <bpmn:conditionExpression>permission_granted == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_permission_denied" sourceRef="permission_gw" targetRef="end_permission_denied"/>
+    <bpmn:sequenceFlow id="flow_insert_to_version" sourceRef="insert_skill" targetRef="create_initial_version"/>
+    <bpmn:sequenceFlow id="flow_create_version_to_deploy" sourceRef="create_initial_version" targetRef="merge_to_deploy"/>
+
+    <!-- Update path flows -->
+    <bpmn:sequenceFlow id="flow_lookup_to_found_gw" sourceRef="lookup_skill" targetRef="found_gw"/>
+    <bpmn:sequenceFlow id="flow_found" sourceRef="found_gw" targetRef="snapshot_version">
+      <bpmn:conditionExpression>skill_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_found" sourceRef="found_gw" targetRef="end_not_found"/>
+    <bpmn:sequenceFlow id="flow_snapshot_to_increment" sourceRef="snapshot_version" targetRef="increment_version"/>
+    <bpmn:sequenceFlow id="flow_increment_to_update" sourceRef="increment_version" targetRef="update_content"/>
+    <bpmn:sequenceFlow id="flow_update_to_deploy" sourceRef="update_content" targetRef="merge_to_deploy"/>
+
+    <!-- Common tail flows -->
+    <bpmn:sequenceFlow id="flow_merge_to_deploy_file" sourceRef="merge_to_deploy" targetRef="deploy_file"/>
+    <bpmn:sequenceFlow id="flow_deploy_to_validate" sourceRef="deploy_file" targetRef="validate_deployment"/>
+    <bpmn:sequenceFlow id="flow_validate_to_end" sourceRef="validate_deployment" targetRef="end_success"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="skill_lifecycle">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

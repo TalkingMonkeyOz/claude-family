@@ -566,31 +566,19 @@ def _format_resume(data: dict) -> dict:
             lines.append(row(f"  - {wf['component']} ({wf['file_count']} files){pin}"))
         lines.append(div)
 
-    # Prior tasks section (display-only, NOT restored as TaskCreate)
-    # Claude Code natively persists tasks in ~/.claude/tasks/.
-    # DB todo restoration was creating zombie tasks carried forward indefinitely.
-    in_prog = todos.get("in_progress", [])
-    pending = todos.get("pending", [])
-    stale = todos.get("stale", [])
-    task_count = len(in_prog) + len(pending)
-    if task_count > 0:
-        lines.append(row(f"PRIOR SESSION TASKS ({task_count}) - for reference only:"))
-        if in_prog:
-            lines.append(row("  Were in progress:"))
-            for t in in_prog:
-                lines.append(row(f"    > {t['content'][:w - 8]}"))
-        if pending:
-            lines.append(row("  Were pending:"))
-            for t in pending:
-                lines.append(row(f"    - {t['content'][:w - 10]}"))
-    else:
-        lines.append(row("PRIOR SESSION TASKS: (none)"))
-
-    if stale:
-        lines.append(row(f"  Stale ({len(stale)}):"))
-        for t in stale:
-            age = t.get('age_days', '?')
-            lines.append(row(f"    ~ {t['content'][:w - 16]} ({age}d old)"))
+    # Native task count from disk (~/.claude/tasks/{list_id}/)
+    # Claude Code natively persists tasks as JSON files. Show count so
+    # user knows their backlog size. Use /tasks to see details.
+    native_task_count = 0
+    try:
+        list_id = os.environ.get("CLAUDE_CODE_TASK_LIST_ID", "")
+        if list_id:
+            tasks_dir = Path.home() / ".claude" / "tasks" / list_id
+            if tasks_dir.exists():
+                native_task_count = len(list(tasks_dir.glob("*.json")))
+    except OSError:
+        pass
+    lines.append(row(f"TASK BACKLOG: {native_task_count} pending (use /tasks to view)"))
     lines.append(div)
 
     # Features section — detect streams for build board view
@@ -3982,12 +3970,30 @@ def update_config(
         cur = conn.cursor()
 
         # Step 1: Find the component (or create it)
-        cur.execute(
-            f"SELECT {cfg['id_col']}::text, content, scope FROM {cfg['table']} "
-            f"WHERE LOWER({cfg['name_col']}) = LOWER(%s) AND is_active = true",
-            (component_name,),
-        )
-        row = cur.fetchone()
+        # Scope-aware lookup: if scope provided, filter by it; otherwise check for ambiguity
+        if scope:
+            cur.execute(
+                f"SELECT {cfg['id_col']}::text, content, scope FROM {cfg['table']} "
+                f"WHERE LOWER({cfg['name_col']}) = LOWER(%s) AND scope = %s AND is_active = true",
+                (component_name, scope),
+            )
+            row = cur.fetchone()
+        else:
+            cur.execute(
+                f"SELECT {cfg['id_col']}::text, content, scope FROM {cfg['table']} "
+                f"WHERE LOWER({cfg['name_col']}) = LOWER(%s) AND is_active = true",
+                (component_name,),
+            )
+            rows = cur.fetchall()
+            if len(rows) > 1:
+                scopes = [r['scope'] for r in rows]
+                return {
+                    "success": False,
+                    "error": f"Ambiguous: '{component_name}' exists in multiple scopes: {scopes}. "
+                             f"Specify scope parameter to disambiguate.",
+                    "matching_scopes": scopes,
+                }
+            row = rows[0] if rows else None
         is_create = row is None
 
         if is_create:
@@ -4052,12 +4058,12 @@ def update_config(
                 (component_id, next_version, old_content, change_reason or "Updated via update_config"),
             )
 
-            # Update content
+            # Update content + version
             final_content = content if mode == "replace" else (old_content + "\n" + content)
             cur.execute(
-                f"UPDATE {cfg['table']} SET content = %s, updated_at = NOW() "
+                f"UPDATE {cfg['table']} SET content = %s, version = %s, updated_at = NOW() "
                 f"WHERE {cfg['id_col']} = %s::uuid",
-                (final_content, component_id),
+                (final_content, next_version, component_id),
             )
             content = final_content  # Use merged content for file deploy
 

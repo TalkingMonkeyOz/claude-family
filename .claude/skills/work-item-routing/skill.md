@@ -17,19 +17,19 @@ skill-inheritance:
 # Work Item Routing Skill
 
 **Status**: Active
-**Last Updated**: 2026-01-08
 
 ---
 
 ## Overview
 
-This skill provides guidance for creating and routing work items to the correct tables: feedback, features, or build_tasks.
+Route work items to the correct tables: feedback, features, or build_tasks.
+
+**Detailed reference**: See [reference.md](./reference.md) for SQL examples and detailed field descriptions.
 
 ---
 
 ## When to Use
 
-Invoke this skill when:
 - User reports a bug or issue
 - User requests a new feature
 - Planning feature implementation
@@ -38,23 +38,19 @@ Invoke this skill when:
 
 ---
 
-## Quick Reference
-
-### Work Item Hierarchy
+## Work Item Hierarchy
 
 ```
 claude.feedback          (Ideas, bugs, questions, changes)
-    ↓
+    ->
 claude.features         (Planned features linked to feedback)
-    ↓
+    ->
 claude.build_tasks      (Implementation tasks for features)
 ```
 
 ---
 
-## Decision Tree
-
-### I have...
+## Routing Decision Table
 
 | User Says | Table | Type |
 |-----------|-------|------|
@@ -67,157 +63,38 @@ claude.build_tasks      (Implementation tasks for features)
 
 ---
 
-## Creating Feedback
+## MCP Tools (Preferred Over Raw SQL)
 
-Use the Data Gateway pattern:
-
-```sql
--- 1. Check valid feedback types
-SELECT valid_values FROM claude.column_registry
-WHERE table_name = 'feedback' AND column_name = 'feedback_type';
--- Result: ['bug', 'design', 'question', 'change', 'idea', 'improvement']
-
--- 2. Check valid statuses
-SELECT valid_values FROM claude.column_registry
-WHERE table_name = 'feedback' AND column_name = 'status';
--- Result: ['new', 'in_progress', 'resolved', 'wont_fix', 'duplicate']
-
--- 3. Insert feedback
-INSERT INTO claude.feedback (
-    project_id,
-    feedback_type,
-    title,
-    description,
-    priority,
-    status,
-    created_at
-) VALUES (
-    'project-uuid'::uuid,
-    'bug',  -- From valid_values
-    'Login fails with incorrect error message',
-    'When credentials are wrong, shows "Server error" instead of "Invalid credentials"',
-    2,  -- 1=critical, 5=low
-    'new',
-    NOW()
-) RETURNING feedback_id;
-```
-
-### Using `/feedback-create` Command
-
-```bash
-/feedback-create type=bug priority=2 title="Login error message" description="..."
-```
+| Tool | Purpose |
+|------|---------|
+| `create_feedback(project, type, description)` | Create feedback item |
+| `create_feature(project, name, description)` | Create feature |
+| `create_linked_task(feature_code, name, desc, verification, files)` | Add task to feature (quality enforced) |
+| `add_build_task(feature_id, name)` | Quick/informal task |
+| `advance_status(type, id, status)` | Change status |
+| `promote_feedback(feedback_id)` | Feedback -> Feature |
 
 ---
 
-## Creating Features
+## Status Values
 
-Features represent planned work linked to feedback:
+| Table | Valid Statuses |
+|-------|---------------|
+| `feedback` | new, in_progress, resolved, wont_fix, duplicate |
+| `features` | draft, planned, in_progress, completed, cancelled |
+| `build_tasks` | todo, in_progress, completed, blocked, cancelled |
 
-```sql
--- Link feature to feedback
-INSERT INTO claude.features (
-    feature_id,
-    project_id,
-    feature_name,
-    description,
-    status,
-    priority,
-    related_feedback_ids,  -- UUID array linking to feedback
-    created_at
-) VALUES (
-    gen_random_uuid(),
-    'project-uuid'::uuid,
-    'Improve login error messages',
-    'Show specific error messages for different failure modes',
-    'planned',
-    2,
-    ARRAY['feedback-uuid']::uuid[],  -- Note: explicit cast required!
-    NOW()
-);
-```
-
-**Status values**: `planned`, `in_progress`, `completed`, `cancelled`
+**Always check**: `column_registry` before writing. Priority: 1=critical, 5=low.
 
 ---
 
-## Creating Build Tasks
-
-Tasks are implementation steps for features:
-
-```sql
-INSERT INTO claude.build_tasks (
-    task_id,
-    feature_id,
-    task_name,
-    description,
-    assigned_to,
-    status,
-    priority,
-    created_at
-) VALUES (
-    gen_random_uuid(),
-    'feature-uuid'::uuid,
-    'Update AuthService error mapping',
-    'Map auth errors to user-friendly messages',
-    'claude-code-unified',
-    'todo',  -- Valid: todo, in_progress, blocked, completed, cancelled (NEVER 'pending')
-    2,
-    NOW()
-);
-```
-
-**Status values**: `todo`, `in_progress`, `completed`, `blocked`, `cancelled`
-
----
-
-## Common Queries
-
-```sql
--- Open feedback for project
-SELECT
-    feedback_id::text,
-    feedback_type,
-    title,
-    priority,
-    status,
-    created_at
-FROM claude.feedback
-WHERE project_id = 'your-project-uuid'::uuid
-  AND status IN ('new', 'in_progress')
-ORDER BY priority ASC, created_at DESC;
-
--- Features with linked feedback
-SELECT
-    f.feature_name,
-    f.status,
-    f.priority,
-    array_length(f.related_feedback_ids, 1) as feedback_count
-FROM claude.features f
-WHERE f.project_id = 'your-project-uuid'::uuid
-  AND f.status != 'cancelled'
-ORDER BY f.priority ASC;
-
--- Tasks for a feature
-SELECT
-    task_name,
-    status,
-    assigned_to,
-    created_at
-FROM claude.build_tasks
-WHERE feature_id = 'your-feature-uuid'::uuid
-ORDER BY created_at ASC;
-```
-
----
-
-## Commands Available
+## Commands
 
 | Command | Purpose |
 |---------|---------|
 | `/feedback-create` | Create new feedback item |
 | `/feedback-list` | List and filter feedback |
-| `/feedback-check` | Show open feedback for current project |
+| `/feedback-check` | Show open feedback for project |
 
 ---
 
@@ -231,39 +108,14 @@ ORDER BY created_at ASC;
 
 ## Key Gotchas
 
-### 1. UUID Array Casting
-
-**Problem**: PostgreSQL doesn't auto-cast text[] to uuid[]
-
-```sql
--- WRONG
-related_feedback_ids = ARRAY['uuid1', 'uuid2']
-
--- CORRECT
-related_feedback_ids = ARRAY['uuid1', 'uuid2']::uuid[]
-```
-
-### 2. Wrong Table Choice
-
-**Problem**: Creating features for bugs instead of feedback
-
-**Solution**: Follow the hierarchy - feedback first, then features if planning to implement
-
-### 3. Not Checking Valid Values
-
-**Problem**: Using invalid status/type values, constraint violation
-
-**Solution**: Always query `column_registry` before insert
-
-### 4. Priority Confusion
-
-**Problem**: Using high numbers for urgent (5 is LOW priority)
-
-**Solution**: Remember 1=critical, 5=low priority
+1. **UUID array casting** — use `ARRAY[...]::uuid[]` (PostgreSQL won't auto-cast)
+2. **Wrong table choice** — feedback first, then features if implementing
+3. **Not checking valid values** — always query `column_registry`
+4. **Priority confusion** — 1=critical, 5=low (not the other way)
 
 ---
 
-**Version**: 1.1 (Fix invalid build_tasks status 'pending'→'todo', fix feedback_type column_registry comment to include idea/improvement)
+**Version**: 2.0 (Progressive disclosure: split to SKILL.md overview + reference.md detail)
 **Created**: 2025-12-26
-**Updated**: 2026-03-09
-**Location**: .claude/skills/work-item-routing/skill.md
+**Updated**: 2026-03-29
+**Location**: .claude/skills/work-item-routing/SKILL.md
