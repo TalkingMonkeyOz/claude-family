@@ -2509,6 +2509,21 @@ def create_linked_task(
                          f"Tasks can only be added to 'planned' or 'in_progress' features."
             }
 
+        # Dedup check: reject if a non-cancelled task with same name exists for this feature
+        cur.execute("""
+            SELECT 'BT' || short_code as task_code, status
+            FROM claude.build_tasks
+            WHERE feature_id = %s::uuid AND task_name = %s AND status != 'cancelled'
+        """, (feature['feature_id'], task_name))
+        existing = cur.fetchone()
+        if existing:
+            return {
+                "success": False,
+                "error": f"Duplicate task: '{task_name}' already exists as {existing['task_code']} "
+                         f"(status: {existing['status']}) for this feature. "
+                         f"Use advance_status to update it instead of creating a new one."
+            }
+
         # Get next step_order
         cur.execute("""
             SELECT COALESCE(MAX(step_order), 0) + 1 as next_order

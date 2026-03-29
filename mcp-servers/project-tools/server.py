@@ -642,6 +642,19 @@ async def tool_add_build_task(
         if not feature:
             return {"error": f"Feature not found: {feature_id}"}
 
+        # Dedup check: reject if a non-cancelled task with same name exists
+        cur.execute("""
+            SELECT 'BT' || short_code as task_code, status
+            FROM claude.build_tasks
+            WHERE feature_id = %s AND task_name = %s AND status != 'cancelled'
+        """, (feature['feature_id'], task_name))
+        existing = cur.fetchone()
+        if existing:
+            return {
+                "error": f"Duplicate: '{task_name}' already exists as {existing['task_code']} "
+                         f"(status: {existing['status']})"
+            }
+
         # Get next step_order
         cur.execute("""
             SELECT COALESCE(MAX(step_order), 0) + 1 as next_order
