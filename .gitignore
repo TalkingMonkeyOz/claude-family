@@ -37,6 +37,12 @@ desktop.ini
 # But DO track shared slash commands
 !.claude/commands/
 
+# Playwright MCP (local tooling)
+.playwright-mcp/
+
+# Downloaded packages
+*.tgz
+
 # Temporary files
 *.tmp
 *.bak

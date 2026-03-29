@@ -84,7 +84,7 @@ except ImportError:
         sys.exit(1)
 
 # Initialize MCP server
-app = Server("claude-project-tools")
+app = Server("project-tools")
 
 # ============================================================================
 # Database Connection

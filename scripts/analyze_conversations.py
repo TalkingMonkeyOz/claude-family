@@ -181,8 +181,9 @@ def update_vocabulary_mappings(conn, candidates: Counter, min_count: int = 2) ->
 
 
 def cleanup_old_files(days: int, dry_run: bool = True) -> Tuple[int, int]:
-    """Delete conversation files older than specified days.
+    """Delete conversation files and session directories older than specified days.
 
+    Cleans: root JSONL files, subagent JSONL files, and empty session directories.
     Returns: (files_deleted, bytes_freed)
     """
     if not TRANSCRIPTS_DIR.exists():
@@ -196,6 +197,7 @@ def cleanup_old_files(days: int, dry_run: bool = True) -> Tuple[int, int]:
         if not project_dir.is_dir():
             continue
 
+        # Clean root-level JSONL files
         for jsonl_file in project_dir.glob("*.jsonl"):
             mtime = datetime.fromtimestamp(jsonl_file.stat().st_mtime)
             if mtime < cutoff:
@@ -204,9 +206,31 @@ def cleanup_old_files(days: int, dry_run: bool = True) -> Tuple[int, int]:
                     print(f"  Would delete: {jsonl_file.name} ({size // 1024}KB, {mtime.date()})")
                 else:
                     jsonl_file.unlink()
-                    print(f"  Deleted: {jsonl_file.name} ({size // 1024}KB)")
                 deleted += 1
                 bytes_freed += size
+
+        # Clean session directories (UUID-named) including subagent logs
+        import re
+        import shutil
+        uuid_pattern = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+        for session_dir in project_dir.iterdir():
+            if not session_dir.is_dir() or not uuid_pattern.match(session_dir.name):
+                continue
+            # Check if any file in the session dir is newer than cutoff
+            has_recent = False
+            for f in session_dir.rglob("*"):
+                if f.is_file():
+                    if datetime.fromtimestamp(f.stat().st_mtime) >= cutoff:
+                        has_recent = True
+                        break
+            if not has_recent:
+                dir_size = sum(f.stat().st_size for f in session_dir.rglob("*") if f.is_file())
+                if dry_run:
+                    print(f"  Would delete dir: {session_dir.name}/ ({dir_size // 1024}KB)")
+                else:
+                    shutil.rmtree(session_dir, ignore_errors=True)
+                deleted += 1
+                bytes_freed += dir_size
 
     return deleted, bytes_freed
 

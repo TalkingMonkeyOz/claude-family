@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_ckg"
+                  targetNamespace="http://claude-family/bpmn/infrastructure">
+
+  <bpmn:process id="ckg_daemon_lifecycle" name="CKG Daemon Lifecycle" isExecutable="true">
+
+    <!-- ============================================================ -->
+    <!-- PHASE 1: SessionStart — Daemon Spawn                         -->
+    <!-- ============================================================ -->
+    <bpmn:startEvent id="start_session" name="SessionStart Hook Fires" />
+
+    <bpmn:sequenceFlow id="flow_1" sourceRef="start_session" targetRef="resolve_port" />
+
+    <bpmn:scriptTask id="resolve_port" name="[HOOK] Resolve daemon port from project name (MD5 mod 100 + 9800)">
+      <bpmn:script>port = 9800 + (MD5(project_name) % 100)</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:sequenceFlow id="flow_2" sourceRef="resolve_port" targetRef="check_health" />
+
+    <bpmn:serviceTask id="check_health" name="[HOOK] GET /health on localhost:{port} (0.5s timeout)" />
+
+    <bpmn:sequenceFlow id="flow_3" sourceRef="check_health" targetRef="gw_daemon_running" />
+
+    <bpmn:exclusiveGateway id="gw_daemon_running" name="Daemon already running?" />
+
+    <bpmn:sequenceFlow id="flow_4_yes" sourceRef="gw_daemon_running" targetRef="daemon_ready" name="Yes — health OK">
+      <bpmn:conditionExpression>health_response.status == 200</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_4_no" sourceRef="gw_daemon_running" targetRef="spawn_daemon" name="No — not responding" />
+
+    <bpmn:scriptTask id="spawn_daemon" name="[HOOK] Spawn ckg_daemon.py as detached process (Windows: CREATE_NO_WINDOW, Unix: start_new_session)">
+      <bpmn:script>subprocess.Popen(['python', 'ckg_daemon.py', project_name, project_path], creationflags=0x00000008)</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:sequenceFlow id="flow_5" sourceRef="spawn_daemon" targetRef="daemon_ready" />
+
+    <bpmn:intermediateThrowEvent id="daemon_ready" name="CKG Daemon Ready" />
+
+    <!-- ============================================================ -->
+    <!-- PHASE 2: PreToolUse Write — Collision Check                   -->
+    <!-- ============================================================ -->
+    <bpmn:sequenceFlow id="flow_6" sourceRef="daemon_ready" targetRef="await_write" />
+
+    <bpmn:intermediateCatchEvent id="await_write" name="Wait for Write/Edit tool call" />
+
+    <bpmn:sequenceFlow id="flow_7" sourceRef="await_write" targetRef="collision_hook" />
+
+    <bpmn:serviceTask id="collision_hook" name="[HOOK] code_collision_hook_v2.py — POST /collision-check to daemon (2s timeout)" />
+
+    <bpmn:sequenceFlow id="flow_8" sourceRef="collision_hook" targetRef="gw_collision_result" />
+
+    <bpmn:exclusiveGateway id="gw_collision_result" name="Collision found?" />
+
+    <bpmn:sequenceFlow id="flow_9_no" sourceRef="gw_collision_result" targetRef="allow_write" name="No collision">
+      <bpmn:conditionExpression>collisions.length == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_9_yes" sourceRef="gw_collision_result" targetRef="warn_collision" name="Collision(s) found" />
+
+    <bpmn:scriptTask id="warn_collision" name="[HOOK] Return allow + additionalContext warning listing collisions">
+      <bpmn:script>return {"decision": "allow", "additionalContext": format_collision_warnings(collisions)}</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:sequenceFlow id="flow_10" sourceRef="warn_collision" targetRef="allow_write" />
+
+    <bpmn:serviceTask id="allow_write" name="Allow Write/Edit to proceed" />
+
+    <!-- ============================================================ -->
+    <!-- PHASE 3: PostToolUse Write/Edit — Incremental Reindex         -->
+    <!-- ============================================================ -->
+    <bpmn:sequenceFlow id="flow_11" sourceRef="allow_write" targetRef="reindex_check" />
+
+    <bpmn:exclusiveGateway id="reindex_check" name="Is file a source file? (not .md/.json/.yml)" />
+
+    <bpmn:sequenceFlow id="flow_12_yes" sourceRef="reindex_check" targetRef="reindex_hook" name="Source file">
+      <bpmn:conditionExpression>ext not in skip_extensions</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_12_no" sourceRef="reindex_check" targetRef="await_write" name="Non-source file — skip" />
+
+    <bpmn:serviceTask id="reindex_hook" name="[HOOK] ckg_reindex_hook.py — POST /reindex-file to daemon (1s timeout, fire-and-forget)" />
+
+    <bpmn:sequenceFlow id="flow_13" sourceRef="reindex_hook" targetRef="await_write" />
+
+    <!-- ============================================================ -->
+    <!-- PHASE 4: Idle Timeout — Auto Shutdown                         -->
+    <!-- ============================================================ -->
+    <bpmn:boundaryEvent id="idle_timer" attachedToRef="await_write" name="30 min idle timeout">
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT30M</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+
+    <bpmn:sequenceFlow id="flow_14" sourceRef="idle_timer" targetRef="shutdown_daemon" />
+
+    <bpmn:scriptTask id="shutdown_daemon" name="[DAEMON] Close DB connections, remove PID file, exit process" />
+
+    <bpmn:sequenceFlow id="flow_15" sourceRef="shutdown_daemon" targetRef="end_lifecycle" />
+
+    <bpmn:endEvent id="end_lifecycle" name="Daemon Stopped" />
+
+  </bpmn:process>
+
+</bpmn:definitions>
