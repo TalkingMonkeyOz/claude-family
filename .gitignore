@@ -4,6 +4,9 @@
 postgres/data/*.json
 logs/*.txt
 
+# Node modules
+node_modules/
+
 # Python cache
 __pycache__/
 *.py[cod]
