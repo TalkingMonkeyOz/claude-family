@@ -1,0 +1,323 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/rag-hook-execution"
+    id="Definitions_RagHookExecution">
+
+  <bpmn:process id="rag_hook_execution" name="RAG Hook Execution: UserPromptSubmit Context Assembly" isExecutable="true">
+
+    <!-- ========================================================
+         RAG Hook Execution Flow
+         Fires on UserPromptSubmit. Assembles context from multiple
+         sources and injects into the prompt for the LLM.
+
+         CURRENT: Serial fallback path (WCC inactive)
+         TARGET:  Parallel fan-out for independent queries
+         ======================================================== -->
+
+    <bpmn:startEvent id="start_event" name="UserPromptSubmit Hook Triggered">
+      <bpmn:outgoing>flow_start_to_check_empty</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Gate 1: Empty prompt check -->
+    <bpmn:exclusiveGateway id="gw_empty_prompt" name="Is Prompt Empty?" default="flow_not_empty">
+      <bpmn:incoming>flow_start_to_check_empty</bpmn:incoming>
+      <bpmn:outgoing>flow_empty_prompt</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_empty</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_empty" name="Return Empty (No Injection)">
+      <bpmn:incoming>flow_empty_prompt</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Gate 2: Command check -->
+    <bpmn:exclusiveGateway id="gw_is_command" name="Is Slash Command?" default="flow_not_command">
+      <bpmn:incoming>flow_not_empty</bpmn:incoming>
+      <bpmn:outgoing>flow_is_command</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_command</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="task_protocol_only" name="[HOOK] Return Protocol Only" scriptFormat="python">
+      <bpmn:incoming>flow_is_command</bpmn:incoming>
+      <bpmn:outgoing>flow_protocol_to_end_command</bpmn:outgoing>
+      <bpmn:script>
+# Commands get protocol injection but no RAG context
+# Avoids polluting slash command execution with RAG noise
+context = protocol_context_only()
+return context
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_command" name="Return Protocol Only">
+      <bpmn:incoming>flow_protocol_to_end_command</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Implicit feedback (fire-and-forget, does not block parallel work) -->
+    <bpmn:scriptTask id="task_implicit_feedback" name="[HOOK] Process Implicit Feedback" scriptFormat="python">
+      <bpmn:incoming>flow_not_command</bpmn:incoming>
+      <bpmn:outgoing>flow_feedback_to_session_facts</bpmn:outgoing>
+      <bpmn:script>
+# Fire-and-forget: detect feedback signals in prompt text
+# (bug reports, ideas, frustrations) and auto-create feedback items
+# Does not block downstream context assembly
+process_implicit_feedback_async(prompt)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Critical session facts — must complete before parallel fan-out -->
+    <bpmn:scriptTask id="task_session_facts" name="[HOOK] Query Critical Session Facts" scriptFormat="python">
+      <bpmn:incoming>flow_feedback_to_session_facts</bpmn:incoming>
+      <bpmn:outgoing>flow_session_facts_to_wcc_check</bpmn:outgoing>
+      <bpmn:script>
+# Load pinned session facts, todos, active features
+# These are always needed regardless of WCC status
+session_facts = query_critical_session_facts(session_id)
+active_todos = load_active_todos(session_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- WCC availability check -->
+    <bpmn:scriptTask id="task_check_wcc" name="[HOOK] Check WCC Availability" scriptFormat="python">
+      <bpmn:incoming>flow_session_facts_to_wcc_check</bpmn:incoming>
+      <bpmn:outgoing>flow_wcc_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Check if Workfile Context Cache is active and has a matching activity
+wcc_available = check_wcc_availability(prompt, project)
+wcc_activity = detect_activity_from_prompt(prompt) if wcc_available else None
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Gate 3: WCC active? -->
+    <bpmn:exclusiveGateway id="gw_wcc_active" name="WCC Active?" default="flow_wcc_inactive">
+      <bpmn:incoming>flow_wcc_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_wcc_active</bpmn:outgoing>
+      <bpmn:outgoing>flow_wcc_inactive</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- WCC path: single assembly call replaces all individual queries -->
+    <bpmn:scriptTask id="task_wcc_assembly" name="[HOOK] WCC Context Assembly" scriptFormat="python">
+      <bpmn:incoming>flow_wcc_active</bpmn:incoming>
+      <bpmn:outgoing>flow_wcc_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# WCC assembles context from cached workfiles, knowledge, features
+# in a single budget-managed call — replaces individual parallel queries
+wcc_context = assemble_wcc_context(wcc_activity, prompt, budget=1000)
+context_parts = [wcc_context]
+context_source = "wcc"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ========================================================
+         TARGET: Parallel Fan-Out (WCC inactive path)
+         All 6 queries are independent and can run concurrently.
+         CURRENT implementation runs them serially; TARGET runs
+         them in parallel and joins before health check.
+         ======================================================== -->
+
+    <!-- Parallel fork -->
+    <bpmn:parallelGateway id="gw_parallel_fork" name="Fan-Out: Independent Queries">
+      <bpmn:incoming>flow_wcc_inactive</bpmn:incoming>
+      <bpmn:outgoing>flow_fork_to_knowledge_graph</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_vault_rag</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_nimbus_context</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_schema_context</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_skill_suggestions</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_design_map</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Parallel branch 1: Knowledge graph -->
+    <bpmn:scriptTask id="task_knowledge_graph" name="[HOOK] Query Knowledge Graph" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_knowledge_graph</bpmn:incoming>
+      <bpmn:outgoing>flow_knowledge_graph_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Semantic search against claude.knowledge (MID/LONG tier memories)
+# Condition: needs_rag = True
+if needs_rag:
+    knowledge_results = query_knowledge_graph(prompt, budget=300)
+else:
+    knowledge_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 2: Vault RAG -->
+    <bpmn:scriptTask id="task_vault_rag" name="[HOOK] Query Vault RAG" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_vault_rag</bpmn:incoming>
+      <bpmn:outgoing>flow_vault_rag_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Voyage AI embedding search against vault_embeddings
+# Condition: needs_rag = True
+if needs_rag:
+    vault_results = query_vault_embeddings(prompt, limit=5)
+else:
+    vault_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 3: Nimbus context -->
+    <bpmn:scriptTask id="task_nimbus_context" name="[HOOK] Query Nimbus Context" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_nimbus_context</bpmn:incoming>
+      <bpmn:outgoing>flow_nimbus_context_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Project-specific entity catalog lookup (nimbus domain)
+# Condition: needs_rag = True AND project has nimbus entities
+if needs_rag:
+    nimbus_context = query_nimbus_entities(prompt, project)
+else:
+    nimbus_context = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 4: Schema context -->
+    <bpmn:scriptTask id="task_schema_context" name="[HOOK] Query Schema Context" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_schema_context</bpmn:incoming>
+      <bpmn:outgoing>flow_schema_context_to_join</bpmn:outgoing>
+      <bpmn:script>
+# DB schema reference injection for SQL-related prompts
+# Condition: needs_rag = True AND needs_schema = True
+if needs_rag and needs_schema:
+    schema_context = query_schema_context(project, tier=1)
+else:
+    schema_context = None
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 5: Skill suggestions -->
+    <bpmn:scriptTask id="task_skill_suggestions" name="[HOOK] Query Skill Suggestions" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_skill_suggestions</bpmn:incoming>
+      <bpmn:outgoing>flow_skill_suggestions_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Match prompt against available skills for suggestion injection
+# Always runs (no needs_rag condition)
+skill_suggestions = query_skill_suggestions(prompt, project)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 6: Design map -->
+    <bpmn:scriptTask id="task_design_map" name="[HOOK] Load Design Map" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_design_map</bpmn:incoming>
+      <bpmn:outgoing>flow_design_map_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Load active design map / architecture context if relevant
+# Always runs; returns empty if no design map active
+design_map = load_design_map(project)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel join — wait for all 6 branches -->
+    <bpmn:parallelGateway id="gw_parallel_join" name="Join: All Queries Complete">
+      <bpmn:incoming>flow_knowledge_graph_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_vault_rag_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_nimbus_context_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_schema_context_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_skill_suggestions_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_design_map_to_join</bpmn:incoming>
+      <bpmn:outgoing>flow_join_to_merge</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <!-- Merge point: both WCC and parallel paths converge here -->
+    <bpmn:exclusiveGateway id="gw_merge" name="Merge Context Paths">
+      <bpmn:incoming>flow_wcc_to_merge</bpmn:incoming>
+      <bpmn:incoming>flow_join_to_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_health_check</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Post-assembly: context health check -->
+    <bpmn:scriptTask id="task_context_health" name="[HOOK] Check Context Health" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_health_check</bpmn:incoming>
+      <bpmn:outgoing>flow_health_check_to_failures</bpmn:outgoing>
+      <bpmn:script>
+# Validate assembled context: check for missing required sections,
+# stale knowledge, or empty results where content was expected
+health_report = check_context_health(context_parts, session_facts)
+context_warnings = health_report.get("warnings", [])
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Pending failures injection -->
+    <bpmn:scriptTask id="task_pending_failures" name="[HOOK] Get Pending Failures" scriptFormat="python">
+      <bpmn:incoming>flow_health_check_to_failures</bpmn:incoming>
+      <bpmn:outgoing>flow_failures_to_budget</bpmn:outgoing>
+      <bpmn:script>
+# Surface any captured hook failures from failure_capture table
+# Injects warnings so the LLM is aware of system degradation
+pending_failures = get_pending_hook_failures(project, limit=5)
+if pending_failures:
+    context_parts.append(format_failure_warnings(pending_failures))
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Budget enforcement — final step before output -->
+    <bpmn:scriptTask id="task_apply_budget" name="[HOOK] Apply Context Budget" scriptFormat="python">
+      <bpmn:incoming>flow_failures_to_budget</bpmn:incoming>
+      <bpmn:outgoing>flow_budget_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Trim assembled context to token budget (default: 2000 tokens)
+# Priority order: protocol > session_facts > todos > rag > vault > schema
+final_context = apply_context_budget(
+    parts=context_parts,
+    budget=MAX_CONTEXT_TOKENS,
+    priority=["protocol", "session_facts", "todos", "rag", "vault", "schema"]
+)
+output = json.dumps({"context": final_context, "source": context_source})
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_main" name="Output JSON Context">
+      <bpmn:incoming>flow_budget_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ========================================================
+         Sequence Flows
+         ======================================================== -->
+
+    <bpmn:sequenceFlow id="flow_start_to_check_empty" sourceRef="start_event" targetRef="gw_empty_prompt" />
+
+    <bpmn:sequenceFlow id="flow_empty_prompt" name="prompt == empty" sourceRef="gw_empty_prompt" targetRef="end_empty">
+      <bpmn:conditionExpression>prompt is None or len(prompt.strip()) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_empty" sourceRef="gw_empty_prompt" targetRef="gw_is_command" />
+
+    <bpmn:sequenceFlow id="flow_is_command" name="prompt.startswith('/')" sourceRef="gw_is_command" targetRef="task_protocol_only">
+      <bpmn:conditionExpression>prompt.startswith('/')</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_command" sourceRef="gw_is_command" targetRef="task_implicit_feedback" />
+    <bpmn:sequenceFlow id="flow_protocol_to_end_command" sourceRef="task_protocol_only" targetRef="end_command" />
+
+    <bpmn:sequenceFlow id="flow_feedback_to_session_facts" sourceRef="task_implicit_feedback" targetRef="task_session_facts" />
+    <bpmn:sequenceFlow id="flow_session_facts_to_wcc_check" sourceRef="task_session_facts" targetRef="task_check_wcc" />
+    <bpmn:sequenceFlow id="flow_wcc_check_to_gw" sourceRef="task_check_wcc" targetRef="gw_wcc_active" />
+
+    <bpmn:sequenceFlow id="flow_wcc_active" name="wcc_available == True" sourceRef="gw_wcc_active" targetRef="task_wcc_assembly">
+      <bpmn:conditionExpression>wcc_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_wcc_inactive" sourceRef="gw_wcc_active" targetRef="gw_parallel_fork" />
+
+    <bpmn:sequenceFlow id="flow_wcc_to_merge" sourceRef="task_wcc_assembly" targetRef="gw_merge" />
+
+    <bpmn:sequenceFlow id="flow_fork_to_knowledge_graph" sourceRef="gw_parallel_fork" targetRef="task_knowledge_graph" />
+    <bpmn:sequenceFlow id="flow_fork_to_vault_rag" sourceRef="gw_parallel_fork" targetRef="task_vault_rag" />
+    <bpmn:sequenceFlow id="flow_fork_to_nimbus_context" sourceRef="gw_parallel_fork" targetRef="task_nimbus_context" />
+    <bpmn:sequenceFlow id="flow_fork_to_schema_context" sourceRef="gw_parallel_fork" targetRef="task_schema_context" />
+    <bpmn:sequenceFlow id="flow_fork_to_skill_suggestions" sourceRef="gw_parallel_fork" targetRef="task_skill_suggestions" />
+    <bpmn:sequenceFlow id="flow_fork_to_design_map" sourceRef="gw_parallel_fork" targetRef="task_design_map" />
+
+    <bpmn:sequenceFlow id="flow_knowledge_graph_to_join" sourceRef="task_knowledge_graph" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_vault_rag_to_join" sourceRef="task_vault_rag" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_nimbus_context_to_join" sourceRef="task_nimbus_context" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_schema_context_to_join" sourceRef="task_schema_context" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_skill_suggestions_to_join" sourceRef="task_skill_suggestions" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_design_map_to_join" sourceRef="task_design_map" targetRef="gw_parallel_join" />
+
+    <bpmn:sequenceFlow id="flow_join_to_merge" sourceRef="gw_parallel_join" targetRef="gw_merge" />
+
+    <bpmn:sequenceFlow id="flow_merge_to_health_check" sourceRef="gw_merge" targetRef="task_context_health" />
+    <bpmn:sequenceFlow id="flow_health_check_to_failures" sourceRef="task_context_health" targetRef="task_pending_failures" />
+    <bpmn:sequenceFlow id="flow_failures_to_budget" sourceRef="task_pending_failures" targetRef="task_apply_budget" />
+    <bpmn:sequenceFlow id="flow_budget_to_end" sourceRef="task_apply_budget" targetRef="end_main" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

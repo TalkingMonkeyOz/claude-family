@@ -72,6 +72,7 @@ import time
 import logging
 import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
@@ -279,6 +280,8 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to check task map: {e}")
 
+        main_start = time.time()
+
         logger.info(f"RAG query hook invoked for project: {project_name}")
         logger.info(f"Query text (first 100 chars): {user_prompt[:100]}")
 
@@ -312,23 +315,9 @@ def main():
             logger.info("Config keywords detected - injecting config management warning")
             config_warning = CONFIG_WARNING
 
-        # SKILL SUGGESTIONS: Re-enabled (FB138 fix)
-        # Query skill_content for semantically relevant skills on non-command prompts.
-        # Previously disabled ("never acted on") but the discovery gap was the root cause.
-        skill_context = None
-        if DB_AVAILABLE:
-            try:
-                skill_context = query_skill_suggestions(
-                    user_prompt=user_prompt,
-                    project_name=project_name,
-                    top_k=2,
-                    min_similarity=0.55
-                )
-            except Exception as e:
-                logger.warning(f"Skill suggestion query failed: {e}")
-
         # DESIGN MAP: Inject compressed design map if project has one
         # Lightweight file read (~500 tokens), gives instant design orientation
+        # Kept serial — pure local file read, thread overhead > time saved
         design_map_context = None
         try:
             design_map_context = _load_design_map(project_name)
@@ -372,51 +361,103 @@ def main():
         nimbus_context = None
         schema_context = None
 
+        # SKILL SUGGESTIONS: Re-enabled (FB138 fix)
+        # Initialised here; populated in the parallel block (needs_rag path) or
+        # the serial fallback below (non-RAG / WCC-active paths).
+        skill_context = None
+
         if wcc_active:
             logger.info(f"WCC active — skipping per-source RAG/knowledge queries")
+            # Skill suggestions still run serially when WCC is active
+            if DB_AVAILABLE:
+                try:
+                    skill_context = query_skill_suggestions(
+                        user_prompt=user_prompt,
+                        project_name=project_name,
+                        top_k=2,
+                        min_similarity=0.55,
+                    )
+                except Exception as e:
+                    logger.warning(f"Skill suggestion query failed: {e}")
         elif needs_rag(user_prompt):
             logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
 
-            # Query KNOWLEDGE GRAPH (pgvector seed + relationship walk)
-            # Note: Voyage-3 similarity scores are typically 0.3-0.5 for good matches
-            knowledge_context = query_knowledge_graph(
-                user_prompt=user_prompt,
-                project_name=project_name,
-                session_id=session_id,
-                max_initial_hits=3,
-                max_hops=2,
-                min_similarity=0.35,
-                token_budget=400,
-            )
+            parallel_start = time.time()
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = {}
 
-            # Query RAG (vault knowledge - documentation)
-            rag_context = query_vault_rag(
-                user_prompt=user_prompt,
-                project_name=project_name,
-                session_id=session_id,
-                top_k=3,
-                min_similarity=0.45
-            )
-
-            # Query NIMBUS CONTEXT (keyword search for Nimbus projects only)
-            nimbus_context = query_nimbus_context(
-                user_prompt=user_prompt,
-                project_name=project_name,
-                top_k=3
-            )
-
-            # Query SCHEMA CONTEXT (when prompt mentions tables/schema/data model)
-            if needs_schema_search(user_prompt):
-                try:
-                    schema_context = query_schema_context(
+                # Submit all independent queries in parallel
+                futures['knowledge'] = executor.submit(
+                    query_knowledge_graph,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    session_id=session_id,
+                    max_initial_hits=3,
+                    max_hops=2,
+                    min_similarity=0.35,
+                    token_budget=400,
+                )
+                futures['vault'] = executor.submit(
+                    query_vault_rag,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    session_id=session_id,
+                    top_k=3,
+                    min_similarity=0.45,
+                )
+                futures['nimbus'] = executor.submit(
+                    query_nimbus_context,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    top_k=3,
+                )
+                futures['skill'] = executor.submit(
+                    query_skill_suggestions,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    top_k=2,
+                    min_similarity=0.55,
+                )
+                if needs_schema_search(user_prompt):
+                    futures['schema'] = executor.submit(
+                        query_schema_context,
                         user_prompt=user_prompt,
                         top_k=3,
-                        min_similarity=0.40
+                        min_similarity=0.40,
                     )
-                except Exception as e:
-                    logger.warning(f"Schema context query failed: {e}")
+
+                # Collect results with timeout
+                for key, future in futures.items():
+                    try:
+                        result = future.result(timeout=8)
+                        if key == 'knowledge':
+                            knowledge_context = result
+                        elif key == 'vault':
+                            rag_context = result
+                        elif key == 'nimbus':
+                            nimbus_context = result
+                        elif key == 'skill':
+                            skill_context = result
+                        elif key == 'schema':
+                            schema_context = result
+                    except Exception as e:
+                        logger.warning(f"Parallel query '{key}' failed: {e}")
+
+            parallel_ms = (time.time() - parallel_start) * 1000
+            logger.info(f"Parallel RAG queries completed in {parallel_ms:.0f}ms")
         else:
             logger.info(f"RAG skipped for action prompt: {user_prompt[:50]}")
+            # Skill suggestions still run for non-RAG prompts
+            if DB_AVAILABLE:
+                try:
+                    skill_context = query_skill_suggestions(
+                        user_prompt=user_prompt,
+                        project_name=project_name,
+                        top_k=2,
+                        min_similarity=0.55,
+                    )
+                except Exception as e:
+                    logger.warning(f"Skill suggestion query failed: {e}")
 
         # CONTEXT HEALTH: Check context window fullness (graduated urgency)
         # Uses StatusLine sensor data or prompt count fallback
@@ -489,6 +530,9 @@ def main():
             combined_context = "\n".join(
                 text for (_pri, text) in budget_blocks if text
             )
+
+        total_ms = (time.time() - main_start) * 1000
+        logger.info(f"RAG hook total execution: {total_ms:.0f}ms")
 
         # Build result (CORRECT format per Claude Code docs)
         result = {

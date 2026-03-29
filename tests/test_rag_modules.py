@@ -269,3 +269,66 @@ class TestE2EOrchestrator:
         output = self._run_hook("yes")
         hso = output["hookSpecificOutput"]
         assert "additionalContext" in hso
+
+
+# ---------------------------------------------------------------------------
+# 7. Performance benchmarks
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.performance
+class TestPerformance:
+    """Performance benchmarks for RAG hook parallel I/O."""
+
+    def _run_hook(self, prompt: str) -> tuple:
+        """Run the hook and return (wall_time_ms, output_json)."""
+        import time
+        start = time.time()
+        result = subprocess.run(
+            [sys.executable, "scripts/rag_query_hook.py"],
+            input=json.dumps({"prompt": prompt}),
+            capture_output=True,
+            text=True,
+            cwd=PROJECT_ROOT,
+            timeout=30,
+        )
+        wall_ms = (time.time() - start) * 1000
+        output = json.loads(result.stdout) if result.stdout.strip() else {}
+        return wall_ms, output
+
+    def test_rag_prompt_timing(self):
+        """RAG-enabled prompt should complete in reasonable time."""
+        times = []
+        for _ in range(3):
+            ms, output = self._run_hook("how do I create a feature?")
+            assert "hookSpecificOutput" in output
+            ctx = output["hookSpecificOutput"].get("additionalContext", "")
+            assert len(ctx) > 0, "RAG prompt should return context"
+            times.append(ms)
+
+        avg_ms = sum(times) / len(times)
+        print(f"\nRAG prompt avg: {avg_ms:.0f}ms (runs: {[f'{t:.0f}' for t in times]})")
+        # With parallel I/O, RAG prompts should complete under 15 seconds
+        # (generous threshold — accounts for cold Voyage API + DB; observed ~10s on this host)
+        assert avg_ms < 15000, f"RAG prompt too slow: {avg_ms:.0f}ms avg"
+
+    def test_command_prompt_timing(self):
+        """Command prompts should be fast (no RAG queries)."""
+        times = []
+        for _ in range(3):
+            ms, output = self._run_hook("yes")
+            assert "hookSpecificOutput" in output
+            times.append(ms)
+
+        avg_ms = sum(times) / len(times)
+        print(f"\nCommand prompt avg: {avg_ms:.0f}ms (runs: {[f'{t:.0f}' for t in times]})")
+        # Commands should be much faster — no DB queries, no Voyage API
+        assert avg_ms < 2000, f"Command prompt too slow: {avg_ms:.0f}ms avg"
+
+    def test_empty_prompt_timing(self):
+        """Empty prompts should return instantly."""
+        ms, output = self._run_hook("")
+        print(f"\nEmpty prompt: {ms:.0f}ms")
+        assert ms < 1500, f"Empty prompt too slow: {ms:.0f}ms"
+        ctx = output.get("hookSpecificOutput", {}).get("additionalContext", "")
+        assert ctx == "", "Empty prompt should return empty context"
