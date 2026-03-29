@@ -7892,6 +7892,56 @@ def check_collision(name: str, project: str = "", file_path: str = "") -> dict:
 
 
 @mcp.tool()
+def _resolve_ckg_file_path(cur, project_id: str, project_name: str, file_path: str) -> str:
+    """Normalize a file_path for CKG queries.
+
+    Handles: relative paths, forward slashes, missing drive letters.
+    Strategy:
+      1. Normalize slashes to OS-native
+      2. If absolute, use as-is
+      3. If relative, resolve against workspace_path
+      4. Fallback: suffix match in DB
+    """
+    import os
+    normalized = os.path.normpath(file_path)
+
+    # If already absolute, return normalized
+    if os.path.isabs(normalized):
+        return normalized
+
+    # Try resolving against workspace_path
+    cur.execute(
+        "SELECT config->>'workspace_path' as path FROM claude.workspaces "
+        "WHERE project_name = %s AND is_active = true",
+        (project_name,)
+    )
+    ws_row = cur.fetchone()
+    if ws_row and ws_row['path']:
+        resolved = os.path.normpath(os.path.join(ws_row['path'], normalized))
+        # Verify it exists in the DB
+        cur.execute(
+            "SELECT 1 FROM claude.code_symbols WHERE project_id = %s AND file_path = %s LIMIT 1",
+            (project_id, resolved),
+        )
+        if cur.fetchone():
+            return resolved
+
+    # Fallback: suffix match (handles both slash directions)
+    suffix = normalized.replace('\\', '/').lstrip('/')
+    cur.execute(
+        "SELECT DISTINCT file_path FROM claude.code_symbols "
+        "WHERE project_id = %s AND file_path LIKE %s LIMIT 1",
+        (project_id, '%' + suffix),
+    )
+    match = cur.fetchone()
+    if match:
+        return match['file_path']
+
+    # Nothing found — return normalized as best effort
+    return normalized
+
+
+@mcp.tool()
 def get_module_map(project: str = "", file_path: str = "") -> dict:
     """Get a structural map of symbols in a file or project.
 
@@ -7918,13 +7968,14 @@ def get_module_map(project: str = "", file_path: str = "") -> dict:
         project_id = row['project_id']
 
         if file_path:
+            resolved_path = _resolve_ckg_file_path(cur, project_id, proj_name, file_path)
             cur.execute("""
                 SELECT symbol_id::text, name, kind, line_number, end_line,
                        signature, visibility, scope, parent_symbol_id::text
                 FROM claude.code_symbols
                 WHERE project_id = %s AND file_path = %s
                 ORDER BY line_number
-            """, (project_id, file_path))
+            """, (project_id, resolved_path))
             symbols = cur.fetchall()
 
             by_id = {s['symbol_id']: {**s, 'children': []} for s in symbols}
