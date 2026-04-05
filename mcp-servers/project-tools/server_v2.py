@@ -212,6 +212,58 @@ mcp = FastMCP(
     lifespan=_channel_lifespan,
 )
 
+
+# ============================================================================
+# MCP _meta: Raise persist-to-disk threshold for heavy tools (v2.1.91+)
+# ============================================================================
+# FastMCP doesn't expose _meta on @mcp.tool(), so we patch list_tools to
+# inject anthropic/maxResultSizeChars on tools that return large responses.
+# Without this, Claude Code silently truncates results that exceed the default
+# persist threshold, causing incomplete data for schema, context, and board ops.
+
+LARGE_RESULT_TOOLS: dict[str, int] = {
+    # Session & orientation (returns full project context, todos, features, messages)
+    "start_session": 200_000,
+    # Schema reference (full table defs with constraints for 60+ tables)
+    "get_schema": 200_000,
+    # Build board (stream → feature → task hierarchy for entire project)
+    "get_build_board": 200_000,
+    # Context assembly (WCC multi-source context, token-budgeted)
+    "assemble_context": 200_000,
+    # Memory recall (3-tier retrieval: short/mid/long with graph walk)
+    "recall_memories": 100_000,
+    # Entity catalog search (structured data with full properties)
+    "recall_entities": 100_000,
+    # Work context (feature-level or project-level overviews)
+    "get_work_context": 100_000,
+    # Session end (extracts insights, stores conversation)
+    "end_session": 100_000,
+    # Conversation extraction (full session turns)
+    "extract_conversation": 200_000,
+    # Module map (project-wide symbol listing)
+    "get_module_map": 100_000,
+    # Symbol context (body + callers + callees + siblings)
+    "get_context": 100_000,
+    # Dependency graph (recursive call chains)
+    "get_dependency_graph": 100_000,
+}
+
+_original_list_tools = mcp.list_tools
+
+
+async def _list_tools_with_meta() -> list:
+    """Wrap list_tools to inject _meta on tools that return large results."""
+    tools = await _original_list_tools()
+    for tool in tools:
+        if tool.name in LARGE_RESULT_TOOLS:
+            tool.meta = {
+                "anthropic/maxResultSizeChars": LARGE_RESULT_TOOLS[tool.name]
+            }
+    return tools
+
+mcp.list_tools = _list_tools_with_meta
+
+
 # ============================================================================
 # Database Connection (shared with server.py)
 # ============================================================================
