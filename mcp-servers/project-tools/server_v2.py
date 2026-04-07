@@ -7631,6 +7631,301 @@ def recall_entities(
         conn.close()
 
 
+@mcp.tool()
+def explore_entities(
+    tags: list = None,
+    entity_type: str = "",
+    entity_id: str = "",
+    project: str = "",
+    page: int = 1,
+    page_size: int = 30,
+) -> dict:
+    """Browse the entity catalog with progressive disclosure (inventory → list → detail).
+
+    Three stages of progressive disclosure for token-efficient navigation:
+
+    Stage 1 - INVENTORY: explore_entities(tags=["nimbus"]) → type counts as tree
+    Stage 2 - BROWSE: explore_entities(tags=["nimbus"], entity_type="odata_entity") → entity list
+    Stage 3 - DETAIL: explore_entities(entity_id="xxx") → full properties
+
+    This is a BROWSE tool, not a search tool. Use recall_entities() for search.
+
+    Use when: Orienting to a project's knowledge, browsing what entities exist,
+    or drilling into a specific entity's details.
+    Returns: {success, stage, tree/entities/entity, total_count, page, page_size}.
+
+    Args:
+        tags: Filter entities by tags (e.g. ["nimbus"]). Used in Stage 1 and 2.
+        entity_type: Filter by entity type name. Triggers Stage 2 browse.
+        entity_id: Specific entity UUID. Triggers Stage 3 detail.
+        project: Project name filter (optional).
+        page: Page number for Stage 2 browse (default 1).
+        page_size: Entities per page in Stage 2 (default 30, max 50).
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        page_size = min(page_size, 50)
+        offset = (page - 1) * page_size
+
+        # ── Stage 3: DETAIL (entity_id provided) ──
+        if entity_id:
+            cur.execute("""
+                SELECT e.entity_id::text, e.display_name, et.type_name,
+                       e.properties, e.tags, e.confidence, e.access_count,
+                       e.created_at::text, e.updated_at::text
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE e.entity_id = %s::uuid AND NOT e.is_archived
+            """, (entity_id,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"Entity not found: {entity_id}"}
+
+            # Get explicit relationships from entity_relationships table
+            cur.execute("""
+                SELECT er.relationship_type, er.strength,
+                       e2.entity_id::text as related_id,
+                       e2.display_name as related_name,
+                       et2.type_name as related_type,
+                       'outgoing' as direction
+                FROM claude.entity_relationships er
+                JOIN claude.entities e2 ON er.to_entity_id = e2.entity_id
+                JOIN claude.entity_types et2 ON e2.entity_type_id = et2.type_id
+                WHERE er.from_entity_id = %s::uuid AND NOT e2.is_archived
+                UNION ALL
+                SELECT er.relationship_type, er.strength,
+                       e2.entity_id::text as related_id,
+                       e2.display_name as related_name,
+                       et2.type_name as related_type,
+                       'incoming' as direction
+                FROM claude.entity_relationships er
+                JOIN claude.entities e2 ON er.from_entity_id = e2.entity_id
+                JOIN claude.entity_types et2 ON e2.entity_type_id = et2.type_id
+                WHERE er.to_entity_id = %s::uuid AND NOT e2.is_archived
+            """, (entity_id, entity_id))
+            explicit_rels = [dict(r) for r in cur.fetchall()]
+
+            # Resolve implicit relationships based on entity type
+            entity_data = dict(row)
+            type_name = entity_data.get("type_name", "")
+            props = entity_data.get("properties", {}) or {}
+            implicit_rels = []
+
+            if type_name == "odata_entity":
+                # Extract NavigationProperty fields and resolve to catalog entities
+                fields = props.get("fields", [])
+                if isinstance(fields, list):
+                    nav_names = []
+                    for f in fields:
+                        if isinstance(f, dict) and f.get("type") == "NavigationProperty":
+                            name = f.get("name", "")
+                            # Strip "List" suffix for collection nav props
+                            target = name[:-4] if name.endswith("List") else name
+                            nav_names.append((name, target))
+
+                    if nav_names:
+                        # Batch resolve: look up target entity names in the catalog
+                        targets = [t for _, t in nav_names]
+                        cur.execute("""
+                            SELECT e2.entity_id::text, e2.display_name
+                            FROM claude.entities e2
+                            JOIN claude.entity_types et2 ON e2.entity_type_id = et2.type_id
+                            WHERE et2.type_name = 'odata_entity'
+                              AND e2.display_name = ANY(%s)
+                              AND NOT e2.is_archived
+                        """, (targets,))
+                        resolved = {r['display_name']: r['entity_id'] for r in cur.fetchall()}
+
+                        for nav_name, target in nav_names:
+                            rel = {
+                                "relationship_type": "nav_property",
+                                "nav_property": nav_name,
+                                "related_name": target,
+                                "related_type": "odata_entity",
+                                "source": "implicit",
+                            }
+                            if target in resolved:
+                                rel["related_id"] = resolved[target]
+                                rel["resolved"] = True
+                            else:
+                                rel["resolved"] = False
+                            implicit_rels.append(rel)
+
+            elif type_name == "domain_concept":
+                # Resolve workfile_refs
+                for wref in props.get("workfile_refs", []):
+                    if isinstance(wref, dict):
+                        implicit_rels.append({
+                            "relationship_type": "workfile_ref",
+                            "related_name": f"{wref.get('component', '?')}/{wref.get('title', '?')}",
+                            "related_type": "workfile",
+                            "source": "implicit",
+                        })
+                # Resolve vault_refs
+                for vref in props.get("vault_refs", []):
+                    if isinstance(vref, dict):
+                        implicit_rels.append({
+                            "relationship_type": "vault_ref",
+                            "related_name": vref.get("title", vref.get("path", "?")),
+                            "related_type": "vault_doc",
+                            "source": "implicit",
+                        })
+                    elif isinstance(vref, str):
+                        implicit_rels.append({
+                            "relationship_type": "vault_ref",
+                            "related_name": vref,
+                            "related_type": "vault_doc",
+                            "source": "implicit",
+                        })
+
+            # Mark explicit relationships with source
+            for r in explicit_rels:
+                r["source"] = "explicit"
+
+            # Update access tracking
+            cur.execute("""
+                UPDATE claude.entities
+                SET access_count = access_count + 1, last_accessed_at = NOW()
+                WHERE entity_id = %s::uuid
+            """, (entity_id,))
+            conn.commit()
+
+            # Build summary counts
+            all_rels = explicit_rels + implicit_rels
+            rel_summary = {}
+            for r in all_rels:
+                rt = r["relationship_type"]
+                rel_summary[rt] = rel_summary.get(rt, 0) + 1
+
+            return {
+                "success": True,
+                "stage": "detail",
+                "entity": entity_data,
+                "relationships": explicit_rels,
+                "implicit_connections": implicit_rels,
+                "connection_summary": rel_summary,
+            }
+
+        # ── Build tag/project filter ──
+        filter_clauses = ["NOT e.is_archived"]
+        filter_params = []
+
+        if tags:
+            filter_clauses.append("e.tags @> %s")
+            filter_params.append(tags)
+
+        if project:
+            cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (project,))
+            proj = cur.fetchone()
+            if proj:
+                filter_clauses.append("e.project_id = %s::uuid")
+                filter_params.append(str(proj['project_id']))
+
+        where = " AND ".join(filter_clauses)
+
+        # ── Stage 2: BROWSE (entity_type provided) ──
+        if entity_type:
+            # Get total count
+            cur.execute(f"""
+                SELECT count(*) as total
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE et.type_name = %s AND {where}
+            """, [entity_type] + filter_params)
+            total = cur.fetchone()['total']
+
+            # Get paginated entity list with compact info
+            cur.execute(f"""
+                SELECT e.entity_id::text, e.display_name, e.summary,
+                       e.tags, e.access_count,
+                       jsonb_typeof(e.properties->'fields') as has_fields,
+                       CASE WHEN e.properties ? 'field_count'
+                            THEN (e.properties->>'field_count')::int
+                            ELSE NULL END as field_count
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE et.type_name = %s AND {where}
+                ORDER BY e.display_name
+                LIMIT %s OFFSET %s
+            """, [entity_type] + filter_params + [page_size, offset])
+            rows = cur.fetchall()
+
+            entities = []
+            for r in rows:
+                entry = {
+                    "entity_id": r['entity_id'],
+                    "name": r['display_name'],
+                }
+                if r['summary']:
+                    entry["summary"] = r['summary']
+                if r['field_count']:
+                    entry["field_count"] = r['field_count']
+                entities.append(entry)
+
+            tag_label = f" (tags: {', '.join(tags)})" if tags else ""
+            total_pages = (total + page_size - 1) // page_size
+
+            return {
+                "success": True,
+                "stage": "browse",
+                "entity_type": entity_type,
+                "filter": tag_label.strip(),
+                "entities": entities,
+                "total_count": total,
+                "page": page,
+                "total_pages": total_pages,
+                "page_size": page_size,
+            }
+
+        # ── Stage 1: INVENTORY (default) ──
+        cur.execute(f"""
+            SELECT et.type_name, et.display_name as type_display,
+                   count(e.entity_id) as count
+            FROM claude.entity_types et
+            LEFT JOIN claude.entities e ON e.entity_type_id = et.type_id AND {where}
+            WHERE et.is_active = TRUE
+            GROUP BY et.type_name, et.display_name
+            HAVING count(e.entity_id) > 0
+            ORDER BY count(e.entity_id) DESC
+        """, filter_params)
+        type_rows = cur.fetchall()
+
+        total_entities = sum(r['count'] for r in type_rows)
+        tag_label = ', '.join(tags) if tags else 'all'
+
+        # Build ASCII tree
+        tree_lines = [f"Knowledge Map ({tag_label}) — {total_entities} entities"]
+        for i, r in enumerate(type_rows):
+            is_last = (i == len(type_rows) - 1)
+            prefix = "└── " if is_last else "├── "
+            tree_lines.append(f"{prefix}{r['type_display']} ({r['count']})")
+
+        tree = "\n".join(tree_lines)
+
+        # Also return structured data
+        types = [{"type_name": r['type_name'], "display_name": r['type_display'],
+                  "count": r['count']} for r in type_rows]
+
+        return {
+            "success": True,
+            "stage": "inventory",
+            "tree": tree,
+            "types": types,
+            "total_entities": total_entities,
+            "filter_tags": tags or [],
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Entity exploration failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
 # ============================================================================
 # Code Knowledge Graph Tools
 # ============================================================================
