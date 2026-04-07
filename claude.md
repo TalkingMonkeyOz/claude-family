@@ -86,7 +86,7 @@ claude-family/
 └── templates/            # Project templates
 ```
 
----
+**File placement rules**: See [[File Placement Standards]] for where new files should go, line limits, and DB-managed file rules.
 
 ## Coding Standards
 
@@ -168,37 +168,17 @@ Status changes go through the **WorkflowEngine** state machine. Invalid transiti
 
 ## Skills System (ADR-005)
 
-**Architecture**: Skills-First — 32 skills in `.claude/skills/`, all with YAML frontmatter.
+## Skills, Instructions & Information Discovery
 
-Core skills available:
+**Skills**: 32 skills in `.claude/skills/`. Use the `Skill` tool when a task matches. See Global CLAUDE.md for full skill list and descriptions.
 
-| Skill | Purpose |
-|-------|---------|
-| database-operations | SQL validation, column_registry checks |
-| work-item-routing | Feedback, features, build_tasks routing |
-| session-management | Session lifecycle (start/end/resume) |
-| code-review | Pre-commit review, testing |
-| project-ops | Project init, retrofit, phases |
-| messaging | Inter-Claude communication |
-| agentic-orchestration | Agent spawning, parallel work |
-| testing-patterns | Test writing and execution |
-| bpmn-modeling | BPMN-first process design, query/model/test workflows |
+**Instructions**: Auto-apply coding standards based on file patterns. See Global CLAUDE.md for available standards.
 
-**Usage**: When a skill applies, use the `Skill` tool to invoke it.
-
-**History**: Migrated from process_router (ADR-005, 2025-12). Commands migrated to skills (2026-03-15).
-
----
+**Information Discovery**: See [[Information Discovery Architecture]] for the full 8-layer model — how information flows from CLAUDE.md through protocol, rules, RAG, skills, and MCP tools.
 
 ## Auto-Apply Instructions
 
-Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
-
-**Available** (9 files): csharp, winforms, winforms-dark-theme, wpf-ui, mvvm, a11y, sql-postgres, playwright, markdown
-
-**Override**: Create `.claude/instructions/[name].instructions.md` for project-specific rules.
-
----
+Coding standards in `~/.claude/instructions/` auto-apply based on file patterns. See Global CLAUDE.md for available standards and override instructions.
 
 ## Knowledge System
 
@@ -213,4 +193,6 @@ Coding standards in `~/.claude/instructions/` auto-apply based on file patterns.
 | 2026-03-14 | **Background Job Runner**: `job_runner.py` + 6 maintenance jobs. Storage skill created (see `storage-rules` for usage). |
 | 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables, 2 new MCP tools (`catalog`/`recall_entities`). |
 **Full changelog**: See git log
+
+| 2026-04-07 | **Entity Catalog v2** [F187]: Deep property search (BM25 indexes JSONB content), `explore_entities()` 3-stage progressive disclosure browser, relationship walking (OData nav props + domain concept refs). See [[Entity Catalog: Search vs Browse Pattern]]. |
 

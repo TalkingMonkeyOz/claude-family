@@ -8,29 +8,44 @@
     targetNamespace="http://claude-family/bpmn/entity-catalog-retrieval">
 
   <!--
-    Entity Catalog: Progressive Disclosure Workflow
+    Entity Catalog v2: Complete Workflow
 
-    Two independent paths modeled as separate processes:
+    Three independent paths modeled as separate processes:
 
     Path 1 — catalog() (Write):
       Claude provides entity properties → validate against json_schema →
       upsert into claude.entities → compute summary from properties →
       store summary on row → generate/update embedding → done.
+      Note: DB trigger auto-populates tsvector from JSONB properties (BT555).
 
-    Path 2 — recall_entities() (Read with Progressive Disclosure):
-      Search requested → generate query embedding → RRF fusion search →
+    Path 2 — recall_entities() (Search with RRF Fusion):
+      Search requested → generate query embedding → RRF fusion search
+      (vector similarity + BM25 full-text including JSONB property content) →
       gateway on detail_level:
         "summary" (default): return summary + entity_id per match
         "full": return full properties per match
         "entity_id": return single entity full properties
       → update access stats → done.
 
+    Path 3 — explore_entities() (Browse with Relationship Walking):
+      Browse requested → gateway on stage:
+        "inventory": aggregate entity type counts with tag filter → ASCII tree
+        "browse": paginated entity list for a type → compact summaries
+        "detail": full entity properties + explicit relationships (entity_relationships)
+                  + implicit connections (OData nav prop → entity resolution,
+                    domain_concept workfile/vault refs) → connection summary
+      → update access stats (detail only) → done.
+
+    Decision: Search vs Browse
+      - "I need to find X" → recall_entities() (semantic + keyword search)
+      - "Show me what exists" → explore_entities() (structured navigation)
+
     Actors:
       [CLAUDE] = userTask (Claude provides input)
       [HOOK]   = scriptTask (server-side logic in project-tools)
       [DB]     = scriptTask (direct database interaction, claude.entities)
 
-    Key tables: claude.entities, claude.entity_types
+    Key tables: claude.entities, claude.entity_types, claude.entity_relationships
     Implementation: mcp-servers/project-tools/server_v2.py
   -->
 
@@ -48,29 +63,34 @@
       <bpmn:outgoing>Flow_provide_to_validate</bpmn:outgoing>
     </bpmn:userTask>
 
-    <bpmn:scriptTask id="Task_validate_schema" name="[HOOK] Validate against entity_type json_schema">
+    <bpmn:scriptTask id="Task_validate_schema" name="[HOOK] Validate against entity_type json_schema" scriptFormat="python">
       <bpmn:incoming>Flow_provide_to_validate</bpmn:incoming>
       <bpmn:outgoing>Flow_validate_to_upsert</bpmn:outgoing>
+      <bpmn:script>schema_validated = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="Task_upsert_entity" name="[DB] Upsert entity in claude.entities">
+    <bpmn:scriptTask id="Task_upsert_entity" name="[DB] Upsert entity in claude.entities" scriptFormat="python">
       <bpmn:incoming>Flow_validate_to_upsert</bpmn:incoming>
       <bpmn:outgoing>Flow_upsert_to_summary</bpmn:outgoing>
+      <bpmn:script>entity_upserted = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="Task_compute_summary" name="[HOOK] Compute summary from properties">
+    <bpmn:scriptTask id="Task_compute_summary" name="[HOOK] Compute summary from properties" scriptFormat="python">
       <bpmn:incoming>Flow_upsert_to_summary</bpmn:incoming>
       <bpmn:outgoing>Flow_summary_to_store</bpmn:outgoing>
+      <bpmn:script>summary_computed = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="Task_store_summary" name="[DB] Store summary on entity row">
+    <bpmn:scriptTask id="Task_store_summary" name="[DB] Store summary on entity row" scriptFormat="python">
       <bpmn:incoming>Flow_summary_to_store</bpmn:incoming>
       <bpmn:outgoing>Flow_store_to_embed</bpmn:outgoing>
+      <bpmn:script>summary_stored = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="Task_generate_embedding" name="[HOOK] Generate/update embedding">
+    <bpmn:scriptTask id="Task_generate_embedding" name="[HOOK] Generate/update embedding" scriptFormat="python">
       <bpmn:incoming>Flow_store_to_embed</bpmn:incoming>
       <bpmn:outgoing>Flow_embed_to_end</bpmn:outgoing>
+      <bpmn:script>embedding_generated = True</bpmn:script>
     </bpmn:scriptTask>
 
     <bpmn:endEvent id="End_entity_stored" name="Entity Stored">
@@ -97,14 +117,16 @@
       <bpmn:outgoing>Flow_start_to_query_embed</bpmn:outgoing>
     </bpmn:startEvent>
 
-    <bpmn:scriptTask id="Task_query_embedding" name="[HOOK] Generate query embedding">
+    <bpmn:scriptTask id="Task_query_embedding" name="[HOOK] Generate query embedding" scriptFormat="python">
       <bpmn:incoming>Flow_start_to_query_embed</bpmn:incoming>
       <bpmn:outgoing>Flow_query_embed_to_rrf</bpmn:outgoing>
+      <bpmn:script>query_embedding_generated = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="Task_rrf_search" name="[DB] RRF fusion search (vector + BM25)">
+    <bpmn:scriptTask id="Task_rrf_search" name="[DB] RRF fusion search (vector + BM25)" scriptFormat="python">
       <bpmn:incoming>Flow_query_embed_to_rrf</bpmn:incoming>
       <bpmn:outgoing>Flow_rrf_to_gateway</bpmn:outgoing>
+      <bpmn:script>rrf_search_done = True</bpmn:script>
     </bpmn:scriptTask>
 
     <bpmn:exclusiveGateway id="Gateway_detail_level" name="Detail level?">
@@ -115,21 +137,24 @@
     </bpmn:exclusiveGateway>
 
     <!-- Path A: summary (default) -->
-    <bpmn:scriptTask id="Task_return_summaries" name="[DB] Return summary + entity_id for matches">
+    <bpmn:scriptTask id="Task_return_summaries" name="[DB] Return summary + entity_id for matches" scriptFormat="python">
       <bpmn:incoming>Flow_gateway_to_summary</bpmn:incoming>
       <bpmn:outgoing>Flow_summaries_to_join</bpmn:outgoing>
+      <bpmn:script>summaries_returned = True</bpmn:script>
     </bpmn:scriptTask>
 
     <!-- Path B: full -->
-    <bpmn:scriptTask id="Task_return_full" name="[DB] Return full properties for matches">
+    <bpmn:scriptTask id="Task_return_full" name="[DB] Return full properties for matches" scriptFormat="python">
       <bpmn:incoming>Flow_gateway_to_full</bpmn:incoming>
       <bpmn:outgoing>Flow_full_to_join</bpmn:outgoing>
+      <bpmn:script>full_properties_returned = True</bpmn:script>
     </bpmn:scriptTask>
 
     <!-- Path C: entity_id -->
-    <bpmn:scriptTask id="Task_return_single" name="[DB] Return single entity full properties">
+    <bpmn:scriptTask id="Task_return_single" name="[DB] Return single entity full properties" scriptFormat="python">
       <bpmn:incoming>Flow_gateway_to_single</bpmn:incoming>
       <bpmn:outgoing>Flow_single_to_join</bpmn:outgoing>
+      <bpmn:script>single_entity_returned = True</bpmn:script>
     </bpmn:scriptTask>
 
     <!-- Converging gateway -->
@@ -140,9 +165,10 @@
       <bpmn:outgoing>Flow_join_to_stats</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <bpmn:scriptTask id="Task_update_access_stats" name="[DB] Update access stats">
+    <bpmn:scriptTask id="Task_update_access_stats" name="[DB] Update access stats" scriptFormat="python">
       <bpmn:incoming>Flow_join_to_stats</bpmn:incoming>
       <bpmn:outgoing>Flow_stats_to_end</bpmn:outgoing>
+      <bpmn:script>access_stats_updated = True</bpmn:script>
     </bpmn:scriptTask>
 
     <bpmn:endEvent id="End_results_returned" name="Results Returned">
@@ -170,6 +196,140 @@
 
     <bpmn:sequenceFlow id="Flow_join_to_stats" sourceRef="Gateway_rejoin" targetRef="Task_update_access_stats" />
     <bpmn:sequenceFlow id="Flow_stats_to_end" sourceRef="Task_update_access_stats" targetRef="End_results_returned" />
+
+  </bpmn:process>
+
+  <!-- ================================================================== -->
+  <!-- PROCESS 3: explore_entities() — Browse with Relationship Walking   -->
+  <!-- ================================================================== -->
+  <bpmn:process id="entity_catalog_browse" name="Entity Catalog: Browse with Relationship Walking" isExecutable="true">
+
+    <bpmn:startEvent id="Start_browse_requested" name="Browse Requested">
+      <bpmn:outgoing>Flow_start_to_stage_gateway</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Stage decision: inventory vs browse vs detail -->
+    <bpmn:exclusiveGateway id="Gateway_stage" name="Which stage?">
+      <bpmn:incoming>Flow_start_to_stage_gateway</bpmn:incoming>
+      <bpmn:outgoing>Flow_to_inventory</bpmn:outgoing>
+      <bpmn:outgoing>Flow_to_browse</bpmn:outgoing>
+      <bpmn:outgoing>Flow_to_detail</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Stage 1: INVENTORY — type counts with tag filter -->
+    <bpmn:scriptTask id="Task_aggregate_types" name="[DB] Aggregate entity type counts with tag/project filter" scriptFormat="python">
+      <bpmn:incoming>Flow_to_inventory</bpmn:incoming>
+      <bpmn:outgoing>Flow_inventory_to_tree</bpmn:outgoing>
+      <bpmn:script>types_aggregated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_render_tree" name="[HOOK] Render ASCII tree of types" scriptFormat="python">
+      <bpmn:incoming>Flow_inventory_to_tree</bpmn:incoming>
+      <bpmn:outgoing>Flow_tree_to_end</bpmn:outgoing>
+      <bpmn:script>tree_rendered = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Stage 2: BROWSE — paginated entity list -->
+    <bpmn:scriptTask id="Task_paginated_list" name="[DB] Query paginated entities for type with summaries" scriptFormat="python">
+      <bpmn:incoming>Flow_to_browse</bpmn:incoming>
+      <bpmn:outgoing>Flow_browse_to_end</bpmn:outgoing>
+      <bpmn:script>paginated_list_returned = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Stage 3: DETAIL — full entity + relationships -->
+    <bpmn:scriptTask id="Task_fetch_entity" name="[DB] Fetch full entity properties" scriptFormat="python">
+      <bpmn:incoming>Flow_to_detail</bpmn:incoming>
+      <bpmn:outgoing>Flow_entity_to_explicit_rels</bpmn:outgoing>
+      <bpmn:script>entity_fetched = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_fetch_explicit_rels" name="[DB] Query entity_relationships (both directions)" scriptFormat="python">
+      <bpmn:incoming>Flow_entity_to_explicit_rels</bpmn:incoming>
+      <bpmn:outgoing>Flow_explicit_to_type_check</bpmn:outgoing>
+      <bpmn:script>explicit_rels_fetched = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Implicit relationship resolution depends on entity type -->
+    <bpmn:exclusiveGateway id="Gateway_entity_type" name="Entity type?">
+      <bpmn:incoming>Flow_explicit_to_type_check</bpmn:incoming>
+      <bpmn:outgoing>Flow_to_odata_resolve</bpmn:outgoing>
+      <bpmn:outgoing>Flow_to_domain_resolve</bpmn:outgoing>
+      <bpmn:outgoing>Flow_to_no_implicit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="Task_resolve_odata_navprops" name="[DB] Resolve OData nav properties to catalog entities" scriptFormat="python">
+      <bpmn:incoming>Flow_to_odata_resolve</bpmn:incoming>
+      <bpmn:outgoing>Flow_odata_to_merge</bpmn:outgoing>
+      <bpmn:script>odata_navprops_resolved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="Task_resolve_domain_refs" name="[HOOK] Resolve domain_concept workfile/vault refs" scriptFormat="python">
+      <bpmn:incoming>Flow_to_domain_resolve</bpmn:incoming>
+      <bpmn:outgoing>Flow_domain_to_merge</bpmn:outgoing>
+      <bpmn:script>domain_refs_resolved = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge all connections -->
+    <bpmn:exclusiveGateway id="Gateway_merge_connections" name="Merge connections">
+      <bpmn:incoming>Flow_odata_to_merge</bpmn:incoming>
+      <bpmn:incoming>Flow_domain_to_merge</bpmn:incoming>
+      <bpmn:incoming>Flow_to_no_implicit</bpmn:incoming>
+      <bpmn:outgoing>Flow_merge_to_stats</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="Task_update_detail_stats" name="[DB] Update access stats" scriptFormat="python">
+      <bpmn:incoming>Flow_merge_to_stats</bpmn:incoming>
+      <bpmn:outgoing>Flow_detail_stats_to_end</bpmn:outgoing>
+      <bpmn:script>detail_stats_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Converging end -->
+    <bpmn:exclusiveGateway id="Gateway_browse_end" name="Rejoin all stages">
+      <bpmn:incoming>Flow_tree_to_end</bpmn:incoming>
+      <bpmn:incoming>Flow_browse_to_end</bpmn:incoming>
+      <bpmn:incoming>Flow_detail_stats_to_end</bpmn:incoming>
+      <bpmn:outgoing>Flow_rejoin_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="End_browse_complete" name="Browse Complete">
+      <bpmn:incoming>Flow_rejoin_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="Flow_start_to_stage_gateway" sourceRef="Start_browse_requested" targetRef="Gateway_stage" />
+
+    <bpmn:sequenceFlow id="Flow_to_inventory" name="no entity_type, no entity_id" sourceRef="Gateway_stage" targetRef="Task_aggregate_types">
+      <bpmn:conditionExpression>stage == "inventory"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_to_browse" name="entity_type provided" sourceRef="Gateway_stage" targetRef="Task_paginated_list">
+      <bpmn:conditionExpression>stage == "browse"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_to_detail" name="entity_id provided" sourceRef="Gateway_stage" targetRef="Task_fetch_entity">
+      <bpmn:conditionExpression>stage == "detail"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="Flow_inventory_to_tree" sourceRef="Task_aggregate_types" targetRef="Task_render_tree" />
+    <bpmn:sequenceFlow id="Flow_tree_to_end" sourceRef="Task_render_tree" targetRef="Gateway_browse_end" />
+    <bpmn:sequenceFlow id="Flow_browse_to_end" sourceRef="Task_paginated_list" targetRef="Gateway_browse_end" />
+
+    <bpmn:sequenceFlow id="Flow_entity_to_explicit_rels" sourceRef="Task_fetch_entity" targetRef="Task_fetch_explicit_rels" />
+    <bpmn:sequenceFlow id="Flow_explicit_to_type_check" sourceRef="Task_fetch_explicit_rels" targetRef="Gateway_entity_type" />
+
+    <bpmn:sequenceFlow id="Flow_to_odata_resolve" name="odata_entity" sourceRef="Gateway_entity_type" targetRef="Task_resolve_odata_navprops">
+      <bpmn:conditionExpression>entity_type == "odata_entity"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_to_domain_resolve" name="domain_concept" sourceRef="Gateway_entity_type" targetRef="Task_resolve_domain_refs">
+      <bpmn:conditionExpression>entity_type == "domain_concept"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="Flow_to_no_implicit" name="other types" sourceRef="Gateway_entity_type" targetRef="Gateway_merge_connections">
+      <bpmn:conditionExpression>entity_type not in ("odata_entity", "domain_concept")</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="Flow_odata_to_merge" sourceRef="Task_resolve_odata_navprops" targetRef="Gateway_merge_connections" />
+    <bpmn:sequenceFlow id="Flow_domain_to_merge" sourceRef="Task_resolve_domain_refs" targetRef="Gateway_merge_connections" />
+    <bpmn:sequenceFlow id="Flow_merge_to_stats" sourceRef="Gateway_merge_connections" targetRef="Task_update_detail_stats" />
+    <bpmn:sequenceFlow id="Flow_detail_stats_to_end" sourceRef="Task_update_detail_stats" targetRef="Gateway_browse_end" />
+    <bpmn:sequenceFlow id="Flow_rejoin_to_end" sourceRef="Gateway_browse_end" targetRef="End_browse_complete" />
 
   </bpmn:process>
 
