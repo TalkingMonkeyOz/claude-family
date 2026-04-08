@@ -18,35 +18,6 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 ---
 
-## CRITICAL: Config Management (READ FIRST)
-
-**Database is source of truth for config.**
-
-| File | Source | Behavior |
-|------|--------|----------|
-| `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | Generated from DB. Manual edits overwritten by `regenerate_settings()`. |
-| `CLAUDE.md` | `profiles.config->behavior` | Stored in DB. Edit via `update_claude_md()`. Deploy via `deploy_claude_md()`. Manual file edits are OK but won't persist to DB. |
-
-**DO NOT manually edit settings.local.json** - changes will be overwritten.
-
-**To change config permanently:**
-```sql
--- All projects: Update config_templates (template_id=1 = hooks-base)
--- Project type: Update project_type_configs
--- Single project: Update workspaces.startup_config
-```
-
-**Regenerate manually:** `python scripts/sync_project.py` (run from project directory)
-
-**Full details**: See [[Config Management SOP]]
-
-## Current Phase
-
-**Phase**: Implementation
-**Focus**: Infrastructure optimization and governance enforcement
-
----
-
 ## Architecture Overview
 
 Infrastructure for the Claude Family ecosystem:
@@ -58,141 +29,112 @@ Infrastructure for the Claude Family ecosystem:
 
 **Full details**: See `ARCHITECTURE.md`
 
+---
+
 ## Project Structure
 
 ```
 claude-family/
-├── CLAUDE.md              # This file - AI constitution
+├── CLAUDE.md              # This file
 ├── PROBLEM_STATEMENT.md   # Problem definition
 ├── ARCHITECTURE.md        # System design
 ├── .claude/
-│   ├── commands/          # Slash commands
+│   ├── rules/             # Auto-loaded enforcement rules
+│   ├── skills/            # 32 domain skills (use Skill tool)
 │   ├── instructions/      # Auto-apply coding standards
-│   ├── collections/       # Agent/resource groupings
-│   └── skills/            # Domain skills
-├── docs/
-│   ├── adr/              # Architecture decisions
-│   ├── sop/              # Standard operating procedures
-│   └── *.md              # Plans, specs, guides
-├── knowledge-vault/       # Obsidian vault for knowledge capture
-│   ├── 00-Inbox/         # Quick capture
-│   ├── 10-Projects/      # Project-specific knowledge
-│   ├── 20-Domains/       # Domain knowledge (APIs, DB, etc.)
-│   ├── 30-Patterns/      # Reusable patterns, gotchas, solutions
-│   ├── 40-Procedures/    # SOPs, Family Rules, workflows
-│   └── _templates/       # Note templates
-├── scripts/              # Python utilities
-├── mcp-servers/          # MCP server implementations
-└── templates/            # Project templates
+│   └── commands/          # Slash commands
+├── knowledge-vault/       # Obsidian vault (RAG-indexed)
+│   ├── 10-Projects/       # Project knowledge
+│   ├── 20-Domains/        # Domain expertise
+│   ├── 30-Patterns/       # Patterns, gotchas
+│   └── 40-Procedures/     # SOPs, workflows
+├── scripts/               # Python hooks + utilities
+├── mcp-servers/           # MCP server implementations
+│   ├── project-tools/     # Main tooling (server_v2.py, ~60 tools)
+│   └── bpmn-engine/       # Process models + test runner
+└── templates/             # Project templates
 ```
 
-**File placement rules**: See [[File Placement Standards]] for where new files should go, line limits, and DB-managed file rules.
+---
 
-## Coding Standards
+## Build & Run
 
-- **Python**: PEP 8, type hints where helpful
-- **SQL**: Use `claude` schema (not legacy `claude_family`, `claude_pm`)
-- **Docs**: Markdown, follow template structure
-- **Commits**: Descriptive messages, reference issues
+```bash
+# Sync all project config from DB
+python scripts/sync_project.py
+
+# Run background jobs manually
+python scripts/job_runner.py --list        # See all jobs
+python scripts/job_runner.py --force JOB   # Force-run a job
+
+# BPMN process tests
+cd mcp-servers/bpmn-engine && pytest tests/ -v
+
+# Vault embedding update
+python scripts/embed_vault_documents.py --all-projects
+```
+
+---
+
+## Information Discovery
+
+| I need... | Tool |
+|-----------|------|
+| Domain knowledge, gotchas | `recall_memories("topic keyword")` |
+| Structured data (APIs, entities, schemas) | `recall_entities("search term")` |
+| Browse entity types | `explore_entities(entity_type="domain_concept")` |
+| Working notes from prior sessions | `unstash("component-name")` or `list_workfiles()` |
+| Session decisions/credentials | `list_session_facts()` |
+| Vault docs (SOPs, patterns) | RAG auto-searches each prompt. Also: `recall_memories("SOP topic")` |
+| Available BPMN models | `search_processes("keyword")` or `list_processes()` |
+| DB table schema | `get_schema(table_name="table")` |
 
 ---
 
 ## Work Tracking
 
-| I have... | Put it in... | How |
-|-----------|--------------|-----|
-| An idea | feedback | type='idea' |
-| A bug | feedback | type='bug' |
-| A feature to build | features | link to project |
-| A task to do | build_tasks | `create_linked_task(feature_code, ...)` |
-| Work right now | TodoWrite | session only |
+| I have... | Tool |
+|-----------|------|
+| A bug | `create_feedback(type='bug', title='...', description='...')` |
+| An idea | `create_feedback(type='idea', title='...', description='...')` |
+| A feature to build | `create_feature(name='...', description='...')` |
+| A task within a feature | `create_linked_task(feature_code, name, desc, verification, files)` |
+| Work to start | `start_work(task_code)` / `complete_work(task_code)` |
+| Status to check | `get_work_context(scope='current')` or `get_build_board(project)` |
+| Config to update | `update_config(component_type, project, name, content, reason)` |
+| CLAUDE.md section to update | `update_claude_md(project, section, content)` |
 
-**Data Gateway**: Before writing, check `claude.column_registry` for valid values.
-
-**Task tool preference**: Use `create_linked_task` by default (enforces quality: description >=100 chars, verification, files). Use `add_build_task` only for quick/informal tasks.
-
-### Workflow Tools (Application Layer)
-
-Status changes go through the **WorkflowEngine** state machine. Invalid transitions are rejected.
-
-| Tool | Use When |
-|------|----------|
-| `advance_status(type, id, status)` | Move any item through its state machine |
-| `start_work(task_code)` | Start a build task (todo→in_progress + loads plan_data) |
-| `complete_work(task_code)` | Finish a task (in_progress→completed + suggests next task) |
-| `get_work_context(scope)` | Token-budgeted context: current/feature/project |
-| `create_linked_task(feature, name, desc, verification, files)` | Add detailed task to active feature |
-
-### Config Tools (v3+)
-
-| Tool | Use When |
-|------|----------|
-| `update_config(component_type, project, name, content, reason)` | **Update ANY config (skill/rule/instruction/claude_md) with versioning + deploy** |
-| `update_claude_md(project, section, content)` | Update a CLAUDE.md section atomically |
-| `deploy_claude_md(project)` | Deploy CLAUDE.md from DB to file (one-way) |
-| `deploy_project(project, components)` | Deploy settings/rules/skills from DB |
-| `regenerate_settings(project)` | Regenerate settings.local.json from DB |
-
-## Configuration (Database-Driven)
-
-**Project Type**: `infrastructure` (inherits defaults from `project_type_configs`)
-
-**Config Flow**: Database → `sync_project.py` → all project files (settings.local.json, .mcp.json, skills, commands, rules, agents)
-
-**Self-Healing**: All configs regenerate from database on every launch and SessionStart. Manual file edits are temporary.
-
-**Customization**: Update `claude.workspaces.startup_config` (JSONB) to override defaults.
-
-**Components in DB**: `claude.skills` (scope: global/project/command/agent), `claude.rules`, `claude.instructions`
-
-**Details**: See [[Config Management SOP]]
+**Data Gateway**: Before INSERT/UPDATE on constrained columns, check `claude.column_registry`.
 
 ---
 
-## Standard Operating Procedures
+## Project-Specific Rules
 
-**Workflow**: CLAUDE.md → Vault SOP → Skill → Done
+### Config Management (CRITICAL)
 
-- **New project**: See [[New Project SOP]]
-- **Add MCP**: See [[Add MCP Server SOP]]
-- **Manage config**: See [[Config Management SOP]]
+**Database is source of truth.** Files regenerate from DB on every launch.
 
-## Key Procedures
+| File | Source | Rule |
+|------|--------|------|
+| `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | NEVER edit manually |
+| `CLAUDE.md` | `profiles.config->behavior` | Edit via `update_claude_md()` |
+| Skills, rules, instructions | `claude.skills`, `claude.rules`, `claude.instructions` | Edit via `update_config()` |
 
-1. **Session Start** - Automatic via SessionStart hook (logs session, loads todos, checks messages)
-2. `/session-end` - Run manually to save summary and learnings
-3. Data writes - Check column_registry for valid values
-4. Config changes - Update database, files regenerate automatically
+### Schema Rules
+
+- **ALWAYS** use `claude.*` schema — NEVER `claude_family.*` or `claude_pm.*`
+- Check `claude.column_registry` before writing to constrained columns
+
+### BPMN-First
+
+Before modifying hooks, workflow code, config management, or enforcement rules:
+1. `search_processes("system name")` to find existing model
+2. Update BPMN model FIRST, then implement code
+3. Commit model + code together
 
 ---
 
-## Skills System (ADR-005)
-
-## Skills, Instructions & Information Discovery
-
-**Skills**: 32 skills in `.claude/skills/`. Use the `Skill` tool when a task matches. See Global CLAUDE.md for full skill list and descriptions.
-
-**Instructions**: Auto-apply coding standards based on file patterns. See Global CLAUDE.md for available standards.
-
-**Information Discovery**: See [[Information Discovery Architecture]] for the full 8-layer model — how information flows from CLAUDE.md through protocol, rules, RAG, skills, and MCP tools.
-
-## Auto-Apply Instructions
-
-Coding standards in `~/.claude/instructions/` auto-apply based on file patterns. See Global CLAUDE.md for available standards and override instructions.
-
-## Knowledge System
-
-3-tier memory: SHORT (session facts) → MID (working knowledge) → LONG (proven patterns). `remember()` auto-routes, `recall_memories()` retrieves with budget cap. `consolidate_memories()` promotes/decays/archives (auto on session end + 24h periodic). Vault docs in `knowledge-vault/` auto-searched via RAG hook. See storage-rules (auto-loaded via `.claude/rules/`) for which system to use.
-
-## Recent Changes
-
-| Date | Change |
-|------|--------|
-| 2026-03-17 | **Routing Fix**: Replaced hardcoded vault paths in CLAUDE.md with wiki-links and tool-based routing. Entity catalog is the indirection layer — paths change in catalog, CLAUDE.md stays stable. |
-| 2026-03-15 | **Unified Deployment System**: Created `sync_project.py` replacing 3 scripts. All components DB-backed. Background job scheduler activated. No-loose-ends rule added. |
-| 2026-03-14 | **Background Job Runner**: `job_runner.py` + 6 maintenance jobs. Storage skill created (see `storage-rules` for usage). |
-| 2026-03-13 | **Entity Catalog System**: Type-extensible entity storage with RRF search. 3 new tables, 2 new MCP tools (`catalog`/`recall_entities`). |
-**Full changelog**: See git log
-
-| 2026-04-07 | **Entity Catalog v2** [F187]: Deep property search (BM25 indexes JSONB content), `explore_entities()` 3-stage progressive disclosure browser, relationship walking (OData nav props + domain concept refs). See [[Entity Catalog: Search vs Browse Pattern]]. |
-
+**Version**: 5.0
+**Created**: 2025-10-21
+**Updated**: 2026-04-08
+**Template**: claude-md-standard v1.0
