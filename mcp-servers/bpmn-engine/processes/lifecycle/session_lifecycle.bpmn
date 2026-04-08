@@ -14,9 +14,10 @@
 
       Paths:
         1. Fresh session: start → auto_archive → session_start → check_messages → load_state
+           → check_workfiles → surface_entities → inject_handoff
            → has_prior_state(False) → fresh_start → work_merge → do_work
            → work_action(end_session) → save_summary → close_session → end_normal
-        2. Resumed session: ... → has_prior_state(True) → display_session_summary
+        2. Resumed session: ... → inject_handoff → has_prior_state(True) → display_session_summary
            → has_prior_tasks → ... → work_merge → do_work
         3. Compact cycle: do_work → action(compact) → save_checkpoint → do_work (loop)
         4. Continue loop: do_work → action(continue/default) → do_work (loop)
@@ -98,7 +99,7 @@ file counts, and pinned status. Helps Claude understand what component context i
     <!-- Surface available cataloged entities for this project's domain -->
     <bpmn:scriptTask id="surface_entities" name="[MCP] Surface Available Entity Types" scriptFormat="python">
       <bpmn:incoming>flow_check_workfiles_to_surface_entities</bpmn:incoming>
-      <bpmn:outgoing>flow_surface_entities_to_prior_gateway</bpmn:outgoing>
+      <bpmn:outgoing>flow_surface_entities_to_inject_handoff</bpmn:outgoing>
       <bpmn:script>entities_surfaced = True</bpmn:script>
       <bpmn:documentation>Query claude.entities grouped by entity_type for the project's client_domain.
 If cataloged entities exist (e.g., 366 odata_entity for nimbus), include count
@@ -107,9 +108,35 @@ projects automatically learn what structured data is available without needing
 CLAUDE.md sections.</bpmn:documentation>
     </bpmn:scriptTask>
 
+    <!-- Inject handoff context from previous session (session_state table) -->
+    <bpmn:scriptTask id="inject_handoff" name="[HOOK] Inject Handoff Context (session_state)" scriptFormat="python">
+      <bpmn:incoming>flow_surface_entities_to_inject_handoff</bpmn:incoming>
+      <bpmn:outgoing>flow_inject_handoff_to_prior_gateway</bpmn:outgoing>
+      <bpmn:script>
+handoff = query("SELECT current_focus, next_steps FROM claude.session_state WHERE project_name = project")
+if handoff:
+    prior_state = True
+    inject_context(f"LAST SESSION: {handoff.current_focus}\nNEXT STEPS: {handoff.next_steps}")
+else:
+    prior_state = False
+      </bpmn:script>
+      <bpmn:documentation>KEY HANDOFF STEP: Reads session_state.current_focus and session_state.next_steps
+for the current project. This data was written by end_session() (MCP tool) in the
+previous session. Injected into the startup hook output so Claude immediately knows
+what was happening and what to do next. This is what enables seamless session-to-session
+continuity — even after hard reboots or context clears.
+
+BUG FIX (2026-04-08): Previously this step did not exist. session_state was written
+correctly by end_session() but never read back at startup. Added as part of the
+session continuity improvement (handoff = DB-injected prompt).</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:sequenceFlow id="flow_surface_entities_to_inject_handoff" sourceRef="surface_entities" targetRef="inject_handoff" />
+    <bpmn:sequenceFlow id="flow_inject_handoff_to_prior_gateway" sourceRef="inject_handoff" targetRef="has_prior_state_gateway" />
+
     <!-- Exclusive Gateway: Has Prior State? -->
     <bpmn:exclusiveGateway id="has_prior_state_gateway" name="Has Prior State?" default="flow_fresh_start">
-      <bpmn:incoming>flow_surface_entities_to_prior_gateway</bpmn:incoming>
+      <bpmn:incoming>flow_inject_handoff_to_prior_gateway</bpmn:incoming>
       <bpmn:outgoing>flow_restore_context</bpmn:outgoing>
       <bpmn:outgoing>flow_fresh_start</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -258,7 +285,8 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_check_messages_to_load_state" sourceRef="check_messages" targetRef="load_state"/>
     <bpmn:sequenceFlow id="flow_load_state_to_check_workfiles" sourceRef="load_state" targetRef="check_workfiles"/>
     <bpmn:sequenceFlow id="flow_check_workfiles_to_surface_entities" sourceRef="check_workfiles" targetRef="surface_entities"/>
-    <bpmn:sequenceFlow id="flow_surface_entities_to_prior_gateway" sourceRef="surface_entities" targetRef="has_prior_state_gateway"/>
+    <!-- OLD: flow_surface_entities_to_prior_gateway removed — now goes via inject_handoff -->
+    <!-- New flows defined inline with inject_handoff element above -->
 
     <bpmn:sequenceFlow id="flow_restore_context" sourceRef="has_prior_state_gateway" targetRef="display_session_summary">
       <bpmn:conditionExpression>prior_state == True</bpmn:conditionExpression>

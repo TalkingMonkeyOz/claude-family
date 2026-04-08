@@ -692,6 +692,40 @@ def main():
                 names = [r['project_name'] for r in recipients[:10]]
                 context_lines.append(f"Messaging recipients: {', '.join(names)}")
 
+            # Added 2026-04-08: Inject handoff context from session_state for session continuity
+            try:
+                handoff_conn = get_db_connection()
+                if handoff_conn:
+                    handoff_cur = handoff_conn.cursor()
+                    handoff_cur.execute("""
+                        SELECT current_focus, next_steps, updated_at
+                        FROM claude.session_state
+                        WHERE project_name = %s
+                    """, (project_name,))
+                    handoff = handoff_cur.fetchone()
+                    handoff_conn.close()
+
+                    if handoff and handoff.get('current_focus'):
+                        import json as _json
+                        focus = handoff['current_focus']
+                        next_steps = handoff.get('next_steps') or []
+                        if isinstance(next_steps, str):
+                            try:
+                                next_steps = _json.loads(next_steps)
+                            except Exception:
+                                next_steps = [next_steps]
+
+                        context_lines.append("")
+                        context_lines.append("## Previous Session Handoff")
+                        context_lines.append(f"**Last focus:** {focus}")
+                        if next_steps:
+                            context_lines.append("**Next steps:**")
+                            for i, step in enumerate(next_steps, 1):
+                                context_lines.append(f"  {i}. {step}")
+                        logger.info(f"Injected handoff context: focus='{focus[:50]}...', {len(next_steps)} next steps")
+            except Exception as e:
+                logger.warning(f"Handoff context injection skipped (non-fatal): {e}")
+
             # F156: Auto-detect and load dossier from git branch or active tasks
             try:
                 import subprocess as _git_sp

@@ -1167,16 +1167,22 @@ def end_session(
             if closed:
                 results["session_id"] = closed['session_id']
         else:
-            # Try to close the most recent open session for this project
+            # BUG FIX (2026-04-08): Previous query updated ALL open sessions for the project.
+            # Now uses subquery to target only the most recent open session.
             cur.execute("""
                 UPDATE claude.sessions
                 SET session_end = NOW(),
                     session_summary = %s,
                     tasks_completed = %s,
                     learnings_gained = %s
-                WHERE project_name = %s
-                  AND session_end IS NULL
-                  AND session_start > NOW() - INTERVAL '24 hours'
+                WHERE session_id = (
+                    SELECT session_id FROM claude.sessions
+                    WHERE project_name = %s
+                      AND session_end IS NULL
+                      AND session_start > NOW() - INTERVAL '24 hours'
+                    ORDER BY session_start DESC
+                    LIMIT 1
+                )
                 RETURNING session_id::text
             """, (summary, tasks_completed, learnings, project))
             closed = cur.fetchone()
