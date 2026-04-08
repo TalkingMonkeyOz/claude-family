@@ -3485,7 +3485,26 @@ def update_claude_md(
         with open(claude_md_path, 'w', encoding='utf-8') as f:
             f.writelines(lines)
 
-        return {
+        # Template compliance check (2026-04-08)
+        template_warning = None
+        try:
+            cur2 = conn.cursor()
+            cur2.execute("""
+                SELECT properties->'required_sections' as req
+                FROM claude.entities
+                WHERE entity_type = 'template'
+                  AND properties->>'name' = 'claude-md-standard'
+                  AND is_active = true LIMIT 1
+            """)
+            tmpl_row = cur2.fetchone()
+            if tmpl_row and tmpl_row['req']:
+                required = json.loads(tmpl_row['req']) if isinstance(tmpl_row['req'], str) else tmpl_row['req']
+                if section not in required:
+                    template_warning = f"Section '## {section}' is not in the standard template (claude-md-standard v1.0). Consider moving this content to vault, entities, or rules."
+        except Exception:
+            pass
+
+        result = {
             "success": True,
             "section_name": section,
             "lines_changed": lines_changed,
@@ -3494,6 +3513,9 @@ def update_claude_md(
             "profile_updated": profile_updated,
             "version_created": version_created,
         }
+        if template_warning:
+            result["template_warning"] = template_warning
+        return result
 
     except Exception as e:
         conn.rollback()
@@ -3583,17 +3605,49 @@ def deploy_claude_md(
             json.dumps({"diff_summary": diff_summary})
         ))
 
+        # Validate against template (2026-04-08: template compliance check)
+        template_warnings = []
+        try:
+            cur.execute("""
+                SELECT properties FROM claude.entities
+                WHERE entity_type = 'template'
+                  AND properties->>'name' = 'claude-md-standard'
+                  AND is_active = true
+                LIMIT 1
+            """)
+            tmpl_row = cur.fetchone()
+            if tmpl_row:
+                tmpl = tmpl_row['properties']
+                required = tmpl.get('required_sections', [])
+                # Extract ## headers from the content being deployed
+                import re as _re
+                found_sections = [m.group(1) for m in _re.finditer(r'^## (.+)$', new_content, _re.MULTILINE)]
+                missing = [s for s in required if s not in found_sections]
+                if missing:
+                    template_warnings = [f"Missing required section: ## {s}" for s in missing]
+                # Check line count
+                line_count = len(new_content.split('\n'))
+                max_lines = tmpl.get('max_lines', 250)
+                if line_count > max_lines:
+                    template_warnings.append(f"CLAUDE.md is {line_count} lines (max: {max_lines})")
+        except Exception:
+            pass  # Template validation is advisory, don't block deploy
+
         conn.commit()
 
         # Write file AFTER successful DB commit
         with open(claude_md_path, 'w', encoding='utf-8') as f:
             f.write(new_content)
 
-        return {
+        result = {
             "success": True,
             "diff_summary": diff_summary,
             "file_path": str(claude_md_path),
         }
+        if template_warnings:
+            result["template_warnings"] = template_warnings
+            result["template_version"] = "claude-md-standard v1.0"
+        return result
 
     except Exception as e:
         conn.rollback()
