@@ -1,0 +1,240 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/knowledge-curator"
+    id="Definitions_KnowledgeCurator">
+
+  <bpmn:process id="knowledge_curator" name="Knowledge Curator: LLM-Assisted Quality Pipeline" isExecutable="true">
+
+    <!--
+      Background knowledge curation pipeline. Runs as a scheduled job.
+      Uses Anthropic API (Haiku for classification, Sonnet for summarization)
+      to audit and improve knowledge quality across projects.
+
+      Complements existing models:
+        - cognitive_memory_consolidation: tier promotion/decay (structural)
+        - cognitive_memory_contradiction: per-entry overlap detection (reactive)
+        - This model: batch quality audit (proactive, LLM-assisted)
+
+      Pipeline stages:
+        1. Scan → collect all knowledge entries for target project
+        2. Cluster → group by semantic similarity (embeddings)
+        3. Classify → LLM classifies each cluster (duplicate, complementary, contradicting, stale)
+        4. Curate → merge duplicates, resolve contradictions, summarize clusters
+        5. Report → quality score, actions taken, flagged items
+
+      Triggers: scheduled (weekly), manual (per-project), on threshold (>500 entries)
+    -->
+
+    <!-- Start Event -->
+    <bpmn:startEvent id="start" name="Curation Trigger">
+      <bpmn:outgoing>flow_to_select_project</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Select target project (or iterate all) -->
+    <bpmn:scriptTask id="select_project" name="[SCRIPT] Select Target Project" scriptFormat="python">
+      <bpmn:incoming>flow_to_select_project</bpmn:incoming>
+      <bpmn:outgoing>flow_to_scan</bpmn:outgoing>
+      <bpmn:script>
+project = args.get("project") or next_due_project()
+      </bpmn:script>
+      <bpmn:documentation>If triggered manually, uses specified project.
+If scheduled, picks the project with the most knowledge entries
+that hasn't been curated recently (last_curated_at in metadata).
+Skips projects with fewer than 20 entries (not worth curating).</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Stage 1: Scan — collect all entries -->
+    <bpmn:scriptTask id="scan_entries" name="[DB] Scan Knowledge Entries for Project" scriptFormat="python">
+      <bpmn:incoming>flow_to_scan</bpmn:incoming>
+      <bpmn:outgoing>flow_to_enough_gw</bpmn:outgoing>
+      <bpmn:script>
+entries = query("""
+    SELECT knowledge_id, title, description, knowledge_type, confidence_level,
+           tier, embedding, created_at, last_accessed
+    FROM claude.knowledge
+    WHERE applies_to_projects @> ARRAY[project_id]::uuid[]
+      AND is_archived = false
+    ORDER BY created_at
+""")
+entry_count = len(entries)
+      </bpmn:script>
+      <bpmn:documentation>Loads all active knowledge entries with embeddings.
+Also loads entity catalog entries for the project's client_domain.
+Combined dataset is the input for clustering.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="enough_entries_gw" name="Enough to Curate?" default="flow_too_few">
+      <bpmn:incoming>flow_to_enough_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_enough</bpmn:outgoing>
+      <bpmn:outgoing>flow_too_few</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skip" name="Skipped (Too Few)">
+      <bpmn:incoming>flow_too_few</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Stage 2: Cluster — group by semantic similarity -->
+    <bpmn:scriptTask id="cluster_entries" name="[SCRIPT] Cluster by Semantic Similarity" scriptFormat="python">
+      <bpmn:incoming>flow_enough</bpmn:incoming>
+      <bpmn:outgoing>flow_to_classify</bpmn:outgoing>
+      <bpmn:script>
+# Use existing pgvector embeddings for cosine similarity
+# Group entries where similarity > 0.80 into clusters
+# Each cluster = entries talking about the same topic
+clusters = build_clusters(entries, threshold=0.80)
+singleton_count = len([c for c in clusters if len(c) == 1])
+multi_count = len([c for c in clusters if len(c) > 1])
+      </bpmn:script>
+      <bpmn:documentation>Uses pgvector cosine similarity to find clusters of related entries.
+Algorithm: for each entry, find all entries with similarity > 0.80.
+Connected components become clusters. Singletons (unique topics) are
+skipped in the classify step but counted for the quality report.
+
+This leverages existing Voyage AI embeddings — no new API calls needed.
+Pure DB operation using pgvector operators.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Stage 3: Classify — LLM determines relationship type per cluster -->
+    <bpmn:scriptTask id="classify_clusters" name="[LLM:Haiku] Classify Cluster Relationships" scriptFormat="python">
+      <bpmn:incoming>flow_to_classify</bpmn:incoming>
+      <bpmn:outgoing>flow_to_curate</bpmn:outgoing>
+      <bpmn:script>
+# For each multi-entry cluster, call Haiku to classify
+# Input: cluster entries (title + description for each)
+# Output: classification per entry pair
+#   - duplicate: same information, different wording
+#   - complementary: different aspects of same topic
+#   - contradicting: conflicting information
+#   - stale: outdated based on newer entries
+#   - unique: no issues
+for cluster in multi_clusters:
+    classification = call_haiku(CLASSIFY_PROMPT, cluster)
+      </bpmn:script>
+      <bpmn:documentation>Uses Claude Haiku (claude-haiku-4-5-20251001) for cost efficiency.
+Batches clusters into groups of 5-10 for a single API call.
+Each call includes a structured prompt that returns JSON classification.
+
+Estimated cost: ~$0.05-0.10 per project with 500 entries.
+Template prompt stored in entity catalog as type='template', name='curator-classify'.
+
+Classification categories:
+  - DUPLICATE: merge into one, keep the better-written version
+  - COMPLEMENTARY: link together, optionally merge into summary
+  - CONTRADICTING: flag for resolution (newer usually wins)
+  - STALE: mark for archive (superseded by newer info)
+  - UNIQUE: no action needed</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- Stage 4: Curate — take action on classified clusters -->
+    <bpmn:scriptTask id="curate_duplicates" name="[LLM:Sonnet] Merge Duplicates into Summaries" scriptFormat="python">
+      <bpmn:incoming>flow_to_curate</bpmn:incoming>
+      <bpmn:outgoing>flow_to_resolve</bpmn:outgoing>
+      <bpmn:script>
+# For clusters classified as DUPLICATE:
+# Call Sonnet to produce a single merged summary
+# Archive the originals, create new merged entry
+for dup_cluster in duplicate_clusters:
+    merged = call_sonnet(MERGE_PROMPT, dup_cluster)
+    create_knowledge(merged)
+    archive_originals(dup_cluster)
+      </bpmn:script>
+      <bpmn:documentation>Uses Claude Sonnet (claude-sonnet-4-6) for quality summarization.
+Only called for duplicate clusters (typically 10-20% of multi-clusters).
+Each merged entry preserves: the best title, combined description,
+highest confidence from originals, links to archived originals.
+
+The merge prompt template (stored in entity catalog) ensures consistent
+output format: title, description (max 200 chars), knowledge_type,
+and a "merged_from" metadata field listing original IDs.
+
+COMPLEMENTARY clusters: linked together (no merge, just relationship).
+STALE entries: archived with reason.
+CONTRADICTING entries: flagged for human review or auto-resolved
+  using the existing cognitive_memory_contradiction BPMN logic.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="resolve_contradictions" name="[LOGIC] Resolve Contradictions (existing model)" scriptFormat="python">
+      <bpmn:incoming>flow_to_resolve</bpmn:incoming>
+      <bpmn:outgoing>flow_to_link</bpmn:outgoing>
+      <bpmn:script>
+# Delegate to existing cognitive_memory_contradiction logic
+# Compare recency + confidence + source authority
+for contra_cluster in contradicting_clusters:
+    resolve_contradiction(contra_cluster)
+      </bpmn:script>
+      <bpmn:documentation>Reuses the existing cognitive_memory_contradiction BPMN logic:
+compare recency, confidence, and source authority.
+Newer + higher confidence wins. Unclear cases flagged for review.
+This avoids duplicating resolution logic.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="link_complementary" name="[DB] Link Complementary Entries" scriptFormat="python">
+      <bpmn:incoming>flow_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_to_report</bpmn:outgoing>
+      <bpmn:script>
+# Create knowledge_relations for complementary entries
+for comp_cluster in complementary_clusters:
+    for pair in combinations(comp_cluster, 2):
+        link_knowledge(pair[0], pair[1], "complements")
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Stage 5: Report — generate quality metrics -->
+    <bpmn:scriptTask id="generate_report" name="[DB] Generate Quality Report" scriptFormat="python">
+      <bpmn:incoming>flow_to_report</bpmn:incoming>
+      <bpmn:outgoing>flow_to_end</bpmn:outgoing>
+      <bpmn:script>
+report = {
+    "project": project,
+    "total_entries": entry_count,
+    "clusters_found": multi_count,
+    "singletons": singleton_count,
+    "duplicates_merged": len(duplicate_clusters),
+    "contradictions_resolved": len(contradicting_clusters),
+    "stale_archived": len(stale_entries),
+    "complementary_linked": len(complementary_clusters),
+    "quality_score": compute_quality_score(),
+    "curated_at": now()
+}
+# Store report in session_state or workfile
+# Update project metadata with last_curated_at
+      </bpmn:script>
+      <bpmn:documentation>Quality score formula:
+  base = 100
+  - 5 per duplicate cluster found (noise)
+  - 10 per contradiction found (confusion)
+  - 2 per stale entry (decay)
+  + 3 per complementary link created (coherence)
+  Score capped at 0-100.
+
+Report stored as a workfile (stash) for the project.
+Also updates project metadata with curated_at timestamp
+so the scheduler knows when this project was last audited.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end" name="Curation Complete">
+      <bpmn:incoming>flow_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence Flows -->
+    <bpmn:sequenceFlow id="flow_to_select_project" sourceRef="start" targetRef="select_project" />
+    <bpmn:sequenceFlow id="flow_to_scan" sourceRef="select_project" targetRef="scan_entries" />
+    <bpmn:sequenceFlow id="flow_to_enough_gw" sourceRef="scan_entries" targetRef="enough_entries_gw" />
+    <bpmn:sequenceFlow id="flow_enough" sourceRef="enough_entries_gw" targetRef="cluster_entries">
+      <bpmn:conditionExpression>entry_count >= 20</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_too_few" sourceRef="enough_entries_gw" targetRef="end_skip" />
+    <bpmn:sequenceFlow id="flow_to_classify" sourceRef="cluster_entries" targetRef="classify_clusters" />
+    <bpmn:sequenceFlow id="flow_to_curate" sourceRef="classify_clusters" targetRef="curate_duplicates" />
+    <bpmn:sequenceFlow id="flow_to_resolve" sourceRef="curate_duplicates" targetRef="resolve_contradictions" />
+    <bpmn:sequenceFlow id="flow_to_link" sourceRef="resolve_contradictions" targetRef="link_complementary" />
+    <bpmn:sequenceFlow id="flow_to_report" sourceRef="link_complementary" targetRef="generate_report" />
+    <bpmn:sequenceFlow id="flow_to_end" sourceRef="generate_report" targetRef="end" />
+
+  </bpmn:process>
+
+</bpmn:definitions>
