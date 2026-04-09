@@ -19,8 +19,8 @@ from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
 
-# Force UTF-8 encoding for Windows
-if sys.platform == 'win32':
+# Force UTF-8 encoding for Windows (guard for pythonw which has no stdout)
+if sys.platform == 'win32' and sys.stdout is not None:
     sys.stdout.reconfigure(encoding='utf-8')
 
 # Simple checkmarks that work on Windows

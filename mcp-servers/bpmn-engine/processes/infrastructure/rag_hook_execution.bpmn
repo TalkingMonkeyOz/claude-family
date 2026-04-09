@@ -111,10 +111,11 @@ context_source = "wcc"
     </bpmn:scriptTask>
 
     <!-- ========================================================
-         TARGET: Parallel Fan-Out (WCC inactive path)
-         All 6 queries are independent and can run concurrently.
-         CURRENT implementation runs them serially; TARGET runs
-         them in parallel and joins before health check.
+         Parallel Fan-Out (WCC inactive path)
+         All 8 queries are independent and can run concurrently.
+         Includes: knowledge graph, vault RAG, nimbus context,
+         schema context, skill suggestions, design map,
+         entity catalog, and workfile search.
          ======================================================== -->
 
     <!-- Parallel fork -->
@@ -126,6 +127,8 @@ context_source = "wcc"
       <bpmn:outgoing>flow_fork_to_schema_context</bpmn:outgoing>
       <bpmn:outgoing>flow_fork_to_skill_suggestions</bpmn:outgoing>
       <bpmn:outgoing>flow_fork_to_design_map</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_entity_catalog</bpmn:outgoing>
+      <bpmn:outgoing>flow_fork_to_workfile_search</bpmn:outgoing>
     </bpmn:parallelGateway>
 
     <!-- Parallel branch 1: Knowledge graph -->
@@ -206,7 +209,37 @@ design_map = load_design_map(project)
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Parallel join — wait for all 6 branches -->
+    <!-- Parallel branch 7: Entity catalog -->
+    <bpmn:scriptTask id="task_entity_catalog" name="[HOOK] Query Entity Catalog" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_entity_catalog</bpmn:incoming>
+      <bpmn:outgoing>flow_entity_catalog_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Semantic search against claude.entities (domain concepts, OData, APIs, etc.)
+# Uses Voyage AI embeddings via recall_entities for RRF fusion search
+# Condition: needs_rag = True
+if needs_rag:
+    entity_results = query_entity_catalog(prompt, limit=5)
+else:
+    entity_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel branch 8: Workfile search -->
+    <bpmn:scriptTask id="task_workfile_search" name="[HOOK] Query Workfiles" scriptFormat="python">
+      <bpmn:incoming>flow_fork_to_workfile_search</bpmn:incoming>
+      <bpmn:outgoing>flow_workfile_search_to_join</bpmn:outgoing>
+      <bpmn:script>
+# Semantic search against claude.workfiles (component working notes, findings, approaches)
+# Uses Voyage AI embeddings via search_workfiles for similarity matching
+# Condition: needs_rag = True
+if needs_rag:
+    workfile_results = query_workfile_search(prompt, limit=3)
+else:
+    workfile_results = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parallel join — wait for all 8 branches -->
     <bpmn:parallelGateway id="gw_parallel_join" name="Join: All Queries Complete">
       <bpmn:incoming>flow_knowledge_graph_to_join</bpmn:incoming>
       <bpmn:incoming>flow_vault_rag_to_join</bpmn:incoming>
@@ -214,6 +247,8 @@ design_map = load_design_map(project)
       <bpmn:incoming>flow_schema_context_to_join</bpmn:incoming>
       <bpmn:incoming>flow_skill_suggestions_to_join</bpmn:incoming>
       <bpmn:incoming>flow_design_map_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_entity_catalog_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_workfile_search_to_join</bpmn:incoming>
       <bpmn:outgoing>flow_join_to_merge</bpmn:outgoing>
     </bpmn:parallelGateway>
 
@@ -255,11 +290,13 @@ if pending_failures:
       <bpmn:outgoing>flow_budget_to_end</bpmn:outgoing>
       <bpmn:script>
 # Trim assembled context to token budget (default: 2000 tokens)
-# Priority order: protocol > session_facts > todos > rag > vault > schema
+# Priority order (1=highest): protocol > session_facts > todos > rag >
+#   entity_catalog(5) > vault > workfiles(7) > schema
 final_context = apply_context_budget(
     parts=context_parts,
     budget=MAX_CONTEXT_TOKENS,
-    priority=["protocol", "session_facts", "todos", "rag", "vault", "schema"]
+    priority=["protocol", "session_facts", "todos", "rag",
+              "entity_catalog", "vault", "workfiles", "schema"]
 )
 output = json.dumps({"context": final_context, "source": context_source})
       </bpmn:script>
@@ -303,6 +340,8 @@ output = json.dumps({"context": final_context, "source": context_source})
     <bpmn:sequenceFlow id="flow_fork_to_schema_context" sourceRef="gw_parallel_fork" targetRef="task_schema_context" />
     <bpmn:sequenceFlow id="flow_fork_to_skill_suggestions" sourceRef="gw_parallel_fork" targetRef="task_skill_suggestions" />
     <bpmn:sequenceFlow id="flow_fork_to_design_map" sourceRef="gw_parallel_fork" targetRef="task_design_map" />
+    <bpmn:sequenceFlow id="flow_fork_to_entity_catalog" sourceRef="gw_parallel_fork" targetRef="task_entity_catalog" />
+    <bpmn:sequenceFlow id="flow_fork_to_workfile_search" sourceRef="gw_parallel_fork" targetRef="task_workfile_search" />
 
     <bpmn:sequenceFlow id="flow_knowledge_graph_to_join" sourceRef="task_knowledge_graph" targetRef="gw_parallel_join" />
     <bpmn:sequenceFlow id="flow_vault_rag_to_join" sourceRef="task_vault_rag" targetRef="gw_parallel_join" />
@@ -310,6 +349,8 @@ output = json.dumps({"context": final_context, "source": context_source})
     <bpmn:sequenceFlow id="flow_schema_context_to_join" sourceRef="task_schema_context" targetRef="gw_parallel_join" />
     <bpmn:sequenceFlow id="flow_skill_suggestions_to_join" sourceRef="task_skill_suggestions" targetRef="gw_parallel_join" />
     <bpmn:sequenceFlow id="flow_design_map_to_join" sourceRef="task_design_map" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_entity_catalog_to_join" sourceRef="task_entity_catalog" targetRef="gw_parallel_join" />
+    <bpmn:sequenceFlow id="flow_workfile_search_to_join" sourceRef="task_workfile_search" targetRef="gw_parallel_join" />
 
     <bpmn:sequenceFlow id="flow_join_to_merge" sourceRef="gw_parallel_join" targetRef="gw_merge" />
 

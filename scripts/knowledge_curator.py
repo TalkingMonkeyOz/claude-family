@@ -107,18 +107,62 @@ def _fetchone(conn, query: str, params=None):
         return row
 
 
+def call_claude(prompt: str, model: str = "sonnet", max_tokens: int = 2048) -> str:
+    """Call Claude via CLI (uses subscription, not API key).
+
+    Routes through the user's Claude Code subscription instead of the
+    paid Anthropic API. Uses --print mode for non-interactive output.
+    """
+    import subprocess
+
+    cmd = [
+        "claude", "-p", prompt,
+        "--model", model,
+        "--max-tokens", str(max_tokens),
+        "--bare",  # Skip hooks/LSP/plugins for speed
+        "--output-format", "text",
+    ]
+
+    import time as _time
+    call_start = _time.time()
+    logger.info("Calling Claude CLI: model=%s, prompt_len=%d, max_tokens=%d", model, len(prompt), max_tokens)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        elapsed_ms = (_time.time() - call_start) * 1000
+        if result.returncode != 0:
+            logger.error("Claude CLI failed (exit %d, %.0fms): stderr=%s", result.returncode, elapsed_ms, result.stderr[:500])
+            return ""
+        response = result.stdout.strip()
+        logger.info("Claude CLI response: model=%s, response_len=%d, %.0fms", model, len(response), elapsed_ms)
+        return response
+    except subprocess.TimeoutExpired:
+        elapsed_ms = (_time.time() - call_start) * 1000
+        logger.error("Claude CLI timed out after %.0fms (model=%s, prompt_len=%d)", elapsed_ms, model, len(prompt))
+        return ""
+    except FileNotFoundError:
+        logger.error("Claude CLI not found. Ensure 'claude' is on PATH.")
+        return ""
+
+
 def get_anthropic_client():
-    """Create an Anthropic API client."""
+    """DEPRECATED: Use call_claude() instead. Kept as fallback."""
     try:
         import anthropic
     except ImportError:
-        logger.error("anthropic package not installed. Run: pip install anthropic")
-        sys.exit(1)
+        logger.error("anthropic package not installed — using Claude CLI instead")
+        return None
 
     api_key = get_anthropic_key()
     if not api_key:
-        logger.error("ANTHROPIC_API_KEY not set in environment or .env files")
-        sys.exit(1)
+        logger.error("ANTHROPIC_API_KEY not set — using Claude CLI instead")
+        return None
 
     return anthropic.Anthropic(api_key=api_key)
 
@@ -134,12 +178,12 @@ def _get_next_due_project(conn) -> str | None:
                COUNT(k.knowledge_id) AS entry_count,
                MAX(w.updated_at) AS last_curated
         FROM claude.projects p
-        JOIN claude.knowledge k ON k.applies_to_projects @> ARRAY[p.project_id]
-        LEFT JOIN claude.workfiles w
+        JOIN claude.knowledge k ON k.applies_to_projects @> ARRAY[p.project_name]::text[]
+        LEFT JOIN claude.project_workfiles w
             ON w.project_id = p.project_id
             AND w.component = 'knowledge-curator'
             AND w.title = 'quality-report'
-        WHERE k.is_archived = false
+        WHERE k.tier != 'archived'
         GROUP BY p.project_name
         HAVING COUNT(k.knowledge_id) >= 5
         ORDER BY MAX(w.updated_at) ASC NULLS FIRST, COUNT(k.knowledge_id) DESC
@@ -161,10 +205,8 @@ def scan_entries(project_name: str, conn) -> list[dict]:
                k.confidence_level, k.tier, k.created_at,
                k.embedding
         FROM claude.knowledge k
-        WHERE k.applies_to_projects @> ARRAY(
-            SELECT project_id FROM claude.projects WHERE project_name = %s
-        )
-        AND k.is_archived = false
+        WHERE k.applies_to_projects @> ARRAY[%s]::text[]
+        AND k.tier != 'archived'
         ORDER BY k.created_at
     """, (project_name,))
     logger.info("Stage 1 (Scan): Loaded %d entries for project '%s'", len(rows), project_name)
@@ -262,7 +304,7 @@ Output ONLY valid JSON (no markdown fences):
 {{"pairs": [{{"entry_a": "id", "entry_b": "id", "relationship": "duplicate|complementary|contradicting|stale", "confidence": 0.0-1.0, "reason": "brief explanation"}}]}}"""
 
 
-def classify_clusters(clusters: list[list[dict]], client) -> list[dict]:
+def classify_clusters(clusters: list[list[dict]]) -> list[dict]:
     """Use Haiku to classify relationships within each cluster.
 
     Batches clusters into groups of CLASSIFY_BATCH_SIZE for efficiency.
@@ -289,12 +331,7 @@ def classify_clusters(clusters: list[list[dict]], client) -> list[dict]:
             prompt = CLASSIFY_PROMPT.format(entries_json=json.dumps(entry_summaries, indent=2))
 
             try:
-                response = client.messages.create(
-                    model=HAIKU_MODEL,
-                    max_tokens=2048,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                response_text = response.content[0].text.strip()
+                response_text = call_claude(prompt, model="sonnet", max_tokens=2048)
 
                 # Parse JSON response (handle potential markdown fences)
                 if response_text.startswith("```"):
@@ -342,7 +379,6 @@ Output ONLY valid JSON (no markdown fences):
 def curate(
     classifications: list[dict],
     conn,
-    client,
     dry_run: bool = False,
 ) -> dict:
     """Take action on classified clusters.
@@ -397,7 +433,7 @@ def curate(
             if relationship == "duplicate":
                 action_record["action"] = "merge"
                 if not dry_run:
-                    _merge_duplicates(entry_a, entry_b, conn, client)
+                    _merge_duplicates(entry_a, entry_b, conn)
                 stats["duplicates_merged"] += 1
 
             elif relationship == "complementary":
@@ -439,7 +475,7 @@ def curate(
     return stats
 
 
-def _merge_duplicates(entry_a: dict, entry_b: dict, conn, client):
+def _merge_duplicates(entry_a: dict, entry_b: dict, conn):
     """Use Sonnet to merge two duplicate entries into one."""
     entries_for_prompt = [
         {
@@ -460,12 +496,7 @@ def _merge_duplicates(entry_a: dict, entry_b: dict, conn, client):
 
     prompt = MERGE_PROMPT.format(entries_json=json.dumps(entries_for_prompt, indent=2))
 
-    response = client.messages.create(
-        model=SONNET_MODEL,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    response_text = response.content[0].text.strip()
+    response_text = call_claude(prompt, model="sonnet", max_tokens=1024)
 
     # Parse JSON response
     if response_text.startswith("```"):
@@ -483,7 +514,7 @@ def _merge_duplicates(entry_a: dict, entry_b: dict, conn, client):
     row = _fetchone(conn, """
         INSERT INTO claude.knowledge (
             title, description, knowledge_type, confidence_level, tier,
-            applies_to_projects, source, is_archived
+            applies_to_projects, source
         )
         SELECT
             %s, %s, %s, %s, %s,
@@ -495,8 +526,7 @@ def _merge_duplicates(entry_a: dict, entry_b: dict, conn, client):
                     WHERE a.knowledge_id = %s AND b.knowledge_id = %s
                 )
             ),
-            'knowledge_curator_merge',
-            false
+            'knowledge_curator_merge'
         RETURNING knowledge_id
     """, (
         merged.get("title", entry_a.get("title", "")),
@@ -517,7 +547,7 @@ def _merge_duplicates(entry_a: dict, entry_b: dict, conn, client):
     # Archive originals
     _execute(conn, """
         UPDATE claude.knowledge
-        SET is_archived = true
+        SET tier = 'archived'
         WHERE knowledge_id IN (%s, %s)
     """, (entry_a["knowledge_id"], entry_b["knowledge_id"]))
     conn.commit()
@@ -574,7 +604,7 @@ def _resolve_contradiction(entry_a: dict, entry_b: dict, conn):
 
     _execute(conn, """
         UPDATE claude.knowledge
-        SET is_archived = true
+        SET tier = 'archived'
         WHERE knowledge_id = %s
     """, (loser["knowledge_id"],))
     conn.commit()
@@ -636,7 +666,7 @@ def generate_report(project_name: str, stats: dict, entry_count: int, cluster_co
             report_content = json.dumps(report, indent=2, default=str)
 
             _execute(conn, """
-                INSERT INTO claude.workfiles (project_id, component, title, content, updated_at)
+                INSERT INTO claude.project_workfiles (project_id, component, title, content, updated_at)
                 VALUES (%s, 'knowledge-curator', 'quality-report', %s, NOW())
                 ON CONFLICT (project_id, component, title)
                 DO UPDATE SET content = EXCLUDED.content, updated_at = NOW()
@@ -700,7 +730,7 @@ def show_existing_report(project_name: str, conn) -> bool:
     """
     row = _fetchone(conn, """
         SELECT w.content, w.updated_at
-        FROM claude.workfiles w
+        FROM claude.project_workfiles w
         JOIN claude.projects p ON w.project_id = p.project_id
         WHERE p.project_name = %s
           AND w.component = 'knowledge-curator'
@@ -731,6 +761,9 @@ def run_pipeline(project_name: str, dry_run: bool = False) -> dict:
 
     Returns the final report dict.
     """
+    import time as _time
+    pipeline_start = _time.time()
+    logger.info("Pipeline starting for project '%s' (dry_run=%s)", project_name, dry_run)
     conn = get_db_connection(strict=True)
 
     try:
@@ -748,19 +781,28 @@ def run_pipeline(project_name: str, dry_run: bool = False) -> dict:
             report = generate_report(project_name, {}, len(entries), 0, conn)
             return report
 
-        # Stage 3: Classify (requires LLM)
-        client = get_anthropic_client()
-        classifications = classify_clusters(clusters, client)
+        # Stage 3: Classify (uses Claude CLI via subscription)
+        classifications = classify_clusters(clusters)
         if not classifications:
             logger.info("No classifications produced for project '%s'", project_name)
             report = generate_report(project_name, {}, len(entries), len(clusters), conn)
             return report
 
         # Stage 4: Curate
-        stats = curate(classifications, conn, client, dry_run=dry_run)
+        stats = curate(classifications, conn, dry_run=dry_run)
 
         # Stage 5: Report
         report = generate_report(project_name, stats, len(entries), len(clusters), conn)
+
+        elapsed_s = _time.time() - pipeline_start
+        logger.info(
+            "Pipeline complete for '%s' in %.1fs: scanned=%d, clusters=%d, "
+            "merged=%d, linked=%d, contradictions=%d, stale=%d, errors=%d, score=%d",
+            project_name, elapsed_s, len(entries), len(clusters),
+            stats.get("duplicates_merged", 0), stats.get("complementary_linked", 0),
+            stats.get("contradictions_resolved", 0), stats.get("stale_archived", 0),
+            stats.get("errors", 0), report.get("quality_score", -1),
+        )
         return report
 
     except Exception as e:

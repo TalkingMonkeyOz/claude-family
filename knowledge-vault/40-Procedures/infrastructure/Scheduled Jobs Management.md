@@ -1,84 +1,102 @@
 ---
 projects:
   - claude-family
-  - claude-manager-mui
 tags:
   - scheduler
   - jobs
   - automation
-synced: false
 ---
 
 # Scheduled Jobs Management
 
-How scheduled jobs work in the Claude Family ecosystem.
+How scheduled jobs work in the Claude Family ecosystem. 24 total jobs (14 active cron, 10 inactive/legacy).
 
 ---
 
 ## Architecture
 
-Jobs are tracked in two places:
+**Master scheduler**: Windows Task Scheduler runs `Claude Family Job Runner` **hourly**. The Job Runner reads `claude.scheduled_jobs`, evaluates cron schedules, and executes any due jobs.
 
-| Source | Purpose | Execution |
-|--------|---------|-----------|
-| **Windows Task Scheduler** | OS-level automation | Runs automatically |
-| **claude.scheduled_jobs** | Claude-triggered jobs | Run via MUI Manager or session hooks |
-
-The `source` column in `scheduled_jobs` indicates where a job runs from:
-- `windows_task_scheduler` - Windows runs it
-- `database` - Claude runs via MUI Manager or manually
-
----
-
-## Windows Task Scheduler Jobs
-
-| Task | Schedule | Script |
-|------|----------|--------|
-| Claude Family - PostgreSQL Backup | Weekly Sat 2am | `scripts/backup_postgres.ps1` |
-| Claude Family - Documentation Audit | Daily 9am | `scripts/audit_docs.py` |
-
-These are synced to `claude.scheduled_jobs` for visibility (prefixed with "Windows:").
-
----
-
-## Database Jobs (Active)
-
-Query active jobs:
-```sql
-SELECT job_name, trigger_type, schedule, last_run, last_status
-FROM claude.scheduled_jobs
-WHERE is_active = true
-ORDER BY source, job_name;
+```
+Windows Task Scheduler (hourly)
+  └── job_runner.py
+       ├── Reads claude.scheduled_jobs WHERE is_active = true
+       ├── Evaluates cron expression against last_run
+       └── Executes due jobs, updates last_run/last_status
 ```
 
-### Trigger Types
-
-| Type | When It Runs |
-|------|--------------|
-| `session_start` | Claude should run at session start |
-| `cron` | Scheduled time (no daemon - manual) |
-| `windows_scheduler` | Windows Task Scheduler |
+**Key script**: `scripts/job_runner.py`
+- `--list` shows all jobs with status
+- `--force JOB` runs a specific job immediately
+- `--dry-run` shows what would execute without running
 
 ---
 
-## MUI Manager Scheduler
+## Windows Task Scheduler Tasks
 
-The `claude-manager-mui` app has a Scheduler interface:
+| Task | Schedule | What It Does |
+|------|----------|--------------|
+| **Claude Family Job Runner** | Hourly | Master scheduler - triggers all cron jobs |
+| PostgreSQL Backup | Weekly Sun 1am | DB backup to OneDrive (`backup_postgres.ps1`) |
+| Documentation Audit | Daily 8am | Vault doc quality scan (`audit_docs.py`) |
+| Claude Family Startup | Disabled | Legacy startup task |
 
-- **Sidebar**: Tools > Scheduler
-- **Startup Dialog**: Shows overdue jobs on app launch
-- **Run Jobs**: Click play button to execute
-
-### Files
-- `src/features/scheduler/SchedulerView.tsx`
-- `src/features/scheduler/OverdueJobsDialog.tsx`
-- `src-tauri/src/commands.rs` (get_scheduled_jobs, run_job)
+The Job Runner is the only task that matters for cron job execution. The others are standalone Windows tasks.
 
 ---
 
-## Adding New Jobs
+## Active Cron Jobs (14)
 
-### Database Job (Claude-triggered)
+| Job | Schedule (cron) | Description |
+|-----|----------------|-------------|
+| `vault-embeddings-update` | `0 2 * * *` (daily 2am) | Incremental Voyage AI embeddings for vault + project files |
+| `memory-consolidation` | `0 3 * * *` (daily 3am) | Promote short-to-mid, mid-to-long tier memories; decay stale edges |
+| `transcript-cleanup` | `0 3 * * *` (daily 3am) | Delete conversation transcripts older than 14 days |
+| `knowledge-decay` | `0 4 * * *` (daily 4am) | Reduce edge strength on unused knowledge graph connections |
+| `system-maintenance` | `0 5 * * *` (daily 5am) | Detect/repair staleness in schema, vault, BPMN, memory, column registry |
+| `bpmn-sync` | `0 6 * * *` (daily 6am) | Sync .bpmn files from all repos to central registry with embeddings |
+| `consistency-check` | `0 6 * * *` (daily 6am) | Compare hooks and commands across all projects, report drift |
+| `document-scanner` | `0 6 * * *` (daily 6am) | Scan and index project docs to `claude.documents` |
+| `compliance-audit-check` | `0 7 * * *` (daily 7am) | Check for due compliance audits, send messages to projects |
+| `task_cleanup` | `0 */6 * * *` (every 6h) | Delete completed task JSON files from `~/.claude/tasks/` |
+| `postgres-backup` | `0 2 * * 0` (Sun 2am) | Weekly DB backup to OneDrive |
+| `vault-librarian` | `0 7 * * 0` (Sun 7am) | Vault health audit: uncataloged files, orphans, missing frontmatter |
+| `knowledge-curator` | `0 8 * * 0` (Sun 8am) | LLM-assisted knowledge dedup and quality audit (see below) |
+| `vocabulary_analyzer` | `0 9 1-7 * 1` (1st Mon 9am) | Analyze transcripts for vocabulary patterns to improve RAG |
+
+### Knowledge Curator (New)
+
+Weekly LLM-assisted knowledge quality audit:
+1. Clusters knowledge entries by semantic similarity (Voyage AI)
+2. Uses Haiku to classify clusters: duplicate, complementary, contradicting, stale
+3. Uses Sonnet to merge confirmed duplicates
+4. Picks the most-due project each run (round-robin)
+
+**Execution model**: Uses Claude CLI (`claude -p "prompt"`) via the user's Max subscription. No API key needed. See `scripts/knowledge_curator.py` and BPMN model `knowledge_curation_process`.
+
+---
+
+## Inactive Jobs (10)
+
+Legacy jobs retained for reference. All have `is_active = false`.
+
+| Job | Last Trigger Type | Why Inactive |
+|-----|-------------------|--------------|
+| `insight-extraction` | cron | Superseded by knowledge-curator |
+| `Windows: Documentation Audit` | cron | Replaced by document-scanner |
+| `Agent Health Check` | session_start | No longer needed |
+| `Anthropic Docs Monitor` | session_start | Monitoring paused |
+| `data-quality-review` | session_start | Needs rewrite |
+| `doc-staleness-review` | session_start | Replaced by vault-librarian |
+| `governance-compliance-check` | session_start | Replaced by compliance-audit-check |
+| `Link Checker` | session_start | Script broken, needs fix |
+| `Orphan Document Report` | session_start | Replaced by vault-librarian |
+| `sync-anthropic-usage` | session_start | API access removed |
+
+---
+
+## Adding a New Job
+
 ```sql
 INSERT INTO claude.scheduled_jobs (
     job_id, job_name, job_description, trigger_type, schedule,
@@ -87,79 +105,36 @@ INSERT INTO claude.scheduled_jobs (
     gen_random_uuid(),
     'my-job-name',
     'What the job does',
-    'session_start',  -- or 'cron'
-    'daily',          -- human-readable
-    'python C:/Projects/claude-family/scripts/my_script.py',
+    'cron',
+    '0 6 * * *',  -- standard 5-field cron expression
+    'python scripts/my_script.py',
     'C:/Projects/claude-family',
     true,
     'database'
 );
 ```
 
-### Windows Task (automated)
-1. Create in Windows Task Scheduler
-2. Add reference to DB for visibility:
-```sql
-INSERT INTO claude.scheduled_jobs (
-    job_id, job_name, job_description, trigger_type, schedule,
-    command, is_active, source
-) VALUES (
-    gen_random_uuid(),
-    'Windows: My Task Name',
-    'What it does - managed by Windows',
-    'windows_scheduler',
-    'Schedule description',
-    'script path',
-    true,
-    'windows_task_scheduler'
-);
-```
-
----
-
-## Anthropic Docs Monitor
-
-Special job that monitors 10 Anthropic documentation pages for changes.
-
-**State stored in**: `claude.global_config` (key: `anthropic_docs_monitor`)
-
-**Pages monitored**:
-- Claude Code changelog, best practices, sandboxing
-- Agent SDK, advanced tool use, computer use
-- Models overview, extended thinking, token efficiency
-- MCP specification
-
-Run: `python scripts/monitor_anthropic_docs.py --verbose`
-
----
-
-## Recent Changes (2026-01-24 Audit)
-
-**Deleted 4 jobs:**
-- `Review Local LLM Usage` - purpose served (llama3.3 removed)
-- `Windows: Document Scanner` - duplicate of `Document Scanner`
-- `Stale Session Cleanup` - no script, placeholder
-- `transcript_cleanup` - Windows version supersedes
-
-**Fixed bugs:**
-- Path bug in `compliance-audit-check`, `consistency-check` (changed to relative paths)
-- Exit code bug in 3 scripts - now return 0 on successful run
-
-**Current count**: 15 jobs (12 DB-triggered, 3 Windows refs)
+After adding, verify with `python scripts/job_runner.py --list`.
 
 ---
 
 ## Maintenance
 
+### Useful commands
+```bash
+python scripts/job_runner.py --list          # See all jobs + last run
+python scripts/job_runner.py --force JOB     # Force-run one job
+python scripts/job_runner.py --dry-run       # Show what's due without running
+```
+
 ### Disable a job
 ```sql
 UPDATE claude.scheduled_jobs
-SET is_active = false,
-    job_description = job_description || ' [DISABLED: reason]'
+SET is_active = false
 WHERE job_name = 'job-name';
 ```
 
-### View job history
+### View recent runs
 ```sql
 SELECT job_name, last_run, last_status, last_output
 FROM claude.scheduled_jobs
@@ -169,7 +144,7 @@ ORDER BY last_run DESC;
 
 ---
 
-**Version**: 1.1
+**Version**: 2.0
 **Created**: 2026-01-13
-**Updated**: 2026-01-24
-**Location**: knowledge-vault/40-Procedures/Scheduled Jobs Management.md
+**Updated**: 2026-04-09
+**Location**: knowledge-vault/40-Procedures/infrastructure/Scheduled Jobs Management.md

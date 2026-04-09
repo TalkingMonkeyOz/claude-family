@@ -1,0 +1,272 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/job-scheduling"
+    id="Definitions_JobScheduling">
+
+  <bpmn:process id="job_scheduling" name="Job Scheduling: Background Job Runner Pipeline" isExecutable="true">
+
+    <!--
+      Background job execution pipeline.
+
+      Trigger:
+        - Windows Task Scheduler fires hourly (+ at logon)
+        - Manual: python job_runner.py [- -force JOB]
+
+      Implementation: scripts/job_runner.py
+
+      Key tables:
+        - claude.scheduled_jobs: Job definitions, schedule, last_run, last_status
+        - claude.job_run_history: Run log with output/error capture
+
+      Flow:
+        1. Trigger fires -> job_runner.py starts
+        2. Connect to DB, load active jobs from scheduled_jobs
+        3. Filter to due jobs (check schedule vs last_run)
+        4. For each due job: execute subprocess -> capture result -> log to DB
+        5. Handle: timeout, subprocess error, success/failure status
+
+      Modes:
+        - Normal: Run all due jobs
+        - Force: Run a specific job regardless of schedule
+        - Dry run: Show what would run without executing
+        - List: Show all jobs and their status
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="Windows Task Scheduler Fires">
+      <bpmn:outgoing>flow_start_to_connect</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: Initialize                                                 -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="task_connect_db" name="[HOOK] Connect to Database" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_connect</bpmn:incoming>
+      <bpmn:outgoing>flow_connect_to_gw_db</bpmn:outgoing>
+      <bpmn:script>
+# Load DATABASE_URL from environment or .env files
+# Connect using psycopg (v3) or psycopg2 (fallback)
+conn = get_db_connection()
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_db_connected" name="DB Connected?" default="flow_db_ok">
+      <bpmn:incoming>flow_connect_to_gw_db</bpmn:incoming>
+      <bpmn:outgoing>flow_db_failed</bpmn:outgoing>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_db_fail" name="Exit: DB Connection Failed">
+      <bpmn:incoming>flow_db_failed</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: Load and Filter Jobs                                       -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="task_load_jobs" name="[DB] Load Active Jobs" scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_load_to_filter</bpmn:outgoing>
+      <bpmn:script>
+# SELECT * FROM claude.scheduled_jobs WHERE is_active = true
+#   AND trigger_type NOT IN ('windows_scheduler', 'session_start')
+# Windows scheduler jobs are managed externally
+# Session start jobs only run during Claude sessions
+jobs = load_active_jobs(conn)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_filter_due" name="[HOOK] Filter Due Jobs" scriptFormat="python">
+      <bpmn:incoming>flow_load_to_filter</bpmn:incoming>
+      <bpmn:outgoing>flow_filter_to_gw_any_due</bpmn:outgoing>
+      <bpmn:script>
+# For each job, check if it's due based on:
+#   - Schedule type: cron, interval (hourly/daily/weekly), on_login
+#   - last_run timestamp vs current time
+#   - Cron parsing: 5-field standard cron expressions
+#   - Interval: compare elapsed time against interval_hours
+#   - On login: max once per 12 hours
+due_jobs = [j for j in jobs if is_job_due(j)]
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_any_due" name="Any Jobs Due?" default="flow_none_due">
+      <bpmn:incoming>flow_filter_to_gw_any_due</bpmn:incoming>
+      <bpmn:outgoing>flow_none_due</bpmn:outgoing>
+      <bpmn:outgoing>flow_jobs_due</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_none_due" name="Exit: No Jobs Due">
+      <bpmn:incoming>flow_none_due</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: Execute Jobs (Loop)                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Multi-instance marker: iterate over due_jobs list -->
+    <bpmn:subProcess id="subprocess_run_job" name="Execute Job (Per Due Job)">
+      <bpmn:incoming>flow_jobs_due</bpmn:incoming>
+      <bpmn:outgoing>flow_loop_to_summary</bpmn:outgoing>
+
+      <bpmn:multiInstanceLoopCharacteristics isSequential="true">
+        <bpmn:loopDataInputRef>due_jobs</bpmn:loopDataInputRef>
+      </bpmn:multiInstanceLoopCharacteristics>
+
+      <bpmn:startEvent id="loop_start" name="Start Job Execution">
+        <bpmn:outgoing>flow_loop_start_to_exec</bpmn:outgoing>
+      </bpmn:startEvent>
+
+      <!-- Execute the job subprocess -->
+      <bpmn:scriptTask id="task_execute_job" name="[HOOK] Run Subprocess" scriptFormat="python">
+        <bpmn:incoming>flow_loop_start_to_exec</bpmn:incoming>
+        <bpmn:outgoing>flow_exec_to_gw_result</bpmn:outgoing>
+        <bpmn:script>
+# subprocess.run(command, shell=True, capture_output=True,
+#     timeout=timeout_seconds, cwd=working_directory)
+# CREATE_NO_WINDOW flag prevents console flash on Windows
+# Captures stdout (truncated to 2000 chars) and stderr
+result = run_job(job, conn)
+        </bpmn:script>
+      </bpmn:scriptTask>
+
+      <!-- Result gateway: success, failure, timeout, or error -->
+      <bpmn:exclusiveGateway id="gw_job_result" name="Job Result?" default="flow_result_success">
+        <bpmn:incoming>flow_exec_to_gw_result</bpmn:incoming>
+        <bpmn:outgoing>flow_result_success</bpmn:outgoing>
+        <bpmn:outgoing>flow_result_timeout</bpmn:outgoing>
+        <bpmn:outgoing>flow_result_error</bpmn:outgoing>
+      </bpmn:exclusiveGateway>
+
+      <!-- Success path -->
+      <bpmn:scriptTask id="task_log_success" name="[DB] Log Success" scriptFormat="python">
+        <bpmn:incoming>flow_result_success</bpmn:incoming>
+        <bpmn:outgoing>flow_success_to_update</bpmn:outgoing>
+        <bpmn:script>
+# INSERT INTO claude.job_run_history (job_id, status='SUCCESS', output, ...)
+# UPDATE claude.scheduled_jobs SET last_run, last_status='SUCCESS',
+#     run_count++, success_count++
+log_run(conn, job, result)
+        </bpmn:script>
+      </bpmn:scriptTask>
+
+      <!-- Timeout path -->
+      <bpmn:scriptTask id="task_handle_timeout" name="[HOOK] Handle Timeout" scriptFormat="python">
+        <bpmn:incoming>flow_result_timeout</bpmn:incoming>
+        <bpmn:outgoing>flow_timeout_to_log_error</bpmn:outgoing>
+        <bpmn:script>
+# subprocess.TimeoutExpired caught in run_job()
+# result.status = 'TIMEOUT'
+# result.error = f"Timed out after {timeout} seconds"
+# Default timeout: 300 seconds (5 minutes)
+logger.error(f"Job {job_name} timed out after {timeout}s")
+        </bpmn:script>
+      </bpmn:scriptTask>
+
+      <!-- Error path (subprocess error or exception) -->
+      <bpmn:scriptTask id="task_handle_error" name="[HOOK] Handle Error" scriptFormat="python">
+        <bpmn:incoming>flow_result_error</bpmn:incoming>
+        <bpmn:outgoing>flow_error_to_log_error</bpmn:outgoing>
+        <bpmn:script>
+# Two error types:
+# 1. Non-zero exit code: status='FAILED', stderr captured
+# 2. Python exception: status='ERROR', exception message captured
+# Both: stderr/error truncated to 2000 chars
+logger.warning(f"Job {job_name} failed: {error[:200]}")
+        </bpmn:script>
+      </bpmn:scriptTask>
+
+      <!-- Common error logging (timeout + error converge here) -->
+      <bpmn:scriptTask id="task_log_error" name="[DB] Log Error to DB" scriptFormat="python">
+        <bpmn:incoming>flow_timeout_to_log_error</bpmn:incoming>
+        <bpmn:incoming>flow_error_to_log_error</bpmn:incoming>
+        <bpmn:outgoing>flow_log_error_to_update</bpmn:outgoing>
+        <bpmn:script>
+# INSERT INTO claude.job_run_history (job_id, status, error_message, ...)
+# UPDATE claude.scheduled_jobs SET last_run, last_status,
+#     last_error = error[:2000], run_count++
+log_run(conn, job, result)
+        </bpmn:script>
+      </bpmn:scriptTask>
+
+      <!-- Update job status (merge point for success + error paths) -->
+      <bpmn:exclusiveGateway id="gw_merge_result" name="Merge Result Paths">
+        <bpmn:incoming>flow_success_to_update</bpmn:incoming>
+        <bpmn:incoming>flow_log_error_to_update</bpmn:incoming>
+        <bpmn:outgoing>flow_update_to_loop_end</bpmn:outgoing>
+      </bpmn:exclusiveGateway>
+
+      <bpmn:endEvent id="loop_end" name="Job Iteration Complete">
+        <bpmn:incoming>flow_update_to_loop_end</bpmn:incoming>
+      </bpmn:endEvent>
+
+      <!-- Subprocess internal flows -->
+      <bpmn:sequenceFlow id="flow_loop_start_to_exec" sourceRef="loop_start" targetRef="task_execute_job" />
+      <bpmn:sequenceFlow id="flow_exec_to_gw_result" sourceRef="task_execute_job" targetRef="gw_job_result" />
+
+      <bpmn:sequenceFlow id="flow_result_success" sourceRef="gw_job_result" targetRef="task_log_success">
+        <bpmn:conditionExpression>result.status == "SUCCESS"</bpmn:conditionExpression>
+      </bpmn:sequenceFlow>
+      <bpmn:sequenceFlow id="flow_result_timeout" name="Timeout" sourceRef="gw_job_result" targetRef="task_handle_timeout">
+        <bpmn:conditionExpression>result.status == "TIMEOUT"</bpmn:conditionExpression>
+      </bpmn:sequenceFlow>
+      <bpmn:sequenceFlow id="flow_result_error" name="Error/Failed" sourceRef="gw_job_result" targetRef="task_handle_error">
+        <bpmn:conditionExpression>result.status in ("FAILED", "ERROR")</bpmn:conditionExpression>
+      </bpmn:sequenceFlow>
+
+      <bpmn:sequenceFlow id="flow_success_to_update" sourceRef="task_log_success" targetRef="gw_merge_result" />
+      <bpmn:sequenceFlow id="flow_timeout_to_log_error" sourceRef="task_handle_timeout" targetRef="task_log_error" />
+      <bpmn:sequenceFlow id="flow_error_to_log_error" sourceRef="task_handle_error" targetRef="task_log_error" />
+      <bpmn:sequenceFlow id="flow_log_error_to_update" sourceRef="task_log_error" targetRef="gw_merge_result" />
+      <bpmn:sequenceFlow id="flow_update_to_loop_end" sourceRef="gw_merge_result" targetRef="loop_end" />
+
+    </bpmn:subProcess>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: Summary                                                    -->
+    <!-- ================================================================== -->
+    <bpmn:scriptTask id="task_summary" name="[HOOK] Log Run Summary" scriptFormat="python">
+      <bpmn:incoming>flow_loop_to_summary</bpmn:incoming>
+      <bpmn:outgoing>flow_summary_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Aggregate results: success count, failed count, skipped count
+# Log to file: ~/.claude/logs/job_runner.log
+logger.info(f"Run complete: {success} success, {failed} failed, {skipped} skipped")
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_main" name="Job Runner Complete">
+      <bpmn:incoming>flow_summary_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- Sequence Flows                                                      -->
+    <!-- ================================================================== -->
+    <bpmn:sequenceFlow id="flow_start_to_connect" sourceRef="start" targetRef="task_connect_db" />
+    <bpmn:sequenceFlow id="flow_connect_to_gw_db" sourceRef="task_connect_db" targetRef="gw_db_connected" />
+
+    <bpmn:sequenceFlow id="flow_db_failed" name="Connection error" sourceRef="gw_db_connected" targetRef="end_db_fail">
+      <bpmn:conditionExpression>conn is None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="gw_db_connected" targetRef="task_load_jobs" />
+
+    <bpmn:sequenceFlow id="flow_load_to_filter" sourceRef="task_load_jobs" targetRef="task_filter_due" />
+    <bpmn:sequenceFlow id="flow_filter_to_gw_any_due" sourceRef="task_filter_due" targetRef="gw_any_due" />
+
+    <bpmn:sequenceFlow id="flow_none_due" sourceRef="gw_any_due" targetRef="end_none_due">
+      <bpmn:conditionExpression>len(due_jobs) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_jobs_due" name="Jobs to run" sourceRef="gw_any_due" targetRef="subprocess_run_job">
+      <bpmn:conditionExpression>len(due_jobs) > 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_loop_to_summary" sourceRef="subprocess_run_job" targetRef="task_summary" />
+    <bpmn:sequenceFlow id="flow_summary_to_end" sourceRef="task_summary" targetRef="end_main" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

@@ -11,6 +11,8 @@ Extracted from rag_query_hook.py. Contains:
 - query_schema_context()         — pgvector on claude.schema_registry
 - query_vault_rag()              — pgvector on claude.vault_embeddings
 - query_skill_suggestions()      — pgvector on claude.skill_content
+- query_entity_catalog()         — pgvector on claude.entity_catalog
+- query_workfiles()              — pgvector on claude.workfiles
 """
 
 import sys
@@ -48,6 +50,7 @@ NIMBUS_PROJECTS = [
     'monash-nimbus-reports',
     'nimbus-user-loader',
     'nimbus-customer-app',
+    'nimbus-mui',
     'ATO-Tax-Agent',
 ]
 
@@ -945,4 +948,165 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
 
     except Exception as e:
         logger.error(f"Skill suggestion query failed: {e}", exc_info=True)
+        return None
+
+
+def query_entity_catalog(user_prompt: str, project_name: str,
+                         top_k: int = 3, min_similarity: float = 0.45) -> str:
+    """Query entity catalog for structured reference data (APIs, schemas, domain concepts).
+
+    Searches claude.entities using pgvector similarity on the embedding column.
+    Returns formatted context showing matching entities with their summaries.
+
+    Returns:
+        Formatted context string or None if no results
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+        query_text = extract_query_from_prompt(user_prompt)
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                e.display_name,
+                et.type_name,
+                e.summary,
+                e.tags,
+                1 - (e.embedding <=> %s::vector) as similarity_score
+            FROM claude.entities e
+            JOIN claude.entity_types et ON et.type_id = e.entity_type_id
+            LEFT JOIN claude.projects p ON p.project_id = e.project_id
+            WHERE e.embedding IS NOT NULL
+              AND e.is_archived = false
+              AND 1 - (e.embedding <=> %s::vector) >= %s
+            ORDER BY e.embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, query_embedding, min_similarity, query_embedding, top_k))
+
+        results = cur.fetchall()
+        conn.close()
+
+        if not results:
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.info(f"Entity catalog: 0 matches >= {min_similarity} in {elapsed_ms:.0f}ms")
+            return None
+
+        elapsed_ms = (time.time() - start_time) * 1000
+        context_lines = [
+            "[ENTITY CATALOG — Structured reference data]",
+        ]
+
+        similarities = []
+        for r in results:
+            if isinstance(r, dict):
+                name, etype, summary, tags, sim = r['display_name'], r['type_name'], r['summary'], r['tags'], r['similarity_score']
+            else:
+                name, etype, summary, tags, sim = r[0], r[1], r[2], r[3], r[4]
+
+            similarities.append(round(sim, 3))
+            summary_short = (summary[:150] + "...") if summary and len(summary) > 150 else (summary or "")
+            tag_str = ", ".join(tags[:3]) if tags else ""
+            context_lines.append(f">> {name} ({etype}, {round(sim, 2)} match)")
+            if tag_str:
+                context_lines.append(f"   Tags: {tag_str}")
+            if summary_short:
+                context_lines.append(f"   {summary_short}")
+            context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+            context_lines.append("")
+
+        logger.info(f"Entity catalog: {len(results)} matches in {elapsed_ms:.0f}ms, similarities={similarities}")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Entity catalog query failed: {e}", exc_info=True)
+        return None
+
+
+def query_workfiles(user_prompt: str, project_name: str,
+                    top_k: int = 2, min_similarity: float = 0.45) -> str:
+    """Query active workfiles for component working context.
+
+    Searches claude.project_workfiles using pgvector similarity on the embedding column.
+    Returns formatted context showing matching workfiles with content previews.
+
+    Returns:
+        Formatted context string or None if no results
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+        query_text = extract_query_from_prompt(user_prompt)
+        query_embedding = generate_embedding(query_text)
+        if not query_embedding:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                w.component,
+                w.title,
+                LEFT(w.content, 200) as preview,
+                w.workfile_type,
+                w.is_pinned,
+                1 - (w.embedding <=> %s::vector) as similarity_score
+            FROM claude.project_workfiles w
+            JOIN claude.projects p ON p.project_id = w.project_id
+            WHERE w.embedding IS NOT NULL
+              AND w.is_active = true
+              AND p.project_name = %s
+              AND 1 - (w.embedding <=> %s::vector) >= %s
+            ORDER BY w.embedding <=> %s::vector
+            LIMIT %s
+        """, (query_embedding, project_name, query_embedding, min_similarity, query_embedding, top_k))
+
+        results = cur.fetchall()
+        conn.close()
+
+        if not results:
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.info(f"Workfile search: 0 matches >= {min_similarity} in {elapsed_ms:.0f}ms")
+            return None
+
+        elapsed_ms = (time.time() - start_time) * 1000
+        context_lines = [
+            "[WORKFILES — Component working context]",
+        ]
+
+        similarities = []
+        for r in results:
+            if isinstance(r, dict):
+                comp, title, preview, wtype, pinned, sim = r['component'], r['title'], r['preview'], r['workfile_type'], r['is_pinned'], r['similarity_score']
+            else:
+                comp, title, preview, wtype, pinned, sim = r[0], r[1], r[2], r[3], r[4], r[5]
+
+            similarities.append(round(sim, 3))
+            pin_marker = " [PINNED]" if pinned else ""
+            preview_clean = preview.replace('\n', ' ').strip() if preview else ""
+            context_lines.append(f">> {comp}/{title} ({wtype}, {round(sim, 2)} match){pin_marker}")
+            if preview_clean:
+                context_lines.append(f"   {preview_clean[:120]}...")
+            context_lines.append(f"   Use: unstash(\"{comp}\") for full content")
+            context_lines.append("")
+
+        logger.info(f"Workfile search: {len(results)} matches in {elapsed_ms:.0f}ms, similarities={similarities}")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Workfile search failed: {e}", exc_info=True)
         return None

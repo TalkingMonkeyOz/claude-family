@@ -29,16 +29,21 @@ Output Format:
 # Fallback: hardcoded DEFAULT_CORE_PROTOCOL below (in case file is missing)
 
 DEFAULT_CORE_PROTOCOL = """
-STOP!
-1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. No tool calls until all tasks exist.
+STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
+1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. NO TOOL CALLS until all tasks exist.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
-2. MULTI-PART CHECK: If the user's message contains multiple sentences, line breaks, or conjunctions (also, and, then), re-read it and confirm you haven't missed a request. When in doubt, ask.
-3. NOTEPAD: store_session_fact() for credentials, decisions, findings, progress. list_session_facts() to review. recall_session_fact() across sessions. This is your memory.
-4. MEMORY: Use remember() when you discover patterns, make decisions, or learn gotchas. Use recall_memories(query) before starting complex tasks to load relevant context. These replace store_knowledge/recall_knowledge for most uses.
-5. DELEGATE: 3+ files = spawn agent (coder-sonnet complex, coder-haiku simple). Don't bloat main context. save_checkpoint() after each task.
+   SCOPE: Prefix every task with [S] (session) or [P] (persistent). Default [S] if unsure.
+2. Verify before claiming - read files, query DB, do research. Never guess.
+3. STORAGE: 5 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
+   - **Notepad** (store_session_fact) — credentials, decisions, findings. This session only.
+   - **Memory** (remember) — patterns, gotchas, decisions for FUTURE sessions. Min 80 chars. NOT for task acks, progress, handoffs.
+   - **Filing Cabinet** (stash) — component working papers across sessions. unstash() to reload.
+   - **Reference Library** (catalog/recall_entities) — structured data (APIs, schemas, entities).
+   - **Vault** — long-form docs, SOPs, research. Auto-searched via RAG.
+4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
+5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
 6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-7. Verify before claiming - read files, query DB. Never guess.
-8. Check MCP tools first - project-tools has 40+ tools.
+7. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.
 """
 
 
@@ -112,7 +117,8 @@ from rag_utils import generate_embedding, extract_query_from_prompt, expand_quer
 from rag_feedback import process_implicit_feedback
 from rag_queries import (query_knowledge, query_knowledge_graph, query_critical_session_facts,
                          query_nimbus_context, needs_schema_search, query_schema_context,
-                         query_vault_rag, query_skill_suggestions)
+                         query_vault_rag, query_skill_suggestions,
+                         query_entity_catalog, query_workfiles)
 from rag_context import (load_reminder_state, save_reminder_state, get_periodic_reminders,
                          _check_context_health, _check_recent_checkpoint,
                          detect_session_keywords, detect_config_keywords, get_session_context,
@@ -196,16 +202,26 @@ def _apply_context_budget(
     used_tokens = sum(len(t) // 4 for t in result_parts)
 
     # Add trimmable blocks in ascending priority order until budget exhausted
+    included_count = len(result_parts)  # pinned blocks already included
+    trimmed_count = 0
     for _pri, text in sorted(trimmable, key=lambda x: x[0]):
         block_tokens = len(text) // 4
         if used_tokens + block_tokens <= max_tokens:
             result_parts.append(text)
             used_tokens += block_tokens
+            included_count += 1
         else:
+            trimmed_count += 1
             logger.info(
                 f"Context budget reached ({used_tokens} tokens used, limit={max_tokens}): "
                 f"dropping block starting with: {text[:60]!r}"
             )
+
+    logger.info(
+        f"Context budget assembly: {included_count} blocks included ({len(pinned)} pinned + "
+        f"{included_count - len(pinned)} trimmable), {trimmed_count} trimmed, "
+        f"~{used_tokens} tokens used of {max_tokens} budget"
+    )
 
     return "\n".join(result_parts)
 
@@ -360,6 +376,8 @@ def main():
         rag_context = None
         nimbus_context = None
         schema_context = None
+        entity_context = None
+        workfile_context = None
 
         # SKILL SUGGESTIONS: Re-enabled (FB138 fix)
         # Initialised here; populated in the parallel block (needs_rag path) or
@@ -383,7 +401,7 @@ def main():
             logger.info(f"RAG enabled for prompt: {user_prompt[:50]}")
 
             parallel_start = time.time()
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=7) as executor:
                 futures = {}
 
                 # Submit all independent queries in parallel
@@ -425,8 +443,24 @@ def main():
                         top_k=3,
                         min_similarity=0.40,
                     )
+                futures['entities'] = executor.submit(
+                    query_entity_catalog,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    top_k=3,
+                    min_similarity=0.45,
+                )
+                futures['workfiles'] = executor.submit(
+                    query_workfiles,
+                    user_prompt=user_prompt,
+                    project_name=project_name,
+                    top_k=2,
+                    min_similarity=0.45,
+                )
 
                 # Collect results with timeout
+                sources_with_results = []
+                sources_empty = []
                 for key, future in futures.items():
                     try:
                         result = future.result(timeout=8)
@@ -440,11 +474,25 @@ def main():
                             skill_context = result
                         elif key == 'schema':
                             schema_context = result
+                        elif key == 'entities':
+                            entity_context = result
+                        elif key == 'workfiles':
+                            workfile_context = result
+
+                        if result:
+                            sources_with_results.append(key)
+                        else:
+                            sources_empty.append(key)
                     except Exception as e:
                         logger.warning(f"Parallel query '{key}' failed: {e}")
+                        sources_empty.append(key)
 
             parallel_ms = (time.time() - parallel_start) * 1000
-            logger.info(f"Parallel RAG queries completed in {parallel_ms:.0f}ms")
+            logger.info(
+                f"Parallel RAG queries completed in {parallel_ms:.0f}ms: "
+                f"{len(sources_with_results)}/{len(futures)} sources returned results "
+                f"(active={sources_with_results}, empty={sources_empty})"
+            )
         else:
             logger.info(f"RAG skipped for action prompt: {user_prompt[:50]}")
             # Skill suggestions still run for non-RAG prompts
@@ -497,13 +545,15 @@ def main():
         #   2. WCC context       (activity-scoped assembled context — replaces 3-9 when active)
         #   3. Config warning    (conditional, but important when triggered)
         #   4. Knowledge graph   (high-value learned patterns)
-        #   5. Vault RAG         (documentation retrieval)
-        #   6. Skill suggestions (discovery aid)
-        #   7. Schema context    (table/column context)
-        #   8. Design map        (project orientation)
-        #   9. Nimbus context    (project-specific, narrow audience)
+        #   5. Entity catalog    (structured reference data — APIs, schemas, domain concepts)
+        #   6. Vault RAG         (documentation retrieval)
+        #   7. Workfiles         (component working context from prior sessions)
+        #   8. Skill suggestions (discovery aid)
+        #   9. Schema context    (table/column context)
+        #  10. Design map        (project orientation)
+        #  11. Nimbus context    (project-specific, narrow audience)
         #
-        # When WCC is active, blocks 4-9 are None (WCC already contains their data).
+        # When WCC is active, blocks 4-11 are None (WCC already contains their data).
         #
         # Fail-open: if _apply_context_budget() errors, the except block below
         # falls back to joining all non-None parts (previous behaviour).
@@ -515,11 +565,13 @@ def main():
             (2, wcc_context or ""),
             (3, config_warning or ""),
             (4, knowledge_context or ""),
-            (5, rag_context or ""),
-            (6, skill_context or ""),
-            (7, schema_context or ""),
-            (8, design_map_context or ""),
-            (9, nimbus_context or ""),
+            (5, entity_context or ""),
+            (6, rag_context or ""),
+            (7, workfile_context or ""),
+            (8, skill_context or ""),
+            (9, schema_context or ""),
+            (10, design_map_context or ""),
+            (11, nimbus_context or ""),
         ]
 
         try:
