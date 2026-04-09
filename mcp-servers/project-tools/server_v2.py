@@ -8633,6 +8633,406 @@ def get_dependency_graph(symbol_id: str, depth: int = 2, direction: str = "both"
 
 
 # ============================================================================
+# Secret Vault: Windows Credential Manager Integration
+# ============================================================================
+
+def _get_keyring():
+    """Import and return keyring module, or None if unavailable."""
+    try:
+        import keyring as kr
+        # Verify a usable backend exists
+        backend = kr.get_keyring()
+        if "fail" in type(backend).__name__.lower():
+            return None
+        return kr
+    except Exception:
+        return None
+
+
+def _safe_db_connect():
+    """Get DB connection or None if unavailable."""
+    try:
+        return get_db_connection()
+    except Exception:
+        return None
+
+
+def _secret_service_name(project: str, key: str) -> str:
+    """Build WCM service name: claude/{project}/{key}."""
+    return f"claude/{project}/{key}"
+
+
+@mcp.tool()
+def set_secret(
+    secret_key: str,
+    secret_value: str,
+    project: str = "",
+    description: str = "",
+) -> dict:
+    """Store a secret in the OS credential vault (Windows Credential Manager).
+
+    Persists across sessions — no need to re-enter credentials. Also registers
+    the key in claude.secret_registry so bulk_load can find it at session start.
+    The secret is also stored as a session fact for immediate use.
+
+    Use when: Storing API keys, auth tokens, connection strings, or any credential
+    that should persist across sessions. Replaces the old pattern of storing
+    credentials as session facts that die with the session.
+    Returns: {success, secret_key, project, stored_in, persist_across_sessions}.
+
+    Args:
+        secret_key: Key name (e.g., 'monash_auth_token', 'voyage_api_key').
+        secret_value: The secret value to store.
+        project: Project name. Defaults to current directory.
+        description: Optional description of what this secret is for.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    if not secret_key or not secret_value:
+        return {"success": False, "error": "secret_key and secret_value are required"}
+
+    kr = _get_keyring()
+    if not kr:
+        return {
+            "success": False,
+            "error": "No keyring backend available. Install keyring: pip install keyring",
+            "stored_in": "none",
+            "persist_across_sessions": False,
+        }
+
+    service = _secret_service_name(project, secret_key)
+
+    try:
+        # Check if exists (for rotation logging)
+        existing = kr.get_password(service, "secret")
+        is_rotation = existing is not None
+
+        # Write to WCM
+        kr.set_password(service, "secret", secret_value)
+
+        # Register in DB so bulk_load knows about it
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO claude.secret_registry (project_name, secret_key, description, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (project_name, secret_key)
+                DO UPDATE SET description = EXCLUDED.description, updated_at = NOW()
+            """, (project, secret_key, description))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # Registry is nice-to-have, WCM store already succeeded
+
+        return {
+            "success": True,
+            "secret_key": secret_key,
+            "project": project,
+            "stored_in": "windows_credential_manager",
+            "persist_across_sessions": True,
+            "is_rotation": is_rotation,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "persist_across_sessions": False}
+
+
+@mcp.tool()
+def get_secret(
+    secret_key: str,
+    project: str = "",
+) -> dict:
+    """Retrieve a secret from the OS credential vault (Windows Credential Manager).
+
+    Checks WCM first, then falls back to session facts. If not found anywhere,
+    returns a prompt message asking the user to provide the credential.
+
+    Use when: You need a credential (API key, auth token, connection string).
+    Call this instead of asking the user — the secret may already be stored.
+    Returns: {success, secret_key, value, source} or {success: false, prompt_user: true}.
+
+    Args:
+        secret_key: Key name (e.g., 'monash_auth_token', 'voyage_api_key').
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    if not secret_key:
+        return {"success": False, "error": "secret_key is required"}
+
+    # Try WCM first
+    kr = _get_keyring()
+    if kr:
+        service = _secret_service_name(project, secret_key)
+        try:
+            value = kr.get_password(service, "secret")
+            if value:
+                return {
+                    "success": True,
+                    "secret_key": secret_key,
+                    "value": value,
+                    "source": "windows_credential_manager",
+                    "project": project,
+                }
+        except Exception:
+            pass  # Fall through to session facts
+
+    # Fallback: check session facts
+    conn = _safe_db_connect()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT fact_value FROM claude.session_facts sf
+                JOIN claude.sessions s ON sf.session_id = s.session_id
+                WHERE sf.fact_key = %s AND sf.fact_type = 'credential'
+                  AND s.project_name = %s
+                ORDER BY sf.created_at DESC LIMIT 1
+            """, (secret_key, project))
+            row = cur.fetchone()
+            if row:
+                return {
+                    "success": True,
+                    "secret_key": secret_key,
+                    "value": row[0] if isinstance(row, tuple) else row["fact_value"],
+                    "source": "session_fact",
+                    "project": project,
+                }
+        finally:
+            conn.close()
+
+    return {
+        "success": False,
+        "secret_key": secret_key,
+        "project": project,
+        "prompt_user": True,
+        "message": f"Secret '{secret_key}' not found in credential vault or session facts. "
+                   f"Please provide it and I'll store it permanently with set_secret().",
+    }
+
+
+@mcp.tool()
+def list_secrets(
+    project: str = "",
+) -> dict:
+    """List all registered secrets for a project (keys only, not values).
+
+    Shows what secrets are registered in the vault for this project.
+    Does NOT reveal secret values — only the key names and descriptions.
+
+    Use when: Checking what credentials are available, or debugging
+    missing credentials at session start.
+    Returns: {success, project, secrets: [{secret_key, description, has_value}]}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+    secrets = []
+
+    conn = _safe_db_connect()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT secret_key, description, updated_at
+                FROM claude.secret_registry
+                WHERE project_name = %s
+                ORDER BY secret_key
+            """, (project,))
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+    else:
+        rows = []
+
+    kr = _get_keyring()
+
+    for row in rows:
+        key = row[0] if isinstance(row, tuple) else row["secret_key"]
+        desc = row[1] if isinstance(row, tuple) else row["description"]
+        # Check if value actually exists in WCM
+        has_value = False
+        if kr:
+            try:
+                service = _secret_service_name(project, key)
+                has_value = kr.get_password(service, "secret") is not None
+            except Exception:
+                pass
+        secrets.append({
+            "secret_key": key,
+            "description": desc or "",
+            "has_value": has_value,
+        })
+
+    return {
+        "success": True,
+        "project": project,
+        "count": len(secrets),
+        "secrets": secrets,
+    }
+
+
+@mcp.tool()
+def delete_secret(
+    secret_key: str,
+    project: str = "",
+) -> dict:
+    """Delete a secret from the OS credential vault and registry.
+
+    Removes both the WCM entry and the registry row. Use for credential
+    rotation cleanup or removing stale entries.
+
+    Use when: A credential is no longer valid or needs to be removed.
+    Returns: {success, secret_key, project, deleted_from}.
+
+    Args:
+        secret_key: Key name to delete.
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    if not secret_key:
+        return {"success": False, "error": "secret_key is required"}
+
+    deleted_from = []
+
+    # Delete from WCM
+    kr = _get_keyring()
+    if kr:
+        service = _secret_service_name(project, secret_key)
+        try:
+            kr.delete_password(service, "secret")
+            deleted_from.append("windows_credential_manager")
+        except Exception:
+            pass  # May not exist
+
+    # Delete from registry
+    conn = _safe_db_connect()
+    if conn:
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                DELETE FROM claude.secret_registry
+                WHERE project_name = %s AND secret_key = %s
+            """, (project, secret_key))
+            if cur.rowcount > 0:
+                deleted_from.append("secret_registry")
+            conn.commit()
+        finally:
+            conn.close()
+
+    return {
+        "success": len(deleted_from) > 0,
+        "secret_key": secret_key,
+        "project": project,
+        "deleted_from": deleted_from,
+    }
+
+
+@mcp.tool()
+def load_project_secrets(
+    project: str = "",
+) -> dict:
+    """Load all registered secrets for a project from WCM into session facts.
+
+    Reads the secret registry, retrieves each secret from WCM, and stores
+    them as session facts for the current session. Called automatically at
+    session start, but can also be called manually.
+
+    Use when: Starting work on a project and need all credentials loaded.
+    Normally called by the session startup hook automatically.
+    Returns: {success, project, loaded, missing, total}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+    """
+    project = project or os.path.basename(os.getcwd())
+
+    kr = _get_keyring()
+    if not kr:
+        return {
+            "success": False,
+            "project": project,
+            "error": "No keyring backend available",
+            "loaded": 0,
+            "missing": 0,
+            "total": 0,
+        }
+
+    # Get registered secrets
+    conn = _safe_db_connect()
+    if not conn:
+        return {"success": False, "error": "No database connection"}
+
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT secret_key FROM claude.secret_registry
+            WHERE project_name = %s ORDER BY secret_key
+        """, (project,))
+        rows = cur.fetchall()
+
+        if not rows:
+            return {
+                "success": True,
+                "project": project,
+                "loaded": 0,
+                "missing": 0,
+                "total": 0,
+                "message": "No secrets registered for this project",
+            }
+
+        loaded = []
+        missing = []
+
+        # Get current session ID
+        cur.execute("""
+            SELECT session_id FROM claude.sessions
+            WHERE project_name = %s AND status = 'active'
+            ORDER BY session_start DESC LIMIT 1
+        """, (project,))
+        session_row = cur.fetchone()
+        session_id = (session_row[0] if isinstance(session_row, tuple)
+                      else session_row["session_id"]) if session_row else None
+
+        for row in rows:
+            key = row[0] if isinstance(row, tuple) else row["secret_key"]
+            service = _secret_service_name(project, key)
+            try:
+                value = kr.get_password(service, "secret")
+                if value and session_id:
+                    # Store as session fact
+                    cur.execute("""
+                        INSERT INTO claude.session_facts
+                            (session_id, fact_key, fact_value, fact_type, is_sensitive)
+                        VALUES (%s, %s, %s, 'credential', true)
+                        ON CONFLICT (session_id, fact_key)
+                        DO UPDATE SET fact_value = EXCLUDED.fact_value
+                    """, (session_id, key, value))
+                    loaded.append(key)
+                else:
+                    missing.append(key)
+            except Exception:
+                missing.append(key)
+
+        conn.commit()
+
+        return {
+            "success": True,
+            "project": project,
+            "loaded": len(loaded),
+            "loaded_keys": loaded,
+            "missing": len(missing),
+            "missing_keys": missing if missing else [],
+            "total": len(rows),
+        }
+    finally:
+        conn.close()
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 
