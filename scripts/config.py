@@ -214,8 +214,8 @@ def get_anthropic_key():
 # --- Hook log rotation ---
 
 HOOK_LOG_PATH = Path.home() / ".claude" / "hooks.log"
-_HOOK_LOG_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
-_HOOK_LOG_BACKUP_COUNT = 3
+_HOOK_LOG_MAX_BYTES = 20 * 1024 * 1024  # 20 MB
+_HOOK_LOG_BACKUP_COUNT = 20  # Keep 20 backups = ~400MB max, ~1 month of history
 
 
 def rotate_hooks_log() -> bool:
