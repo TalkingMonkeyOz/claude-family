@@ -77,6 +77,16 @@ QUESTION_INDICATORS = [
     'show me',
     'tell me about',
     'help me understand',
+    'i want to know',  # Conversational question forms
+    'can you',         # Requests that often need context
+    'can we',
+    'find ',           # "find the credentials", "find the docs" (trailing space avoids matching "find" in words)
+    'look at',         # "look at the session lifecycle"
+    'look into',
+    'check if',        # "check if we have UserSDK docs"
+    'check the',
+    'have a look',     # Conversational phrasing
+    'whats ',          # "whats the session lifecycle" (no apostrophe, common in speech-to-text)
     'documentation',
     'guide',
     'tutorial',
@@ -309,9 +319,7 @@ def needs_rag(prompt: str) -> bool:
     first_word = prompt_lower.split()[0] if prompt_lower.split() else ''
     for indicator in ACTION_INDICATORS:
         if first_word == indicator or prompt_lower.startswith(indicator):
-            # Compound prompts may start with action verbs but contain embedded
-            # questions (e.g. "implement this but first explain the pattern").
-            # Override the skip when a question signal appears in a long prompt.
+            # Override 1: Compound prompts with embedded questions
             EMBEDDED_QUESTION_INDICATORS = [
                 '?', 'explain', 'how do', 'what is', 'why does',
                 'understand', 'describe', 'clarify', 'tell me about',
@@ -320,6 +328,18 @@ def needs_rag(prompt: str) -> bool:
                 q in prompt_lower for q in EMBEDDED_QUESTION_INDICATORS
             ):
                 return True
+
+            # Override 2: Action prompts that reference existing knowledge
+            # "implement X using the existing patterns" needs context about X
+            KNOWLEDGE_REFERENCE_SIGNALS = [
+                'using existing', 'using the', 'with the existing',
+                'about the', 'based on', 'according to',
+                'the existing', 'our existing', 'the current',
+                'sdk', 'api', 'endpoint',  # Domain terms that need lookup
+            ]
+            if any(sig in prompt_lower for sig in KNOWLEDGE_REFERENCE_SIGNALS):
+                return True
+
             return False
 
     # Slash commands don't need RAG (they load their own context)
@@ -327,8 +347,9 @@ def needs_rag(prompt: str) -> bool:
         return False
 
     # Default: if prompt is long enough, it might benefit from RAG
-    # But raise the bar - only if it's >100 chars (substantial question)
-    return len(prompt_lower) > 100
+    # Lowered from 100 to 50 chars to catch conversational prompts like
+    # "I want to know about the scheduled jobs" (43 chars)
+    return len(prompt_lower) > 50
 
 
 def detect_explicit_negative(user_prompt: str) -> Optional[Tuple[str, float]]:
