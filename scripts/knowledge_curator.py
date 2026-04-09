@@ -108,63 +108,49 @@ def _fetchone(conn, query: str, params=None):
 
 
 def call_claude(prompt: str, model: str = "sonnet", max_tokens: int = 2048) -> str:
-    """Call Claude via CLI (uses subscription, not API key).
+    """Call Claude via Anthropic API (Haiku for classification, Sonnet for curation).
 
-    Routes through the user's Claude Code subscription instead of the
-    paid Anthropic API. Uses --print mode for non-interactive output.
+    Uses the API key for background jobs (CLI requires interactive auth).
+    Falls back gracefully if API key is missing.
     """
-    import subprocess
-
-    cmd = [
-        "claude", "-p", prompt,
-        "--model", model,
-        "--max-tokens", str(max_tokens),
-        "--bare",  # Skip hooks/LSP/plugins for speed
-        "--output-format", "text",
-    ]
-
     import time as _time
     call_start = _time.time()
-    logger.info("Calling Claude CLI: model=%s, prompt_len=%d, max_tokens=%d", model, len(prompt), max_tokens)
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            cwd=str(Path(__file__).parent.parent),
-        )
-        elapsed_ms = (_time.time() - call_start) * 1000
-        if result.returncode != 0:
-            logger.error("Claude CLI failed (exit %d, %.0fms): stderr=%s", result.returncode, elapsed_ms, result.stderr[:500])
-            return ""
-        response = result.stdout.strip()
-        logger.info("Claude CLI response: model=%s, response_len=%d, %.0fms", model, len(response), elapsed_ms)
-        return response
-    except subprocess.TimeoutExpired:
-        elapsed_ms = (_time.time() - call_start) * 1000
-        logger.error("Claude CLI timed out after %.0fms (model=%s, prompt_len=%d)", elapsed_ms, model, len(prompt))
-        return ""
-    except FileNotFoundError:
-        logger.error("Claude CLI not found. Ensure 'claude' is on PATH.")
-        return ""
+    # Map friendly names to model IDs
+    MODEL_MAP = {
+        "haiku": "claude-haiku-4-5-20251001",
+        "sonnet": "claude-sonnet-4-6",
+        "opus": "claude-opus-4-6",
+    }
+    model_id = MODEL_MAP.get(model, model)
+    logger.info("Calling Anthropic API: model=%s, prompt_len=%d, max_tokens=%d", model_id, len(prompt), max_tokens)
 
-
-def get_anthropic_client():
-    """DEPRECATED: Use call_claude() instead. Kept as fallback."""
     try:
         import anthropic
     except ImportError:
-        logger.error("anthropic package not installed — using Claude CLI instead")
-        return None
+        logger.error("anthropic package not installed. Run: pip install anthropic")
+        return ""
 
     api_key = get_anthropic_key()
     if not api_key:
-        logger.error("ANTHROPIC_API_KEY not set — using Claude CLI instead")
-        return None
+        logger.error("ANTHROPIC_API_KEY not set. Required for background jobs.")
+        return ""
 
-    return anthropic.Anthropic(api_key=api_key)
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model=model_id,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        elapsed_ms = (_time.time() - call_start) * 1000
+        text = response.content[0].text.strip()
+        logger.info("API response: model=%s, response_len=%d, %.0fms", model_id, len(text), elapsed_ms)
+        return text
+    except Exception as e:
+        elapsed_ms = (_time.time() - call_start) * 1000
+        logger.error("API call failed (%.0fms): %s", elapsed_ms, str(e)[:500])
+        return ""
 
 
 def _get_next_due_project(conn) -> str | None:
