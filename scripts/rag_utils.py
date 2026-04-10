@@ -154,36 +154,14 @@ NEGATIVE_PHRASES = [
 # =============================================================================
 
 def generate_embedding(text: str) -> list:
-    """Generate embedding using Voyage AI API.
+    """Generate embedding using the configured provider (FastEmbed local or Voyage AI API).
 
-    Lazy-loads voyageai module on first call to save ~100ms startup time
-    when embeddings aren't needed (commands, simple questions).
+    Uses embedding_provider.py abstraction layer. Default: FastEmbed (local CPU, no API key).
+    Set EMBEDDING_PROVIDER=voyage to use Voyage AI instead.
     """
-    global VOYAGE_AVAILABLE, _voyageai_module
-
-    # Lazy load voyageai on first use
-    if VOYAGE_AVAILABLE is None:
-        try:
-            import voyageai
-            _voyageai_module = voyageai
-            VOYAGE_AVAILABLE = True
-            logger.info("Lazy-loaded voyageai module")
-        except ImportError:
-            VOYAGE_AVAILABLE = False
-            logger.warning("voyageai not installed - embeddings unavailable")
-
-    if not VOYAGE_AVAILABLE:
-        return None
-
     try:
-        api_key = os.environ.get('VOYAGE_API_KEY')
-        if not api_key:
-            logger.warning("VOYAGE_API_KEY not set - skipping RAG")
-            return None
-
-        client = _voyageai_module.Client(api_key=api_key)
-        result = client.embed([text], model="voyage-3", input_type="query")
-        return result.embeddings[0]
+        from embedding_provider import embed
+        return embed(text)
     except Exception as e:
         logger.warning(f"Failed to generate embedding: {e}")
         return None

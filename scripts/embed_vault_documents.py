@@ -173,27 +173,17 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
 
 
 def generate_embedding(text: str) -> List[float]:
-    """Generate embedding using Voyage AI REST API."""
-    try:
-        if not VOYAGE_API_KEY:
-            raise RuntimeError("VOYAGE_API_KEY environment variable not set")
+    """Generate embedding using the configured provider (FastEmbed local or Voyage AI API).
 
-        response = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {VOYAGE_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": "document"
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result["data"][0]["embedding"]
+    Uses embedding_provider.py abstraction layer. Default: FastEmbed (local CPU, no API key).
+    Set EMBEDDING_PROVIDER=voyage to use Voyage AI instead.
+    """
+    try:
+        from embedding_provider import embed
+        result = embed(text)
+        if result is None:
+            raise RuntimeError("Embedding provider returned None")
+        return result
     except Exception as e:
         logger.error(f"Failed to generate embedding: {e}")
         raise
@@ -399,13 +389,10 @@ def main():
         logger.error(f"Database connection failed: {e}")
         sys.exit(1)
 
-    # Verify Voyage API key
-    if not VOYAGE_API_KEY:
-        logger.error("VOYAGE_API_KEY environment variable not set")
-        logger.error("Get your API key from: https://www.voyageai.com/")
-        sys.exit(1)
-    else:
-        logger.info(f"Voyage AI configured (model: {EMBEDDING_MODEL}, 1024 dimensions)")
+    # Log embedding provider info
+    from embedding_provider import get_provider_info
+    provider_info = get_provider_info()
+    logger.info(f"Embedding provider: {provider_info['provider']} (model: {provider_info['model']}, {provider_info['dimensions']} dims, local: {provider_info['local']})")
 
     # Handle cleanup of stale awesome-copilot embeddings
     if args.cleanup_copilot:

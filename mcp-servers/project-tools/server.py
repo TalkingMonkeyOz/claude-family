@@ -176,37 +176,29 @@ def _get_voyage_key() -> Optional[str]:
 
 
 def generate_embedding(text: str) -> Optional[List[float]]:
-    """Generate embedding for a single text using Voyage AI."""
-    if not REQUESTS_AVAILABLE:
-        return None
-    voyage_key = _get_voyage_key()
-    if not voyage_key:
-        return None
+    """Generate embedding using the configured provider (FastEmbed local or Voyage AI API).
 
+    Uses embedding_provider.py abstraction. Default: FastEmbed (local CPU, no API key).
+    Set EMBEDDING_PROVIDER=voyage env var to use Voyage AI instead.
+    """
     try:
-        response = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {voyage_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": "document"
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result["data"][0]["embedding"]
+        scripts_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, os.path.abspath(scripts_dir))
+        from embedding_provider import embed
+        return embed(text)
     except Exception as e:
         print(f"Embedding generation failed: {e}", file=sys.stderr)
         return None
 
 
 def generate_query_embedding(query: str) -> Optional[List[float]]:
-    """Generate embedding for a query (uses query input_type for better retrieval)."""
+    """Generate embedding for a query. Same as generate_embedding (FastEmbed doesn't distinguish)."""
+    return generate_embedding(query)
+
+
+def _generate_query_embedding_legacy(query: str) -> Optional[List[float]]:
+    """Legacy Voyage AI query embedding (kept for reference, not used)."""
     if not REQUESTS_AVAILABLE:
         return None
     voyage_key = _get_voyage_key()
