@@ -25,9 +25,9 @@ _LOG_PATH = os.path.join(os.path.expanduser('~'), '.claude', 'hooks.log')
 logger = logging.getLogger('embedding_provider')
 if not logger.handlers:
     os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
-    file_handler = logging.handlers.RotatingFileHandler(
-        _LOG_PATH, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
-    )
+    # Use plain FileHandler — RotatingFileHandler fails on Windows when
+    # another process (MCP server) holds the file open during rotation
+    file_handler = logging.FileHandler(_LOG_PATH, encoding='utf-8')
     file_handler.setFormatter(_LOG_FMT)
     logger.addHandler(file_handler)
     stderr_handler = logging.StreamHandler(sys.stderr)
