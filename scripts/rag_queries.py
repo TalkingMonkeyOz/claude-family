@@ -1035,6 +1035,37 @@ def query_entity_catalog_bm25(user_prompt: str, project_name: str,
                     'bm25_score': r[6]
                 })
 
+        # Follow depends_on relationships to co-deliver dependency dossiers
+        matched_ids = [r['entity_id'] for r in parsed]
+        if matched_ids:
+            try:
+                placeholders = ','.join(['%s'] * len(matched_ids))
+                cur.execute(f"""
+                    SELECT e.entity_id, e.display_name, et.type_name,
+                           e.summary, e.tags, e.properties, 0.0 AS bm25_score
+                    FROM claude.entity_relationships er
+                    JOIN claude.entities e ON e.entity_id = er.to_entity_id
+                    JOIN claude.entity_types et ON et.type_id = e.entity_type_id
+                    WHERE er.from_entity_id IN ({placeholders})
+                      AND er.relationship_type = 'depends_on'
+                      AND e.entity_id NOT IN ({placeholders})
+                      AND NOT e.is_archived
+                """, (*matched_ids, *matched_ids))
+                dep_rows = cur.fetchall()
+                for r in dep_rows:
+                    if isinstance(r, dict):
+                        parsed.append(r)
+                    else:
+                        parsed.append({
+                            'entity_id': r[0], 'display_name': r[1], 'type_name': r[2],
+                            'summary': r[3], 'tags': r[4], 'properties': r[5],
+                            'bm25_score': r[6]
+                        })
+                if dep_rows:
+                    logger.info(f"Entity BM25: added {len(dep_rows)} depends_on dossier(s)")
+            except Exception as e:
+                logger.debug(f"depends_on lookup failed (non-fatal): {e}")
+
         # Domain concepts get full dossier, others get summary
         domain_concepts = [r for r in parsed if r['type_name'] == 'domain_concept']
         other_entities = [r for r in parsed if r['type_name'] != 'domain_concept']
