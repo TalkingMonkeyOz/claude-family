@@ -35,10 +35,12 @@ if not logger.handlers:
     logger.addHandler(stderr_handler)
     logger.setLevel(logging.INFO)
 
-# Prevent HuggingFace Hub network calls at module load time (before any function)
+# Prevent HuggingFace Hub network calls and ONNX threading issues at module load time
 # See: https://github.com/qdrant/fastembed/issues/218
-os.environ.setdefault('HF_HUB_OFFLINE', '1')
-os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+os.environ['HF_HUB_OFFLINE'] = '1'  # Force offline — no network calls during model load
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Prevent tokenizer fork warnings
+os.environ.setdefault('OMP_NUM_THREADS', '1')  # Prevent ONNX OpenMP thread contention
+os.environ.setdefault('ONNXRUNTIME_PROVIDERS', 'CPUExecutionProvider')  # CPU only, no GPU probing
 
 # Provider selection: 'fastembed' (default) or 'voyage'
 PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'fastembed').lower()
