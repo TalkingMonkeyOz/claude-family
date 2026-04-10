@@ -12,7 +12,7 @@
 | Working notes on a component | **Filing Cabinet** | `stash(component, title, content)` |
 | API endpoint, OData entity, schema | **Reference Library** | `catalog(entity_type, properties)` |
 | Domain concept spanning multiple systems | **Reference Library** | `catalog("domain_concept", properties)` |
-| Procedure, SOP, research doc | **Vault** | Write to `knowledge-vault/` |
+| Procedure or process | **Skill** or **BPMN** | Create skill or BPMN process model |
 
 ## Key Rules
 
@@ -21,7 +21,7 @@
 - **Memory** = future sessions. Min 80 chars. NOT for task acks or progress.
 - **Filing Cabinet** = component working papers across sessions. `unstash()` to reload.
 - **Reference Library** = structured data with schemas. Search via `recall_entities()`. Use `domain_concept` type for hub entities that tie together endpoints, workfiles, and knowledge.
-- **Vault** = long-form markdown with YAML frontmatter. Auto-searched via RAG.
+- **Vault** = John's documentation layer (architecture overviews, research narratives, project descriptions). NOT for Claude's operational knowledge — use the DB systems above instead.
 
 ## Credential Workflow
 
@@ -42,7 +42,8 @@ When you complete significant research on a topic that spans multiple storage sy
 - `remember("task 3 done")` → use `store_session_fact("progress", "...", "note")`
 - `remember("OData entity User...")` → use `catalog("odata_entity", {...})`
 - Design notes in session facts → use `stash("component", "design-notes", content)`
-- 500-word remember() → write a vault doc instead
+- Writing vault docs for Claude's knowledge → use `remember()`, `catalog()`, or `stash()` instead
+- SOPs as vault markdown → create a skill or BPMN process model instead
 
 ## Before Storing: Check First
 
