@@ -17,22 +17,31 @@ import time
 import logging
 from typing import List, Optional
 
-# Configure logger to write to stderr (MCP servers capture stderr in their logs)
+# Configure logger: hooks.log (standard) + stderr fallback
+import logging.handlers
+_LOG_FMT = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+_LOG_PATH = os.path.join(os.path.expanduser('~'), '.claude', 'hooks.log')
+
 logger = logging.getLogger('embedding_provider')
 if not logger.handlers:
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter(
-        '%(asctime)s [%(name)s] %(levelname)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    ))
-    logger.addHandler(handler)
+    os.makedirs(os.path.dirname(_LOG_PATH), exist_ok=True)
+    file_handler = logging.handlers.RotatingFileHandler(
+        _LOG_PATH, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8'
+    )
+    file_handler.setFormatter(_LOG_FMT)
+    logger.addHandler(file_handler)
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(_LOG_FMT)
+    logger.addHandler(stderr_handler)
     logger.setLevel(logging.INFO)
 
 # Provider selection: 'fastembed' (default) or 'voyage'
 PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'fastembed').lower()
 
-# Lazy-loaded singletons
+# Lazy-loaded singletons (thread-safe)
+import threading
 _fastembed_model = None
+_fastembed_lock = threading.Lock()
 _voyage_client = None
 
 # Track cold start timing
@@ -41,11 +50,20 @@ _embed_call_count = 0
 
 
 def _get_fastembed_model():
-    """Lazy-load FastEmbed model (cached after first call)."""
+    """Lazy-load FastEmbed model (thread-safe, cached after first call)."""
     global _fastembed_model, _model_loaded
-    if _fastembed_model is None:
+    if _fastembed_model is not None:
+        return _fastembed_model
+    with _fastembed_lock:
+        # Double-check after acquiring lock (another thread may have loaded it)
+        if _fastembed_model is not None:
+            return _fastembed_model
         start = time.time()
         logger.info("Loading FastEmbed model BAAI/bge-large-en-v1.5 (cold start)...")
+        # Prevent HuggingFace Hub from making network calls during model load
+        # (model is already cached locally — network check causes hangs)
+        # See: https://github.com/qdrant/fastembed/issues/218
+        os.environ.setdefault('HF_HUB_OFFLINE', '1')
         from fastembed import TextEmbedding
         _fastembed_model = TextEmbedding('BAAI/bge-large-en-v1.5')
         elapsed = time.time() - start

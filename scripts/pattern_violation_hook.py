@@ -24,8 +24,10 @@ import json
 # Force UTF-8 stdout for JSON output
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# Database connection string
-DB_CONNSTR = "dbname=ai_company_foundation host=localhost"
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+from config import get_database_uri
+DB_CONNSTR = get_database_uri()
 
 
 def check_violations(file_path: str) -> list[dict]:
