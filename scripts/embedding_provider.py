@@ -35,6 +35,11 @@ if not logger.handlers:
     logger.addHandler(stderr_handler)
     logger.setLevel(logging.INFO)
 
+# Prevent HuggingFace Hub network calls at module load time (before any function)
+# See: https://github.com/qdrant/fastembed/issues/218
+os.environ.setdefault('HF_HUB_OFFLINE', '1')
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
+
 # Provider selection: 'fastembed' (default) or 'voyage'
 PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'fastembed').lower()
 
