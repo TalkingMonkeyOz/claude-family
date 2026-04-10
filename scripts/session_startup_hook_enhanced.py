@@ -877,13 +877,14 @@ def main():
                     status = f['status'] if isinstance(f, dict) else f[2]
                     cache_parts.append(f"  {code} {name} ({status})")
 
-            # Pinned workfiles
+            # Pinned workfiles — include CONTENT (truncated) so Claude has domain context
             cache_cur.execute("""
-                SELECT pw.component, pw.title
+                SELECT pw.component, pw.title, LEFT(pw.content, 800) as content_preview
                 FROM claude.project_workfiles pw
                 JOIN claude.projects p ON pw.project_id = p.project_id
                 WHERE p.project_name = %s AND pw.is_pinned = true AND pw.is_active = true
-                LIMIT 5
+                ORDER BY pw.access_count DESC
+                LIMIT 3
             """, (project_name,))
             workfiles = cache_cur.fetchall()
             if workfiles:
@@ -891,7 +892,28 @@ def main():
                 for w in workfiles:
                     comp = w['component'] if isinstance(w, dict) else w[0]
                     title = w['title'] if isinstance(w, dict) else w[1]
+                    content = w['content_preview'] if isinstance(w, dict) else w[2]
                     cache_parts.append(f"  {comp}/{title}")
+                    if content:
+                        cache_parts.append(f"  ---\n{content}\n  ---")
+
+            # Top knowledge gotchas — proactive injection of high-confidence entries
+            cache_cur.execute("""
+                SELECT title, LEFT(description, 200) as desc_preview
+                FROM claude.knowledge
+                WHERE (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)
+                  AND knowledge_type = 'gotcha'
+                  AND tier IN ('long', 'mid')
+                  AND confidence_level >= 75
+                ORDER BY confidence_level DESC, access_count DESC
+                LIMIT 10
+            """, (project_name,))
+            gotchas = cache_cur.fetchall()
+            if gotchas:
+                cache_parts.append("KEY GOTCHAS (auto-loaded from knowledge):")
+                for g in gotchas:
+                    title = g['title'] if isinstance(g, dict) else g[0]
+                    cache_parts.append(f"  - {title}")
 
             # Session facts from recent sessions (credentials masked)
             cache_cur.execute("""
