@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_knowledge_consolidation"
+                  targetNamespace="http://claude-family/bpmn/knowledge-consolidation">
+
+  <!--
+    Knowledge Consolidation: Memories to Domain Concepts
+
+    Background job that scans memories (mid/long tier) and merges new
+    gotchas, recipes, and learnings into matching domain_concepts.
+    This closes the loop: sessions produce fragments via remember(),
+    this job synthesizes them back into the reference dossier.
+
+    Actor legend:
+      [HOOK]   = scriptTask (Python logic)
+      [DB]     = scriptTask (direct database query)
+  -->
+
+  <bpmn:process id="knowledge_consolidation" name="Knowledge Consolidation: Memories to Domain Concepts" isExecutable="true">
+
+    <bpmn:startEvent id="start_consolidation" name="Consolidation Triggered">
+      <bpmn:documentation>Triggered by: (1) background job on schedule, (2) session_end hook,
+or (3) manual invocation via consolidate_memories(trigger='manual').</bpmn:documentation>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="task_load_concepts" name="[DB] Load active domain_concepts with embeddings" scriptFormat="python">
+      <bpmn:documentation>SELECT entity_id, display_name, properties, embedding, tags
+FROM claude.entities e JOIN claude.entity_types et ON et.type_id = e.entity_type_id
+WHERE et.type_name = 'domain_concept' AND e.is_archived = false</bpmn:documentation>
+      <bpmn:script>concepts_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_find_memories" name="[DB] Find mid/long tier memories not yet consolidated" scriptFormat="python">
+      <bpmn:documentation>SELECT knowledge_id, title, description, tags, embedding
+FROM claude.knowledge WHERE tier IN ('mid', 'long')
+AND consolidated_into IS NULL AND created_at > NOW() - INTERVAL '30 days'</bpmn:documentation>
+      <bpmn:script>memories_found = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_memories" name="Any unconsolidated memories?" default="flow_has_memories" />
+
+    <bpmn:endEvent id="end_nothing_to_do" name="No Memories to Consolidate" />
+
+    <bpmn:scriptTask id="task_match_memories" name="[DB] Match each memory to nearest domain_concept via cosine similarity" scriptFormat="python">
+      <bpmn:documentation>For each memory, compute cosine similarity against all domain_concept embeddings.
+If similarity >= 0.65, this memory likely belongs to that concept.
+Group: {concept_id: [memory_ids]}</bpmn:documentation>
+      <bpmn:script>memories_matched = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_matches" name="Any matches >= 0.65?" default="flow_has_matches" />
+
+    <bpmn:endEvent id="end_no_matches" name="No Matches Above Threshold" />
+
+    <bpmn:scriptTask id="task_extract_new_knowledge" name="[HOOK] Compare memory content against concept properties" scriptFormat="python">
+      <bpmn:documentation>For each (concept, memories) pair:
+- Parse memory descriptions for gotcha patterns
+- Compare against existing concept gotchas to avoid duplicates
+- Identify new recipes, environment notes
+Output: {concept_id: {new_gotchas: [], new_recipes: []}}</bpmn:documentation>
+      <bpmn:script>new_knowledge_extracted = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_new_knowledge" name="Any new knowledge extracted?" default="flow_has_new" />
+
+    <bpmn:endEvent id="end_all_duplicate" name="All Memories Already Captured" />
+
+    <bpmn:scriptTask id="task_merge_into_concept" name="[DB] Append new gotchas/recipes to domain_concept properties" scriptFormat="python">
+      <bpmn:documentation>UPDATE claude.entities SET properties = jsonb_set(...)
+Also re-generate summary from updated properties.</bpmn:documentation>
+      <bpmn:script>merged_into_concept = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_mark_consolidated" name="[DB] Mark source memories as consolidated" scriptFormat="python">
+      <bpmn:documentation>UPDATE claude.knowledge SET consolidated_into = concept_entity_id
+WHERE knowledge_id IN (matched_memory_ids). Memory NOT deleted.</bpmn:documentation>
+      <bpmn:script>memories_marked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_reembed" name="[HOOK] Re-generate Voyage AI embedding for updated concept" scriptFormat="python">
+      <bpmn:documentation>Updated concept has new gotchas/recipes — re-embed so pgvector searches find new content.</bpmn:documentation>
+      <bpmn:script>concept_reembedded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_log_consolidation" name="[DB] Log consolidation to audit_log" scriptFormat="python">
+      <bpmn:documentation>INSERT INTO claude.audit_log (entity_type, entity_id, action, details)</bpmn:documentation>
+      <bpmn:script>consolidation_logged = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_consolidated" name="Consolidation Complete" />
+
+    <!-- FLOWS -->
+    <bpmn:sequenceFlow id="flow_start" sourceRef="start_consolidation" targetRef="task_load_concepts" />
+    <bpmn:sequenceFlow id="flow_concepts_to_memories" sourceRef="task_load_concepts" targetRef="task_find_memories" />
+    <bpmn:sequenceFlow id="flow_memories_to_check" sourceRef="task_find_memories" targetRef="gw_has_memories" />
+    <bpmn:sequenceFlow id="flow_no_memories" sourceRef="gw_has_memories" targetRef="end_nothing_to_do">
+      <bpmn:conditionExpression>len(memories) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_has_memories" sourceRef="gw_has_memories" targetRef="task_match_memories" />
+    <bpmn:sequenceFlow id="flow_match_to_check" sourceRef="task_match_memories" targetRef="gw_has_matches" />
+    <bpmn:sequenceFlow id="flow_no_matches" sourceRef="gw_has_matches" targetRef="end_no_matches">
+      <bpmn:conditionExpression>len(matches) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_has_matches" sourceRef="gw_has_matches" targetRef="task_extract_new_knowledge" />
+    <bpmn:sequenceFlow id="flow_extract_to_check" sourceRef="task_extract_new_knowledge" targetRef="gw_has_new_knowledge" />
+    <bpmn:sequenceFlow id="flow_all_duplicate" sourceRef="gw_has_new_knowledge" targetRef="end_all_duplicate">
+      <bpmn:conditionExpression>len(new_knowledge) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_has_new" sourceRef="gw_has_new_knowledge" targetRef="task_merge_into_concept" />
+    <bpmn:sequenceFlow id="flow_merge_to_mark" sourceRef="task_merge_into_concept" targetRef="task_mark_consolidated" />
+    <bpmn:sequenceFlow id="flow_mark_to_reembed" sourceRef="task_mark_consolidated" targetRef="task_reembed" />
+    <bpmn:sequenceFlow id="flow_reembed_to_log" sourceRef="task_reembed" targetRef="task_log_consolidation" />
+    <bpmn:sequenceFlow id="flow_log_to_end" sourceRef="task_log_consolidation" targetRef="end_consolidated" />
+
+  </bpmn:process>
+</bpmn:definitions>

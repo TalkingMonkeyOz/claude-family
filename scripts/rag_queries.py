@@ -951,6 +951,39 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
         return None
 
 
+def _get_entity_breadcrumb(cur, entity_id, entity_name, max_depth=3):
+    """Walk entity_relationships upward to build a hierarchy breadcrumb.
+
+    Returns: "Parent > Child > entity_name" or just entity_name if no parents.
+    """
+    breadcrumb_parts = [entity_name]
+    current_id = entity_id
+
+    for _ in range(max_depth):
+        try:
+            cur.execute("""
+                SELECT e.entity_id, e.display_name
+                FROM claude.entity_relationships er
+                JOIN claude.entities e ON e.entity_id = er.from_entity_id
+                WHERE er.to_entity_id = %s
+                  AND er.relationship_type IN ('parent_of', 'contains', 'has_child')
+                LIMIT 1
+            """, (current_id,))
+            parent = cur.fetchone()
+            if not parent:
+                break
+            if isinstance(parent, dict):
+                parent_id, parent_name = parent['entity_id'], parent['display_name']
+            else:
+                parent_id, parent_name = parent[0], parent[1]
+            breadcrumb_parts.insert(0, parent_name)
+            current_id = parent_id
+        except Exception:
+            break
+
+    return " > ".join(breadcrumb_parts)
+
+
 def query_entity_catalog(user_prompt: str, project_name: str,
                          top_k: int = 3, min_similarity: float = 0.45) -> str:
     """Query entity catalog for structured reference data (APIs, schemas, domain concepts).
@@ -978,10 +1011,12 @@ def query_entity_catalog(user_prompt: str, project_name: str,
         cur = conn.cursor()
         cur.execute("""
             SELECT
+                e.entity_id,
                 e.display_name,
                 et.type_name,
                 e.summary,
                 e.tags,
+                e.properties,
                 1 - (e.embedding <=> %s::vector) as similarity_score
             FROM claude.entities e
             JOIN claude.entity_types et ON et.type_id = e.entity_type_id
@@ -994,37 +1029,122 @@ def query_entity_catalog(user_prompt: str, project_name: str,
         """, (query_embedding, query_embedding, min_similarity, query_embedding, top_k))
 
         results = cur.fetchall()
-        conn.close()
 
         if not results:
+            conn.close()
             elapsed_ms = (time.time() - start_time) * 1000
             logger.info(f"Entity catalog: 0 matches >= {min_similarity} in {elapsed_ms:.0f}ms")
             return None
 
-        elapsed_ms = (time.time() - start_time) * 1000
-        context_lines = [
-            "[ENTITY CATALOG — Structured reference data]",
-        ]
-
-        similarities = []
+        # Parse results
+        parsed = []
         for r in results:
             if isinstance(r, dict):
-                name, etype, summary, tags, sim = r['display_name'], r['type_name'], r['summary'], r['tags'], r['similarity_score']
+                parsed.append(r)
             else:
-                name, etype, summary, tags, sim = r[0], r[1], r[2], r[3], r[4]
+                parsed.append({
+                    'entity_id': r[0], 'display_name': r[1], 'type_name': r[2],
+                    'summary': r[3], 'tags': r[4], 'properties': r[5],
+                    'similarity_score': r[6]
+                })
 
+        # Check for domain_concepts — these get full dossier delivery
+        domain_concepts = [r for r in parsed if r['type_name'] == 'domain_concept']
+        other_entities = [r for r in parsed if r['type_name'] != 'domain_concept']
+
+        context_lines = []
+        similarities = []
+
+        # DOMAIN CONCEPTS: Full dossier delivery (the key F189 change)
+        for dc in domain_concepts:
+            props = dc['properties'] or {}
+            sim = dc['similarity_score']
             similarities.append(round(sim, 3))
-            summary_short = (summary[:150] + "...") if summary and len(summary) > 150 else (summary or "")
-            tag_str = ", ".join(tags[:3]) if tags else ""
-            context_lines.append(f">> {name} ({etype}, {round(sim, 2)} match)")
-            if tag_str:
-                context_lines.append(f"   Tags: {tag_str}")
-            if summary_short:
-                context_lines.append(f"   {summary_short}")
-            context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+            name = dc['display_name']
+
+            # Walk hierarchy for breadcrumb
+            breadcrumb = _get_entity_breadcrumb(cur, dc['entity_id'], name)
+
+            context_lines.append(f"[DOMAIN CONCEPT DOSSIER — {name}]")
+            if breadcrumb != name:
+                context_lines.append(f"Hierarchy: {breadcrumb}")
+
+            overview = props.get('overview', '')
+            if overview:
+                context_lines.append(f"Overview: {overview}")
+
+            usage_modes = props.get('usage_modes', [])
+            if usage_modes:
+                context_lines.append("Usage Modes:")
+                for mode in usage_modes:
+                    context_lines.append(f"  - {mode}")
+
+            gotchas = props.get('gotchas', [])
+            if gotchas:
+                context_lines.append("Gotchas:")
+                for i, g in enumerate(gotchas, 1):
+                    context_lines.append(f"  {i}. {g}")
+
+            recipes = props.get('recipes', [])
+            if recipes:
+                context_lines.append("Recipes:")
+                for recipe in recipes:
+                    if isinstance(recipe, dict):
+                        context_lines.append(f"  [{recipe.get('name', 'recipe')}]")
+                        context_lines.append(f"  {recipe.get('content', '')}")
+                    else:
+                        context_lines.append(f"  - {recipe}")
+
+            auth = props.get('auth', '')
+            if auth:
+                context_lines.append(f"Auth: {auth}")
+
+            env_notes = props.get('environment_notes', '')
+            if env_notes:
+                context_lines.append(f"Environment: {env_notes}")
+
+            verified = props.get('verified', {})
+            if verified:
+                context_lines.append(f"Verified: {verified.get('date', '?')} on {verified.get('environment', '?')}")
+
             context_lines.append("")
 
-        logger.info(f"Entity catalog: {len(results)} matches in {elapsed_ms:.0f}ms, similarities={similarities}")
+            # Update access stats for domain concepts
+            try:
+                cur.execute("""
+                    UPDATE claude.entities SET access_count = access_count + 1,
+                    last_accessed_at = NOW() WHERE entity_id = %s
+                """, (dc['entity_id'],))
+                conn.commit()
+            except Exception:
+                pass
+
+        # OTHER ENTITIES: Summary + pointer (existing behavior)
+        if other_entities:
+            if domain_concepts:
+                context_lines.append("[ENTITY CATALOG — Related reference data]")
+            else:
+                context_lines.append("[ENTITY CATALOG — Structured reference data]")
+
+            for r in other_entities:
+                sim = r['similarity_score']
+                similarities.append(round(sim, 3))
+                name = r['display_name']
+                summary = r['summary'] or ''
+                tags = r['tags'] or []
+                summary_short = (summary[:150] + "...") if len(summary) > 150 else summary
+                tag_str = ", ".join(tags[:3]) if tags else ""
+                context_lines.append(f">> {name} ({r['type_name']}, {round(sim, 2)} match)")
+                if tag_str:
+                    context_lines.append(f"   Tags: {tag_str}")
+                if summary_short:
+                    context_lines.append(f"   {summary_short}")
+                context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+                context_lines.append("")
+
+        conn.close()
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.info(f"Entity catalog: {len(results)} matches ({len(domain_concepts)} dossiers) in {elapsed_ms:.0f}ms, similarities={similarities}")
         return "\n".join(context_lines)
 
     except Exception as e:

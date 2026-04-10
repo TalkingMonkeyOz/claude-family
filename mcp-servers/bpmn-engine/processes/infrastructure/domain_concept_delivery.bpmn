@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+                  id="Definitions_domain_concept_delivery"
+                  targetNamespace="http://claude-family/bpmn/domain-concept-delivery">
+
+  <!--
+    Domain Concept Delivery: Full Dossier via RAG Hook
+
+    Called from rag_hook_execution (task_entity_catalog) during the parallel fan-out.
+    This process replaces the summary-only behavior with full dossier delivery
+    when a domain_concept entity matches the user's prompt.
+
+    Current behavior (broken):
+      query_entity_catalog() → pgvector search → summary[:150] + pointer → Claude gets teaser
+      Claude must manually call recall_entities() to get full content → often doesn't
+
+    Target behavior (this model):
+      query_entity_catalog() → pgvector search → detect domain_concept →
+        FULL properties (overview, gotchas, usage_modes, recipes, auth) → Claude gets dossier
+      Non-domain_concept entities → existing summary + pointer behavior preserved
+
+    Actor legend:
+      [HOOK]   = scriptTask (rag_queries.py logic)
+      [DB]     = scriptTask (direct database query)
+  -->
+
+  <bpmn:process id="domain_concept_delivery" name="Domain Concept Delivery: Full Dossier via RAG Hook" isExecutable="true">
+
+    <bpmn:startEvent id="start_query" name="Entity Catalog Query Triggered">
+      <bpmn:documentation>Fired from rag_hook_execution parallel fan-out (task_entity_catalog).
+Input: user_prompt, project_name, query_embedding</bpmn:documentation>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="task_pgvector_search" name="[DB] pgvector similarity search on claude.entities" scriptFormat="python">
+      <bpmn:documentation>SELECT e.*, et.type_name FROM claude.entities e
+JOIN claude.entity_types et ON et.type_id = e.entity_type_id
+WHERE e.embedding IS NOT NULL AND e.is_archived = false
+AND 1 - (e.embedding &lt;=&gt; query_embedding) >= min_similarity
+ORDER BY similarity DESC LIMIT top_k</bpmn:documentation>
+      <bpmn:script>pgvector_search_done = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_results" name="Any matches?" default="flow_has_results" />
+
+    <bpmn:endEvent id="end_no_results" name="No Results (return None)" />
+
+    <bpmn:exclusiveGateway id="gw_is_domain_concept" name="Any domain_concept in results?" default="flow_not_domain_concept" />
+
+    <bpmn:scriptTask id="task_load_full_properties" name="[DB] Load full JSONB properties for domain_concept" scriptFormat="python">
+      <bpmn:documentation>For domain_concept matches: load properties->'overview', properties->'gotchas',
+properties->'usage_modes', properties->'recipes', properties->'auth',
+properties->'environment_notes', properties->'verified'.
+KEY CHANGE: current code returns summary[:150], this returns full properties.</bpmn:documentation>
+      <bpmn:script>full_properties_loaded = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_walk_hierarchy" name="[DB] Walk entity_relationships for parent/child concepts" scriptFormat="python">
+      <bpmn:documentation>Query entity_relationships for this domain_concept:
+- Find parent concept (e.g., UserSDK → Nimbus REST API → Nimbus T2W)
+- Find sibling concepts at same level
+- Return breadcrumb: "Nimbus T2W > REST API > UserSDK"
+- Include parent auth pattern if child lacks one</bpmn:documentation>
+      <bpmn:script>hierarchy_walked = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_format_dossier" name="[HOOK] Format domain concept as reference dossier" scriptFormat="python">
+      <bpmn:documentation>Format as:
+[DOMAIN CONCEPT DOSSIER — {name}]
+Hierarchy: {breadcrumb}
+Overview: {overview}
+Usage Modes: {usage_modes as bullets}
+Gotchas: {gotchas as numbered list}
+Recipes: {recipes if present}
+Auth: {auth pattern or "See: {parent} for auth"}
+Verified: {date, environment}
+Related: {sibling concepts}
+Token budget: ~1500-2000 tokens for a rich concept.</bpmn:documentation>
+      <bpmn:script>dossier_formatted = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="task_format_summary" name="[HOOK] Format as summary + recall_entities pointer" scriptFormat="python">
+      <bpmn:documentation>For non-domain_concept entities (odata_entity, api_endpoint, etc.):
+Keep existing behavior — summary[:150] + "Use: recall_entities() for full details"</bpmn:documentation>
+      <bpmn:script>summary_formatted = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_merge_format" name="Merge format paths" />
+
+    <bpmn:scriptTask id="task_update_access" name="[DB] Update access_count and last_accessed_at" scriptFormat="python">
+      <bpmn:documentation>UPDATE claude.entities SET access_count = access_count + 1,
+last_accessed_at = NOW() WHERE entity_id IN (matched_ids)</bpmn:documentation>
+      <bpmn:script>access_updated = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_context_returned" name="Formatted Context Returned to RAG Hook" />
+
+    <!-- FLOWS -->
+    <bpmn:sequenceFlow id="flow_start" sourceRef="start_query" targetRef="task_pgvector_search" />
+    <bpmn:sequenceFlow id="flow_search_to_check" sourceRef="task_pgvector_search" targetRef="gw_has_results" />
+    <bpmn:sequenceFlow id="flow_no_results" sourceRef="gw_has_results" targetRef="end_no_results">
+      <bpmn:conditionExpression>len(results) == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_has_results" sourceRef="gw_has_results" targetRef="gw_is_domain_concept" />
+    <bpmn:sequenceFlow id="flow_is_domain_concept" sourceRef="gw_is_domain_concept" targetRef="task_load_full_properties">
+      <bpmn:conditionExpression>any(r.type_name == 'domain_concept' for r in results)</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_domain_concept" sourceRef="gw_is_domain_concept" targetRef="task_format_summary">
+      <bpmn:conditionExpression>not any(r.type_name == 'domain_concept' for r in results)</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_props_to_hierarchy" sourceRef="task_load_full_properties" targetRef="task_walk_hierarchy" />
+    <bpmn:sequenceFlow id="flow_hierarchy_to_format" sourceRef="task_walk_hierarchy" targetRef="task_format_dossier" />
+    <bpmn:sequenceFlow id="flow_dossier_to_merge" sourceRef="task_format_dossier" targetRef="gw_merge_format" />
+    <bpmn:sequenceFlow id="flow_summary_to_merge" sourceRef="task_format_summary" targetRef="gw_merge_format" />
+    <bpmn:sequenceFlow id="flow_merge_to_access" sourceRef="gw_merge_format" targetRef="task_update_access" />
+    <bpmn:sequenceFlow id="flow_access_to_end" sourceRef="task_update_access" targetRef="end_context_returned" />
+
+  </bpmn:process>
+</bpmn:definitions>
