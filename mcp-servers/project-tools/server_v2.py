@@ -7495,6 +7495,189 @@ def catalog(
 
 
 @mcp.tool()
+def update_entity(
+    entity_id: str = "",
+    entity_name: str = "",
+    entity_type: str = "",
+    patch: dict | None = None,
+    tags: list[str] | None = None,
+    is_archived: bool | None = None,
+) -> dict:
+    """Update an existing entity's properties without full upsert.
+
+    Supports targeted patch operations on JSONB properties fields so you don't
+    need to know the full properties to fix a single value.
+
+    Use when: Fixing a gotcha in an entity, adding a field, removing stale data,
+    or archiving an entity. Avoids the need for raw SQL to modify entity data.
+    Returns: {success, entity_id, display_name, changes_applied, action: 'updated'}.
+
+    Args:
+        entity_id: Entity UUID (preferred). Either entity_id or entity_name required.
+        entity_name: Display name to look up (case-insensitive). If ambiguous, also
+            provide entity_type to disambiguate.
+        entity_type: Filter by type name when using entity_name lookup.
+        patch: Dict of property patches. Each key is a property field name, value is
+            either a literal (shorthand for "set") or an operation dict:
+            - {"op": "set", "value": <any>} — set/overwrite the field
+            - {"op": "append", "value": <any>} — append to an array field
+            - {"op": "remove", "value": <any>} — remove a value from an array field
+            - {"op": "remove_key"} — remove the property key entirely
+            - Shorthand: {"field": "new_value"} is equivalent to {"field": {"op": "set", "value": "new_value"}}
+        tags: Replace tags entirely (set to [] to clear). None = no change.
+        is_archived: Set archive status. None = no change.
+    """
+    if not patch and tags is None and is_archived is None:
+        return {"success": False, "error": "Nothing to update. Provide patch, tags, or is_archived."}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Resolve entity
+        if entity_id:
+            cur.execute("""
+                SELECT e.entity_id::text, e.properties, e.entity_type_id::text,
+                       et.embedding_template, et.summary_template,
+                       COALESCE(e.properties->>'name', e.properties->>'title', 'Unnamed') AS display_name
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE e.entity_id = %s::uuid
+            """, (entity_id,))
+        elif entity_name:
+            type_filter = ""
+            params = [entity_name]
+            if entity_type:
+                type_filter = "AND et.type_name = %s"
+                params.append(entity_type)
+            cur.execute(f"""
+                SELECT e.entity_id::text, e.properties, e.entity_type_id::text,
+                       et.embedding_template, et.summary_template,
+                       COALESCE(e.properties->>'name', e.properties->>'title', 'Unnamed') AS display_name
+                FROM claude.entities e
+                JOIN claude.entity_types et ON e.entity_type_id = et.type_id
+                WHERE LOWER(COALESCE(e.properties->>'name', e.properties->>'title', '')) = LOWER(%s)
+                  AND NOT e.is_archived
+                  {type_filter}
+            """, params)
+        else:
+            return {"success": False, "error": "Provide entity_id or entity_name."}
+
+        rows = cur.fetchall()
+        if not rows:
+            return {"success": False, "error": f"Entity not found: {entity_id or entity_name}"}
+        if len(rows) > 1:
+            matches = [{"entity_id": r['entity_id'], "display_name": r['display_name']} for r in rows]
+            return {"success": False, "error": "Ambiguous name — multiple matches. Provide entity_type or use entity_id.",
+                    "matches": matches}
+
+        row = rows[0]
+        eid = row['entity_id']
+        properties = row['properties']
+        embedding_template = row['embedding_template']
+        summary_template = row.get('summary_template')
+
+        # 2. Apply patches to properties
+        changes = []
+        if patch:
+            for field, operation in patch.items():
+                # Shorthand: literal value = set
+                if not isinstance(operation, dict) or 'op' not in operation:
+                    operation = {"op": "set", "value": operation}
+
+                op = operation['op']
+                val = operation.get('value')
+
+                if op == 'set':
+                    properties[field] = val
+                    changes.append(f"set {field}")
+
+                elif op == 'append':
+                    if field not in properties:
+                        properties[field] = []
+                    if not isinstance(properties[field], list):
+                        return {"success": False, "error": f"Cannot append to non-array field '{field}'"}
+                    properties[field].append(val)
+                    changes.append(f"appended to {field}")
+
+                elif op == 'remove':
+                    if field in properties and isinstance(properties[field], list):
+                        try:
+                            properties[field].remove(val)
+                            changes.append(f"removed from {field}")
+                        except ValueError:
+                            changes.append(f"'{val}' not found in {field} (no change)")
+                    elif field in properties:
+                        return {"success": False, "error": f"Cannot remove from non-array field '{field}'. Use 'remove_key' to delete the field."}
+
+                elif op == 'remove_key':
+                    if field in properties:
+                        del properties[field]
+                        changes.append(f"removed key {field}")
+                    else:
+                        changes.append(f"key {field} not present (no change)")
+
+                else:
+                    return {"success": False, "error": f"Unknown op '{op}'. Valid: set, append, remove, remove_key."}
+
+        # 3. Build UPDATE query
+        set_clauses = ["properties = %s", "updated_at = NOW()"]
+        params = [json.dumps(properties)]
+
+        if tags is not None:
+            set_clauses.append("tags = %s")
+            params.append(tags)
+            changes.append("replaced tags")
+
+        if is_archived is not None:
+            set_clauses.append("is_archived = %s")
+            params.append(is_archived)
+            changes.append(f"{'archived' if is_archived else 'unarchived'}")
+
+        # Recompute summary
+        summary = _compute_entity_summary(properties, summary_template)
+        set_clauses.append("summary = %s")
+        params.append(summary)
+
+        params.append(eid)
+        cur.execute(f"""
+            UPDATE claude.entities
+            SET {', '.join(set_clauses)}
+            WHERE entity_id = %s::uuid
+            RETURNING entity_id::text,
+                COALESCE(properties->>'name', properties->>'title', 'Unnamed') AS display_name
+        """, params)
+        updated = cur.fetchone()
+
+        # 4. Refresh embedding
+        embed_text = _interpolate_template(embedding_template, properties)
+        embedding = generate_embedding(embed_text)
+        if embedding:
+            cur.execute("""
+                UPDATE claude.entities SET embedding = %s::vector
+                WHERE entity_id = %s::uuid
+            """, (embedding, eid))
+
+        conn.commit()
+        return {
+            "success": True,
+            "entity_id": updated['entity_id'],
+            "display_name": updated['display_name'],
+            "changes_applied": changes,
+            "action": "updated",
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to update entity: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
 def recall_entities(
     query: str,
     entity_type: str = "",
