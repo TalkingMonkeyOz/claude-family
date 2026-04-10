@@ -49,15 +49,11 @@ def cosine_similarity(a, b):
 
 
 def generate_embedding(text):
-    """Generate Voyage AI embedding for text."""
+    """Generate embedding using configured provider (FastEmbed local or Voyage AI)."""
     try:
-        import voyageai
-        key = get_voyage_key()
-        if not key:
-            logger.warning("No Voyage AI key available")
-            return None
-        client = voyageai.Client(api_key=key)
-        result = client.embed([text], model="voyage-3", input_type="document")
+        from embedding_provider import embed
+        result = embed(text)
+        return result
         return result.embeddings[0]
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
@@ -259,6 +255,74 @@ def merge_and_mark(conn, results, dry_run=False):
         merged_count += len(new_gotchas)
 
     return merged_count
+
+
+def consolidate_session(conn, session_id=None, threshold=SIMILARITY_THRESHOLD):
+    """Lightweight consolidation for a single session's memories.
+
+    Called at end_session() to merge corrections discovered during this session
+    into domain_concept dossiers immediately, rather than waiting for the daily batch.
+
+    Returns: {consolidated: int, concepts_updated: int}
+    """
+    try:
+        concepts = load_domain_concepts(conn)
+        if not concepts:
+            return {"consolidated": 0, "concepts_updated": 0, "message": "No domain_concepts found"}
+
+        # Find only this session's unconsolidated memories
+        cur = conn.cursor()
+        session_filter = ""
+        params = []
+        if session_id:
+            # Match memories created during this session's timeframe
+            session_filter = """
+                AND k.created_at >= (SELECT session_start FROM claude.sessions WHERE session_id = %s::uuid)
+            """
+            params = [session_id]
+
+        cur.execute(f"""
+            SELECT knowledge_id, title, description, tags, embedding
+            FROM claude.knowledge k
+            WHERE tier IN ('mid', 'long')
+              AND consolidated_into IS NULL
+              AND embedding IS NOT NULL
+              AND created_at > NOW() - INTERVAL '1 day'
+              {session_filter}
+            ORDER BY created_at DESC
+        """, params)
+
+        rows = cur.fetchall()
+        memories = []
+        for r in rows:
+            if isinstance(r, dict):
+                memories.append(r)
+            else:
+                memories.append({
+                    'knowledge_id': r[0], 'title': r[1], 'description': r[2],
+                    'tags': r[3], 'embedding': r[4]
+                })
+
+        if not memories:
+            return {"consolidated": 0, "concepts_updated": 0, "message": "No session memories to consolidate"}
+
+        logger.info(f"Session consolidation: {len(memories)} memories to check")
+
+        matches = match_memories_to_concepts(memories, concepts, threshold)
+        if not matches:
+            return {"consolidated": 0, "concepts_updated": 0, "message": "No memories matched concepts"}
+
+        results = extract_new_knowledge(matches)
+        if not results:
+            return {"consolidated": 0, "concepts_updated": 0, "message": "All matched memories already captured"}
+
+        merged = merge_and_mark(conn, results)
+        logger.info(f"Session consolidation: merged {merged} gotchas into {len(results)} concepts")
+        return {"consolidated": merged, "concepts_updated": len(results)}
+
+    except Exception as e:
+        logger.error(f"Session consolidation failed: {e}", exc_info=True)
+        return {"consolidated": 0, "concepts_updated": 0, "error": str(e)}
 
 
 def main():

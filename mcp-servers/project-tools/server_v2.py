@@ -1362,10 +1362,23 @@ def end_session(
             except Exception as cons_err:
                 results["consolidation"] = {"error": str(cons_err)}
 
+        # 7. F190: Merge session corrections into domain_concept dossiers
+        if closed_session_id:
+            try:
+                scripts_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')
+                if scripts_dir not in sys.path:
+                    sys.path.insert(0, os.path.abspath(scripts_dir))
+                from knowledge_consolidation import consolidate_session
+                kc_result = consolidate_session(conn, session_id=closed_session_id)
+                results["dossier_consolidation"] = kc_result
+            except Exception as kc_err:
+                results["dossier_consolidation"] = {"error": str(kc_err)}
+
         knowledge_note = f", {results['knowledge_created']} knowledge entries created" if results.get("knowledge_created") else ""
         insights_note = f", {results['insights_extracted']} insights extracted" if results.get("insights_extracted") else ""
         consolidation_note = f", {results.get('consolidation', {}).get('promoted', 0)} facts promoted" if results.get("consolidation", {}).get("promoted") else ""
-        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}{consolidation_note}."
+        dossier_note = f", {results.get('dossier_consolidation', {}).get('consolidated', 0)} corrections merged into dossiers" if results.get("dossier_consolidation", {}).get("consolidated") else ""
+        results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}{consolidation_note}{dossier_note}."
         return results
 
     except Exception as e:
