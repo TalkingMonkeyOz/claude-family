@@ -69,8 +69,9 @@ def _check_pending_messages(project_name: str) -> str:
 def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
     """Search entity catalog for domain_concept dossiers matching the prompt.
 
-    Imports rag_queries lazily (it pulls in voyageai). Runs with a 2s timeout
-    so it doesn't block protocol injection if Voyage AI is slow.
+    Strategy: BM25 keyword search first (<10ms, pure SQL), then embedding
+    fallback only if BM25 finds nothing. This avoids Voyage AI cold-start
+    latency (3-8s) that was killing hook performance.
     Returns formatted dossier string or empty string.
     """
     if not user_prompt or len(user_prompt.strip()) < 10:
@@ -79,6 +80,17 @@ def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
     if user_prompt.strip().startswith('/'):
         return ""
     try:
+        # Fast path: BM25 keyword matching (<10ms, no external API)
+        from rag_queries import query_entity_catalog_bm25
+        result = query_entity_catalog_bm25(user_prompt, project_name, top_k=2,
+                                            domain_concepts_only=True)
+        if result:
+            return result
+
+        # Slow path: embedding similarity (only if BM25 missed)
+        # Skip if prompt is very short (unlikely to benefit from semantic search)
+        if len(user_prompt.strip()) < 30:
+            return ""
         from rag_queries import query_entity_catalog
         result = query_entity_catalog(user_prompt, project_name, top_k=2, min_similarity=0.35)
         return result or ""
@@ -113,7 +125,7 @@ def main():
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(_query_domain_concepts, user_prompt, project_name)
             try:
-                dossier_context = future.result(timeout=2.5)
+                dossier_context = future.result(timeout=5.0)
             except (FuturesTimeout, Exception):
                 dossier_context = ""  # Skip if too slow, don't block
 

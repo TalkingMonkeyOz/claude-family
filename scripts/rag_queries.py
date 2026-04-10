@@ -951,6 +951,190 @@ def query_skill_suggestions(user_prompt: str, project_name: str,
         return None
 
 
+def _build_tsquery(text: str) -> str:
+    """Build a PostgreSQL tsquery string from natural language text.
+
+    Extracts words >2 chars, joins with | (OR) for broad matching.
+    Returns empty string if no usable words found.
+    """
+    words = [w.strip().lower() for w in re.split(r'[^a-zA-Z0-9]+', text) if w.strip() and len(w.strip()) > 2]
+    if not words:
+        return ""
+    return " | ".join(words)
+
+
+def query_entity_catalog_bm25(user_prompt: str, project_name: str,
+                               top_k: int = 3, min_score: float = 0.04,
+                               domain_concepts_only: bool = False) -> str:
+    """BM25 keyword search on entity catalog — no embedding needed.
+
+    Uses PostgreSQL tsvector/tsquery for instant (<10ms) keyword matching.
+    Returns full dossier for domain_concepts, summary+pointer for others.
+    Designed for synchronous hooks where Voyage AI latency is unacceptable.
+
+    Args:
+        min_score: Minimum ts_rank score to include (0.04 filters common-word false positives)
+        domain_concepts_only: If True, only search domain_concept entities (for hook dossier delivery)
+
+    Returns:
+        Formatted context string or None if no keyword matches
+    """
+    if not DB_AVAILABLE:
+        return None
+
+    try:
+        start_time = time.time()
+        ts_query = _build_tsquery(user_prompt)
+        if not ts_query:
+            return None
+
+        conn = get_db_connection()
+        if not conn:
+            return None
+
+        type_filter = "AND et.type_name = 'domain_concept'" if domain_concepts_only else ""
+
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT
+                e.entity_id,
+                e.display_name,
+                et.type_name,
+                e.summary,
+                e.tags,
+                e.properties,
+                ts_rank(e.search_vector, to_tsquery('english', %s)) AS bm25_score
+            FROM claude.entities e
+            JOIN claude.entity_types et ON et.type_id = e.entity_type_id
+            WHERE e.is_archived = false
+              AND e.search_vector IS NOT NULL
+              AND e.search_vector @@ to_tsquery('english', %s)
+              AND ts_rank(e.search_vector, to_tsquery('english', %s)) >= %s
+              {type_filter}
+            ORDER BY ts_rank(e.search_vector, to_tsquery('english', %s)) DESC
+            LIMIT %s
+        """, (ts_query, ts_query, ts_query, min_score, ts_query, top_k))
+
+        results = cur.fetchall()
+
+        if not results:
+            conn.close()
+            elapsed_ms = (time.time() - start_time) * 1000
+            logger.info(f"Entity BM25: 0 keyword matches in {elapsed_ms:.0f}ms (query: {ts_query[:60]})")
+            return None
+
+        # Parse results
+        parsed = []
+        for r in results:
+            if isinstance(r, dict):
+                parsed.append(r)
+            else:
+                parsed.append({
+                    'entity_id': r[0], 'display_name': r[1], 'type_name': r[2],
+                    'summary': r[3], 'tags': r[4], 'properties': r[5],
+                    'bm25_score': r[6]
+                })
+
+        # Domain concepts get full dossier, others get summary
+        domain_concepts = [r for r in parsed if r['type_name'] == 'domain_concept']
+        other_entities = [r for r in parsed if r['type_name'] != 'domain_concept']
+
+        context_lines = []
+
+        # DOMAIN CONCEPTS: Full dossier delivery
+        for dc in domain_concepts:
+            props = dc['properties'] or {}
+            if isinstance(props, str):
+                props = json.loads(props)
+            name = dc['display_name']
+
+            breadcrumb = _get_entity_breadcrumb(cur, dc['entity_id'], name)
+
+            context_lines.append(f"[DOMAIN CONCEPT DOSSIER — {name}]")
+            if breadcrumb != name:
+                context_lines.append(f"Hierarchy: {breadcrumb}")
+
+            overview = props.get('overview', '')
+            if overview:
+                context_lines.append(f"Overview: {overview}")
+
+            usage_modes = props.get('usage_modes', [])
+            if usage_modes:
+                context_lines.append("Usage Modes:")
+                for mode in usage_modes:
+                    context_lines.append(f"  - {mode}")
+
+            gotchas = props.get('gotchas', [])
+            if gotchas:
+                context_lines.append("Gotchas:")
+                for i, g in enumerate(gotchas, 1):
+                    context_lines.append(f"  {i}. {g}")
+
+            recipes = props.get('recipes', [])
+            if recipes:
+                context_lines.append("Recipes:")
+                for recipe in recipes:
+                    if isinstance(recipe, dict):
+                        context_lines.append(f"  [{recipe.get('name', 'recipe')}]")
+                        context_lines.append(f"  {recipe.get('content', '')}")
+                    else:
+                        context_lines.append(f"  - {recipe}")
+
+            auth = props.get('auth', '')
+            if auth:
+                context_lines.append(f"Auth: {auth}")
+
+            env_notes = props.get('environment_notes', '')
+            if env_notes:
+                context_lines.append(f"Environment: {env_notes}")
+
+            verified = props.get('verified', {})
+            if verified:
+                context_lines.append(f"Verified: {verified.get('date', '?')} on {verified.get('environment', '?')}")
+
+            context_lines.append("")
+
+            # Update access stats
+            try:
+                cur.execute("""
+                    UPDATE claude.entities SET access_count = access_count + 1,
+                    last_accessed_at = NOW() WHERE entity_id = %s
+                """, (dc['entity_id'],))
+                conn.commit()
+            except Exception:
+                pass
+
+        # OTHER ENTITIES: Summary + pointer
+        if other_entities:
+            if domain_concepts:
+                context_lines.append("[ENTITY CATALOG — Related reference data]")
+            else:
+                context_lines.append("[ENTITY CATALOG — Structured reference data]")
+
+            for r in other_entities:
+                name = r['display_name']
+                summary = r['summary'] or ''
+                tags = r['tags'] or []
+                summary_short = (summary[:150] + "...") if len(summary) > 150 else summary
+                tag_str = ", ".join(tags[:3]) if tags else ""
+                context_lines.append(f">> {name} ({r['type_name']})")
+                if tag_str:
+                    context_lines.append(f"   Tags: {tag_str}")
+                if summary_short:
+                    context_lines.append(f"   {summary_short}")
+                context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+                context_lines.append("")
+
+        conn.close()
+        elapsed_ms = (time.time() - start_time) * 1000
+        logger.info(f"Entity BM25: {len(results)} matches ({len(domain_concepts)} dossiers) in {elapsed_ms:.0f}ms")
+        return "\n".join(context_lines)
+
+    except Exception as e:
+        logger.error(f"Entity BM25 query failed: {e}", exc_info=True)
+        return None
+
+
 def _get_entity_breadcrumb(cur, entity_id, entity_name, max_depth=3):
     """Walk entity_relationships upward to build a hierarchy breadcrumb.
 
