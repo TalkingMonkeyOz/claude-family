@@ -7988,7 +7988,7 @@ def recall_entities(
         detail: 'summary' (default) returns compact summaries, 'full' returns complete properties.
         entity_id: If provided, returns full details for this specific entity (ignores query).
     """
-    from server import generate_query_embedding, _get_voyage_key
+    from server import generate_query_embedding
 
     # Fast path: single entity by ID (always returns full properties)
     if entity_id:
@@ -8021,12 +8021,10 @@ def recall_entities(
         finally:
             conn.close()
 
-    if not _get_voyage_key():
-        return {"error": "Embedding service not configured — semantic search unavailable"}
-
+    # Generate query embedding (uses FastEmbed local or Voyage AI based on EMBEDDING_PROVIDER)
     query_embedding = generate_query_embedding(query)
     if not query_embedding:
-        return {"error": "Failed to generate query embedding"}
+        return {"error": "Failed to generate query embedding — embedding service may be unavailable"}
 
     conn = get_db_connection()
     cur = None
@@ -8569,9 +8567,9 @@ def find_symbol(query: str, project: str = "", kind: str = "", limit: int = 20) 
 
         if len(exact_results) < limit:
             try:
-                import voyageai
-                vo = voyageai.Client()
-                embedding = vo.embed([query], model="voyage-code-3").embeddings[0]
+                embedding = generate_query_embedding(query)
+                if not embedding:
+                    raise ValueError("Embedding generation failed")
                 embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
                 embed_params = [embedding_str]

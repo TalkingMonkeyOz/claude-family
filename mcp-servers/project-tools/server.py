@@ -1021,13 +1021,10 @@ async def tool_recall_knowledge(
     date_range_days: Optional[int] = None
 ) -> Dict:
     """Semantic search over knowledge entries with structured filters."""
-    if not _get_voyage_key():
-        return {"error": "Embedding service not configured — semantic search unavailable"}
-
-    # Generate query embedding
+    # Generate query embedding (uses FastEmbed local or Voyage AI based on EMBEDDING_PROVIDER)
     query_embedding = generate_query_embedding(query)
     if not query_embedding:
-        return {"error": "Failed to generate query embedding"}
+        return {"error": "Failed to generate query embedding — embedding service may be unavailable"}
 
     conn = get_db_connection()
     try:
@@ -1441,12 +1438,10 @@ async def tool_graph_search(
     token_budget: int = 500,
 ) -> Dict:
     """Graph-aware knowledge search: pgvector seed + recursive CTE graph walk."""
-    if not _get_voyage_key():
-        return {"error": "Embedding service not configured — semantic search unavailable"}
-
+    # Generate query embedding (uses FastEmbed local or Voyage AI based on EMBEDDING_PROVIDER)
     query_embedding = generate_query_embedding(query)
     if not query_embedding:
-        return {"error": "Failed to generate query embedding"}
+        return {"error": "Failed to generate query embedding — embedding service may be unavailable"}
 
     conn = get_db_connection()
     try:
