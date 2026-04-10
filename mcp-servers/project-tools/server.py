@@ -168,6 +168,11 @@ def get_project_id(project_identifier: str) -> Optional[str]:
 
 EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"  # FastEmbed local model
 
+# Ensure embedding_provider is importable
+_embedding_provider_path = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')
+if os.path.abspath(_embedding_provider_path) not in sys.path:
+    sys.path.insert(0, os.path.abspath(_embedding_provider_path))
+
 
 def generate_embedding(text: str) -> Optional[List[float]]:
     """Generate embedding using the configured provider (FastEmbed local or Voyage AI API).
@@ -176,13 +181,15 @@ def generate_embedding(text: str) -> Optional[List[float]]:
     Set EMBEDDING_PROVIDER=voyage env var to use Voyage AI instead.
     """
     try:
-        scripts_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')
-        if scripts_dir not in sys.path:
-            sys.path.insert(0, os.path.abspath(scripts_dir))
         from embedding_provider import embed
-        return embed(text)
+        result = embed(text)
+        if result is None:
+            # embed() already logs the reason — just note it here
+            print(f"[server] generate_embedding returned None for text ({len(text) if text else 0} chars)", file=sys.stderr)
+        return result
     except Exception as e:
-        print(f"Embedding generation failed: {e}", file=sys.stderr)
+        import traceback
+        print(f"[server] generate_embedding FAILED: {e}\n{traceback.format_exc()}", file=sys.stderr)
         return None
 
 
