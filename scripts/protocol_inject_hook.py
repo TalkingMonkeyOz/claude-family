@@ -80,7 +80,7 @@ def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
         return ""
     try:
         from rag_queries import query_entity_catalog
-        result = query_entity_catalog(user_prompt, project_name, top_k=2, min_similarity=0.50)
+        result = query_entity_catalog(user_prompt, project_name, top_k=2, min_similarity=0.35)
         return result or ""
     except Exception:
         return ""
