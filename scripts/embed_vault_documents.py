@@ -2,7 +2,7 @@
 """
 Vault Embedding Pipeline - Generate and store embeddings for vault documents
 
-Reads markdown files from knowledge-vault, generates embeddings using Voyage AI,
+Reads markdown files from knowledge-vault, generates embeddings via embedding_provider,
 and stores them in PostgreSQL with pgvector for semantic search.
 
 Features:
@@ -65,19 +65,11 @@ except ImportError:
     logger.error("psycopg not installed. Run: pip install psycopg")
     sys.exit(1)
 
-try:
-    import requests
-except ImportError:
-    logger.error("requests not installed. Run: pip install requests")
-    sys.exit(1)
-
 # Configuration
 VAULT_PATH = Path("C:/Projects/claude-family/knowledge-vault")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import get_database_uri
 DB_CONNECTION = get_database_uri()
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-EMBEDDING_MODEL = "voyage-3"  # voyage-3 or voyage-3-lite
 CHUNK_SIZE = 1000  # Characters per chunk
 CHUNK_OVERLAP = 200  # Character overlap between chunks
 
@@ -462,7 +454,7 @@ def main():
         for idx, file_path in enumerate(md_files, 1):
             # Skip awesome-copilot-reference: these files are excluded from RAG queries in
             # rag_query_hook.py (doc_path NOT LIKE '%%awesome-copilot%%'), so embedding
-            # them wastes Voyage AI API calls and storage. Run --cleanup-copilot to remove
+            # them wastes embedding API calls and storage. Run --cleanup-copilot to remove
             # any previously stored embeddings for this directory.
             if 'awesome-copilot' in str(file_path):
                 logger.info(f"[{idx}/{len(md_files)}] Skipping (excluded from RAG): {file_path.relative_to(VAULT_PATH)}")

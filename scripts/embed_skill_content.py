@@ -2,7 +2,7 @@
 """
 Embed skill_content descriptions for semantic search.
 
-One-time script to generate Voyage AI embeddings for all skill_content entries.
+One-time script to generate embeddings for all skill_content entries via embedding_provider.
 """
 
 import os
@@ -12,17 +12,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import get_database_uri
 
+from embedding_provider import embed_batch
+
 try:
-    import voyageai
     import psycopg
     from psycopg.rows import dict_row
 except ImportError as e:
     print(f"Missing dependency: {e}")
-    sys.exit(1)
-
-VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY')
-if not VOYAGE_API_KEY:
-    print("ERROR: VOYAGE_API_KEY not set")
     sys.exit(1)
 
 def main():
@@ -46,10 +42,7 @@ def main():
         print("No skills to embed")
         return
 
-    # Initialize Voyage AI client
-    client = voyageai.Client(api_key=VOYAGE_API_KEY)
-
-    # Embed in batches (Voyage allows up to 128 per call)
+    # Embed in batches
     batch_size = 20
     updated = 0
 
@@ -59,9 +52,12 @@ def main():
 
         print(f"Embedding batch {i//batch_size + 1}: {len(texts)} descriptions...")
 
-        result = client.embed(texts, model="voyage-3", input_type="document")
+        embeddings = embed_batch(texts)
+        if embeddings is None:
+            print(f"  [ERROR] Embedding batch failed, skipping")
+            continue
 
-        for skill, embedding in zip(batch, result.embeddings):
+        for skill, embedding in zip(batch, embeddings):
             cur.execute("""
                 UPDATE claude.skill_content
                 SET description_embedding = %s::vector

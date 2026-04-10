@@ -12,6 +12,7 @@ Usage:
 """
 
 import os
+import sys
 import json
 import time
 from datetime import datetime
@@ -30,11 +31,9 @@ except ImportError:
     print("ERROR: psycopg not installed. Run: pip install psycopg")
     raise
 
-try:
-    import voyageai
-except ImportError:
-    print("ERROR: voyageai not installed. Run: pip install voyageai")
-    raise
+# Embedding provider abstraction (FastEmbed local or Voyage AI via env var)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'scripts'))
+from embedding_provider import embed as _embed_text, get_provider_info
 
 # Initialize MCP server
 mcp = FastMCP("vault-rag")
@@ -44,9 +43,7 @@ DB_CONNECTION = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:05OX79HNFCjQwhotDjVx@localhost/ai_company_foundation"
 )
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-EMBEDDING_MODEL = "voyage-3"  # voyage-3 or voyage-3-lite
-_client = None  # Lazy load client
+_provider_info = get_provider_info()
 
 
 def get_db_connection():
@@ -55,16 +52,12 @@ def get_db_connection():
 
 
 def generate_embedding(text: str) -> List[float]:
-    """Generate embedding using Voyage AI."""
-    global _client
+    """Generate embedding using the configured provider (FastEmbed or Voyage AI)."""
     try:
-        if _client is None:
-            if not VOYAGE_API_KEY:
-                raise RuntimeError("VOYAGE_API_KEY environment variable not set")
-            _client = voyageai.Client(api_key=VOYAGE_API_KEY)
-
-        result = _client.embed([text], model=EMBEDDING_MODEL, input_type="document")
-        return result.embeddings[0]
+        result = _embed_text(text)
+        if result is None:
+            raise RuntimeError("Embedding provider returned None")
+        return result
     except Exception as e:
         raise RuntimeError(f"Failed to generate embedding: {e}")
 
@@ -225,7 +218,7 @@ def semantic_search(
         return {
             "found": False,
             "error": str(e),
-            "message": "Search failed - check Voyage AI key and database is accessible",
+            "message": "Search failed - check embedding provider and database accessibility",
             "latency_ms": latency_ms
         }
 
@@ -422,7 +415,7 @@ def vault_stats() -> Dict:
             "table_size": overall['table_size'],
             "first_embedded": overall['first_embedded'].isoformat() if overall['first_embedded'] else None,
             "last_updated": overall['last_updated'].isoformat() if overall['last_updated'] else None,
-            "embedding_model": EMBEDDING_MODEL,
+            "embedding_model": _provider_info["model"],
             "vector_dimensions": 1024,
             "by_source": [
                 {
@@ -452,11 +445,10 @@ def main():
     """Run the MCP server."""
     print("Vault RAG MCP Server starting...")
 
-    # Verify Voyage API key
-    if not VOYAGE_API_KEY:
-        print("[WARN] VOYAGE_API_KEY not set - embeddings will fail")
-    else:
-        print(f"[OK] Voyage AI configured (model: {EMBEDDING_MODEL}, 1024 dimensions)")
+    # Report embedding provider
+    print(f"[OK] Embedding provider: {_provider_info['provider']} "
+          f"(model: {_provider_info['model']}, {_provider_info['dimensions']} dimensions, "
+          f"local={_provider_info['local']})")
 
     # Verify database is accessible
     try:

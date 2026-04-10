@@ -52,12 +52,10 @@ def get_entity_type_id(conn, type_name):
 
 
 def get_embedding(text):
-    """Generate Voyage AI embedding for entity search."""
+    """Generate embedding for entity search using the configured provider."""
     try:
-        import voyageai
-        client = voyageai.Client()
-        result = client.embed([text], model="voyage-3", input_type="document")
-        return result.embeddings[0]
+        from embedding_provider import embed
+        return embed(text)
     except Exception as e:
         logger.warning(f"Embedding failed: {e}")
         return None

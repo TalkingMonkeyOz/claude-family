@@ -38,7 +38,8 @@ from typing import Optional
 
 # Add scripts directory to path for config import
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import get_db_connection, detect_psycopg, get_voyage_key
+from config import get_db_connection, detect_psycopg
+from embedding_provider import embed as _embed_text
 
 # Setup logging
 logging.basicConfig(
@@ -55,8 +56,8 @@ logger = logging.getLogger('system_maintenance')
 SCRIPTS_DIR = Path(__file__).parent.resolve()
 VAULT_PATH = Path(r'C:\Projects\claude-family\knowledge-vault')
 BPMN_PROCESSES_DIR = Path(r'C:\Projects\claude-family\mcp-servers\bpmn-engine\processes')
-VOYAGE_API_KEY = get_voyage_key()
-EMBEDDING_MODEL = "voyage-3"
+
+
 BPMN_NS = {"bpmn": "http://www.omg.org/spec/BPMN/20100524/MODEL"}
 
 # Level/category inference map (mirrors server_v2.py _LEVEL_CATEGORY_MAP)
@@ -117,33 +118,9 @@ def _sha256_file(path: Path) -> str:
 
 
 def _generate_embedding(text: str) -> Optional[list]:
-    """Generate a Voyage AI embedding via REST API. Returns None on failure."""
+    """Generate embedding using the configured provider (FastEmbed or Voyage AI). Returns None on failure."""
     try:
-        import requests
-    except ImportError:
-        logger.warning("requests not installed — cannot generate embeddings")
-        return None
-
-    if not VOYAGE_API_KEY:
-        logger.warning("VOYAGE_API_KEY not set — cannot generate embeddings")
-        return None
-
-    try:
-        response = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {VOYAGE_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": "document"
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        return response.json()["data"][0]["embedding"]
+        return _embed_text(text)
     except Exception as e:
         logger.error(f"Embedding generation failed: {e}")
         return None
@@ -900,8 +877,7 @@ def repair_bpmn(project: str = 'claude-family') -> dict:
 def repair_memory(conn=None) -> dict:
     """Find mid-tier knowledge entries without embeddings, generate and store them.
 
-    Requires VOYAGE_API_KEY environment variable. Generates embeddings directly
-    via the Voyage AI REST API (same approach as embed_knowledge.py).
+    Uses the embedding_provider abstraction (FastEmbed local or Voyage AI).
 
     Returns:
         {
@@ -910,11 +886,6 @@ def repair_memory(conn=None) -> dict:
         }
     """
     logger.info("Repairing memory: embedding mid-tier knowledge entries...")
-
-    if not VOYAGE_API_KEY:
-        msg = "VOYAGE_API_KEY not set — cannot embed memory entries"
-        logger.warning(msg)
-        return {'success': False, 'embedded_count': 0, 'error': msg}
 
     close_conn = False
     if conn is None:

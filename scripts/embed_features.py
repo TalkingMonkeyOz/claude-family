@@ -2,7 +2,7 @@
 """
 Feature Embedding Script - Generate embeddings for features and build tasks
 
-Reads features and build_tasks from database, generates embeddings using Voyage AI,
+Reads features and build_tasks from database, generates embeddings via embedding_provider,
 and stores them in vault_embeddings for semantic search.
 
 This enables RAG queries like:
@@ -48,18 +48,11 @@ except ImportError:
     logger.error("psycopg not installed. Run: pip install psycopg")
     sys.exit(1)
 
-try:
-    import requests
-except ImportError:
-    logger.error("requests not installed. Run: pip install requests")
-    sys.exit(1)
-
 # Configuration
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import get_database_uri
+from embedding_provider import embed
 DB_CONNECTION = get_database_uri()
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-EMBEDDING_MODEL = "voyage-3"
 
 
 def calculate_content_hash(content: str) -> str:
@@ -68,26 +61,11 @@ def calculate_content_hash(content: str) -> str:
 
 
 def generate_embedding(text: str) -> List[float]:
-    """Generate embedding using Voyage AI REST API."""
-    if not VOYAGE_API_KEY:
-        raise RuntimeError("VOYAGE_API_KEY environment variable not set")
-
-    response = requests.post(
-        "https://api.voyageai.com/v1/embeddings",
-        headers={
-            "Authorization": f"Bearer {VOYAGE_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "input": [text],
-            "model": EMBEDDING_MODEL,
-            "input_type": "document"
-        },
-        timeout=30
-    )
-    response.raise_for_status()
-    result = response.json()
-    return result["data"][0]["embedding"]
+    """Generate embedding using the configured provider (FastEmbed local or Voyage AI API)."""
+    result = embed(text)
+    if result is None:
+        raise RuntimeError("Embedding provider returned None")
+    return result
 
 
 def build_feature_document(feature: Dict, tasks: List[Dict]) -> str:
@@ -286,11 +264,6 @@ def main():
 
     if not args.project and not args.all:
         parser.error("Must specify --project PROJECT or --all")
-
-    # Verify Voyage API key
-    if not VOYAGE_API_KEY:
-        logger.error("VOYAGE_API_KEY environment variable not set")
-        sys.exit(1)
 
     # Connect to database
     try:

@@ -166,13 +166,7 @@ def get_project_id(project_identifier: str) -> Optional[str]:
 # Embedding Helper
 # ============================================================================
 
-EMBEDDING_MODEL = "voyage-3"
-
-
-def _get_voyage_key() -> Optional[str]:
-    """Lazy-load Voyage API key from environment. Reads on each call so it works
-    regardless of when the .env file was loaded."""
-    return os.environ.get('VOYAGE_API_KEY')
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"  # FastEmbed local model
 
 
 def generate_embedding(text: str) -> Optional[List[float]]:
@@ -197,34 +191,6 @@ def generate_query_embedding(query: str) -> Optional[List[float]]:
     return generate_embedding(query)
 
 
-def _generate_query_embedding_legacy(query: str) -> Optional[List[float]]:
-    """Legacy Voyage AI query embedding (kept for reference, not used)."""
-    if not REQUESTS_AVAILABLE:
-        return None
-    voyage_key = _get_voyage_key()
-    if not voyage_key:
-        return None
-
-    try:
-        response = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {voyage_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "input": [query],
-                "model": EMBEDDING_MODEL,
-                "input_type": "query"
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result["data"][0]["embedding"]
-    except Exception as e:
-        print(f"Query embedding generation failed: {e}", file=sys.stderr)
-        return None
 
 
 def format_knowledge_for_embedding(entry: dict) -> str:

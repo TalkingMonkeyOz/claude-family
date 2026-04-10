@@ -2,7 +2,7 @@
 """
 Schema Embedding Pipeline - Generate and store embeddings for database schema metadata
 
-Introspects PostgreSQL schema, generates rich text descriptions, embeds via Voyage AI,
+Introspects PostgreSQL schema, generates rich text descriptions, embeds via embedding_provider,
 and stores embeddings in claude.schema_registry for semantic search (RAG).
 
 Features:
@@ -50,18 +50,10 @@ except ImportError:
     logger.error("psycopg not installed. Run: pip install psycopg")
     sys.exit(1)
 
-try:
-    import requests
-except ImportError:
-    logger.error("requests not installed. Run: pip install requests")
-    sys.exit(1)
-
 # Configuration
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import get_db_connection, get_voyage_key
-
-VOYAGE_API_KEY = get_voyage_key()
-EMBEDDING_MODEL = "voyage-3"
+from config import get_db_connection
+from embedding_provider import embed as embed_text
 SCHEMA_NAME = "claude"
 
 # Common column descriptions for heuristics
@@ -78,7 +70,7 @@ COMMON_COLUMNS = {
     'status': 'Current lifecycle status',
     'priority': 'Priority level (1=critical, 5=low)',
     'description': 'Human-readable description',
-    'embedding': 'Voyage AI vector embedding (1024 dimensions)',
+    'embedding': 'Vector embedding (1024 dimensions)',
     'metadata': 'Additional metadata as JSONB',
     'content_hash': 'SHA256 hash of content for change detection',
     'created_by': 'Identity/system that created this record',
@@ -139,27 +131,12 @@ def ensure_schema_columns(conn) -> bool:
 
 
 def generate_embedding(text: str) -> List[float]:
-    """Generate embedding using Voyage AI REST API."""
+    """Generate embedding using the configured provider (FastEmbed local or Voyage AI API)."""
     try:
-        if not VOYAGE_API_KEY:
-            raise RuntimeError("VOYAGE_API_KEY environment variable not set")
-
-        response = requests.post(
-            "https://api.voyageai.com/v1/embeddings",
-            headers={
-                "Authorization": f"Bearer {VOYAGE_API_KEY}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "input": [text],
-                "model": EMBEDDING_MODEL,
-                "input_type": "document"
-            },
-            timeout=30
-        )
-        response.raise_for_status()
-        result = response.json()
-        return result["data"][0]["embedding"]
+        result = embed_text(text)
+        if result is None:
+            raise RuntimeError("Embedding provider returned None")
+        return result
     except Exception as e:
         logger.error(f"Failed to generate embedding: {e}")
         raise
@@ -469,13 +446,10 @@ def main():
         logger.error(f"Database connection failed: {e}")
         sys.exit(1)
 
-    # Verify Voyage API key
-    if not VOYAGE_API_KEY:
-        logger.error("VOYAGE_API_KEY environment variable not set")
-        logger.error("Get your API key from: https://www.voyageai.com/")
-        sys.exit(1)
-    else:
-        logger.info(f"Voyage AI configured (model: {EMBEDDING_MODEL}, 1024 dimensions)")
+    # Log embedding provider info
+    from embedding_provider import get_provider_info
+    provider_info = get_provider_info()
+    logger.info(f"Embedding provider: {provider_info['provider']} (model: {provider_info['model']}, {provider_info['dimensions']} dims)")
 
     # Ensure schema columns exist
     if not ensure_schema_columns(conn):

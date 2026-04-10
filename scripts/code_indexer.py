@@ -4,14 +4,14 @@ Code Knowledge Graph Indexer — Parse and index project source files into Postg
 
 Walks a project directory, parses source files with tree-sitter, extracts symbols
 (functions, classes, methods, etc.) and cross-references, and stores them in:
-  - claude.code_symbols: symbol definitions with optional Voyage AI embeddings
+  - claude.code_symbols: symbol definitions with optional embeddings
   - claude.code_references: call/import/inheritance relationships between symbols
 
 Supports Python, TypeScript, JavaScript, C#, and Rust via tree_sitter_language_pack.
 
 Features:
   - Incremental indexing: SHA-256 hash comparison skips unchanged files
-  - Batch embedding: Voyage AI voyage-code-3 in batches of 100
+  - Batch embedding: via embedding_provider abstraction (FastEmbed or Voyage AI) in batches of 100
   - Stale cleanup: removes symbols for files no longer on disk
   - Cross-file reference resolution: links to_symbol_name → symbol_id post-index
   - Fail-open: parse errors and embedding failures are logged and skipped
@@ -48,7 +48,8 @@ logger = logging.getLogger("code_indexer")
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).parent))
-from config import get_db_connection, get_voyage_key  # noqa: E402
+from config import get_db_connection  # noqa: E402
+from embedding_provider import embed_batch as _provider_embed_batch  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -70,10 +71,7 @@ EXTENSION_TO_LANGUAGE: dict[str, str] = {
     ".rs":  "rust",
 }
 
-EMBEDDING_MODEL = "voyage-code-3"
 EMBEDDING_BATCH_SIZE = 100
-EMBEDDING_MAX_RETRIES = 4
-EMBEDDING_BACKOFF_BASE = 2.0  # seconds
 
 
 # ---------------------------------------------------------------------------
@@ -1281,52 +1279,26 @@ def cleanup_stale_symbols(conn, project_id: str, live_paths: set[str]) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Voyage AI embeddings
+# Embeddings (via embedding_provider abstraction)
 # ---------------------------------------------------------------------------
 
-def _embed_batch(texts: list[str], voyage_key: str) -> list[Optional[list[float]]]:
+def _embed_batch(texts: list[str]) -> list[Optional[list[float]]]:
     """
-    Call Voyage AI embeddings API for a batch of texts.
-    Returns a list of embedding vectors (or None on error).
-    Uses exponential backoff on rate-limit responses.
+    Generate embeddings for a batch of texts using the configured provider.
+    Returns a list of embedding vectors (or None entries on error).
     """
-    import urllib.request
-    import json as _json
+    try:
+        result = _provider_embed_batch(texts)
+        if result is not None:
+            return result
+    except Exception as exc:
+        logger.warning("Batch embedding failed: %s", exc)
 
-    payload = _json.dumps({
-        "input": texts,
-        "model": EMBEDDING_MODEL,
-        "input_type": "document",
-    }).encode("utf-8")
-
-    for attempt in range(EMBEDDING_MAX_RETRIES):
-        try:
-            req = urllib.request.Request(
-                "https://api.voyageai.com/v1/embeddings",
-                data=payload,
-                headers={
-                    "Authorization": f"Bearer {voyage_key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                result = _json.loads(resp.read())
-                return [item["embedding"] for item in result["data"]]
-        except Exception as exc:
-            wait = EMBEDDING_BACKOFF_BASE ** attempt
-            logger.warning(
-                "Embedding attempt %d/%d failed: %s — retrying in %.0fs",
-                attempt + 1, EMBEDDING_MAX_RETRIES, exc, wait,
-            )
-            if attempt < EMBEDDING_MAX_RETRIES - 1:
-                time.sleep(wait)
-
-    logger.error("All embedding attempts failed for batch of %d texts", len(texts))
+    logger.error("Embedding failed for batch of %d texts", len(texts))
     return [None] * len(texts)
 
 
-def generate_embeddings_for_project(conn, project_id: str, voyage_key: str) -> int:
+def generate_embeddings_for_project(conn, project_id: str) -> int:
     """
     Generate and store embeddings for symbols that have no embedding yet.
     Returns the number of symbols embedded.
@@ -1355,7 +1327,7 @@ def generate_embeddings_for_project(conn, project_id: str, voyage_key: str) -> i
             "{kind} {name} in {file_path}: {signature}".format(**r)
             for r in batch
         ]
-        vectors = _embed_batch(texts, voyage_key)
+        vectors = _embed_batch(texts)
 
         updates = [
             (vec, row["symbol_id"])
@@ -1411,7 +1383,6 @@ def index_project(
         raise FileNotFoundError(f"Project path not found: {project_path}")
 
     conn = get_db_connection(strict=True)
-    voyage_key = get_voyage_key()
 
     try:
         # Ensure hash tracking table exists (idempotent)
@@ -1548,15 +1519,12 @@ def index_project(
             conn.commit()
         stats["stale_deleted"] = stale_deleted
 
-        # Embeddings (fail-open: skip if no Voyage key or API errors)
-        if voyage_key:
-            try:
-                embedded = generate_embeddings_for_project(conn, project_id, voyage_key)
-                stats["symbols_embedded"] = embedded
-            except Exception as exc:
-                logger.warning("Embedding step failed (continuing without embeddings): %s", exc)
-        else:
-            logger.info("VOYAGE_API_KEY not set — skipping embedding generation")
+        # Embeddings (fail-open: errors are logged and skipped)
+        try:
+            embedded = generate_embeddings_for_project(conn, project_id)
+            stats["symbols_embedded"] = embedded
+        except Exception as exc:
+            logger.warning("Embedding step failed (continuing without embeddings): %s", exc)
 
         logger.info("Indexing complete: %s", stats)
         return stats

@@ -28,15 +28,6 @@ DB_AVAILABLE = psycopg_mod is not None
 logger = logging.getLogger('rag_query.utils')
 
 # =============================================================================
-# VOYAGE AI LAZY-LOADING GLOBALS
-# =============================================================================
-# Voyage AI is lazy-loaded in generate_embedding() to save ~100ms startup time
-# Only imported when embeddings are actually needed
-VOYAGE_AVAILABLE = None  # Will be set on first use
-_voyageai_module = None  # Cached module reference
-
-
-# =============================================================================
 # COMMAND DETECTION CONSTANTS
 # =============================================================================
 

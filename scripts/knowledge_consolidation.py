@@ -29,7 +29,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from config import get_db_connection, get_voyage_key, detect_psycopg
+from config import get_db_connection, detect_psycopg
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger('knowledge_consolidation')

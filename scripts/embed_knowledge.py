@@ -2,7 +2,7 @@
 """
 Knowledge Embedding Script - Generate embeddings for knowledge table entries
 
-Reads knowledge entries from the database, generates embeddings using Voyage AI,
+Reads knowledge entries from the database, generates embeddings via embedding_provider,
 and stores them back for semantic search.
 
 Usage:
@@ -34,41 +34,19 @@ except ImportError:
     logger.error("psycopg not installed. Run: pip install psycopg")
     sys.exit(1)
 
-try:
-    import requests
-except ImportError:
-    logger.error("requests not installed. Run: pip install requests")
-    sys.exit(1)
-
 # Configuration
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import get_database_uri
+from embedding_provider import embed_batch
 DB_CONNECTION = get_database_uri()
-VOYAGE_API_KEY = os.getenv("VOYAGE_API_KEY")
-EMBEDDING_MODEL = "voyage-3"
 
 
 def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Generate embeddings for multiple texts using Voyage AI."""
-    if not VOYAGE_API_KEY:
-        raise RuntimeError("VOYAGE_API_KEY environment variable not set")
-
-    response = requests.post(
-        "https://api.voyageai.com/v1/embeddings",
-        headers={
-            "Authorization": f"Bearer {VOYAGE_API_KEY}",
-            "Content-Type": "application/json"
-        },
-        json={
-            "input": texts,
-            "model": EMBEDDING_MODEL,
-            "input_type": "document"
-        },
-        timeout=60
-    )
-    response.raise_for_status()
-    result = response.json()
-    return [item["embedding"] for item in result["data"]]
+    """Generate embeddings for multiple texts using the configured provider."""
+    result = embed_batch(texts)
+    if result is None:
+        raise RuntimeError("Embedding provider returned None")
+    return result
 
 
 def format_knowledge_for_embedding(entry: dict) -> str:
@@ -107,11 +85,6 @@ def main():
     parser.add_argument('--batch-size', type=int, default=10, help='Batch size for API calls')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be done without making changes')
     args = parser.parse_args()
-
-    if not VOYAGE_API_KEY:
-        logger.error("VOYAGE_API_KEY environment variable not set")
-        logger.info("Set it with: export VOYAGE_API_KEY='your-key'")
-        sys.exit(1)
 
     logger.info("Connecting to database...")
     with psycopg.connect(DB_CONNECTION, row_factory=dict_row) as conn:

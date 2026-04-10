@@ -145,9 +145,10 @@ def gather_memory_context(conn, project_name: str, query: str, budget: int = 500
     results = {"decisions": [], "patterns": []}
 
     try:
-        import voyageai
-        vo = voyageai.Client()
-        embedding = vo.embed([query], model="voyage-3").embeddings[0]
+        from embedding_provider import embed as _embed_text
+        embedding = _embed_text(query)
+        if embedding is None:
+            raise RuntimeError("Embedding provider returned None")
         embedding_str = json.dumps(embedding)
 
         cur.execute("""
@@ -394,11 +395,10 @@ def populate_dossier(
         # Generate embedding for semantic search
         embedding_str = None
         try:
-            import voyageai
-            vo = voyageai.Client()
+            from embedding_provider import embed as _embed_text_2
             embed_text = f"{component}: {search_query}. Files: {', '.join(files)}"
-            embedding = vo.embed([embed_text], model="voyage-3").embeddings[0]
-            embedding_str = json.dumps(embedding)
+            embedding = _embed_text_2(embed_text)
+            embedding_str = json.dumps(embedding) if embedding else None
         except Exception:
             pass
 

@@ -44,10 +44,10 @@ IDENTITY_MAP = {
 }
 
 def check_system_health() -> dict:
-    """Check system health: DB, Voyage AI, required env vars."""
+    """Check system health: DB, embedding provider, required env vars."""
     health = {
         'database': {'status': 'unknown', 'message': ''},
-        'voyage_ai': {'status': 'unknown', 'message': ''},
+        'embeddings': {'status': 'unknown', 'message': ''},
         'env_vars': {'status': 'unknown', 'message': ''},
         'overall': 'unknown'
     }
@@ -72,20 +72,23 @@ def check_system_health() -> dict:
             health['database'] = {'status': 'error', 'message': str(e)[:50]}
             issues.append(f'DB: {str(e)[:30]}')
 
-    # Check Voyage AI (for RAG)
-    voyage_key = os.environ.get('VOYAGE_API_KEY', '')
-    if not voyage_key:
-        health['voyage_ai'] = {'status': 'warning', 'message': 'VOYAGE_API_KEY not set (RAG disabled)'}
-        issues.append('Voyage AI: No API key')
-    elif len(voyage_key) < 10:
-        health['voyage_ai'] = {'status': 'warning', 'message': 'VOYAGE_API_KEY looks invalid'}
-        issues.append('Voyage AI: Invalid key')
-    else:
-        health['voyage_ai'] = {'status': 'ok', 'message': 'API key configured'}
+    # Check embedding provider (for RAG)
+    try:
+        from embedding_provider import get_provider_info
+        pinfo = get_provider_info()
+        provider_name = pinfo['provider']
+        model_name = pinfo['model']
+        health['embeddings'] = {
+            'status': 'ok',
+            'message': f'{provider_name} ({model_name}, local={pinfo["local"]})'
+        }
+    except Exception as e:
+        health['embeddings'] = {'status': 'warning', 'message': f'Embedding provider error: {str(e)[:50]}'}
+        issues.append(f'Embeddings: {str(e)[:30]}')
 
     # Check required env vars
     required_vars = ['POSTGRES_PASSWORD']
-    optional_vars = ['ANTHROPIC_API_KEY', 'VOYAGE_API_KEY']
+    optional_vars = ['ANTHROPIC_API_KEY']
     missing_required = [v for v in required_vars if not os.environ.get(v)]
     missing_optional = [v for v in optional_vars if not os.environ.get(v)]
 
