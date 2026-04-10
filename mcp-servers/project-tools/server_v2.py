@@ -3669,6 +3669,128 @@ def deploy_claude_md(
         conn.close()
 
 
+def _parse_skill_frontmatter(content: str) -> dict:
+    """Parse YAML-like frontmatter from skill markdown content."""
+    import re
+    match = re.match(r'^---\s*\n(.*?)\n---', content, re.DOTALL)
+    if not match:
+        return {}
+    frontmatter = {}
+    # Fields that should always be treated as plain strings (never split on commas)
+    string_fields = {'name', 'description', 'model'}
+    for line in match.group(1).split('\n'):
+        if ':' in line:
+            key, _, value = line.partition(':')
+            key = key.strip()
+            value = value.strip()
+            if key in string_fields:
+                frontmatter[key] = value
+            elif value.startswith('[') or ',' in value:
+                value = value.strip('[]')
+                frontmatter[key] = [v.strip() for v in value.split(',') if v.strip()]
+            else:
+                frontmatter[key] = value
+    return frontmatter
+
+
+def _sync_skills_to_entities(cur, project_id: str | None = None) -> dict:
+    """Sync skills from claude.skills to claude.entities for search/linking.
+
+    Reads all active skills, parses frontmatter for descriptions, and upserts
+    corresponding entities with embeddings. Skills remain as .md files for
+    Claude Code; entities are the searchable/linkable representation.
+    """
+    # Get skill entity type
+    cur.execute("""
+        SELECT type_id::text, embedding_template, name_property, summary_template
+        FROM claude.entity_types WHERE type_name = 'skill' AND is_active = TRUE
+    """)
+    type_row = cur.fetchone()
+    if not type_row:
+        return {"synced": 0, "error": "skill entity type not registered"}
+
+    type_id = type_row['type_id']
+    embedding_template = type_row['embedding_template']
+    summary_template = type_row['summary_template']
+
+    # Read all active skills
+    cur.execute("""
+        SELECT skill_id::text, name, content, scope, scope_ref
+        FROM claude.skills WHERE is_active = true
+    """)
+    skills = cur.fetchall()
+
+    created = 0
+    updated = 0
+    errors = []
+
+    for skill in skills:
+        try:
+            fm = _parse_skill_frontmatter(skill['content'] or '')
+            description = fm.get('description', '')
+            allowed_tools_raw = fm.get('allowed-tools', [])
+            if isinstance(allowed_tools_raw, str):
+                allowed_tools_raw = [t.strip() for t in allowed_tools_raw.split(',') if t.strip()]
+
+            properties = {
+                "name": skill['name'],
+                "description": description,
+                "scope": skill['scope'],
+                "allowed_tools": allowed_tools_raw,
+                "skill_id": skill['skill_id'],
+            }
+
+            # Check for existing entity by name
+            cur.execute("""
+                SELECT entity_id::text FROM claude.entities
+                WHERE entity_type_id = %s::uuid
+                  AND properties->>'name' = %s
+                  AND NOT is_archived
+                LIMIT 1
+            """, (type_id, skill['name']))
+            existing = cur.fetchone()
+
+            embed_text = _interpolate_template(embedding_template, properties)
+            embedding = generate_embedding(embed_text)
+            summary = _interpolate_template(summary_template or '', properties) if summary_template else None
+
+            if existing:
+                cur.execute("""
+                    UPDATE claude.entities
+                    SET properties = %s, tags = %s, embedding = %s::vector,
+                        summary = %s, updated_at = NOW()
+                    WHERE entity_id = %s::uuid
+                """, (
+                    json.dumps(properties),
+                    [skill['scope']],
+                    embedding,
+                    summary,
+                    existing['entity_id'],
+                ))
+                updated += 1
+            else:
+                cur.execute("""
+                    INSERT INTO claude.entities (
+                        entity_type_id, project_id, properties, tags,
+                        embedding, summary, created_at, updated_at
+                    ) VALUES (
+                        %s::uuid, %s, %s, %s, %s::vector, %s, NOW(), NOW()
+                    )
+                """, (
+                    type_id,
+                    project_id,
+                    json.dumps(properties),
+                    [skill['scope']],
+                    embedding,
+                    summary,
+                ))
+                created += 1
+        except Exception as e:
+            errors.append(f"{skill['name']}: {str(e)}")
+
+    return {"created": created, "updated": updated, "total": len(skills), "errors": errors}
+
+
 @mcp.tool()
 def deploy_project(
     project: str,
@@ -3681,15 +3803,15 @@ def deploy_project(
 
     Use when: Regenerating project config files from DB (e.g., after DB changes
     or to fix corrupted files). Deploys any combination of: settings, rules,
-    skills, instructions, claude_md. Omit components to deploy all.
+    skills, instructions, claude_md, skill_entities. Omit components to deploy all.
     Returns: {success, project, deployed_components: [], changes_summary: []}.
 
     Args:
         project: Project name.
         components: List of components to deploy. Valid: 'settings', 'rules', 'skills',
-                   'instructions', 'claude_md'. If None, deploys all.
+                   'instructions', 'claude_md', 'skill_entities'. If None, deploys all.
     """
-    valid_components = ['settings', 'rules', 'skills', 'instructions', 'claude_md']
+    valid_components = ['settings', 'rules', 'skills', 'instructions', 'claude_md', 'skill_entities']
     components = components or valid_components
 
     # Validate components
@@ -3872,6 +3994,20 @@ def deploy_project(
                 changes_summary.append(f"claude_md: {len(behavior_text)} chars → {claude_md_path}")
             else:
                 changes_summary.append("claude_md: No profile found for this project")
+
+        # Component: skill_entities (sync skills to entity catalog for search)
+        if 'skill_entities' in components:
+            try:
+                sync_result = _sync_skills_to_entities(cur, project_id)
+                deployed.append('skill_entities')
+                changes_summary.append(
+                    f"skill_entities: {sync_result.get('created', 0)} created, "
+                    f"{sync_result.get('updated', 0)} updated of {sync_result.get('total', 0)} skills"
+                )
+                if sync_result.get('errors'):
+                    changes_summary.append(f"  errors: {sync_result['errors'][:3]}")
+            except Exception as e:
+                changes_summary.append(f"skill_entities: failed - {str(e)}")
 
         # Log to audit_log
         for component in deployed:
