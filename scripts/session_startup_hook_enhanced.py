@@ -488,6 +488,7 @@ def main():
     }
 
     context_lines = []
+    handoff_summary = ""  # Visible handoff for systemMessage (set in handoff block)
     # Pre-initialize project_name so it is available in the systemMessage even
     # if the try block exits early due to an exception.
     project_name = os.path.basename(os.getcwd())
@@ -722,6 +723,15 @@ def main():
                             context_lines.append("**Next steps:**")
                             for i, step in enumerate(next_steps, 1):
                                 context_lines.append(f"  {i}. {step}")
+
+                        # Build visible summary for systemMessage
+                        # Truncate focus to first 80 chars for readability
+                        short_focus = focus[:80] + ("..." if len(focus) > 80 else "")
+                        step_list = "; ".join(f"{i}. {s}" for i, s in enumerate(next_steps[:3], 1)) if next_steps else ""
+                        handoff_summary = f"\nHandoff: {short_focus}"
+                        if step_list:
+                            handoff_summary += f"\nNext: {step_list}"
+
                         logger.info(f"Injected handoff context: focus='{focus[:50]}...', {len(next_steps)} next steps")
             except Exception as e:
                 logger.warning(f"Handoff context injection skipped (non-fatal): {e}")
@@ -913,7 +923,7 @@ def main():
         logger.warning(f"Session context cache generation failed (non-fatal): {e}")
 
     result["additionalContext"] = "\n".join(context_lines)
-    result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database."
+    result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database.{handoff_summary}"
 
     print(json.dumps(result))
     return 0

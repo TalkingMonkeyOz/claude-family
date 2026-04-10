@@ -386,4 +386,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # CRITICAL: Catch ALL exceptions at the top level.
+        # pythonw.exe shows a message box dialog for unhandled exceptions
+        # (since it has no stderr), which pops up a window and steals focus.
+        try:
+            logger.critical(f"Unhandled exception in job_runner: {e}", exc_info=True)
+        except Exception:
+            pass  # If even logging fails, exit silently
+        sys.exit(1)

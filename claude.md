@@ -85,11 +85,10 @@ python scripts/embed_vault_documents.py --all-projects
 | Browse entity types | `explore_entities(entity_type="domain_concept")` |
 | Working notes from prior sessions | `unstash("component-name")` or `list_workfiles()` |
 | Session decisions/credentials | `list_session_facts()` |
+| **Persistent credentials** | `get_secret(key, project)` / `list_secrets(project)` |
 | Vault docs (SOPs, patterns) | RAG auto-searches each prompt. Also: `recall_memories("SOP topic")` |
 | Available BPMN models | `search_processes("keyword")` or `list_processes()` |
 | DB table schema | `get_schema(table_name="table")` |
-
----
 
 ## Work Tracking
 

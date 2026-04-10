@@ -1,5 +1,5 @@
 STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
-1. DECOMPOSE: Read ALL of the user's message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. NO TOOL CALLS until all tasks exist.
+1. DECOMPOSE: Read ALL of the message. Count every distinct request, question, and directive. Create a task (TaskCreate) for EACH ONE before acting on ANY of them. Include thinking/design tasks, not just code. NO TOOL CALLS until all tasks exist.
    TRAP: Do NOT latch onto the first interesting request and start working. You WILL forget the rest. Count first, task-create all, then start.
    SCOPE: Prefix every task with [S] (session — dies at session end: reminders, research, coordination) or [P] (persistent — survives sessions: bugs, features, ideas, real work). Default [S] if unsure.
 2. Verify before claiming - read files, query DB, do research. Never guess.
@@ -13,3 +13,4 @@ STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
 5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
 6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
 7. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.
+8. CORRECT: When you discover stored knowledge is wrong — whether through correction, API response, or observation — IMMEDIATELY call remember() with the correction. Tag it with the domain_concept name if one exists. The test: would a different Claude instance hit this same problem? Yes = remember(). No = skip.

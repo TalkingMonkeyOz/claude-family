@@ -24,7 +24,16 @@ echo.
 
 REM Derive project name from path for shared task list persistence
 for %%I in ("%PROJECT_PATH%") do set "PROJECT_NAME=%%~nxI"
-set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%
+
+REM Detect if running inside a git worktree - give worktrees their own task list
+REM so two instances (main + worktree) don't share tasks
+set "WORKTREE_SUFFIX="
+echo "%PROJECT_PATH%" | findstr /I /C:".claude\worktrees" >nul 2>&1
+if %ERRORLEVEL%==0 (
+    REM Extract worktree name (last folder in path)
+    for %%W in ("%PROJECT_PATH%") do set "WORKTREE_SUFFIX=-wt-%%~nxW"
+)
+set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%%WORKTREE_SUFFIX%
 
 REM Check for terminal preference argument
 if "%~2"=="1" goto :WINTERMINAL
@@ -57,7 +66,7 @@ python "C:\Projects\claude-family\scripts\sync_project.py" "%PROJECT_PATH%" --no
 REM Launch Windows Terminal with Claude
 REM suppressApplicationTitle in WT profile blocks VT escape sequences (Claude CLI title override)
 REM cmd "title" command uses Win32 API (SetConsoleTitle) which is NOT blocked by suppressApplicationTitle
-start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_NAME%" -p "Claude Code" cmd /k "title Claude - %PROJECT_NAME% && set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME% && claude --dangerously-load-development-channels server:channel-messaging"
+start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_NAME%" -p "Claude Code" cmd /k "title Claude - %PROJECT_NAME%%WORKTREE_SUFFIX% && set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%%WORKTREE_SUFFIX% && claude --dangerously-load-development-channels server:channel-messaging"
 goto :END
 
 :WEZTERM

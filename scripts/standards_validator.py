@@ -147,9 +147,16 @@ def get_file_type(file_path: str) -> str:
     if base_name == 'README.md':
         return 'readme'
 
-    # Check patterns — order matters: reports before generic docs/
+    # Check patterns — order matters: structured subdirs before generic docs/
     if 'TODO' in base_name or 'PLAN' in base_name:
         return 'working'
+    # docs/ structured subdirectories get report-level limits (200 lines)
+    if 'docs/' in file_path and any(sub in file_path for sub in [
+        'docs/research/', 'docs/designs/', 'docs/investigations/',
+        'docs/findings/', 'docs/adr/'
+    ]):
+        return 'report'
+    # docs/ files with report keywords in filename
     if 'docs/' in file_path and any(kw in base_name.lower() for kw in ['audit', 'report', 'analysis', 'review', 'test', 'research']):
         return 'report'
     if 'docs/' in file_path:
