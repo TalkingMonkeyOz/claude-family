@@ -45,6 +45,15 @@ os.environ.setdefault('ONNXRUNTIME_PROVIDERS', 'CPUExecutionProvider')  # CPU on
 # Provider selection: 'fastembed' (default) or 'voyage'
 PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'fastembed').lower()
 
+# Import FastEmbed at module level to avoid Python import lock deadlock.
+# When _run_async spawns a thread that tries `from fastembed import TextEmbedding`
+# while the main thread is also importing, Python's import lock blocks forever.
+try:
+    from fastembed import TextEmbedding as _TextEmbedding
+except ImportError:
+    _TextEmbedding = None
+    logging.getLogger('embedding_provider').warning("fastembed not installed — embedding disabled")
+
 # Lazy-loaded singletons (thread-safe)
 import threading
 _fastembed_model = None
@@ -66,13 +75,8 @@ def _get_fastembed_model():
         if _fastembed_model is not None:
             return _fastembed_model
         start = time.time()
-        logger.info("Loading FastEmbed model BAAI/bge-large-en-v1.5 (cold start)...")
-        # Prevent HuggingFace Hub from making network calls during model load
-        # (model is already cached locally — network check causes hangs)
-        # See: https://github.com/qdrant/fastembed/issues/218
-        os.environ.setdefault('HF_HUB_OFFLINE', '1')
-        from fastembed import TextEmbedding
-        _fastembed_model = TextEmbedding('BAAI/bge-large-en-v1.5')
+        logger.info(f"Loading FastEmbed model (cold start) pid={os.getpid()} module={__name__} id={id(_fastembed_lock)}")
+        _fastembed_model = _TextEmbedding('BAAI/bge-large-en-v1.5')
         elapsed = time.time() - start
         _model_loaded = True
         logger.info(f"FastEmbed model loaded in {elapsed:.1f}s (1024 dims, ONNX)")
