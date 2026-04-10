@@ -7677,6 +7677,147 @@ def update_entity(
         conn.close()
 
 
+# ============================================================================
+# RESOURCE LINKING — Universal cross-system bridge
+# ============================================================================
+
+
+def _get_linked_resources(cur, resource_type: str, resource_id: str,
+                          link_type: str = "", direction: str = "both") -> list:
+    """Internal helper: query resource_links for a given resource."""
+    results = []
+    if direction in ("both", "outgoing"):
+        type_filter = "AND link_type = %s" if link_type else ""
+        params = [resource_type, resource_id]
+        if link_type:
+            params.append(link_type)
+        cur.execute(f"""
+            SELECT link_id::text, to_type, to_id::text, link_type, strength, metadata
+            FROM claude.resource_links
+            WHERE from_type = %s AND from_id = %s::uuid {type_filter}
+            ORDER BY strength DESC
+        """, params)
+        for row in cur.fetchall():
+            results.append({
+                "link_id": row['link_id'], "direction": "outgoing",
+                "resource_type": row['to_type'], "resource_id": row['to_id'],
+                "link_type": row['link_type'], "strength": row['strength'],
+                "metadata": row.get('metadata', {}),
+            })
+    if direction in ("both", "incoming"):
+        type_filter = "AND link_type = %s" if link_type else ""
+        params = [resource_type, resource_id]
+        if link_type:
+            params.append(link_type)
+        cur.execute(f"""
+            SELECT link_id::text, from_type, from_id::text, link_type, strength, metadata
+            FROM claude.resource_links
+            WHERE to_type = %s AND to_id = %s::uuid {type_filter}
+            ORDER BY strength DESC
+        """, params)
+        for row in cur.fetchall():
+            results.append({
+                "link_id": row['link_id'], "direction": "incoming",
+                "resource_type": row['from_type'], "resource_id": row['from_id'],
+                "link_type": row['link_type'], "strength": row['strength'],
+                "metadata": row.get('metadata', {}),
+            })
+    return results
+
+
+@mcp.tool()
+def link_resources(
+    from_type: str,
+    from_id: str,
+    to_type: str,
+    to_id: str,
+    link_type: str = "related_to",
+    strength: float = 1.0,
+    metadata: dict | None = None,
+) -> dict:
+    """Create a link between any two resources in the system.
+
+    Use when: Connecting a skill to related entities, a feature to its BPMN
+    process, a workfile to a knowledge entry, or any cross-system relationship.
+    Returns: {success, link_id, from_type, from_id, to_type, to_id, link_type}.
+
+    Args:
+        from_type: Source resource type (entity, skill, workfile, feature, build_task,
+            feedback, bpmn_process, knowledge, activity, rule, project).
+        from_id: UUID of the source resource.
+        to_type: Target resource type (same options as from_type).
+        to_id: UUID of the target resource.
+        link_type: Relationship type: related_to, depends_on, implements, documents,
+            extends, part_of, uses, produces, validates.
+        strength: Link strength 0-1 (default 1.0).
+        metadata: Optional JSONB metadata.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.resource_links (from_type, from_id, to_type, to_id, link_type, strength, metadata)
+            VALUES (%s, %s::uuid, %s, %s::uuid, %s, %s, %s)
+            ON CONFLICT (from_type, from_id, to_type, to_id, link_type)
+            DO UPDATE SET strength = EXCLUDED.strength, metadata = EXCLUDED.metadata
+            RETURNING link_id::text
+        """, (from_type, from_id, to_type, to_id, link_type, strength,
+              json.dumps(metadata or {})))
+        result = cur.fetchone()
+        conn.commit()
+        return {
+            "success": True, "link_id": result['link_id'],
+            "from_type": from_type, "from_id": from_id,
+            "to_type": to_type, "to_id": to_id, "link_type": link_type,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to link resources: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def get_linked_resources(
+    resource_type: str,
+    resource_id: str,
+    link_type: str = "",
+    direction: str = "both",
+) -> dict:
+    """Get all resources linked to a given resource.
+
+    Use when: Understanding what's connected to a skill, entity, feature, or
+    any other resource. Bidirectional by default — shows both outgoing and
+    incoming links.
+    Returns: {success, resource_type, resource_id, links: [{direction, resource_type,
+              resource_id, link_type, strength}]}.
+
+    Args:
+        resource_type: Type of the resource to query (entity, skill, workfile, etc.).
+        resource_id: UUID of the resource.
+        link_type: Filter by link type (optional).
+        direction: 'both' (default), 'outgoing', or 'incoming'.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        links = _get_linked_resources(cur, resource_type, resource_id, link_type, direction)
+        return {
+            "success": True, "resource_type": resource_type,
+            "resource_id": resource_id, "link_count": len(links), "links": links,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"Failed to get linked resources: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
 @mcp.tool()
 def recall_entities(
     query: str,
