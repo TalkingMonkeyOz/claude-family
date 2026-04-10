@@ -93,7 +93,7 @@ WHERE project_name = '{project_name}';
 6. **If not met**: Show what's missing, offer to help complete items
 
 **BPMN model**: `lifecycle/project_lifecycle.bpmn` (phase_advancement process)
-**Vault SOP**: [[Project Lifecycle SOP]]
+**Vault SOP**: `recall_memories("project lifecycle SOP")`
 
 ---
 

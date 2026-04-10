@@ -20,7 +20,7 @@ Phase 1 of the **Structured Autonomy Workflow** - research and planning for cost
 
 **Pattern**: Plan -> Generate -> Implement (73% cheaper than all-premium approach)
 
-See: `knowledge-vault/30-Patterns/workflows/Structured Autonomy Workflow.md`
+See: `recall_memories("structured autonomy workflow")` for full pattern details
 
 ---
 
@@ -104,7 +104,7 @@ See the full template structure below for populating plan files:
 - `/sa-generate {feature-name}` - Phase 2: Generate implementation specs
 - `/sa-implement {feature-name}` - Phase 3: Execute implementation
 
-**Reference**: `knowledge-vault/30-Patterns/workflows/Structured Autonomy Workflow.md`
+**Reference**: `recall_memories("structured autonomy workflow")`
 
 ---
 

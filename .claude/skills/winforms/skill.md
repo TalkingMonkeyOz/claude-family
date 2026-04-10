@@ -99,10 +99,8 @@ await control.InvokeAsync(() => label1.Text = "Updated!");
 
 ## Related Knowledge
 
-- `knowledge-vault/20-Domains/WinForms/winforms-designer-rules.md`
-- `knowledge-vault/20-Domains/WinForms/winforms-layout-patterns.md`
-- `knowledge-vault/20-Domains/WinForms/winforms-async-patterns.md`
-- `knowledge-vault/20-Domains/WinForms/winforms-databinding.md`
+- `recall_memories("winforms patterns")` -- designer rules, layout, async, databinding
+- `recall_memories("winforms dark theme")` -- dark mode theming patterns
 
 ---
 

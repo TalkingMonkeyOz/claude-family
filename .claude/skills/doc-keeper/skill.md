@@ -21,7 +21,7 @@ Maintain accuracy of documentation, vault entries, and configuration registries.
 
 ### 1. MCP Registry Verification
 
-Check `knowledge-vault/Claude Family/mcp-and-tools/MCP Registry.md` against:
+Check MCP registry (use `recall_entities("MCP registry")` to load) against:
 - `~/.claude.json` global mcpServers
 - Per-project mcpServers in projects section
 - Individual `.mcp.json` files
@@ -91,7 +91,7 @@ Use built-in Read/Glob/Grep tools (filesystem MCP retired Jan 2026):
 
 ## Related
 
-- MCP Registry: `knowledge-vault/Claude Family/mcp-and-tools/MCP Registry.md`
+- MCP Registry: `recall_entities("MCP registry")`
 - Agent Definitions: `.claude/agents/` (orchestrator retired 2026-02-24)
 - Skills: `.claude/skills/`
 

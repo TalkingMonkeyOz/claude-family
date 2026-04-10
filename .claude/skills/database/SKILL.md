@@ -74,7 +74,7 @@ WHERE table_name = 'TABLE' AND column_name = 'COLUMN';
 
 | Table.Column | Valid Values |
 |--------------|--------------|
-| `feedback.feedback_type` | bug, design, question, change |
+| `feedback.feedback_type` | bug, design, question, change, idea, improvement |
 | `*.priority` | 1-5 (1=critical, 5=low) |
 | `*.status` | Check registry - varies by table |
 

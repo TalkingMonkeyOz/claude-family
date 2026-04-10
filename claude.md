@@ -22,14 +22,12 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude` (60+ tables)
-- **MCP Servers**: postgres, project-tools (~60 tools), python-repl, sequential-thinking, bpmn-engine
+- **MCP Servers**: postgres, project-tools (~60 tools), sequential-thinking, bpmn-engine, channel-messaging
 - **Enforcement**: Hooks, database constraints, column_registry
-- **Knowledge**: Vault embeddings (RAG) for semantic search
+- **Knowledge**: DB-first (Memory, Filing Cabinet, Reference Library, Credential Vault) + vault embeddings for domain concept dossiers
 - **UI**: Mission Control Web (MCW) for visibility
 
 **Full details**: See `ARCHITECTURE.md`
-
----
 
 ## Project Structure
 
@@ -43,7 +41,7 @@ claude-family/
 │   ├── skills/            # 32 domain skills (use Skill tool)
 │   ├── instructions/      # Auto-apply coding standards
 │   └── commands/          # Slash commands
-├── knowledge-vault/       # Obsidian vault (RAG-indexed)
+├── knowledge-vault/       # Obsidian vault (reference documentation)
 │   ├── 10-Projects/       # Project knowledge
 │   ├── 20-Domains/        # Domain expertise
 │   ├── 30-Patterns/       # Patterns, gotchas
@@ -54,8 +52,6 @@ claude-family/
 │   └── bpmn-engine/       # Process models + test runner
 └── templates/             # Project templates
 ```
-
----
 
 ## Build & Run
 
@@ -78,17 +74,22 @@ python scripts/embed_vault_documents.py --all-projects
 
 ## Information Discovery
 
-| I need... | Tool |
-|-----------|------|
-| Domain knowledge, gotchas | `recall_memories("topic keyword")` |
-| Structured data (APIs, entities, schemas) | `recall_entities("search term")` |
-| Browse entity types | `explore_entities(entity_type="domain_concept")` |
-| Working notes from prior sessions | `unstash("component-name")` or `list_workfiles()` |
-| Session decisions/credentials | `list_session_facts()` |
-| **Persistent credentials** | `get_secret(key, project)` / `list_secrets(project)` |
-| Vault docs (SOPs, patterns) | RAG auto-searches each prompt. Also: `recall_memories("SOP topic")` |
-| Available BPMN models | `search_processes("keyword")` or `list_processes()` |
-| DB table schema | `get_schema(table_name="table")` |
+
+| I need... | Search |
+|-----------|--------|
+| Hook architecture, how hooks work | `recall_memories("hook system architecture")` |
+| Storage systems, which to use | Load skill: `/skill-load-memory-storage` |
+| Config management, how files regenerate | `recall_memories("config management SOP")` |
+| Database schema, table structures | `get_schema()` tool |
+| Embedding pipeline, FastEmbed | `recall_memories("FastEmbed embedding pipeline")` |
+| Session lifecycle, startup/end | `recall_memories("session lifecycle")` |
+| BPMN process models | `search_processes("keyword")` |
+| Agent delegation patterns | `recall_memories("agent selection")` |
+| Nimbus API patterns | `recall_entities("nimbus", entity_type="domain_concept")` |
+| Any domain concept | `explore_entities(entity_type="domain_concept")` |
+| Component working notes | `list_workfiles()` then `unstash("component")` |
+| Credentials/API keys | `get_secret(key, project)` — check before asking user |
+
 
 ## Work Tracking
 
