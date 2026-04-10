@@ -18,8 +18,8 @@ PROTOCOL_FILE = os.path.join(SCRIPT_DIR, "core_protocol.txt")
 # Load DB connection from config module (shared with other hooks)
 sys.path.insert(0, SCRIPT_DIR)
 try:
-    from config import get_connection_string
-    DB_URI = get_connection_string()
+    from config import DATABASE_URI as _db_uri
+    DB_URI = _db_uri or ""
 except Exception:
     DB_URI = os.environ.get("DATABASE_URI", "")
 
@@ -64,6 +64,92 @@ def _check_pending_messages(project_name: str) -> str:
     except Exception:
         pass  # Fail silently — don't block the hook
     return ""
+
+
+def _query_knowledge(user_prompt: str, project_name: str) -> str:
+    """Search knowledge table for gotchas, patterns, and facts relevant to the prompt.
+
+    Uses keyword matching on title/description (fast, pure SQL, <20ms).
+    Prioritizes gotchas and patterns as they prevent mistakes.
+    Returns formatted context string or empty string.
+    """
+    if not DB_URI or not user_prompt or len(user_prompt.strip()) < 15:
+        return ""
+    if user_prompt.strip().startswith('/'):
+        return ""
+    try:
+        import psycopg2
+        import re
+        # Extract meaningful words (3+ chars, skip common words)
+        stop_words = {
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'are', 'was',
+            'has', 'have', 'had', 'not', 'but', 'can', 'will', 'should', 'would',
+            'use', 'using', 'create', 'make', 'add', 'get', 'set', 'run', 'test',
+            'please', 'want', 'need', 'let', 'know', 'how', 'what', 'when', 'where',
+            'why', 'which', 'does', 'been', 'being', 'also', 'just', 'now', 'new',
+        }
+        words = [w for w in re.findall(r'[a-zA-Z]{3,}', user_prompt.lower())
+                 if w not in stop_words]
+        if not words:
+            return ""
+
+        # Build OR condition for keyword matching on title + description
+        # Use up to 6 most distinctive words
+        keywords = words[:6]
+        conditions = []
+        params = []
+        for kw in keywords:
+            conditions.append("(LOWER(title) LIKE %s OR LOWER(description) LIKE %s)")
+            pattern = f"%{kw}%"
+            params.extend([pattern, pattern])
+
+        if not conditions:
+            return ""
+
+        where_keywords = " OR ".join(conditions)
+
+        conn = psycopg2.connect(DB_URI, connect_timeout=2)
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT title, description, knowledge_type, confidence_level,
+                   COALESCE(tier, 'mid') as tier
+            FROM claude.knowledge
+            WHERE COALESCE(tier, 'mid') != 'archived'
+              AND (
+                  applies_to_projects IS NULL
+                  OR cardinality(applies_to_projects) = 0
+                  OR %s = ANY(applies_to_projects)
+              )
+              AND ({where_keywords})
+            ORDER BY
+                CASE knowledge_type
+                    WHEN 'gotcha' THEN 1
+                    WHEN 'pattern' THEN 2
+                    WHEN 'decision' THEN 3
+                    WHEN 'fact' THEN 4
+                    ELSE 5
+                END,
+                confidence_level DESC
+            LIMIT 5
+        """, [project_name] + params)
+
+        results = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not results:
+            return ""
+
+        lines = ["RELEVANT KNOWLEDGE (from past sessions):"]
+        for title, desc, ktype, confidence, tier in results:
+            desc_preview = (desc or '')[:200]
+            if len(desc or '') > 200:
+                desc_preview += "..."
+            lines.append(f"  [{ktype}] {title}: {desc_preview}")
+
+        return "\n".join(lines)
+    except Exception:
+        return ""
 
 
 def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
@@ -118,19 +204,25 @@ def main():
     # 3. Pending messages — lightweight DB check
     message_alert = _check_pending_messages(project_name)
 
-    # 4. Domain concept dossier search (F189) — run in thread with timeout
+    # 4. Knowledge + domain concept queries — run in parallel with timeout
     user_prompt = hook_input.get('prompt', '')
     dossier_context = ""
+    knowledge_context = ""
     if user_prompt:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_query_domain_concepts, user_prompt, project_name)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            dossier_future = executor.submit(_query_domain_concepts, user_prompt, project_name)
+            knowledge_future = executor.submit(_query_knowledge, user_prompt, project_name)
             try:
-                dossier_context = future.result(timeout=5.0)
+                dossier_context = dossier_future.result(timeout=5.0)
             except (FuturesTimeout, Exception):
-                dossier_context = ""  # Skip if too slow, don't block
+                dossier_context = ""
+            try:
+                knowledge_context = knowledge_future.result(timeout=5.0)
+            except (FuturesTimeout, Exception):
+                knowledge_context = ""
 
     # 5. Combine
-    parts = [p for p in [protocol, session_context, message_alert, dossier_context] if p]
+    parts = [p for p in [protocol, session_context, message_alert, knowledge_context, dossier_context] if p]
     combined = "\n\n".join(parts)
 
     # 6. Return in Claude Code hook format
