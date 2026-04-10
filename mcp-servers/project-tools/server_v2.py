@@ -9508,4 +9508,17 @@ def load_project_secrets(
 # ============================================================================
 
 if __name__ == "__main__":
+    # Eager-load FastEmbed model BEFORE accepting tool calls.
+    # Parallel tool calls (recall_memories + recall_entities) hit Python's
+    # import lock deadlock if the model loads lazily on first call.
+    import sys as _sys
+    _scripts = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts')
+    if os.path.abspath(_scripts) not in _sys.path:
+        _sys.path.insert(0, os.path.abspath(_scripts))
+    try:
+        from embedding_provider import _get_fastembed_model
+        _get_fastembed_model()
+        print("[server_v2] FastEmbed model pre-loaded", file=_sys.stderr)
+    except Exception as e:
+        print(f"[server_v2] FastEmbed pre-load failed (non-fatal): {e}", file=_sys.stderr)
     mcp.run(transport="stdio")
