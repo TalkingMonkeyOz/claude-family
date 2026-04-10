@@ -91,6 +91,10 @@ from typing import List, Tuple, Optional, Dict, Any
 # Individual block logic is unchanged — only the final assembly is guarded.
 MAX_CONTEXT_TOKENS = 3000
 
+# Vault RAG sunset: benchmark showed entities + workfiles cover 100% of queries.
+# Set to True to re-enable vault as a fallback source (priority 11, last).
+VAULT_RAG_ENABLED = False
+
 # Setup file-based logging
 LOG_FILE = Path.home() / ".claude" / "hooks.log"
 LOG_FILE.parent.mkdir(exist_ok=True)
@@ -415,14 +419,15 @@ def main():
                     min_similarity=0.35,
                     token_budget=400,
                 )
-                futures['vault'] = executor.submit(
-                    query_vault_rag,
-                    user_prompt=user_prompt,
-                    project_name=project_name,
-                    session_id=session_id,
-                    top_k=3,
-                    min_similarity=0.45,
-                )
+                if VAULT_RAG_ENABLED:
+                    futures['vault'] = executor.submit(
+                        query_vault_rag,
+                        user_prompt=user_prompt,
+                        project_name=project_name,
+                        session_id=session_id,
+                        top_k=3,
+                        min_similarity=0.45,
+                    )
                 futures['nimbus'] = executor.submit(
                     query_nimbus_context,
                     user_prompt=user_prompt,
@@ -566,12 +571,12 @@ def main():
             (3, config_warning or ""),
             (4, knowledge_context or ""),
             (5, entity_context or ""),
-            (6, rag_context or ""),
-            (7, workfile_context or ""),
-            (8, skill_context or ""),
-            (9, schema_context or ""),
-            (10, design_map_context or ""),
-            (11, nimbus_context or ""),
+            (6, workfile_context or ""),
+            (7, skill_context or ""),
+            (8, schema_context or ""),
+            (9, design_map_context or ""),
+            (10, nimbus_context or ""),
+            (11, rag_context or ""),  # Vault RAG — last priority (sunset)
         ]
 
         try:
