@@ -2,15 +2,15 @@
 """Lightweight core protocol injector for UserPromptSubmit hook.
 
 Reads core_protocol.txt + session context cache + pending messages and returns as additionalContext.
-NO heavy imports (no voyageai, torch, numpy, langchain). Target: <100ms.
-
-Replaces the 2000-line rag_query_hook.py for per-prompt injection.
-RAG/semantic search is handled on-demand by project-tools MCP (long-running process).
+Also runs domain_concept dossier search (F189) in a background thread — if a prompt
+matches a domain_concept entity, the full dossier (overview, gotchas, recipes, auth)
+is auto-injected. Other RAG sources are handled on-demand by project-tools MCP.
 """
 import json
 import os
 import sys
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROTOCOL_FILE = os.path.join(SCRIPT_DIR, "core_protocol.txt")
@@ -66,6 +66,26 @@ def _check_pending_messages(project_name: str) -> str:
     return ""
 
 
+def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
+    """Search entity catalog for domain_concept dossiers matching the prompt.
+
+    Imports rag_queries lazily (it pulls in voyageai). Runs with a 2s timeout
+    so it doesn't block protocol injection if Voyage AI is slow.
+    Returns formatted dossier string or empty string.
+    """
+    if not user_prompt or len(user_prompt.strip()) < 10:
+        return ""
+    # Skip slash commands
+    if user_prompt.strip().startswith('/'):
+        return ""
+    try:
+        from rag_queries import query_entity_catalog
+        result = query_entity_catalog(user_prompt, project_name, top_k=2, min_similarity=0.50)
+        return result or ""
+    except Exception:
+        return ""
+
+
 def main():
     try:
         hook_input = json.loads(sys.stdin.read())
@@ -83,14 +103,25 @@ def main():
     )
     session_context = _read_file(cache_file)
 
-    # 3. Pending messages — lightweight DB check (belt-and-suspenders with channels)
+    # 3. Pending messages — lightweight DB check
     message_alert = _check_pending_messages(project_name)
 
-    # 4. Combine
-    parts = [p for p in [protocol, session_context, message_alert] if p]
+    # 4. Domain concept dossier search (F189) — run in thread with timeout
+    user_prompt = hook_input.get('prompt', '')
+    dossier_context = ""
+    if user_prompt:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_query_domain_concepts, user_prompt, project_name)
+            try:
+                dossier_context = future.result(timeout=2.5)
+            except (FuturesTimeout, Exception):
+                dossier_context = ""  # Skip if too slow, don't block
+
+    # 5. Combine
+    parts = [p for p in [protocol, session_context, message_alert, dossier_context] if p]
     combined = "\n\n".join(parts)
 
-    # 5. Return in Claude Code hook format
+    # 6. Return in Claude Code hook format
     result = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
