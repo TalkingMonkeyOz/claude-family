@@ -172,7 +172,7 @@ STORE_QUERIES = {
 }
 
 
-def run_benchmark(min_sim: float = 0.25) -> dict:
+def run_benchmark(min_sim: float = 0.25, exclude_stores: list[str] | None = None) -> dict:
     """Run all test queries against all stores. Returns structured results."""
     # Pre-generate all embeddings before querying.
     # Voyage AI HTTP calls and psycopg3 share async internals that conflict
@@ -200,7 +200,11 @@ def run_benchmark(min_sim: float = 0.25) -> dict:
 
         row = {"query": query, "expected": sorted(expected), "stores": {}}
 
+        active_stores = [s for s in STORES if s not in (exclude_stores or [])]
         for store in STORES:
+            if store not in active_stores:
+                row["stores"][store] = {"hits": 0, "top_sim": 0.0, "excluded": True}
+                continue
             if store == "nimbus":
                 hits, top_sim = query_nimbus_store(conn, query)
             else:
@@ -282,10 +286,14 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark RAG retrieval quality")
     parser.add_argument("--json", action="store_true", help="Output JSON instead of report")
     parser.add_argument("--min-sim", type=float, default=0.25, help="Minimum similarity threshold")
+    parser.add_argument("--exclude", nargs="+", choices=STORES, help="Stores to exclude (e.g. --exclude vault)")
     args = parser.parse_args()
 
-    print("Running RAG benchmark...")
-    data = run_benchmark(min_sim=args.min_sim)
+    excluded = args.exclude or []
+    label = f" (excluding: {', '.join(excluded)})" if excluded else ""
+    print(f"Running RAG benchmark{label}...")
+    data = run_benchmark(min_sim=args.min_sim, exclude_stores=excluded)
+    data["excluded_stores"] = excluded
 
     if args.json:
         print(json.dumps(data, indent=2))
