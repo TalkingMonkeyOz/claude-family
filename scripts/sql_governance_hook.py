@@ -94,11 +94,118 @@ def is_write_operation(sql: str) -> bool:
     return bool(WRITE_KEYWORDS.search(sql))
 
 
+# Tables with dedicated MCP tools — raw SQL writes should use these instead.
+# Applies to ALL projects including claude-family.
+# Warn (not block) because sometimes raw SQL is legitimately needed.
+TOOL_GOVERNED_TABLES = {
+    'features': {
+        'tools': 'create_feature(), advance_status(), get_build_board()',
+        'reason': 'Features have workflow state machines, audit logging, and side effects',
+    },
+    'build_tasks': {
+        'tools': 'create_linked_task(), start_work(), complete_work(), add_build_task()',
+        'reason': 'Build tasks have dependency checks, feature completion cascades, and audit logging',
+    },
+    'feedback': {
+        'tools': 'create_feedback(), resolve_feedback(), promote_feedback(), advance_status()',
+        'reason': 'Feedback has multi-step state transitions and audit logging',
+    },
+    'knowledge': {
+        'tools': 'remember(), update_memory(), archive_memory(), merge_memories()',
+        'reason': 'Knowledge entries need embedding generation, dedup checks, and relation linking',
+    },
+    'entities': {
+        'tools': 'catalog(), update_entity(), recall_entities()',
+        'reason': 'Entities need schema validation, embedding generation, and dedup by key properties',
+    },
+    'sessions': {
+        'tools': 'start_session(), end_session(), save_checkpoint()',
+        'reason': 'Sessions need proper lifecycle management and state persistence',
+    },
+    'todos': {
+        'tools': 'TaskCreate (native), store_session_fact() for notes',
+        'reason': 'Todos sync with Claude Code task system via hooks',
+    },
+    'messages': {
+        'tools': 'send_message(), reply_to(), broadcast(), acknowledge()',
+        'reason': 'Messages need recipient validation, threading, and pg_notify triggers',
+    },
+    'workfiles': {
+        'tools': 'stash(), unstash(), archive_workfile(), search_workfiles()',
+        'reason': 'Workfiles need embedding generation and access tracking',
+    },
+    'knowledge_relations': {
+        'tools': 'link_knowledge(), get_related_knowledge()',
+        'reason': 'Knowledge relations need bidirectional consistency and strength management',
+    },
+    'resource_links': {
+        'tools': 'link_resources(), get_linked_resources()',
+        'reason': 'Resource links have unique constraints and bidirectional queries',
+    },
+    'secret_registry': {
+        'tools': 'set_secret(), get_secret(), list_secrets(), delete_secret()',
+        'reason': 'Secrets need Windows Credential Manager sync and session fact caching',
+    },
+}
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPT_DIR)
+try:
+    from config import DATABASE_URI as _db_uri
+    DB_URI = _db_uri or ""
+except Exception:
+    DB_URI = os.environ.get("DATABASE_URI", "")
+
+
+def log_governance_event(action: str, project: str, tables: set, reason: str = "", sql_snippet: str = ""):
+    """Log governance block or override to claude.enforcement_log for gap analysis."""
+    try:
+        if not DB_URI:
+            return
+        try:
+            import psycopg2
+            conn = psycopg2.connect(DB_URI, connect_timeout=2)
+        except ImportError:
+            import psycopg
+            conn = psycopg.connect(DB_URI, connect_timeout=2)
+        message = json.dumps({
+            "event": "sql_governance",
+            "project": project,
+            "tables": sorted(tables),
+            "override_reason": reason,
+            "sql_preview": sql_snippet[:200],
+        })
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO claude.enforcement_log "
+                    "(reminder_type, reminder_message, action_taken) "
+                    "VALUES (%s, %s, %s)",
+                    (f"sql_governance_{action}", message, action)
+                )
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to log governance event: {e}")
+
+
 def allow():
     print(json.dumps({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow"
+        }
+    }))
+    sys.exit(0)
+
+
+def deny_with_guidance(reason: str):
+    """Deny with helpful message pointing to the correct tool."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason
         }
     }))
     sys.exit(0)
@@ -130,16 +237,14 @@ def main():
 
         project = get_project_name()
 
-        # Infrastructure projects are exempt
-        if project in INFRA_PROJECTS:
-            logger.info(f"SQL governance: infra project '{project}' - allowed")
-            allow()
-
         table_refs = extract_table_refs(sql)
         is_write = is_write_operation(sql)
 
-        # Check 1: Block writes to protected tables
-        if is_write:
+        # Infrastructure projects skip protection checks (1 & 2) but still get governance warnings (3)
+        is_infra = project in INFRA_PROJECTS
+
+        # Check 1: Block writes to protected tables (non-infra only)
+        if is_write and not is_infra:
             protected_hits = table_refs & PROTECTED_TABLES
             if protected_hits:
                 tables_str = ', '.join(f'claude.{t}' for t in protected_hits)
@@ -154,8 +259,11 @@ def main():
                     f"Only claude-family can modify config_templates, workspaces, and other infrastructure tables."
                 )
 
-        # Check 2: Block reads on sensitive tables
-        sensitive_hits = table_refs & SENSITIVE_TABLES
+        # Check 2: Block reads on sensitive tables (non-infra only)
+        if not is_infra:
+            sensitive_hits = table_refs & SENSITIVE_TABLES
+        else:
+            sensitive_hits = set()
         if sensitive_hits:
             tables_str = ', '.join(f'claude.{t}' for t in sensitive_hits)
             logger.warning(
@@ -168,6 +276,51 @@ def main():
                 f"  send_message(message_type='task_request', to_project='claude-family', "
                 f"body='Need config change: ...')"
             )
+
+        # Check 3: Block writes to tool-governed tables (ALL projects including infra)
+        # Override: include "-- OVERRIDE: reason" as a SQL comment to bypass
+        if is_write:
+            governed_hits = table_refs & set(TOOL_GOVERNED_TABLES.keys())
+            if governed_hits:
+                # Check for override comment
+                override_match = re.search(r'--\s*OVERRIDE:\s*(.+)', sql, re.IGNORECASE)
+                if override_match:
+                    override_reason = override_match.group(1).strip()
+                    logger.info(
+                        f"SQL governance OVERRIDE: project '{project}' raw write on "
+                        f"{', '.join(f'claude.{t}' for t in governed_hits)} "
+                        f"reason: {override_reason}"
+                    )
+                    log_governance_event("override", project, governed_hits, override_reason, sql)
+                    allow()
+
+                # No override - deny with guidance
+                guidance_lines = []
+                for table in sorted(governed_hits):
+                    info = TOOL_GOVERNED_TABLES[table]
+                    guidance_lines.append(
+                        f"  claude.{table}:\n"
+                        f"    Use: {info['tools']}\n"
+                        f"    Why: {info['reason']}"
+                    )
+                deny_text = (
+                    f"BLOCKED: Raw SQL write on tool-governed table(s).\n\n"
+                    f"Use the dedicated MCP tools instead:\n"
+                    + "\n".join(guidance_lines)
+                    + "\n\n"
+                    "Raw SQL bypasses workflow validation, audit logging, embedding generation, "
+                    "and side effects (dependency checks, cascades, dedup).\n\n"
+                    "If you MUST use raw SQL (migration, bulk fix, data repair), add a comment:\n"
+                    "  -- OVERRIDE: reason for raw SQL\n"
+                    "Example: UPDATE claude.features SET status = 'cancelled' "
+                    "WHERE ... -- OVERRIDE: bulk cleanup of abandoned features"
+                )
+                logger.warning(
+                    f"SQL governance BLOCKED: project '{project}' raw write on governed tables: "
+                    f"{', '.join(f'claude.{t}' for t in governed_hits)}"
+                )
+                log_governance_event("blocked", project, governed_hits, "", sql)
+                deny_with_guidance(deny_text)
 
         # All checks passed
         logger.info(f"SQL governance: project '{project}' - allowed (tables: {table_refs or 'none detected'})")

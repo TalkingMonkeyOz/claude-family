@@ -2,6 +2,7 @@
 Tests for the Content Validation Pipeline BPMN process.
 
 Models the combined PreToolUse hooks for Write/Edit operations:
+  - Governed File Check (BT581/F194): blocks direct edits to generated files
   - Context Injector (context_injector_hook.py): adds context
   - Standards Validator (standards_validator.py): validates content
 
@@ -12,6 +13,8 @@ Test scenarios:
   4. Validation fails, no fix suggestion → deny (block)
   5. Validation fails, can suggest fix → ask (middleware correction)
   6. Context rules loaded → context injected + validation passes
+  7. Governed file → deny (use tool instead)
+  8. Governed file + bypass → allow (emergency override)
 """
 
 import os
@@ -31,15 +34,31 @@ PROCESS_ID = "content_validation"
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Default data for all gateway variables (prevents NameError on non-taken paths)
+_DEFAULT_DATA = {
+    "has_file_path": True,
+    "is_governed": False,
+    "bypass_governance": False,
+    "correct_tool": "",
+    "db_available": True,
+    "has_context_rules": False,
+    "has_matching_standards": False,
+    "validation_passed": True,
+    "can_suggest_fix": False,
+}
+
+
 def load_workflow(initial_data: dict = None) -> BpmnWorkflow:
     parser = BpmnParser()
     parser.add_bpmn_file(BPMN_FILE)
     spec = parser.get_spec(PROCESS_ID)
     wf = BpmnWorkflow(spec)
+    data = dict(_DEFAULT_DATA)
     if initial_data:
-        start_tasks = [t for t in wf.get_tasks() if t.task_spec.name == "start"]
-        assert start_tasks, "Could not find BPMN start event"
-        start_tasks[0].data.update(initial_data)
+        data.update(initial_data)
+    start_tasks = [t for t in wf.get_tasks() if t.task_spec.name == "start"]
+    assert start_tasks, "Could not find BPMN start event"
+    start_tasks[0].data.update(data)
     wf.do_engine_steps()
     return wf
 
@@ -162,12 +181,9 @@ class TestContextInjectedAndValidated:
 
     def test_full_pipeline(self):
         wf = load_workflow({
-            "has_file_path": True,
-            "db_available": True,
             "has_context_rules": True,
             "has_matching_standards": True,
             "validation_passed": True,
-            "can_suggest_fix": False,
         })
 
         assert wf.is_completed()
@@ -179,3 +195,60 @@ class TestContextInjectedAndValidated:
         assert "allow_validated" in names
         assert wf.data.get("context_injected") is True
         assert wf.data.get("decision") == "allow"
+
+
+class TestGovernedFileDenied:
+    """Governed file (CLAUDE.md, settings.local.json) → deny with tool suggestion."""
+
+    def test_governed_file_blocked(self):
+        wf = load_workflow({
+            "is_governed": True,
+            "correct_tool": "update_claude_md()",
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "check_governed_file" in names
+        assert "deny_governed" in names
+        assert "end_governed_denied" in names
+        # Should NOT reach DB or validation
+        assert "connect_db" not in names
+        assert "load_context_rules" not in names
+        assert "validate_content" not in names
+
+
+class TestGovernedFileBypass:
+    """Governed file + bypass enabled → allow (emergency override)."""
+
+    def test_governed_with_bypass_continues(self):
+        wf = load_workflow({
+            "is_governed": True,
+            "bypass_governance": True,
+            "correct_tool": "update_claude_md()",
+            "has_matching_standards": False,
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "check_governed_file" in names
+        # Should continue past governance to normal pipeline
+        assert "connect_db" in names
+        assert "deny_governed" not in names
+        assert "end_governed_denied" not in names
+
+
+class TestNonGovernedFilePassesThrough:
+    """Non-governed file skips governance check entirely."""
+
+    def test_normal_file_not_affected(self):
+        wf = load_workflow({
+            "is_governed": False,
+            "has_matching_standards": False,
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "check_governed_file" in names
+        assert "deny_governed" not in names
+        assert "connect_db" in names
+        assert "allow_no_standards" in names

@@ -90,10 +90,33 @@
       <bpmn:script>standards_validated = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Merge gated + ungated -->
+    <!-- SQL governance check (BT582/F194) for execute_sql calls -->
+    <bpmn:exclusiveGateway id="sql_check_gw" name="Is SQL Write on Governed Table?" default="flow_sql_ok">
+      <bpmn:incoming>flow_ungated</bpmn:incoming>
+      <bpmn:outgoing>flow_sql_governed</bpmn:outgoing>
+      <bpmn:outgoing>flow_sql_ok</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="warn_sql_governance" name="[HOOK] Warn: Use MCP Tool Instead of Raw SQL" scriptFormat="python">
+      <bpmn:incoming>flow_sql_governed</bpmn:incoming>
+      <bpmn:outgoing>flow_sql_warn_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Warn (not block) when raw INSERT/UPDATE/DELETE on governed tables:
+#   features -> create_feature / advance_status
+#   build_tasks -> create_linked_task / start_work / complete_work
+#   feedback -> create_feedback / resolve_feedback
+#   knowledge -> remember
+#   entities -> catalog / update_entity
+# Log the warning, suggest correct tool, but allow operation
+sql_governance_warned = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Merge gated + ungated + sql_warned -->
     <bpmn:exclusiveGateway id="tool_merge" name="Tool Ready Merge">
       <bpmn:incoming>f_gated_merge</bpmn:incoming>
-      <bpmn:incoming>flow_ungated</bpmn:incoming>
+      <bpmn:incoming>flow_sql_ok</bpmn:incoming>
+      <bpmn:incoming>flow_sql_warn_to_merge</bpmn:incoming>
       <bpmn:outgoing>f5</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
@@ -128,7 +151,12 @@
     <bpmn:sequenceFlow id="flow_gated" sourceRef="gated_check" targetRef="discipline_check">
       <bpmn:conditionExpression>is_gated == True</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="flow_ungated" sourceRef="gated_check" targetRef="tool_merge"/>
+    <bpmn:sequenceFlow id="flow_ungated" sourceRef="gated_check" targetRef="sql_check_gw"/>
+    <bpmn:sequenceFlow id="flow_sql_governed" sourceRef="sql_check_gw" targetRef="warn_sql_governance">
+      <bpmn:conditionExpression>is_sql_write_on_governed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_sql_ok" sourceRef="sql_check_gw" targetRef="tool_merge"/>
+    <bpmn:sequenceFlow id="flow_sql_warn_to_merge" sourceRef="warn_sql_governance" targetRef="tool_merge"/>
 
     <bpmn:sequenceFlow id="f3" sourceRef="discipline_check" targetRef="discipline_gw"/>
 
