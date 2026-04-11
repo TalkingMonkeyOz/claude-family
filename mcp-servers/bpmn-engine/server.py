@@ -1287,6 +1287,560 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
         "type": "claude_behavior",
         "description": "Claude selects acknowledge action: read/acknowledged/actioned/deferred",
     },
+    # ==================================================================================
+    # cognitive_memory_capture.bpmn elements → KMS + DB operations
+    # ==================================================================================
+    "formulate_memory": {
+        "type": "claude_behavior",
+        "description": "Claude formulates memory content before storage",
+    },
+    "auto_extract": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Extract memory candidate from conversation turn",
+    },
+    "harvest_session": {
+        "type": "hook_script",
+        "file": "scripts/session_end_hook.py",
+        "description": "Harvest session facts for promotion at session end",
+    },
+    "classify_tier": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Auto-classify memory tier (short/mid/long) based on memory_type rules",
+    },
+    "validate_quality": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Quality gate: reject < 80 chars, junk patterns, dedup check",
+    },
+    "dedup_check": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Semantic overlap check (similarity > 0.85) before storing",
+    },
+    "merge_existing": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Merge new memory into existing entry when similarity > 0.85",
+    },
+    "generate_embedding": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Generate Voyage AI embedding for memory content",
+    },
+    "store_memory": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Store memory with tier classification + embedding vector",
+    },
+    "link_relations": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Create knowledge relations (extends/supports) to nearby entries",
+    },
+    # ==================================================================================
+    # cognitive_memory_retrieval.bpmn elements → KMS + tier-specific operations
+    # ==================================================================================
+    "parse_context": {
+        "type": "kms_operation",
+        "tool": "recall_memories",
+        "description": "Parse query and working context for retrieval",
+    },
+    "allocate_budget": {
+        "type": "kms_operation",
+        "tool": "recall_memories",
+        "description": "Allocate token budget across tiers based on query_type profile",
+    },
+    "search_short": {
+        "type": "db_query",
+        "table": "claude.session_facts",
+        "description": "Fetch active session facts (short-tier memory)",
+    },
+    "search_mid": {
+        "type": "db_query",
+        "table": "claude.knowledge",
+        "description": "Semantic search recent memories 7-30 days (mid-tier)",
+    },
+    "search_long": {
+        "type": "db_query",
+        "table": "claude.knowledge",
+        "description": "Semantic search + graph walk via pgvector + CTE (long-tier)",
+    },
+    "search_workfiles": {
+        "type": "mcp_tool",
+        "tool": "search_workfiles",
+        "description": "Search component working context (workfile tier)",
+    },
+    "search_entities": {
+        "type": "mcp_tool",
+        "tool": "recall_entities",
+        "description": "Search cataloged entities (entity tier)",
+    },
+    "rank_results": {
+        "type": "kms_operation",
+        "tool": "recall_memories",
+        "description": "Rank all results using composite score across tiers",
+    },
+    "trim_to_budget": {
+        "type": "kms_operation",
+        "tool": "recall_memories",
+        "description": "Trim results to total token budget with diversity guarantee",
+    },
+    "format_output": {
+        "type": "kms_operation",
+        "tool": "recall_memories",
+        "description": "Format results for context injection",
+    },
+    "update_access": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Update access_count and last_accessed_at for decay tracking",
+    },
+    # ==================================================================================
+    # cognitive_memory_consolidation.bpmn elements → KMS + DB operations
+    # ==================================================================================
+    "collect_short": {
+        "type": "kms_operation",
+        "tool": "consolidate_memories",
+        "description": "Collect short-term session facts for evaluation",
+    },
+    "evaluate_short": {
+        "type": "kms_operation",
+        "tool": "consolidate_memories",
+        "description": "Evaluate short-term facts for promotion to mid-tier",
+    },
+    "promote_to_mid": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Promote session fact to mid-term memory with embeddings",
+    },
+    "scan_mid": {
+        "type": "kms_operation",
+        "tool": "consolidate_memories",
+        "description": "Scan mid-term memories older than 7 days for promotion/decay",
+    },
+    "evaluate_mid": {
+        "type": "kms_operation",
+        "tool": "consolidate_memories",
+        "description": "Evaluate mid-term memories for promotion or decay",
+    },
+    "promote_to_long": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Promote to long-term (high confidence, proven knowledge)",
+    },
+    "run_decay": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Run edge decay using 0.95^days formula (F129)",
+    },
+    "find_stale": {
+        "type": "db_query",
+        "table": "claude.knowledge",
+        "description": "Identify stale entries (low access + low confidence) for archive",
+    },
+    # Note: archive_stale already in registry from knowledge_graph_lifecycle
+    # ==================================================================================
+    # cognitive_memory_contradiction.bpmn elements → KMS + DB operations
+    # ==================================================================================
+    "search_overlap": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Search for semantic overlap (similarity > 0.75) during storage",
+    },
+    "classify_relationship": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Classify relationship type (extends, supports, contradicts, supersedes)",
+    },
+    "handle_extends": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Link as 'extends' relation, keep both entries",
+    },
+    "handle_reinforces": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Boost confidence + link as 'supports' relation",
+    },
+    "compare_contradicting": {
+        "type": "kms_operation",
+        "tool": "remember",
+        "description": "Compare recency, confidence, and source authority for contradictions",
+    },
+    "newer_wins": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "New supersedes old: archive old entry",
+    },
+    "older_wins": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Keep old, reduce new entry's confidence",
+    },
+    "flag_review": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Flag both entries for human review when authority is equal",
+    },
+    "handle_supersedes": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Archive old + link 'supersedes' relation",
+    },
+    # ==================================================================================
+    # working_memory.bpmn elements → MCP tools + hooks
+    # ==================================================================================
+    # identify_action already in registry from knowledge_graph_lifecycle
+    "classify_fact": {
+        "type": "claude_behavior",
+        "description": "Claude classifies fact type and sensitivity before storage",
+    },
+    "store_sensitive": {
+        "type": "mcp_tool",
+        "tool": "store_session_fact",
+        "description": "Store session fact with is_sensitive=True",
+    },
+    "store_normal": {
+        "type": "mcp_tool",
+        "tool": "store_session_fact",
+        "description": "Store session fact (normal, non-sensitive)",
+    },
+    "recall_fact": {
+        "type": "mcp_tool",
+        "tool": "recall_session_fact",
+        "description": "Recall a specific session fact by key",
+    },
+    "apply_fact": {
+        "type": "claude_behavior",
+        "description": "Claude applies retrieved fact to current context",
+    },
+    "fact_missing": {
+        "type": "claude_behavior",
+        "description": "Fact not found - Claude reconstructs or asks user",
+    },
+    "precompact_fires": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "hook_event": "PreCompact",
+        "description": "PreCompact hook fires before context compaction",
+    },
+    "query_facts_for_injection": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "description": "Query session facts for injection into compacted context",
+    },
+    "build_system_message": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "description": "Build and inject system message with preserved state",
+    },
+    "post_compact_recovery": {
+        "type": "claude_behavior",
+        "description": "Claude recovers context after compaction using injected state",
+    },
+    "recall_previous": {
+        "type": "mcp_tool",
+        "tool": "recall_previous_session_facts",
+        "description": "Recall facts from previous sessions (cross-session retrieval)",
+    },
+    "merge_with_current": {
+        "type": "claude_behavior",
+        "description": "Claude merges previous session facts with current context",
+    },
+    "route_workfile": {
+        "type": "mcp_tool",
+        "tool": "stash / unstash",
+        "description": "Route to workfile operation (stash or unstash)",
+    },
+    # ==================================================================================
+    # knowledge_curator.bpmn elements → background job scripts
+    # ==================================================================================
+    "select_project": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Select target project for curation run",
+    },
+    "scan_entries": {
+        "type": "db_query",
+        "table": "claude.knowledge",
+        "description": "Scan knowledge entries for target project",
+    },
+    "cluster_entries": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Cluster entries by semantic similarity",
+    },
+    "classify_clusters": {
+        "type": "external_service",
+        "service": "Anthropic API (Claude Haiku)",
+        "description": "LLM classification of cluster relationships",
+    },
+    "curate_duplicates": {
+        "type": "external_service",
+        "service": "Anthropic API (Claude Sonnet)",
+        "description": "LLM-assisted merging of duplicate entries into summaries",
+    },
+    "resolve_contradictions": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Resolve contradictions using existing contradiction model",
+    },
+    "link_complementary": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Link complementary knowledge entries",
+    },
+    "generate_report": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Generate quality report after curation",
+    },
+    # ==================================================================================
+    # knowledge_hygiene.bpmn elements → Claude behavior + MCP tools + hooks + jobs
+    # ==================================================================================
+    "capture_remember": {
+        "type": "claude_behavior",
+        "description": "Claude calls remember(content, memory_type) for knowledge capture",
+    },
+    "capture_fact": {
+        "type": "claude_behavior",
+        "description": "Claude calls store_session_fact(key, value, type) for session facts",
+    },
+    "capture_stash": {
+        "type": "claude_behavior",
+        "description": "Claude calls stash(component, title, content) for workfiles",
+    },
+    "capture_catalog": {
+        "type": "claude_behavior",
+        "description": "Claude calls catalog(entity_type, properties) for entities",
+    },
+    "capture_secret": {
+        "type": "claude_behavior",
+        "description": "Claude calls set_secret(key, value, project) for credentials",
+    },
+    "capture_automemory": {
+        "type": "claude_behavior",
+        "description": "Claude Code built-in MEMORY.md auto-write system",
+    },
+    "act_on_hint": {
+        "type": "claude_behavior",
+        "description": "Claude acts on maintenance hints (list, archive, merge stale entries)",
+    },
+    "retrieve_active": {
+        "type": "claude_behavior",
+        "description": "Claude calls recall_memories / recall_entities / unstash / get_secret",
+    },
+    "retrieve_passive_protocol": {
+        "type": "hook_script",
+        "file": "scripts/protocol_inject_hook.py",
+        "description": "BM25 keyword search + domain concepts injection",
+    },
+    "retrieve_passive_rag": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "7-source RAG assembly (3000 token cap)",
+    },
+    "retrieve_implicit_feedback": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Process implicit feedback from RAG results",
+    },
+    "maint_list": {
+        "type": "claude_behavior",
+        "description": "Claude calls list_memories(project, tier, type, include_archived)",
+    },
+    "maint_update": {
+        "type": "claude_behavior",
+        "description": "Claude calls update_memory(id, content, title, tier, type)",
+    },
+    "maint_archive": {
+        "type": "claude_behavior",
+        "description": "Claude calls archive_memory(id, reason)",
+    },
+    "maint_merge": {
+        "type": "claude_behavior",
+        "description": "Claude calls merge_memories(keep_id, archive_id, reason)",
+    },
+    "maint_link": {
+        "type": "claude_behavior",
+        "description": "Claude calls link_knowledge(from_id, to_id, relation_type, strength)",
+    },
+    "maint_arch_workfile": {
+        "type": "claude_behavior",
+        "description": "Claude calls archive_workfile(component, title)",
+    },
+    "maint_pickup_flags": {
+        "type": "claude_behavior",
+        "description": "Claude reviews curator feedback items from previous run",
+    },
+    "maint_user_remember": {
+        "type": "user_interaction",
+        "description": "User requests knowledge capture via conversation",
+    },
+    "maint_user_forget": {
+        "type": "user_interaction",
+        "description": "User requests knowledge removal via conversation",
+    },
+    "maint_user_correct": {
+        "type": "user_interaction",
+        "description": "User requests knowledge correction via conversation",
+    },
+    "maint_user_review": {
+        "type": "user_interaction",
+        "description": "User requests knowledge review via conversation",
+    },
+    "promote_session_end_hook": {
+        "type": "hook_script",
+        "file": "scripts/session_end_hook.py",
+        "hook_event": "SessionEnd",
+        "description": "Promote session facts to mid-tier at session end",
+    },
+    "promote_embed_batch": {
+        "type": "job_script",
+        "file": "scripts/embed_knowledge.py",
+        "description": "Batch embed entries missing vectors",
+    },
+    "promote_mid_to_long": {
+        "type": "mcp_tool",
+        "tool": "consolidate_memories",
+        "description": "Phase 2: Mid to long promotion",
+    },
+    "promote_decay": {
+        "type": "mcp_tool",
+        "tool": "consolidate_memories",
+        "description": "Phase 3: Decay edges + archive stale entries",
+    },
+    "promote_manual": {
+        "type": "mcp_tool",
+        "tool": "consolidate_memories",
+        "description": "Manual: All 3 phases of memory consolidation",
+    },
+    "curate_scan": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Stage 1: Scan knowledge entries",
+    },
+    "curate_cluster": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Stage 2: Cluster by similarity (0.80 threshold)",
+    },
+    "curate_classify": {
+        "type": "external_service",
+        "service": "Anthropic API (Claude Haiku)",
+        "description": "Stage 3: Classify relationships via LLM",
+    },
+    "curate_act": {
+        "type": "external_service",
+        "service": "Anthropic API (Claude Sonnet)",
+        "description": "Stage 4: Merge dupes, link, resolve contradictions via LLM",
+    },
+    "curate_report": {
+        "type": "job_script",
+        "file": "scripts/knowledge_curator.py",
+        "description": "Stage 5: Quality report + flag issues",
+    },
+    "curate_domain_concepts": {
+        "type": "job_script",
+        "file": "scripts/knowledge_consolidation.py",
+        "description": "Match memories to domain concepts",
+    },
+    "precompact": {
+        "type": "hook_script",
+        "file": "scripts/precompact_hook.py",
+        "hook_event": "PreCompact",
+        "description": "Preserve critical state before compaction (2000 tokens)",
+    },
+    # ==================================================================================
+    # knowledge_full_cycle.bpmn elements → MCP tools + hooks + scripts
+    # ==================================================================================
+    "formulate_knowledge": {
+        "type": "claude_behavior",
+        "description": "Claude formulates knowledge (insight, pattern, gotcha, fact)",
+    },
+    # generate_embedding already in registry from cognitive_memory_capture
+    "store_in_knowledge": {
+        "type": "db_operation",
+        "table": "claude.knowledge",
+        "description": "Store in claude.knowledge with pgvector embedding",
+    },
+    "link_knowledge": {
+        "type": "db_operation",
+        "table": "claude.knowledge_relations",
+        "description": "Create knowledge relation edge",
+    },
+    "scan_vault": {
+        "type": "job_script",
+        "file": "scripts/embed_vault_documents.py",
+        "description": "Scan vault for changes (SHA256 hash comparison)",
+    },
+    "chunk_and_embed": {
+        "type": "job_script",
+        "file": "scripts/embed_vault_documents.py",
+        "description": "Chunk (1000/200 overlap) + Voyage AI embed",
+    },
+    "upsert_vectors": {
+        "type": "db_operation",
+        "table": "claude.vault_embeddings",
+        "description": "Upsert embeddings in pgvector",
+    },
+    "store_book": {
+        "type": "mcp_tool",
+        "tool": "store_book",
+        "description": "Store book record in claude.books",
+    },
+    "store_book_reference": {
+        "type": "mcp_tool",
+        "tool": "store_book_reference",
+        "description": "Store book reference (concept + embedding)",
+    },
+    "extract_conversation": {
+        "type": "mcp_tool",
+        "tool": "extract_conversation",
+        "description": "Extract conversation from JSONL log file",
+    },
+    "extract_insights": {
+        "type": "mcp_tool",
+        "tool": "extract_insights",
+        "description": "Extract insights (pattern match to knowledge)",
+    },
+    "init_retrieve_source": {
+        "type": "logic",
+        "description": "Initialize retrieval source default",
+    },
+    "rag_classify": {
+        "type": "hook_script",
+        "file": "scripts/rag_query_hook.py",
+        "description": "Classify prompt for RAG gating",
+    },
+    # rag_query already in registry
+    # inject_context already in registry
+    "direct_search": {
+        "type": "mcp_tool",
+        "tool": "recall_knowledge",
+        "description": "Semantic search with filters",
+    },
+    "book_search": {
+        "type": "mcp_tool",
+        "tool": "recall_book_reference",
+        "description": "Semantic search over book references",
+    },
+    "graph_traverse": {
+        "type": "mcp_tool",
+        "tool": "get_related_knowledge",
+        "description": "Graph edge traversal for related knowledge",
+    },
+    "apply_knowledge": {
+        "type": "claude_behavior",
+        "description": "Claude applies retrieved knowledge to current task",
+    },
+    "mark_applied": {
+        "type": "mcp_tool",
+        "tool": "mark_knowledge_applied",
+        "description": "Mark knowledge applied (confidence feedback)",
+    },
 }
 
 
@@ -1332,6 +1886,31 @@ def _check_artifact_exists(artifact: dict, project_root: Path) -> dict:
         filepath = project_root / artifact["file"]
         result["exists"] = filepath.exists()
         result["details"] = f"Rule: {artifact['file']}"
+
+    elif artifact["type"] == "kms_operation":
+        result["exists"] = True  # KMS operations are in project-tools MCP
+        result["details"] = f"KMS: {artifact.get('tool', 'unknown')} - {artifact.get('description', '')}"
+
+    elif artifact["type"] == "db_operation":
+        result["exists"] = True  # DB operations are implicit
+        result["details"] = f"DB: {artifact.get('table', 'unknown')}"
+
+    elif artifact["type"] == "job_script":
+        filepath = project_root / artifact["file"]
+        result["exists"] = filepath.exists()
+        result["details"] = f"Job: {artifact['file']}"
+
+    elif artifact["type"] == "external_service":
+        result["exists"] = True  # External services assumed available
+        result["details"] = f"External: {artifact.get('service', 'unknown')}"
+
+    elif artifact["type"] == "user_interaction":
+        result["exists"] = True  # User interaction via conversation
+        result["details"] = artifact.get("description", "User interaction")
+
+    elif artifact["type"] == "logic":
+        result["exists"] = True  # Internal logic, no external artifact
+        result["details"] = artifact.get("description", "Internal logic")
 
     return result
 
@@ -1440,7 +2019,7 @@ def _suggest_artifact(task_name: str) -> str:
     """Suggest what code artifact a BPMN task might map to based on its name."""
     name_lower = task_name.lower()
 
-    if "[hook]" in name_lower:
+    if "[hook]" in name_lower or "[hook:" in name_lower:
         return "Likely a hook script in scripts/"
     if "[tool]" in name_lower:
         return "Likely an MCP tool call"
@@ -1448,8 +2027,32 @@ def _suggest_artifact(task_name: str) -> str:
         return "Likely a database operation"
     if "[claude]" in name_lower:
         return "Claude decision/action - no specific code artifact"
-    if "[km]" in name_lower:
-        return "Knowledge management operation (RAG/vault)"
+    if "[km]" in name_lower or "[kms]" in name_lower:
+        return "Knowledge management system operation in project-tools MCP (remember/recall/consolidate)"
+    if "[short]" in name_lower:
+        return "Short-tier memory: session facts query in project-tools MCP"
+    if "[mid]" in name_lower:
+        return "Mid-tier memory: knowledge semantic search in project-tools MCP"
+    if "[long]" in name_lower:
+        return "Long-tier memory: knowledge + graph walk in project-tools MCP"
+    if "[automemory]" in name_lower:
+        return "Claude Code built-in MEMORY.md system - no code artifact"
+    if "[job]" in name_lower or "[job:" in name_lower:
+        return "Background job script in scripts/ (knowledge_curator, embed_knowledge, etc.)"
+    if "[llm:" in name_lower:
+        return "External LLM API call (Anthropic API)"
+    if "[user]" in name_lower:
+        return "User interaction via conversation - no code artifact"
+    if "[script]" in name_lower:
+        return "Python script in scripts/ directory"
+    if "[mcp]" in name_lower or "[mcp:" in name_lower:
+        return "MCP tool call in project-tools MCP server"
+    if "[workfile]" in name_lower:
+        return "Workfile operation (stash/unstash) in project-tools MCP"
+    if "[entity]" in name_lower:
+        return "Entity catalog operation (catalog/recall_entities) in project-tools MCP"
+    if "[logic]" in name_lower:
+        return "Internal logic/routing - no external artifact"
 
     # Check for common patterns
     if any(kw in name_lower for kw in ("check", "validate", "verify")):

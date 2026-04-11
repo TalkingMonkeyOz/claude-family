@@ -8,6 +8,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import json
 import logging
 import re
 from typing import List, Optional, Tuple
@@ -98,6 +99,21 @@ def log_implicit_feedback(conn, signal_type: str, signal_confidence: float,
             (log_id, signal_type, signal_confidence, doc_path, session_id)
             VALUES (%s, %s, %s, %s, %s)
         """, (log_id, signal_type, signal_confidence, doc_path, session_id))
+        # Also log to audit_log for visibility (FB268 fix)
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
+            VALUES ('knowledge', %s, 'active', 'active', 'rag_feedback', 'implicit_feedback',
+                    %s::jsonb)
+        """, (
+            log_id or 'unknown',
+            json.dumps({
+                "signal_type": signal_type,
+                "signal_confidence": signal_confidence,
+                "doc_path": doc_path,
+                "session_id": session_id,
+            }),
+        ))
         conn.commit()
         logger.info(f"Logged implicit feedback: {signal_type} (confidence={signal_confidence})")
     except Exception as e:

@@ -6,7 +6,7 @@ controlled by a ``gw_phase`` gateway routed via a ``phase`` data variable:
 
   1. CAPTURE   (default) - 6 storage routes + maintenance hint check
   2. RETRIEVE  (phase="retrieve") - active or passive retrieval
-  3. MAINTAIN  (phase="maintain") - 7 self-service maintenance actions
+  3. MAINTAIN  (phase="maintain") - 11 maintenance actions (7 Claude + 4 User)
   4. PROMOTE   (phase="promote") - 3 promotion/decay triggers
   5. CURATE    (phase="curate") - 6-stage background curation pipeline
 
@@ -366,6 +366,10 @@ class TestMaintainListMemories:
         assert "maint_link" not in names
         assert "maint_arch_workfile" not in names
         assert "maint_pickup_flags" not in names
+        assert "maint_user_remember" not in names
+        assert "maint_user_forget" not in names
+        assert "maint_user_correct" not in names
+        assert "maint_user_review" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +512,102 @@ class TestMaintainPickupCuratorFlags:
         names = _completed_names(wf)
 
         assert "maint_pickup_flags" in names
+        assert "end_maintain" in names
+        assert "maint_list" not in names
+
+
+# ---------------------------------------------------------------------------
+# P17a: user_remember (User requests knowledge capture)
+# ---------------------------------------------------------------------------
+
+class TestMaintainUserRemember:
+    """User says 'remember X' — Claude captures via remember()."""
+
+    def test_maintain_user_remember(self):
+        wf = _load(data_overrides={
+            "phase": "maintain",
+            "action": "user_remember",
+        })
+
+        assert "maint_user_remember" in _ready_names(wf)
+        _complete(wf, "maint_user_remember")
+
+        assert wf.is_completed()
+        names = _completed_names(wf)
+
+        assert "maint_user_remember" in names
+        assert "end_maintain" in names
+        assert "maint_list" not in names
+
+
+# ---------------------------------------------------------------------------
+# P17b: user_forget (User requests knowledge removal)
+# ---------------------------------------------------------------------------
+
+class TestMaintainUserForget:
+    """User says 'forget that' — Claude archives the memory."""
+
+    def test_maintain_user_forget(self):
+        wf = _load(data_overrides={
+            "phase": "maintain",
+            "action": "user_forget",
+        })
+
+        assert "maint_user_forget" in _ready_names(wf)
+        _complete(wf, "maint_user_forget")
+
+        assert wf.is_completed()
+        names = _completed_names(wf)
+
+        assert "maint_user_forget" in names
+        assert "end_maintain" in names
+        assert "maint_list" not in names
+
+
+# ---------------------------------------------------------------------------
+# P17c: user_correct (User requests knowledge correction)
+# ---------------------------------------------------------------------------
+
+class TestMaintainUserCorrect:
+    """User says 'that's wrong, it should be Y' — Claude updates the memory."""
+
+    def test_maintain_user_correct(self):
+        wf = _load(data_overrides={
+            "phase": "maintain",
+            "action": "user_correct",
+        })
+
+        assert "maint_user_correct" in _ready_names(wf)
+        _complete(wf, "maint_user_correct")
+
+        assert wf.is_completed()
+        names = _completed_names(wf)
+
+        assert "maint_user_correct" in names
+        assert "end_maintain" in names
+        assert "maint_list" not in names
+
+
+# ---------------------------------------------------------------------------
+# P17d: user_review (User requests knowledge review)
+# ---------------------------------------------------------------------------
+
+class TestMaintainUserReview:
+    """User wants to review what Claude knows — collaborative review loop."""
+
+    def test_maintain_user_review(self):
+        wf = _load(data_overrides={
+            "phase": "maintain",
+            "action": "user_review",
+        })
+
+        assert "maint_user_review" in _ready_names(wf)
+        _complete(wf, "maint_user_review")
+
+        assert wf.is_completed()
+        names = _completed_names(wf)
+
+        assert "maint_user_review" in names
         assert "end_maintain" in names
         assert "maint_list" not in names
 
@@ -737,6 +837,10 @@ class TestAllMaintainActionsReachable:
             ("link",                "maint_link"),
             ("archive_workfile",    "maint_arch_workfile"),
             ("pickup_curator_flags", "maint_pickup_flags"),
+            ("user_remember",       "maint_user_remember"),
+            ("user_forget",         "maint_user_forget"),
+            ("user_correct",        "maint_user_correct"),
+            ("user_review",         "maint_user_review"),
         ]
         for action_val, expected_task in cases:
             wf = _load(data_overrides={

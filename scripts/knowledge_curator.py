@@ -660,6 +660,9 @@ def generate_report(project_name: str, stats: dict, entry_count: int, cluster_co
             conn.commit()
             logger.info("Stage 5 (Report): Stored quality report (score=%d) for '%s'", score, project_name)
 
+            # Create feedback items for issues needing Claude's attention (FB267 fix)
+            _create_curator_feedback(report, project_id, conn)
+
     except Exception as e:
         logger.error("Failed to store quality report: %s", e)
         try:
@@ -668,6 +671,82 @@ def generate_report(project_name: str, stats: dict, entry_count: int, cluster_co
             pass
 
     return report
+
+
+def _create_curator_feedback(report: dict, project_id: str, conn):
+    """Create feedback items for curator findings that need Claude's attention.
+
+    Bridges the curator-to-Claude handoff gap (FB267):
+    - Errors: actions that failed during curation
+    - Low quality: score < 60 indicates systemic knowledge health issues
+    - High contradictions: 3+ contradictions suggest conflicting sources
+    """
+    try:
+        actions = report.get("actions", {})
+        errors = actions.get("errors", 0)
+        contradictions = actions.get("contradictions_resolved", 0)
+        score = report.get("quality_score", 100)
+        project_name = report.get("project", "unknown")
+
+        items_to_create = []
+
+        if errors > 0:
+            error_details = [
+                a for a in report.get("action_details", [])
+                if a.get("action") == "error"
+            ]
+            detail_str = "; ".join(
+                f"{a.get('entry_a', '?')}/{a.get('entry_b', '?')}: {a.get('error', '?')}"
+                for a in error_details[:5]
+            )
+            items_to_create.append({
+                "type": "bug",
+                "priority": "high",
+                "title": f"Knowledge curator: {errors} action(s) failed for {project_name}",
+                "description": f"The knowledge curator encountered {errors} error(s) during curation of {project_name}. "
+                               f"These entries need manual review. Details: {detail_str}",
+            })
+
+        if score < 60:
+            items_to_create.append({
+                "type": "improvement",
+                "priority": "medium",
+                "title": f"Knowledge quality low ({score}/100) for {project_name}",
+                "description": f"Knowledge curator scored {project_name} at {score}/100. "
+                               f"Actions: {actions.get('duplicates_merged', 0)} dupes merged, "
+                               f"{contradictions} contradictions, {actions.get('stale_archived', 0)} stale archived. "
+                               f"Review with list_memories() and clean up.",
+            })
+
+        if contradictions >= 3:
+            items_to_create.append({
+                "type": "bug",
+                "priority": "medium",
+                "title": f"Knowledge curator found {contradictions} contradictions in {project_name}",
+                "description": f"The curator resolved {contradictions} contradictions automatically, but this high count "
+                               f"suggests conflicting knowledge sources. Review recent remember() calls and verify "
+                               f"which information is authoritative.",
+            })
+
+        for item in items_to_create:
+            _execute(conn, """
+                INSERT INTO claude.feedback (project_id, feedback_type, title, description, priority, status, source)
+                VALUES (%s, %s, %s, %s, %s, 'new', 'knowledge_curator')
+            """, (project_id, item["type"], item["title"], item["description"], item["priority"]))
+
+        if items_to_create:
+            conn.commit()
+            logger.info(
+                "Created %d feedback item(s) for curator findings in '%s'",
+                len(items_to_create), project_name,
+            )
+
+    except Exception as e:
+        logger.error("Failed to create curator feedback: %s", e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
 
 
 def print_report(report: dict):

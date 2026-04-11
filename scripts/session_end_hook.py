@@ -9,10 +9,10 @@ users to run /session-end (which they usually forgot).
 What gets saved:
 - Marks session_end timestamp in claude.sessions
 - Preserves session_state (current_focus from latest session_summary)
+- Promotes qualifying session facts to mid-tier knowledge WITH embeddings (FB266)
 
 What does NOT happen here (left for manual /session-end):
 - Detailed session summary (requires Claude's analysis)
-- Knowledge capture
 - Git operations
 
 Hook Event: SessionEnd
@@ -142,11 +142,30 @@ def close_session_scoped_todos(project_name: str, conn):
         return 0
 
 
+def _format_knowledge_for_embedding(title: str, knowledge_type: str,
+                                    description: str, projects: list) -> str:
+    """Format a knowledge entry as text for embedding.
+
+    Matches the format used by embed_knowledge.py for consistency.
+    """
+    parts = []
+    if title:
+        parts.append(f"# {title}")
+    if knowledge_type:
+        parts.append(f"Type: {knowledge_type}")
+    if description:
+        parts.append(description)
+    if projects:
+        parts.append(f"\nApplies to: {', '.join(projects)}")
+    return '\n\n'.join(parts)
+
+
 def consolidate_session_facts(project_name: str, conn, current_session_id: str = None):
     """Promote qualifying session facts to mid-tier knowledge (F130 Cognitive Memory).
 
-    Lightweight version: inserts into claude.knowledge WITHOUT Voyage AI embeddings.
-    Embeddings are added later by the MCP consolidate_memories() tool.
+    Inserts into claude.knowledge with inline embedding generation via FastEmbed.
+    If embedding fails, the fact is still promoted (just without embedding),
+    matching pre-FB266 behavior.
 
     Args:
         project_name: Project to consolidate facts for.
@@ -180,19 +199,44 @@ def consolidate_session_facts(project_name: str, conn, current_session_id: str =
 
         facts = cur.fetchall()
         promoted = 0
+        embedded = 0
         for fact in facts:
             ktype = 'learned' if fact['fact_type'] in ('note', 'data') else fact['fact_type']
-            cur.execute("""
-                INSERT INTO claude.knowledge
-                    (knowledge_id, title, description, knowledge_type, tier,
-                     confidence_level, source, created_at, applies_to_projects)
-                VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
-                        NOW(), %s)
-            """, (fact['fact_key'], fact['fact_value'], ktype, [project_name]))
+
+            # Generate embedding inline (FB266: eliminate 1-hour embedding gap)
+            embedding_vec = None
+            try:
+                from embedding_provider import embed
+                embed_text = _format_knowledge_for_embedding(
+                    fact['fact_key'], ktype, fact['fact_value'], [project_name]
+                )
+                embedding_vec = embed(embed_text)
+            except Exception as embed_err:
+                logger.warning(f"Inline embedding failed for '{fact['fact_key']}' (non-fatal): {embed_err}")
+
+            if embedding_vec is not None:
+                cur.execute("""
+                    INSERT INTO claude.knowledge
+                        (knowledge_id, title, description, knowledge_type, tier,
+                         confidence_level, source, created_at, applies_to_projects,
+                         embedding)
+                    VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
+                            NOW(), %s, %s::vector)
+                """, (fact['fact_key'], fact['fact_value'], ktype, [project_name],
+                      embedding_vec))
+                embedded += 1
+            else:
+                cur.execute("""
+                    INSERT INTO claude.knowledge
+                        (knowledge_id, title, description, knowledge_type, tier,
+                         confidence_level, source, created_at, applies_to_projects)
+                    VALUES (gen_random_uuid(), %s, %s, %s, 'mid', 65, 'consolidation',
+                            NOW(), %s)
+                """, (fact['fact_key'], fact['fact_value'], ktype, [project_name]))
             promoted += 1
 
         if promoted > 0:
-            logger.info(f"Promoted {promoted} session fact(s) to mid-tier knowledge for {project_name}")
+            logger.info(f"Promoted {promoted} session fact(s) to mid-tier knowledge for {project_name} ({embedded} with embeddings)")
         conn.commit()
     except Exception as e:
         logger.warning(f"Session fact consolidation failed (non-fatal): {e}")

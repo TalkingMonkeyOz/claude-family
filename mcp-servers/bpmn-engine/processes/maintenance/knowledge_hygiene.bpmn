@@ -13,12 +13,13 @@
       Comprehensive knowledge lifecycle process for claude-family (Windows local).
       Version: 1.0 | Created: 2026-04-11
 
-      Models the ACTUAL system: 11 MCP tools, 7 hooks, 3 background jobs, auto-memory.
-      4 actors indicated by name prefix:
+      Models the ACTUAL system: 11 MCP tools, 7 hooks, 3 background jobs, auto-memory, user interactions.
+      5 actors indicated by name prefix:
         [CLAUDE] = Claude instance MCP tool calls
         [HOOK]   = Automatic hook scripts (session_end, protocol_inject, rag_query, precompact)
         [JOB]    = Background scheduled jobs (curator, embedder, consolidator)
         [AUTOMEMORY] = Claude Code built-in MEMORY.md file system
+        [USER]   = User-initiated knowledge actions via conversation
 
       NOT modeled (separate deployment):
         Apache AGE graph layer (METIS/Linux, see knowledge_graph_lifecycle.bpmn)
@@ -287,6 +288,10 @@ No explicit Claude action needed; fully automatic.</bpmn:documentation>
       <bpmn:outgoing>f_maint_link</bpmn:outgoing>
       <bpmn:outgoing>f_maint_arch_wf</bpmn:outgoing>
       <bpmn:outgoing>f_maint_pickup</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_user_remember</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_user_forget</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_user_correct</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_user_review</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
     <bpmn:userTask id="maint_list" name="[CLAUDE] list_memories(project, tier, type, include_archived)">
@@ -364,6 +369,55 @@ Currently works because get_build_board shows pending feedback.</bpmn:documentat
       <bpmn:conditionExpression>action == "pickup_curator_flags"</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
 
+    <!-- User-triggered knowledge management actions -->
+    <bpmn:userTask id="maint_user_remember" name="[USER] Request Knowledge Capture">
+      <bpmn:incoming>f_maint_user_remember</bpmn:incoming>
+      <bpmn:outgoing>f_mur_done</bpmn:outgoing>
+      <bpmn:documentation>User says "remember X" in conversation. Claude formulates the knowledge
+and calls remember(content, memory_type) with appropriate type and content.
+This is the user-initiated entry point to the capture phase — the user
+explicitly asks Claude to store something for future sessions.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_user_remember" sourceRef="gw_maintain_action" targetRef="maint_user_remember">
+      <bpmn:conditionExpression>action == "user_remember"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_user_forget" name="[USER] Request Knowledge Removal">
+      <bpmn:incoming>f_maint_user_forget</bpmn:incoming>
+      <bpmn:outgoing>f_muf_done</bpmn:outgoing>
+      <bpmn:documentation>User says "forget that" or "delete that memory" in conversation.
+Claude searches with list_memories() or recall_memories() to find the entry,
+confirms with the user, then calls archive_memory(id, reason) to soft-delete.
+Reason is logged for audit trail.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_user_forget" sourceRef="gw_maintain_action" targetRef="maint_user_forget">
+      <bpmn:conditionExpression>action == "user_forget"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_user_correct" name="[USER] Request Knowledge Correction">
+      <bpmn:incoming>f_maint_user_correct</bpmn:incoming>
+      <bpmn:outgoing>f_muc_done</bpmn:outgoing>
+      <bpmn:documentation>User says "that's wrong, it should be Y" in conversation.
+Claude identifies the incorrect memory via recall_memories() or list_memories(),
+then calls update_memory(id, content=corrected_content) with the user's correction.
+Re-embeds automatically if content changes. Audit-logged.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_user_correct" sourceRef="gw_maintain_action" targetRef="maint_user_correct">
+      <bpmn:conditionExpression>action == "user_correct"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_user_review" name="[USER] Request Knowledge Review">
+      <bpmn:incoming>f_maint_user_review</bpmn:incoming>
+      <bpmn:outgoing>f_murv_done</bpmn:outgoing>
+      <bpmn:documentation>User wants to review what Claude knows. Claude calls list_memories()
+and presents entries to user. User decides what to keep, archive, or merge.
+Claude executes the user's decisions via archive_memory() or merge_memories().
+Collaborative review loop until user is satisfied.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_user_review" sourceRef="gw_maintain_action" targetRef="maint_user_review">
+      <bpmn:conditionExpression>action == "user_review"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
     <bpmn:endEvent id="end_maintain" name="Maintenance Complete">
       <bpmn:incoming>f_ml_done</bpmn:incoming>
       <bpmn:incoming>f_mu_done</bpmn:incoming>
@@ -372,6 +426,10 @@ Currently works because get_build_board shows pending feedback.</bpmn:documentat
       <bpmn:incoming>f_mlk_done</bpmn:incoming>
       <bpmn:incoming>f_maw_done</bpmn:incoming>
       <bpmn:incoming>f_mpf_done</bpmn:incoming>
+      <bpmn:incoming>f_mur_done</bpmn:incoming>
+      <bpmn:incoming>f_muf_done</bpmn:incoming>
+      <bpmn:incoming>f_muc_done</bpmn:incoming>
+      <bpmn:incoming>f_murv_done</bpmn:incoming>
     </bpmn:endEvent>
     <bpmn:sequenceFlow id="f_ml_done" sourceRef="maint_list" targetRef="end_maintain"/>
     <bpmn:sequenceFlow id="f_mu_done" sourceRef="maint_update" targetRef="end_maintain"/>
@@ -380,6 +438,10 @@ Currently works because get_build_board shows pending feedback.</bpmn:documentat
     <bpmn:sequenceFlow id="f_mlk_done" sourceRef="maint_link" targetRef="end_maintain"/>
     <bpmn:sequenceFlow id="f_maw_done" sourceRef="maint_arch_workfile" targetRef="end_maintain"/>
     <bpmn:sequenceFlow id="f_mpf_done" sourceRef="maint_pickup_flags" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_mur_done" sourceRef="maint_user_remember" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_muf_done" sourceRef="maint_user_forget" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_muc_done" sourceRef="maint_user_correct" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_murv_done" sourceRef="maint_user_review" targetRef="end_maintain"/>
 
     <!-- =============================== -->
     <!-- PHASE 4: PROMOTE + DECAY        -->
