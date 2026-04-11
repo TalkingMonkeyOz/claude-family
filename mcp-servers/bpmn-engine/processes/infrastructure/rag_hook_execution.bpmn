@@ -290,13 +290,13 @@ if pending_failures:
       <bpmn:outgoing>flow_budget_to_end</bpmn:outgoing>
       <bpmn:script>
 # Trim assembled context to token budget (default: 2000 tokens)
-# Priority order (1=highest): protocol > session_facts > todos > rag >
-#   entity_catalog(5) > vault > workfiles(7) > schema
+# Priority order (1=highest, DB-first): protocol > session_facts > todos > rag >
+#   entity_catalog(5) > workfiles(6) > vault(7, human docs only) > schema
 final_context = apply_context_budget(
     parts=context_parts,
     budget=MAX_CONTEXT_TOKENS,
     priority=["protocol", "session_facts", "todos", "rag",
-              "entity_catalog", "vault", "workfiles", "schema"]
+              "entity_catalog", "workfiles", "vault", "schema"]
 )
 output = json.dumps({"context": final_context, "source": context_source})
       </bpmn:script>

@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/cross-system-linking"
+    id="Definitions_CSL">
+
+  <!--
+    PROCESS 1: MANUAL LINKING
+    Claude or a tool explicitly creates a link between two resources.
+    Tools: link_resources(), link_knowledge(), get_linked_resources().
+    Table: claude.resource_links (unique on from_type+from_id+to_type+to_id+link_type).
+
+    PROCESS 2: AUTO CONTEXT ASSEMBLY (WCC)
+    When an activity is detected, WCC queries resource_links to assemble
+    related workfiles, entities, memories, and BPMN processes as context.
+    Tool: assemble_context().
+  -->
+
+  <!-- ================================================================ -->
+  <!-- PROCESS 1: MANUAL RESOURCE LINKING                               -->
+  <!-- ================================================================ -->
+
+  <bpmn:process id="cross_system_linking" name="Cross-System Linking: Connect Resources Across Storage Systems" isExecutable="true">
+
+    <!--
+      Links any two resources in the system via claude.resource_links.
+
+      Resource types: entity, skill, workfile, feature, build_task,
+        feedback, bpmn_process, knowledge, activity, rule, project.
+
+      Link types: related_to (default), depends_on, implements,
+        documents, extends, part_of, uses, produces, validates.
+
+      Input data:
+        action: "link" (default), "query", or "unlink"
+        from_type, from_id: Source resource
+        to_type, to_id: Target resource
+        link_type: Relationship type
+        strength: 0.0 to 1.0 (default 1.0)
+
+      Dedup: unique constraint prevents duplicate links.
+    -->
+
+    <bpmn:startEvent id="start" name="Linking Request">
+      <bpmn:outgoing>f_start_to_action</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:exclusiveGateway id="gw_action" name="Action?" default="f_action_link">
+      <bpmn:incoming>f_start_to_action</bpmn:incoming>
+      <bpmn:outgoing>f_action_link</bpmn:outgoing>
+      <bpmn:outgoing>f_action_query</bpmn:outgoing>
+      <bpmn:outgoing>f_action_unlink</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- LINK PATH -->
+
+    <bpmn:userTask id="identify_resources" name="[CLAUDE] Identify Source and Target Resources">
+      <bpmn:incoming>f_action_link</bpmn:incoming>
+      <bpmn:outgoing>f_identify_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:scriptTask id="validate_resources" name="[DB] Validate Both Resources Exist" scriptFormat="python">
+      <bpmn:incoming>f_identify_to_validate</bpmn:incoming>
+      <bpmn:outgoing>f_validate_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Check that from_id and to_id exist in their respective tables
+# entity -> claude.entities, skill -> claude.skills, etc.
+try:
+    if force_invalid_resource:
+        resources_valid = False
+        validation_error = "Resource not found"
+    else:
+        resources_valid = True
+except NameError:
+    resources_valid = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_valid" name="Resources Valid?" default="f_invalid">
+      <bpmn:incoming>f_validate_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_valid</bpmn:outgoing>
+      <bpmn:outgoing>f_invalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_invalid" name="Error: Resource Not Found">
+      <bpmn:incoming>f_invalid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="check_existing_link" name="[DB] Check for Existing Link (dedup)" scriptFormat="python">
+      <bpmn:incoming>f_valid</bpmn:incoming>
+      <bpmn:outgoing>f_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT from claude.resource_links WHERE from_type=? AND from_id=? AND to_type=? AND to_id=? AND link_type=?
+# Unique constraint: uq_resource_link
+try:
+    if force_link_exists:
+        link_exists = True
+    else:
+        link_exists = False
+except NameError:
+    link_exists = False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_exists" name="Link Already Exists?" default="f_new_link">
+      <bpmn:incoming>f_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_update_link</bpmn:outgoing>
+      <bpmn:outgoing>f_new_link</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="update_existing_link" name="[DB] Update Existing Link Strength/Metadata" scriptFormat="python">
+      <bpmn:incoming>f_update_link</bpmn:incoming>
+      <bpmn:outgoing>f_update_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.resource_links SET strength=?, metadata=? WHERE link_id=?
+link_action = "updated"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="create_new_link" name="[MCP] link_resources(from_type, from_id, to_type, to_id, link_type)" scriptFormat="python">
+      <bpmn:incoming>f_new_link</bpmn:incoming>
+      <bpmn:outgoing>f_create_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.resource_links (from_type, from_id, to_type, to_id, link_type, strength)
+link_action = "created"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_link_merge" name="Link Merge">
+      <bpmn:incoming>f_update_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_create_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_merge_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_linked" name="Resources Linked">
+      <bpmn:incoming>f_merge_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- QUERY PATH -->
+
+    <bpmn:scriptTask id="query_links" name="[MCP] get_linked_resources(resource_type, resource_id)" scriptFormat="python">
+      <bpmn:incoming>f_action_query</bpmn:incoming>
+      <bpmn:outgoing>f_query_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT * FROM claude.resource_links WHERE (from_type=? AND from_id=?) OR (to_type=? AND to_id=?)
+# Returns bidirectional links with direction indicator
+try:
+    if force_no_links:
+        links_found = False
+        link_count = 0
+    else:
+        links_found = True
+        link_count = 3
+except NameError:
+    links_found = True
+    link_count = 3
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_links" name="Links Found?" default="f_no_links">
+      <bpmn:incoming>f_query_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_has_links</bpmn:outgoing>
+      <bpmn:outgoing>f_no_links</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_query_results" name="Links Retrieved">
+      <bpmn:incoming>f_has_links</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_no_links" name="No Links Found">
+      <bpmn:incoming>f_no_links</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- UNLINK PATH -->
+
+    <bpmn:scriptTask id="remove_link" name="[DB] DELETE FROM resource_links WHERE link_id=?" scriptFormat="python">
+      <bpmn:incoming>f_action_unlink</bpmn:incoming>
+      <bpmn:outgoing>f_unlink_to_end</bpmn:outgoing>
+      <bpmn:script>
+# DELETE FROM claude.resource_links WHERE link_id = ?
+link_action = "removed"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_unlinked" name="Link Removed">
+      <bpmn:incoming>f_unlink_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="f_start_to_action" sourceRef="start" targetRef="gw_action"/>
+    <bpmn:sequenceFlow id="f_action_link" sourceRef="gw_action" targetRef="identify_resources"/>
+    <bpmn:sequenceFlow id="f_action_query" sourceRef="gw_action" targetRef="query_links">
+      <bpmn:conditionExpression>action == "query"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_action_unlink" sourceRef="gw_action" targetRef="remove_link">
+      <bpmn:conditionExpression>action == "unlink"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_identify_to_validate" sourceRef="identify_resources" targetRef="validate_resources"/>
+    <bpmn:sequenceFlow id="f_validate_to_gw" sourceRef="validate_resources" targetRef="gw_valid"/>
+    <bpmn:sequenceFlow id="f_valid" sourceRef="gw_valid" targetRef="check_existing_link">
+      <bpmn:conditionExpression>resources_valid == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_invalid" sourceRef="gw_valid" targetRef="end_invalid"/>
+    <bpmn:sequenceFlow id="f_check_to_gw" sourceRef="check_existing_link" targetRef="gw_exists"/>
+    <bpmn:sequenceFlow id="f_update_link" sourceRef="gw_exists" targetRef="update_existing_link">
+      <bpmn:conditionExpression>link_exists == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_new_link" sourceRef="gw_exists" targetRef="create_new_link"/>
+    <bpmn:sequenceFlow id="f_update_to_merge" sourceRef="update_existing_link" targetRef="gw_link_merge"/>
+    <bpmn:sequenceFlow id="f_create_to_merge" sourceRef="create_new_link" targetRef="gw_link_merge"/>
+    <bpmn:sequenceFlow id="f_merge_to_end" sourceRef="gw_link_merge" targetRef="end_linked"/>
+    <bpmn:sequenceFlow id="f_query_to_gw" sourceRef="query_links" targetRef="gw_has_links"/>
+    <bpmn:sequenceFlow id="f_has_links" sourceRef="gw_has_links" targetRef="end_query_results">
+      <bpmn:conditionExpression>links_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_links" sourceRef="gw_has_links" targetRef="end_no_links"/>
+    <bpmn:sequenceFlow id="f_unlink_to_end" sourceRef="remove_link" targetRef="end_unlinked"/>
+
+  </bpmn:process>
+
+  <!-- ================================================================ -->
+  <!-- PROCESS 2: AUTO CONTEXT ASSEMBLY (WCC)                           -->
+  <!-- ================================================================ -->
+
+  <bpmn:process id="wcc_context_assembly" name="WCC: Auto Context Assembly via Resource Links" isExecutable="true">
+
+    <!--
+      When a skill or activity is activated, WCC assembles context from
+      linked resources. This models the assemble_context() tool flow.
+
+      Input: activity_name, project, budget (token limit)
+      Output: assembled context with proportional budget allocation
+
+      6 sources queried in parallel (modeled as sequence for BPMN):
+        1. Workfiles (stash) linked to activity
+        2. Knowledge (memories) linked to activity
+        3. Entity catalog entries linked to activity
+        4. Session facts for current session
+        5. Vault RAG (if relevant)
+        6. BPMN process steps (if navigable)
+    -->
+
+    <bpmn:startEvent id="wcc_start" name="Activity Detected">
+      <bpmn:outgoing>f_wcc_start_to_detect</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="detect_activity" name="[WCC] Detect Activity from Prompt Text" scriptFormat="python">
+      <bpmn:incoming>f_wcc_start_to_detect</bpmn:incoming>
+      <bpmn:outgoing>f_detect_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Match prompt text against activity names and aliases
+# Activity table: claude.activities (name, aliases, project_id)
+try:
+    if force_no_activity:
+        activity_found = False
+    else:
+        activity_found = True
+        activity_id = "detected_activity_uuid"
+except NameError:
+    activity_found = True
+    activity_id = "detected_activity_uuid"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_activity_found" name="Activity Found?" default="f_no_activity">
+      <bpmn:incoming>f_detect_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_activity_found</bpmn:outgoing>
+      <bpmn:outgoing>f_no_activity</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_activity" name="No Activity Matched">
+      <bpmn:incoming>f_no_activity</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="query_resource_links" name="[DB] Query resource_links for Activity" scriptFormat="python">
+      <bpmn:incoming>f_activity_found</bpmn:incoming>
+      <bpmn:outgoing>f_links_to_budget</bpmn:outgoing>
+      <bpmn:script>
+# SELECT * FROM claude.resource_links
+# WHERE (from_type='activity' AND from_id=activity_id)
+#    OR (to_type='activity' AND to_id=activity_id)
+# Groups by resource type for budget allocation
+linked_workfiles = 2
+linked_knowledge = 3
+linked_entities = 1
+linked_bpmn = 1
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="allocate_budget" name="[WCC] Allocate Token Budget Across Sources" scriptFormat="python">
+      <bpmn:incoming>f_links_to_budget</bpmn:incoming>
+      <bpmn:outgoing>f_budget_to_fetch</bpmn:outgoing>
+      <bpmn:script>
+# Proportional budget allocation (default 1000 tokens):
+#   workfiles: 30%, knowledge: 25%, entities: 20%,
+#   session_facts: 10%, vault_rag: 10%, bpmn: 5%
+# Unused budget from empty sources redistributed proportionally
+try:
+    budget = budget if budget else 1000
+except NameError:
+    budget = 1000
+workfile_budget = int(budget * 0.30)
+knowledge_budget = int(budget * 0.25)
+entity_budget = int(budget * 0.20)
+fact_budget = int(budget * 0.10)
+rag_budget = int(budget * 0.10)
+bpmn_budget = int(budget * 0.05)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="fetch_linked_content" name="[DB] Fetch Content from Each Linked Resource" scriptFormat="python">
+      <bpmn:incoming>f_budget_to_fetch</bpmn:incoming>
+      <bpmn:outgoing>f_fetch_to_assemble</bpmn:outgoing>
+      <bpmn:script>
+# For each linked resource, fetch content up to its budget allocation:
+# workfile -> unstash content
+# knowledge -> recall memory content
+# entity -> recall entity properties
+# session_fact -> list current session facts
+# vault -> semantic search (if budget remains)
+# bpmn -> get_current_step (if navigable process linked)
+total_tokens_used = 800
+sources_used = 4
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="assemble_context" name="[WCC] Assemble Final Context Block" scriptFormat="python">
+      <bpmn:incoming>f_fetch_to_assemble</bpmn:incoming>
+      <bpmn:outgoing>f_assemble_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Combine all fetched content into a single context block
+# Ordered by relevance (linked resources first, then fallback sources)
+# Truncated to budget limit
+context_assembled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_context_ready" name="Context Assembled">
+      <bpmn:incoming>f_assemble_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- SEQUENCE FLOWS -->
+    <bpmn:sequenceFlow id="f_wcc_start_to_detect" sourceRef="wcc_start" targetRef="detect_activity"/>
+    <bpmn:sequenceFlow id="f_detect_to_gw" sourceRef="detect_activity" targetRef="gw_activity_found"/>
+    <bpmn:sequenceFlow id="f_activity_found" sourceRef="gw_activity_found" targetRef="query_resource_links">
+      <bpmn:conditionExpression>activity_found == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_activity" sourceRef="gw_activity_found" targetRef="end_no_activity"/>
+    <bpmn:sequenceFlow id="f_links_to_budget" sourceRef="query_resource_links" targetRef="allocate_budget"/>
+    <bpmn:sequenceFlow id="f_budget_to_fetch" sourceRef="allocate_budget" targetRef="fetch_linked_content"/>
+    <bpmn:sequenceFlow id="f_fetch_to_assemble" sourceRef="fetch_linked_content" targetRef="assemble_context"/>
+    <bpmn:sequenceFlow id="f_assemble_to_end" sourceRef="assemble_context" targetRef="end_context_ready"/>
+
+  </bpmn:process>
+
+  <!-- DIAGRAM -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_CSL">
+    <bpmndi:BPMNPlane id="BPMNPlane_CSL" bpmnElement="cross_system_linking">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>

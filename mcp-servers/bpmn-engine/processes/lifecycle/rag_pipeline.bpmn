@@ -9,6 +9,14 @@
 
   <bpmn:process id="rag_pipeline" name="RAG Pipeline: Knowledge Embedding and Retrieval" isExecutable="true">
 
+    <!--
+      NOTE: This process models vault-only RAG (embedding + retrieval).
+      For the full multi-source context assembly (DB-first with 7 sources),
+      see rag_hook_execution.bpmn which includes entity catalog, memories,
+      workfiles, and session facts alongside vault RAG.
+      Vault RAG is supplementary to DB sources, not the primary path.
+    -->
+
     <!-- Start Event -->
     <bpmn:startEvent id="start_event" name="Start">
       <bpmn:outgoing>flow_start_to_trigger</bpmn:outgoing>

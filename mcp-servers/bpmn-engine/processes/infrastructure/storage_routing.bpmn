@@ -1,0 +1,353 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/storage-routing"
+    id="Definitions_SR">
+  <!--
+    PROCESS: STORAGE ROUTING
+    Executable version of storage rules. Classifies content and routes to correct system.
+    Navigable via get_current_step('storage_routing', completed_steps, data).
+    Related: knowledge_hygiene, secret_vault, workfile_management, entity_catalog_retrieval.
+    7 targets: Credential Vault, Notepad, Memory, Filing Cabinet, Reference Library, Skill/BPMN, Auto Memory.
+  -->
+  <bpmn:process id="storage_routing" name="Storage Routing: Classify and Route to Correct System" isExecutable="true">
+    <!--
+      The decision process for "where does this piece of knowledge go?"
+      Input data:
+        - content: The information to store
+        - content_type: (optional) Pre-classified type. If not set, classification step determines it.
+          Valid values: credential, config, endpoint, decision, pattern, gotcha,
+                        learned, working_notes, structured_data, procedure, auto_memory
+      Output data:
+        - storage_target: Which system was used
+        - storage_tool: Which MCP tool to call
+        - check_first_result: What the dedup/exists check found
+        - store_success: Whether storage succeeded
+      Scenarios:
+        1. API key/token/password → Credential Vault (set_secret)
+        2. Endpoint URL, config value → Notepad (store_session_fact)
+        3. Decision made this session → Notepad (store_session_fact)
+        4. Pattern, gotcha, lesson → Memory (remember)
+        5. Decision for future sessions → Memory (remember)
+        6. Component working notes → Filing Cabinet (stash)
+        7. API endpoint, OData entity, schema → Reference Library (catalog)
+        8. Procedure or process → Skill or BPMN model
+        9. User-requested "remember this" → Auto Memory (.md file)
+      Anti-patterns caught by classification:
+        - Credentials in session facts (should be set_secret)
+        - Secrets in memory (NEVER)
+        - Task acks/progress in memory (should be session fact)
+        - OData entities in memory (should be catalog)
+        - SOPs as vault markdown (should be skill/BPMN)
+    -->
+    <!-- PHASE 1: CLASSIFY CONTENT TYPE -->
+    <bpmn:startEvent id="start" name="Storage Request">
+      <bpmn:outgoing>f_start_to_classify</bpmn:outgoing>
+    </bpmn:startEvent>
+    <bpmn:userTask id="classify_content" name="[CLAUDE] Classify Content Type">
+      <bpmn:incoming>f_start_to_classify</bpmn:incoming>
+      <bpmn:outgoing>f_classify_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+    <!--
+      Classification rules (from storage rules):
+      credential, config, decision_short, decision_long, pattern,
+      working_notes, structured_data, procedure, auto_memory.
+      Anti patterns: secrets must be credential, quality gate 80 chars,
+      task acks rejected.
+    -->
+    <bpmn:exclusiveGateway id="gw_pre_classified" name="Already Classified?" default="f_needs_classification">
+      <bpmn:incoming>f_classify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_already_classified</bpmn:outgoing>
+      <bpmn:outgoing>f_needs_classification</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:scriptTask id="auto_classify" name="[CLAUDE] Apply Classification Rules" scriptFormat="python">
+      <bpmn:incoming>f_needs_classification</bpmn:incoming>
+      <bpmn:outgoing>f_auto_classify_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Apply the classification table from storage-rules.md
+# Sets content_type based on content analysis
+# Also detects anti-patterns (credentials in wrong system, task acks, etc.)
+try:
+    if not content_type or content_type == "":
+        content_type = "pattern"  # default fallback
+except NameError:
+    content_type = "pattern"
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:exclusiveGateway id="gw_classify_merge" name="Classification Merge">
+      <bpmn:incoming>f_already_classified</bpmn:incoming>
+      <bpmn:incoming>f_auto_classify_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_merge_to_antipattern</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <!-- PHASE 2: ANTI-PATTERN CHECK -->
+    <bpmn:scriptTask id="check_antipattern" name="[CLAUDE] Check for Storage Anti-Patterns" scriptFormat="python">
+      <bpmn:incoming>f_merge_to_antipattern</bpmn:incoming>
+      <bpmn:outgoing>f_antipattern_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Anti-pattern detection:
+# 1. Credential stored as session_fact → redirect to credential
+# 2. Secret in memory → BLOCK
+# 3. Task ack/progress in memory → redirect to session_fact
+# 4. OData entity in memory → redirect to structured_data
+# 5. SOP as vault doc → redirect to procedure
+# 6. Content &lt; 80 chars for memory → BLOCK (quality gate)
+try:
+    if force_antipattern:
+        antipattern_detected = True
+        antipattern_type = force_antipattern_type
+        corrected_content_type = force_corrected_type
+    else:
+        antipattern_detected = False
+        corrected_content_type = content_type
+except NameError:
+    antipattern_detected = False
+    corrected_content_type = content_type
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:exclusiveGateway id="gw_antipattern" name="Anti-Pattern Found?" default="f_no_antipattern">
+      <bpmn:incoming>f_antipattern_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_antipattern_block</bpmn:outgoing>
+      <bpmn:outgoing>f_antipattern_redirect</bpmn:outgoing>
+      <bpmn:outgoing>f_no_antipattern</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:endEvent id="end_blocked" name="Blocked: Anti-Pattern (secret in memory, task ack, etc.)">
+      <bpmn:incoming>f_antipattern_block</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:exclusiveGateway id="gw_after_antipattern" name="After Anti-Pattern Merge">
+      <bpmn:incoming>f_antipattern_redirect</bpmn:incoming>
+      <bpmn:incoming>f_no_antipattern</bpmn:incoming>
+      <bpmn:outgoing>f_to_check_first</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <!-- PHASE 3: CHECK FIRST (dedup) -->
+    <bpmn:userTask id="check_first" name="[CLAUDE] Check-First: Verify Not Already Stored">
+      <bpmn:incoming>f_to_check_first</bpmn:incoming>
+      <bpmn:outgoing>f_check_first_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+    <!--
+      Check first rules: Credential=get_secret, Notepad=list_session_facts,
+      Memory=recall_memories, Filing Cabinet=list_workfiles,
+      Reference Library=recall_entities, Skill/BPMN=search_processes,
+      Auto Memory=Read MEMORY.md index.
+    -->
+    <bpmn:exclusiveGateway id="gw_already_exists" name="Already Exists?" default="f_not_exists">
+      <bpmn:incoming>f_check_first_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_exists_update</bpmn:outgoing>
+      <bpmn:outgoing>f_not_exists</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:userTask id="decide_update" name="[CLAUDE] Decide: Update Existing or Skip?">
+      <bpmn:incoming>f_exists_update</bpmn:incoming>
+      <bpmn:outgoing>f_decide_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:exclusiveGateway id="gw_update_decision" name="Update or Skip?" default="f_skip_exists">
+      <bpmn:incoming>f_decide_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_do_update</bpmn:outgoing>
+      <bpmn:outgoing>f_skip_exists</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:endEvent id="end_skipped" name="Skipped: Already Exists">
+      <bpmn:incoming>f_skip_exists</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:exclusiveGateway id="gw_route_merge" name="Route Merge">
+      <bpmn:incoming>f_do_update</bpmn:incoming>
+      <bpmn:incoming>f_not_exists</bpmn:incoming>
+      <bpmn:outgoing>f_to_route</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <!-- PHASE 4: ROUTE TO CORRECT STORAGE SYSTEM -->
+    <bpmn:exclusiveGateway id="gw_route" name="Storage Target?" default="f_route_memory">
+      <bpmn:incoming>f_to_route</bpmn:incoming>
+      <bpmn:outgoing>f_route_credential</bpmn:outgoing>
+      <bpmn:outgoing>f_route_notepad</bpmn:outgoing>
+      <bpmn:outgoing>f_route_memory</bpmn:outgoing>
+      <bpmn:outgoing>f_route_workfile</bpmn:outgoing>
+      <bpmn:outgoing>f_route_entity</bpmn:outgoing>
+      <bpmn:outgoing>f_route_procedure</bpmn:outgoing>
+      <bpmn:outgoing>f_route_automemory</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <!-- Route 1: Credential Vault -->
+    <bpmn:scriptTask id="store_credential" name="[MCP] set_secret(key, value, project)" scriptFormat="python">
+      <bpmn:incoming>f_route_credential</bpmn:incoming>
+      <bpmn:outgoing>f_cred_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Calls set_secret(secret_key, secret_value, project)
+# Persists in Windows Credential Manager forever
+# Also stores as session_fact for immediate use
+storage_target = "credential_vault"
+storage_tool = "set_secret"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- Route 2: Notepad (session facts) -->
+    <bpmn:scriptTask id="store_notepad" name="[MCP] store_session_fact(key, value, type)" scriptFormat="python">
+      <bpmn:incoming>f_route_notepad</bpmn:incoming>
+      <bpmn:outgoing>f_notepad_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Calls store_session_fact(fact_key, fact_value, fact_type)
+# Survives compaction, gone after session
+# Types: config, endpoint, decision, note, data, reference
+storage_target = "notepad"
+storage_tool = "store_session_fact"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- Route 3: Memory (knowledge DB) -->
+    <bpmn:scriptTask id="store_memory" name="[MCP] remember(content, memory_type)" scriptFormat="python">
+      <bpmn:incoming>f_route_memory</bpmn:incoming>
+      <bpmn:outgoing>f_memory_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Calls remember(content, memory_type)
+# Auto-routes tier, dedup, quality gate (>=80 chars)
+# Types: learned, pattern, gotcha, preference, fact, procedure, decision
+# NOT for: credentials, task acks, progress, OData entities
+storage_target = "memory"
+storage_tool = "remember"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- Route 4: Filing Cabinet (workfiles) -->
+    <bpmn:scriptTask id="store_workfile" name="[MCP] stash(component, title, content)" scriptFormat="python">
+      <bpmn:incoming>f_route_workfile</bpmn:incoming>
+      <bpmn:outgoing>f_workfile_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Calls stash(component, title, content)
+# UPSERT on (project, component, title)
+# Types: notes, findings, questions, approach, investigation, reference
+# Use mode="append" for incremental additions
+storage_target = "filing_cabinet"
+storage_tool = "stash"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- Route 5: Reference Library (entity catalog) -->
+    <bpmn:scriptTask id="store_entity" name="[MCP] catalog(entity_type, properties)" scriptFormat="python">
+      <bpmn:incoming>f_route_entity</bpmn:incoming>
+      <bpmn:outgoing>f_entity_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Calls catalog(entity_type, properties)
+# Types: odata_entity, api_endpoint, domain_concept, book, etc.
+# Validated against entity_types.json_schema
+# Auto-dedup by type + key properties
+storage_target = "reference_library"
+storage_tool = "catalog"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- Route 6: Skill or BPMN -->
+    <bpmn:userTask id="store_procedure" name="[CLAUDE] Create Skill or BPMN Process Model">
+      <bpmn:incoming>f_route_procedure</bpmn:incoming>
+      <bpmn:outgoing>f_procedure_to_validate</bpmn:outgoing>
+    </bpmn:userTask>
+    <!--
+      Procedures: Skill (.claude/skills/) for Claude executable procedures,
+      BPMN (processes/) for workflow models. NOT vault markdown.
+    -->
+    <!-- Route 7: Auto Memory (.md file) -->
+    <bpmn:scriptTask id="store_automemory" name="[AUTOMEMORY] Write .md File + Update MEMORY.md Index" scriptFormat="python">
+      <bpmn:incoming>f_route_automemory</bpmn:incoming>
+      <bpmn:outgoing>f_automemory_to_validate</bpmn:outgoing>
+      <bpmn:script>
+# Write .md file with frontmatter (name, description, type)
+# Update MEMORY.md index with one-line pointer
+# Types: user, feedback, project, reference
+storage_target = "auto_memory"
+storage_tool = "write_md_file"
+store_success = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <!-- PHASE 5: VALIDATE AND END -->
+    <bpmn:exclusiveGateway id="gw_validate_merge" name="Validate Merge">
+      <bpmn:incoming>f_cred_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_notepad_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_memory_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_workfile_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_entity_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_procedure_to_validate</bpmn:incoming>
+      <bpmn:incoming>f_automemory_to_validate</bpmn:incoming>
+      <bpmn:outgoing>f_validate_to_gw</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:exclusiveGateway id="gw_success" name="Storage Succeeded?" default="f_store_failed">
+      <bpmn:incoming>f_validate_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_store_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_store_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:endEvent id="end_success" name="Stored Successfully">
+      <bpmn:incoming>f_store_ok</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:endEvent id="end_failed" name="Storage Failed">
+      <bpmn:incoming>f_store_failed</bpmn:incoming>
+    </bpmn:endEvent>
+    <!-- SEQUENCE FLOWS -->
+    <!-- Phase 1: Classification -->
+    <bpmn:sequenceFlow id="f_start_to_classify" sourceRef="start" targetRef="classify_content"/>
+    <bpmn:sequenceFlow id="f_classify_to_gw" sourceRef="classify_content" targetRef="gw_pre_classified"/>
+    <bpmn:sequenceFlow id="f_already_classified" sourceRef="gw_pre_classified" targetRef="gw_classify_merge">
+      <bpmn:conditionExpression>content_type != "" and content_type is not None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_needs_classification" sourceRef="gw_pre_classified" targetRef="auto_classify"/>
+    <bpmn:sequenceFlow id="f_auto_classify_to_merge" sourceRef="auto_classify" targetRef="gw_classify_merge"/>
+    <bpmn:sequenceFlow id="f_merge_to_antipattern" sourceRef="gw_classify_merge" targetRef="check_antipattern"/>
+    <!-- Phase 2: Anti-pattern check -->
+    <bpmn:sequenceFlow id="f_antipattern_to_gw" sourceRef="check_antipattern" targetRef="gw_antipattern"/>
+    <bpmn:sequenceFlow id="f_antipattern_block" sourceRef="gw_antipattern" targetRef="end_blocked">
+      <bpmn:conditionExpression>antipattern_detected == True and corrected_content_type == "BLOCK"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_antipattern_redirect" sourceRef="gw_antipattern" targetRef="gw_after_antipattern">
+      <bpmn:conditionExpression>antipattern_detected == True and corrected_content_type != "BLOCK"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_antipattern" sourceRef="gw_antipattern" targetRef="gw_after_antipattern"/>
+    <bpmn:sequenceFlow id="f_to_check_first" sourceRef="gw_after_antipattern" targetRef="check_first"/>
+    <!-- Phase 3: Check-first -->
+    <bpmn:sequenceFlow id="f_check_first_to_gw" sourceRef="check_first" targetRef="gw_already_exists"/>
+    <bpmn:sequenceFlow id="f_exists_update" sourceRef="gw_already_exists" targetRef="decide_update">
+      <bpmn:conditionExpression>already_exists == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_exists" sourceRef="gw_already_exists" targetRef="gw_route_merge"/>
+    <bpmn:sequenceFlow id="f_decide_to_gw" sourceRef="decide_update" targetRef="gw_update_decision"/>
+    <bpmn:sequenceFlow id="f_do_update" sourceRef="gw_update_decision" targetRef="gw_route_merge">
+      <bpmn:conditionExpression>update_existing == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_skip_exists" sourceRef="gw_update_decision" targetRef="end_skipped"/>
+    <bpmn:sequenceFlow id="f_to_route" sourceRef="gw_route_merge" targetRef="gw_route"/>
+    <!-- Phase 4: Route to storage -->
+    <bpmn:sequenceFlow id="f_route_credential" sourceRef="gw_route" targetRef="store_credential">
+      <bpmn:conditionExpression>corrected_content_type == "credential"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_notepad" sourceRef="gw_route" targetRef="store_notepad">
+      <bpmn:conditionExpression>corrected_content_type in ["config", "endpoint", "decision_short"]</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_memory" sourceRef="gw_route" targetRef="store_memory"/>
+    <bpmn:sequenceFlow id="f_route_workfile" sourceRef="gw_route" targetRef="store_workfile">
+      <bpmn:conditionExpression>corrected_content_type == "working_notes"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_entity" sourceRef="gw_route" targetRef="store_entity">
+      <bpmn:conditionExpression>corrected_content_type == "structured_data"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_procedure" sourceRef="gw_route" targetRef="store_procedure">
+      <bpmn:conditionExpression>corrected_content_type == "procedure"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_automemory" sourceRef="gw_route" targetRef="store_automemory">
+      <bpmn:conditionExpression>corrected_content_type == "auto_memory"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <!-- Phase 5: Validate -->
+    <bpmn:sequenceFlow id="f_cred_to_validate" sourceRef="store_credential" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_notepad_to_validate" sourceRef="store_notepad" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_memory_to_validate" sourceRef="store_memory" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_workfile_to_validate" sourceRef="store_workfile" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_entity_to_validate" sourceRef="store_entity" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_procedure_to_validate" sourceRef="store_procedure" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_automemory_to_validate" sourceRef="store_automemory" targetRef="gw_validate_merge"/>
+    <bpmn:sequenceFlow id="f_validate_to_gw" sourceRef="gw_validate_merge" targetRef="gw_success"/>
+    <bpmn:sequenceFlow id="f_store_ok" sourceRef="gw_success" targetRef="end_success">
+      <bpmn:conditionExpression>store_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_store_failed" sourceRef="gw_success" targetRef="end_failed"/>
+  </bpmn:process>
+  <!-- DIAGRAM -->
+  <bpmndi:BPMNDiagram id="BPMNDiagram_SR">
+    <bpmndi:BPMNPlane id="BPMNPlane_SR" bpmnElement="storage_routing">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>

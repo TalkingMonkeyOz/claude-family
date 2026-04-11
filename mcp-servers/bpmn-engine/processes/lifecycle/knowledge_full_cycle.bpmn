@@ -21,11 +21,12 @@
         4. Conversation mining: extract_conversation → extract_insights → auto-create entries
         5. Knowledge relations: link_knowledge between entries (graph structure)
 
-      Retrieval Paths:
-        1. RAG (vault): UserPromptSubmit hook → classify → Voyage AI query → inject context
-        2. Direct search: recall_knowledge (semantic search with filters)
+      Retrieval Paths (DB-first priority):
+        1. Direct search: recall_memories (semantic search, primary source)
+        2. Entity catalog: recall_entities (structured data search)
         3. Book search: recall_book_reference (semantic search over book concepts)
         4. Graph traversal: get_related_knowledge (follow typed edges)
+        5. Vault RAG: UserPromptSubmit hook (human docs, supplementary)
 
       Feedback Loop:
         - mark_knowledge_applied(success=True/False) adjusts confidence_level
