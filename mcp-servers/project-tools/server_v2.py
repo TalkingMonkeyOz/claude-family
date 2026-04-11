@@ -5262,6 +5262,40 @@ def _get_current_session_id() -> str | None:
     return os.environ.get('CLAUDE_SESSION_ID')
 
 
+def _parse_bpmn_header_comments(file_path: str) -> dict:
+    """Parse deployment_target and model_version from BPMN XML header comments.
+
+    Looks for comments like:
+        <!-- Deployment: claude-family (Windows local) -->
+        <!-- Version: 1.0 -->
+
+    Returns dict with 'deployment_target' and 'model_version' (with defaults).
+    """
+    deployment_target = "all"
+    model_version = "1.0"
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            # Only scan the first 2KB for header comments
+            header = f.read(2048)
+        # Parse deployment comment
+        deploy_match = re.search(r"<!--\s*Deployment:\s*(.+?)\s*-->", header)
+        if deploy_match:
+            raw = deploy_match.group(1).strip().lower()
+            if any(kw in raw for kw in ("claude-family", "windows local")):
+                deployment_target = "claude-family-local"
+            elif any(kw in raw for kw in ("metis", "linux")):
+                deployment_target = "metis-linux"
+            else:
+                deployment_target = "all"
+        # Parse version comment
+        version_match = re.search(r"<!--\s*Version:\s*(.+?)\s*-->", header)
+        if version_match:
+            model_version = version_match.group(1).strip()
+    except Exception:
+        pass  # Return defaults on any read error
+    return {"deployment_target": deployment_target, "model_version": model_version}
+
+
 def _parse_bpmn_file(file_path: str) -> dict | None:
     """Parse a BPMN file and extract process metadata, elements, and flows."""
     try:
@@ -5313,6 +5347,9 @@ def _parse_bpmn_file(file_path: str) -> dict | None:
 
         level, category = _infer_level_category(process_id, file_path)
 
+        # Parse deployment_target and model_version from header comments
+        header_meta = _parse_bpmn_header_comments(file_path)
+
         return {
             "process_id": process_id,
             "process_name": process_name,
@@ -5321,6 +5358,8 @@ def _parse_bpmn_file(file_path: str) -> dict | None:
             "description": description,
             "elements": elements,
             "flows": flows,
+            "deployment_target": header_meta["deployment_target"],
+            "model_version": header_meta["model_version"],
         }
     except Exception:
         return None
@@ -5420,8 +5459,9 @@ def sync_bpmn_processes(
                 INSERT INTO claude.bpmn_processes
                     (process_id, project_name, file_path, process_name, level, category,
                      description, elements, flows, file_hash, embedding,
+                     deployment_target, model_version,
                      created_by_session, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (process_id) DO UPDATE SET
                     project_name = EXCLUDED.project_name,
                     file_path = EXCLUDED.file_path,
@@ -5433,6 +5473,8 @@ def sync_bpmn_processes(
                     flows = EXCLUDED.flows,
                     file_hash = EXCLUDED.file_hash,
                     embedding = EXCLUDED.embedding,
+                    deployment_target = EXCLUDED.deployment_target,
+                    model_version = EXCLUDED.model_version,
                     created_by_session = COALESCE(claude.bpmn_processes.created_by_session, EXCLUDED.created_by_session),
                     updated_at = NOW()
             """, (
@@ -5441,6 +5483,7 @@ def sync_bpmn_processes(
                 json.dumps(parsed["elements"]), json.dumps(parsed["flows"]),
                 file_hash,
                 str(embedding) if embedding else None,
+                parsed["deployment_target"], parsed["model_version"],
                 _get_current_session_id(),
             ))
 
