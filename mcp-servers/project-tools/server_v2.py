@@ -4467,6 +4467,12 @@ from server import (  # noqa: E402
     tool_recall_memories,
     tool_remember,
     tool_consolidate_memories,
+    tool_list_memories,
+    tool_update_memory,
+    tool_archive_memory,
+    tool_merge_memories,
+    tool_archive_workfile,
+    tool_delete_workfile,
 )
 
 
@@ -4899,6 +4905,138 @@ def consolidate_memories(
         trigger,
         project_name or None,
     ))
+
+
+@mcp.tool()
+def list_memories(
+    project: str = "",
+    tier: str = "",
+    memory_type: str = "",
+    include_archived: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Browse stored memories with filters. Returns metadata, not full content.
+
+    Use when: Auditing what memories exist for a project, finding duplicates,
+    or reviewing what knowledge is stored before cleanup.
+    Returns: {success, project, total_count, memories: [{knowledge_id, title,
+              tier, memory_type, confidence, status, created_at, last_accessed_at,
+              description_preview}]}.
+
+    Args:
+        project: Project name. Defaults to current directory.
+        tier: Filter by tier: 'mid' or 'long'. Empty = all.
+        memory_type: Filter by type (learned, pattern, gotcha, etc). Empty = all.
+        include_archived: If True, include archived memories. Default False.
+        limit: Max results (default 50, max 200).
+        offset: Skip first N results for pagination.
+    """
+    return _run_async(tool_list_memories(project or None, tier, memory_type, include_archived, min(limit, 200), offset))
+
+
+@mcp.tool()
+def update_memory(
+    memory_id: str,
+    content: str = "",
+    title: str = "",
+    tier: str = "",
+    memory_type: str = "",
+) -> dict:
+    """Update an existing memory's content, title, tier, or type. Re-embeds if content changes.
+
+    Use when: Fixing incorrect information in a stored memory, updating stale
+    content, or reclassifying a memory's tier or type.
+    Returns: {success, memory_id, updated_fields, re_embedded}.
+
+    Args:
+        memory_id: UUID of the memory to update.
+        content: New description/content. If provided, re-embeds.
+        title: New title. Empty = no change.
+        tier: New tier ('mid' or 'long'). Empty = no change.
+        memory_type: New type. Empty = no change.
+    """
+    return _run_async(tool_update_memory(memory_id, content, title, tier, memory_type))
+
+
+@mcp.tool()
+def archive_memory(
+    memory_id: str,
+    reason: str = "",
+) -> dict:
+    """Soft-delete a memory by setting status to 'archived'. Excluded from recall by default.
+
+    Use when: A memory is wrong, outdated, or superseded. Archived memories
+    are not permanently deleted — the background curator handles purging.
+    Returns: {success, memory_id, title, previous_status, reason}.
+
+    Args:
+        memory_id: UUID of the memory to archive.
+        reason: Why this memory is being archived (stored for audit trail).
+    """
+    return _run_async(tool_archive_memory(memory_id, reason))
+
+
+@mcp.tool()
+def merge_memories(
+    keep_id: str,
+    archive_id: str,
+    reason: str = "",
+) -> dict:
+    """Merge two memories: keep the better one, archive the other, preserve relations.
+
+    Use when: Two memories contain overlapping or duplicate information.
+    The kept memory's content is unchanged. The archived memory's relations
+    are transferred to the kept memory before archiving.
+    Returns: {success, kept_id, archived_id, relations_transferred}.
+
+    Args:
+        keep_id: UUID of the memory to keep.
+        archive_id: UUID of the memory to archive (the duplicate/weaker one).
+        reason: Why these are being merged.
+    """
+    return _run_async(tool_merge_memories(keep_id, archive_id, reason))
+
+
+@mcp.tool()
+def archive_workfile(
+    component: str,
+    title: str,
+    project: str = "",
+) -> dict:
+    """Mark a workfile as inactive (soft-delete). Excluded from unstash by default.
+
+    Use when: A workfile is stale, superseded, or no longer relevant.
+    The file remains in DB but is_active=False hides it from normal queries.
+    Returns: {success, component, title, previous_state}.
+
+    Args:
+        component: Component/drawer name.
+        title: Workfile title within component.
+        project: Project name. Defaults to current directory.
+    """
+    return _run_async(tool_archive_workfile(component, title, project or None))
+
+
+@mcp.tool()
+def delete_workfile(
+    component: str,
+    title: str,
+    project: str = "",
+) -> dict:
+    """Permanently delete a workfile. Cannot be undone.
+
+    Use when: A workfile should be completely removed (not just archived).
+    Prefer archive_workfile for most cases — only hard-delete when the
+    content is genuinely wrong or harmful.
+    Returns: {success, component, title, deleted}.
+
+    Args:
+        component: Component/drawer name.
+        title: Workfile title within component.
+        project: Project name. Defaults to current directory.
+    """
+    return _run_async(tool_delete_workfile(component, title, project or None))
 
 
 @mcp.tool()

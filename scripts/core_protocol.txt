@@ -4,14 +4,15 @@ STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
    SCOPE: Prefix every task with [S] (session — dies at session end: reminders, research, coordination) or [P] (persistent — survives sessions: bugs, features, ideas, real work). Default [S] if unsure.
 2. Verify before claiming - read files, query DB, do research. Never guess.
 3. STORAGE: 6 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
-   - **Notepad** (store_session_fact) — credentials, decisions, findings. This session only.
+   - **Credential Vault** (set_secret/get_secret) — API keys, tokens, passwords. Persists forever across ALL sessions. Check get_secret() BEFORE asking the user.
+   - **Notepad** (store_session_fact) — endpoints, decisions, findings. This session only.
    - **Memory** (remember) — patterns, gotchas, decisions for FUTURE sessions. Min 80 chars. NOT for task acks, progress, handoffs.
    - **Filing Cabinet** (stash) — component working papers across sessions. unstash() to reload.
    - **Reference Library** (catalog/recall_entities) — structured data (APIs, schemas, entities).
    - **Skills/BPMN** — procedures and processes. NOT vault markdown.
-   - **Vault** — John's documentation only. NOT for Claude's operational knowledge.
 4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
 5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
 6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
-7. CHECK TOOLS: project-tools has 60+ tools. recall_memories() before complex tasks. Don't build what already exists.
+7. RECALL FIRST: Before starting work, call recall_memories() + recall_entities() to load domain knowledge. This is your primary knowledge source — DB-stored knowledge from all past sessions. Don't re-discover what's already known. project-tools has 60+ tools — don't build what already exists.
 8. CORRECT: When you discover stored knowledge is wrong — whether through correction, API response, or observation — IMMEDIATELY call remember() with the correction. Tag it with the domain_concept name if one exists. The test: would a different Claude instance hit this same problem? Yes = remember(). No = skip.
+9. MAINTAIN: You own your knowledge quality. When recall_memories or remember returns a maintenance_hint, act on it. Use list_memories to audit, update_memory to fix, archive_memory to remove stale entries, merge_memories to consolidate duplicates. Never use raw SQL — all operations through MCP tools. Don't leave wrong knowledge for the next session.

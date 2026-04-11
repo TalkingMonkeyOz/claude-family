@@ -35,6 +35,21 @@ When a credential is needed:
 
 When you complete significant research on a topic that spans multiple storage systems, create a `domain_concept` entity via `catalog("domain_concept", {...})`.
 
+## Maintain Your Knowledge (MANDATORY)
+
+You are responsible for the quality of your knowledge stores. Don't leave wrong, stale, or duplicate entries for the next session.
+
+**When you discover a problem** (wrong memory, duplicate, stale entry):
+- `list_memories(project)` — browse what's stored, spot issues
+- `update_memory(id, content)` — fix incorrect content (re-embeds automatically)
+- `archive_memory(id, reason)` — soft-delete wrong/stale entries
+- `merge_memories(keep_id, archive_id)` — consolidate duplicates
+- `archive_workfile(component, title)` — retire stale workfiles
+
+**When to maintain**: When recall_memories or remember returns a `maintenance_hint`, act on it. Don't ignore it.
+
+**Never use SQL** to fix knowledge. All operations go through MCP tools.
+
 ## Anti-Patterns
 
 - `store_session_fact("api_key", "sk-...", "credential")` → use `set_secret("api_key", "sk-...")` — session facts die, vault persists

@@ -1519,6 +1519,53 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _quick_knowledge_health(project_name: str, conn) -> Optional[Dict]:
+    """Fast health check for a project's knowledge. Returns hint dict or None if healthy.
+
+    Runs two cheap COUNT queries against the existing connection.
+    Called from remember() and recall_memories() to nudge maintenance.
+    """
+    try:
+        cur = conn.cursor()
+
+        # Stale: not accessed in 90+ days, low confidence, active only
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM claude.knowledge
+            WHERE COALESCE(status, 'active') = 'active'
+              AND (applies_to_projects IS NULL OR cardinality(applies_to_projects) = 0 OR %s = ANY(applies_to_projects))
+              AND COALESCE(last_accessed_at, created_at) < NOW() - INTERVAL '90 days'
+              AND COALESCE(confidence_level, 50) < 60
+        """, (project_name,))
+        stale = cur.fetchone()['cnt']
+
+        # Total active for this project
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM claude.knowledge
+            WHERE COALESCE(status, 'active') = 'active'
+              AND (applies_to_projects IS NULL OR cardinality(applies_to_projects) = 0 OR %s = ANY(applies_to_projects))
+        """, (project_name,))
+        total = cur.fetchone()['cnt']
+
+        cur.close()
+
+        hints = []
+        if stale >= 5:
+            hints.append(f"{stale} stale memories (90+ days, low confidence)")
+        if total > 100:
+            hints.append(f"{total} total memories — consider reviewing with list_memories()")
+
+        if hints:
+            return {
+                "maintenance_hint": "Knowledge health: " + "; ".join(hints) + ". Use list_memories/archive_memory/merge_memories to clean up.",
+                "stale_count": stale,
+                "total_count": total,
+            }
+        return None
+
+    except Exception:
+        return None  # Health check is best-effort, never block the main tool
+
+
 async def tool_recall_memories(
     query: str,
     budget: int = 1000,
@@ -1612,6 +1659,7 @@ async def tool_recall_memories(
             FROM claude.knowledge
             WHERE embedding IS NOT NULL
               AND tier = 'mid'
+              AND COALESCE(status, 'active') = 'active'
               AND 1 - (embedding <=> %s::vector) >= 0.4
               AND (applies_to_projects IS NULL OR cardinality(applies_to_projects) = 0 OR %s = ANY(applies_to_projects))
             ORDER BY embedding <=> %s::vector
@@ -1656,6 +1704,7 @@ async def tool_recall_memories(
             FROM claude.knowledge k
             WHERE k.embedding IS NOT NULL
               AND k.tier = 'long'
+              AND COALESCE(k.status, 'active') = 'active'
               AND 1 - (k.embedding <=> %s::vector) >= 0.35
               AND (k.applies_to_projects IS NULL OR cardinality(k.applies_to_projects) = 0 OR %s = ANY(k.applies_to_projects))
             ORDER BY k.embedding <=> %s::vector
@@ -1703,6 +1752,7 @@ async def tool_recall_memories(
                     (kr.from_knowledge_id = k.knowledge_id AND kr.to_knowledge_id = ANY(%s::uuid[]))
                 )
                 WHERE k.tier IN ('mid', 'long')
+                  AND COALESCE(k.status, 'active') = 'active'
                   AND kr.strength >= 0.3
                 LIMIT 5
             """, (long_seed_ids, long_seed_ids))
@@ -1746,7 +1796,7 @@ async def tool_recall_memories(
 
         total_tokens = short_tokens_used + mid_tokens_used + long_tokens_used
 
-        return {
+        result = {
             "query": query,
             "query_type": query_type,
             "total_budget": budget,
@@ -1755,6 +1805,13 @@ async def tool_recall_memories(
             "tier_counts": tier_counts,
             "memories": memories,
         }
+
+        # Maintenance nudge (best-effort, never blocks)
+        health = _quick_knowledge_health(project_name, conn)
+        if health:
+            result["maintenance_hint"] = health["maintenance_hint"]
+
+        return result
 
     except Exception as e:
         return {"error": f"recall_memories failed: {str(e)}"}
@@ -1873,6 +1930,7 @@ async def tool_remember(
                 FROM claude.knowledge
                 WHERE embedding IS NOT NULL
                   AND tier = %s
+                  AND COALESCE(status, 'active') = 'active'
                   AND 1 - (embedding <=> %s::vector) > 0.75
                 ORDER BY similarity DESC
                 LIMIT 1
@@ -1915,6 +1973,7 @@ async def tool_remember(
                     1 - (embedding <=> %s::vector) as similarity
                 FROM claude.knowledge
                 WHERE embedding IS NOT NULL
+                  AND COALESCE(status, 'active') = 'active'
                   AND 1 - (embedding <=> %s::vector) > 0.75
                   AND tier IN ('mid', 'long')
                 LIMIT 3
@@ -1988,7 +2047,7 @@ async def tool_remember(
         cur.close()
 
         action = "contradiction_flagged" if contradiction_flag else "created"
-        return {
+        result = {
             "success": True,
             "memory_id": new_id,
             "tier": tier,
@@ -1999,6 +2058,13 @@ async def tool_remember(
                 " [CONTRADICTION FLAG: similar high-confidence entry exists]" if contradiction_flag else ""
             ),
         }
+
+        # Maintenance nudge (best-effort, never blocks)
+        health = _quick_knowledge_health(project_name, conn)
+        if health:
+            result["maintenance_hint"] = health["maintenance_hint"]
+
+        return result
 
     except Exception as e:
         return {"error": f"remember failed: {str(e)}"}
@@ -2155,6 +2221,448 @@ async def tool_consolidate_memories(
 
     except Exception as e:
         return {"error": f"consolidate_memories failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_list_memories(
+    project_name: Optional[str] = None,
+    tier: str = "",
+    memory_type: str = "",
+    include_archived: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict:
+    if not project_name:
+        project_name = os.path.basename(os.getcwd())
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        where_parts = []
+        params = []
+
+        # Project filter
+        where_parts.append("(applies_to_projects IS NULL OR cardinality(applies_to_projects) = 0 OR %s = ANY(applies_to_projects))")
+        params.append(project_name)
+
+        # Status filter
+        if not include_archived:
+            where_parts.append("COALESCE(status, 'active') = 'active'")
+
+        # Tier filter
+        if tier:
+            where_parts.append("tier = %s")
+            params.append(tier)
+
+        # Type filter
+        if memory_type:
+            where_parts.append("knowledge_type = %s")
+            params.append(memory_type)
+
+        where_clause = " AND ".join(where_parts)
+
+        # Get total count
+        cur.execute(f"SELECT COUNT(*) as cnt FROM claude.knowledge WHERE {where_clause}", params)
+        total = cur.fetchone()['cnt']
+
+        # Get page
+        cur.execute(f"""
+            SELECT knowledge_id::text, title, LEFT(description, 200) as description_preview,
+                   knowledge_type, tier, confidence_level, COALESCE(status, 'active') as status,
+                   created_at, last_accessed_at, access_count
+            FROM claude.knowledge
+            WHERE {where_clause}
+            ORDER BY COALESCE(last_accessed_at, created_at) DESC
+            LIMIT %s OFFSET %s
+        """, params + [limit, offset])
+
+        rows = cur.fetchall()
+        cur.close()
+
+        memories = [{
+            "knowledge_id": r['knowledge_id'],
+            "title": r['title'],
+            "description_preview": r['description_preview'],
+            "memory_type": r['knowledge_type'],
+            "tier": r['tier'],
+            "confidence": r['confidence_level'],
+            "status": r['status'],
+            "created_at": str(r['created_at']) if r['created_at'] else None,
+            "last_accessed_at": str(r['last_accessed_at']) if r['last_accessed_at'] else None,
+            "access_count": r['access_count'],
+        } for r in rows]
+
+        return {
+            "success": True,
+            "project": project_name,
+            "total_count": total,
+            "showing": len(memories),
+            "offset": offset,
+            "memories": memories,
+        }
+    except Exception as e:
+        return {"error": f"list_memories failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_update_memory(
+    memory_id: str,
+    content: str = "",
+    title: str = "",
+    tier: str = "",
+    memory_type: str = "",
+) -> Dict:
+    if not memory_id:
+        return {"error": "memory_id is required"}
+
+    updates = []
+    params = []
+    updated_fields = []
+
+    if content:
+        updates.append("description = %s")
+        params.append(content)
+        updated_fields.append("content")
+
+    if title:
+        updates.append("title = %s")
+        params.append(title)
+        updated_fields.append("title")
+
+    if tier:
+        if tier not in ('mid', 'long'):
+            return {"error": "tier must be 'mid' or 'long'"}
+        updates.append("tier = %s")
+        params.append(tier)
+        updated_fields.append("tier")
+
+    if memory_type:
+        updates.append("knowledge_type = %s")
+        params.append(memory_type)
+        updated_fields.append("memory_type")
+
+    if not updates:
+        return {"error": "No fields to update. Provide at least one of: content, title, tier, memory_type"}
+
+    # Re-embed if content changed
+    re_embedded = False
+    if content:
+        embedding = generate_embedding(content)
+        if embedding:
+            updates.append("embedding = %s::vector")
+            params.append(embedding)
+            re_embedded = True
+
+    updates.append("last_accessed_at = NOW()")
+    params.append(memory_id)
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Verify memory exists
+        cur.execute("SELECT title, COALESCE(status, 'active') as status FROM claude.knowledge WHERE knowledge_id = %s::uuid", (memory_id,))
+        existing = cur.fetchone()
+        if not existing:
+            return {"error": f"Memory {memory_id} not found"}
+
+        # Update
+        set_clause = ", ".join(updates)
+        cur.execute(f"""
+            UPDATE claude.knowledge SET {set_clause}
+            WHERE knowledge_id = %s::uuid
+            RETURNING knowledge_id::text, title
+        """, params)
+
+        result = cur.fetchone()
+
+        # Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
+            VALUES ('knowledge', %s::uuid, %s, %s, 'update_memory', 'mcp_tool', %s::jsonb)
+        """, (memory_id, existing['status'], existing['status'],
+              json.dumps({"updated_fields": updated_fields, "re_embedded": re_embedded})))
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "title": result['title'] if result else existing['title'],
+            "updated_fields": updated_fields,
+            "re_embedded": re_embedded,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"update_memory failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_archive_memory(
+    memory_id: str,
+    reason: str = "",
+) -> Dict:
+    if not memory_id:
+        return {"error": "memory_id is required"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Get current state
+        cur.execute("""
+            SELECT title, COALESCE(status, 'active') as status, tier
+            FROM claude.knowledge WHERE knowledge_id = %s::uuid
+        """, (memory_id,))
+        existing = cur.fetchone()
+        if not existing:
+            return {"error": f"Memory {memory_id} not found"}
+
+        if existing['status'] == 'archived':
+            return {"success": True, "memory_id": memory_id, "title": existing['title'],
+                    "message": "Already archived", "previous_status": "archived"}
+
+        # Archive it
+        cur.execute("""
+            UPDATE claude.knowledge
+            SET status = 'archived',
+                archived_at = NOW(),
+                archived_reason = %s,
+                archived_by = 'archive_memory'
+            WHERE knowledge_id = %s::uuid
+        """, (reason or 'Manual archive via tool', memory_id))
+
+        # Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
+            VALUES ('knowledge', %s::uuid, 'active', 'archived', 'archive_memory', 'mcp_tool', %s::jsonb)
+        """, (memory_id, json.dumps({"reason": reason, "title": existing['title'], "tier": existing['tier']})))
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "memory_id": memory_id,
+            "title": existing['title'],
+            "previous_status": "active",
+            "reason": reason or 'Manual archive via tool',
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"archive_memory failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_merge_memories(
+    keep_id: str,
+    archive_id: str,
+    reason: str = "",
+) -> Dict:
+    if not keep_id or not archive_id:
+        return {"error": "Both keep_id and archive_id are required"}
+    if keep_id == archive_id:
+        return {"error": "keep_id and archive_id must be different"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        # Verify both exist
+        cur.execute("""
+            SELECT knowledge_id::text, title, COALESCE(status, 'active') as status
+            FROM claude.knowledge
+            WHERE knowledge_id IN (%s::uuid, %s::uuid)
+        """, (keep_id, archive_id))
+        rows = {r['knowledge_id']: r for r in cur.fetchall()}
+
+        if keep_id not in rows:
+            return {"error": f"Keep memory {keep_id} not found"}
+        if archive_id not in rows:
+            return {"error": f"Archive memory {archive_id} not found"}
+
+        # Transfer relations from archive_id to keep_id
+        # Relations where archive_id is the source
+        cur.execute("""
+            UPDATE claude.knowledge_relations
+            SET from_knowledge_id = %s::uuid
+            WHERE from_knowledge_id = %s::uuid
+              AND to_knowledge_id != %s::uuid
+        """, (keep_id, archive_id, keep_id))
+        transferred_from = cur.rowcount
+
+        # Relations where archive_id is the target
+        cur.execute("""
+            UPDATE claude.knowledge_relations
+            SET to_knowledge_id = %s::uuid
+            WHERE to_knowledge_id = %s::uuid
+              AND from_knowledge_id != %s::uuid
+        """, (keep_id, archive_id, keep_id))
+        transferred_to = cur.rowcount
+
+        # Delete any self-referencing relations that may have been created
+        cur.execute("""
+            DELETE FROM claude.knowledge_relations
+            WHERE from_knowledge_id = %s::uuid AND to_knowledge_id = %s::uuid
+        """, (keep_id, keep_id))
+
+        # Archive the duplicate
+        merge_reason = reason or f"Merged into {keep_id} ({rows[keep_id]['title']})"
+        cur.execute("""
+            UPDATE claude.knowledge
+            SET status = 'archived',
+                archived_at = NOW(),
+                archived_reason = %s,
+                archived_by = 'merge_memories'
+            WHERE knowledge_id = %s::uuid
+        """, (merge_reason, archive_id))
+
+        # Boost confidence on the kept entry
+        cur.execute("""
+            UPDATE claude.knowledge
+            SET confidence_level = LEAST(confidence_level + 5, 100),
+                last_accessed_at = NOW()
+            WHERE knowledge_id = %s::uuid
+        """, (keep_id,))
+
+        # Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
+            VALUES ('knowledge', %s::uuid, 'active', 'merged', 'merge_memories', 'mcp_tool', %s::jsonb)
+        """, (archive_id, json.dumps({
+            "kept_id": keep_id,
+            "kept_title": rows[keep_id]['title'],
+            "archived_title": rows[archive_id]['title'],
+            "relations_transferred": transferred_from + transferred_to,
+            "reason": reason,
+        })))
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "kept_id": keep_id,
+            "kept_title": rows[keep_id]['title'],
+            "archived_id": archive_id,
+            "archived_title": rows[archive_id]['title'],
+            "relations_transferred": transferred_from + transferred_to,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"merge_memories failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_archive_workfile(
+    component: str,
+    title: str,
+    project_name: Optional[str] = None,
+) -> Dict:
+    """Mark a workfile as inactive (soft-delete)."""
+    if not component or not title:
+        return {"error": "component and title are required"}
+
+    project_name = project_name or os.path.basename(os.getcwd())
+    project_id = get_project_id(project_name)
+    if not project_id:
+        return {"error": f"Project '{project_name}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            UPDATE claude.project_workfiles
+            SET is_active = FALSE, updated_at = NOW()
+            WHERE project_id = %s::uuid AND component = %s AND title = %s AND is_active = TRUE
+            RETURNING workfile_id::text
+        """, (project_id, component, title))
+
+        result = cur.fetchone()
+        if not result:
+            return {"error": f"Active workfile '{component}/{title}' not found"}
+
+        # Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, from_status, to_status, changed_by, change_source, metadata)
+            VALUES ('workfile', %s::uuid, 'active', 'archived', 'archive_workfile', 'mcp_tool', %s::jsonb)
+        """, (result['workfile_id'], json.dumps({"component": component, "title": title, "project": project_name})))
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "component": component,
+            "title": title,
+            "previous_state": "active",
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"archive_workfile failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_delete_workfile(
+    component: str,
+    title: str,
+    project_name: Optional[str] = None,
+) -> Dict:
+    """Permanently delete a workfile."""
+    if not component or not title:
+        return {"error": "component and title are required"}
+
+    project_name = project_name or os.path.basename(os.getcwd())
+    project_id = get_project_id(project_name)
+    if not project_id:
+        return {"error": f"Project '{project_name}' not found"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            DELETE FROM claude.project_workfiles
+            WHERE project_id = %s::uuid AND component = %s AND title = %s
+            RETURNING workfile_id::text, is_active
+        """, (project_id, component, title))
+
+        result = cur.fetchone()
+        if not result:
+            return {"error": f"Workfile '{component}/{title}' not found"}
+
+        # Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, to_status, changed_by, change_source, metadata)
+            VALUES ('workfile', %s::uuid, 'deleted', 'delete_workfile', 'mcp_tool', %s::jsonb)
+        """, (result['workfile_id'], json.dumps({"component": component, "title": title, "project": project_name, "was_active": result['is_active']})))
+
+        conn.commit()
+        cur.close()
+
+        return {
+            "success": True,
+            "component": component,
+            "title": title,
+            "deleted": True,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"delete_workfile failed: {str(e)}"}
     finally:
         conn.close()
 
