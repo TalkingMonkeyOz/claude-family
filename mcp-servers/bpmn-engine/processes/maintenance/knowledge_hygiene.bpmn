@@ -1,0 +1,585 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/knowledge-hygiene"
+    id="Definitions_KnowledgeHygiene">
+
+  <bpmn:process id="knowledge_hygiene" name="Knowledge Hygiene: Full Lifecycle (Capture, Retrieve, Maintain, Promote, Decay, Curate)" isExecutable="true">
+
+    <!--
+      Comprehensive knowledge lifecycle process for claude-family (Windows local).
+      Version: 1.0 | Created: 2026-04-11
+
+      Models the ACTUAL system: 11 MCP tools, 7 hooks, 3 background jobs, auto-memory.
+      4 actors indicated by name prefix:
+        [CLAUDE] = Claude instance MCP tool calls
+        [HOOK]   = Automatic hook scripts (session_end, protocol_inject, rag_query, precompact)
+        [JOB]    = Background scheduled jobs (curator, embedder, consolidator)
+        [AUTOMEMORY] = Claude Code built-in MEMORY.md file system
+
+      NOT modeled (separate deployment):
+        Apache AGE graph layer (METIS/Linux, see knowledge_graph_lifecycle.bpmn)
+
+      7 Phases: CAPTURE | RETRIEVE | MAINTAIN | PROMOTE | DECAY | CURATE | EMBED
+
+      Discovered gaps documented inline with GAP markers.
+    -->
+
+    <!-- =============================== -->
+    <!-- ENTRY: Identify Knowledge Action -->
+    <!-- =============================== -->
+    <bpmn:startEvent id="start" name="Knowledge Event">
+      <bpmn:outgoing>f_to_phase</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:exclusiveGateway id="gw_phase" name="Which Phase?" default="f_phase_capture">
+      <bpmn:incoming>f_to_phase</bpmn:incoming>
+      <bpmn:outgoing>f_phase_capture</bpmn:outgoing>
+      <bpmn:outgoing>f_phase_retrieve</bpmn:outgoing>
+      <bpmn:outgoing>f_phase_maintain</bpmn:outgoing>
+      <bpmn:outgoing>f_phase_promote</bpmn:outgoing>
+      <bpmn:outgoing>f_phase_curate</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:sequenceFlow id="f_to_phase" sourceRef="start" targetRef="gw_phase"/>
+
+    <!-- =============================== -->
+    <!-- PHASE 1: CAPTURE                -->
+    <!-- =============================== -->
+    <bpmn:sequenceFlow id="f_phase_capture" sourceRef="gw_phase" targetRef="gw_storage_route"/>
+
+    <bpmn:exclusiveGateway id="gw_storage_route" name="Storage Target?" default="f_route_memory">
+      <bpmn:incoming>f_phase_capture</bpmn:incoming>
+      <bpmn:outgoing>f_route_memory</bpmn:outgoing>
+      <bpmn:outgoing>f_route_fact</bpmn:outgoing>
+      <bpmn:outgoing>f_route_workfile</bpmn:outgoing>
+      <bpmn:outgoing>f_route_entity</bpmn:outgoing>
+      <bpmn:outgoing>f_route_secret</bpmn:outgoing>
+      <bpmn:outgoing>f_route_automemory</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- remember() -->
+    <bpmn:userTask id="capture_remember" name="[CLAUDE] remember(content, memory_type)">
+      <bpmn:incoming>f_route_memory</bpmn:incoming>
+      <bpmn:outgoing>f_rem_to_merge</bpmn:outgoing>
+      <bpmn:documentation>Master memory capture with auto-routing, dedup, and contradiction detection.
+Routes to tier: SHORT (credentials/configs) or MID (learned/facts/decisions) or LONG (patterns/procedures/gotchas).
+Quality gate: rejects content less than 80 chars and junk patterns.
+Dedup: 75%+ similarity triggers merge (keeps stronger, boosts confidence +5).
+Contradiction: flags when new mid-tier conflicts with high-confidence long-tier.
+Auto-links: 0.5-0.85 similarity creates relates_to relations (up to 3).
+Generates Voyage AI embedding.
+Returns maintenance_hint if 5+ stale entries or 100+ total.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_route_memory" sourceRef="gw_storage_route" targetRef="capture_remember"/>
+
+    <!-- store_session_fact() -->
+    <bpmn:userTask id="capture_fact" name="[CLAUDE] store_session_fact(key, value, type)">
+      <bpmn:incoming>f_route_fact</bpmn:incoming>
+      <bpmn:outgoing>f_fact_to_merge</bpmn:outgoing>
+      <bpmn:documentation>Session-scoped notepad. Survives context compaction, dies at session end.
+Types: credential, config, endpoint, decision, note, data, reference.
+Promotable to mid-tier at session end (decisions, references, notes, data with 50+ chars).</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_route_fact" sourceRef="gw_storage_route" targetRef="capture_fact">
+      <bpmn:conditionExpression>storage_target == "session_fact"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- stash() -->
+    <bpmn:userTask id="capture_stash" name="[CLAUDE] stash(component, title, content)">
+      <bpmn:incoming>f_route_workfile</bpmn:incoming>
+      <bpmn:outgoing>f_stash_to_merge</bpmn:outgoing>
+      <bpmn:documentation>Filing cabinet: UPSERT on (project, component, title).
+mode=replace|append. is_pinned=True auto-surfaces at session start + precompact.
+Cross-session persistence. Component-scoped working context.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_route_workfile" sourceRef="gw_storage_route" targetRef="capture_stash">
+      <bpmn:conditionExpression>storage_target == "workfile"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- catalog() -->
+    <bpmn:userTask id="capture_catalog" name="[CLAUDE] catalog(entity_type, properties)">
+      <bpmn:incoming>f_route_entity</bpmn:incoming>
+      <bpmn:outgoing>f_cat_to_merge</bpmn:outgoing>
+      <bpmn:documentation>Structured reference data with schema validation.
+Dedup by type + key properties. Embedding auto-generated.
+Types: odata_entity, api_endpoint, domain_concept, book, etc.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_route_entity" sourceRef="gw_storage_route" targetRef="capture_catalog">
+      <bpmn:conditionExpression>storage_target == "entity_catalog"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- set_secret() -->
+    <bpmn:userTask id="capture_secret" name="[CLAUDE] set_secret(key, value, project)">
+      <bpmn:incoming>f_route_secret</bpmn:incoming>
+      <bpmn:outgoing>f_sec_to_merge</bpmn:outgoing>
+      <bpmn:documentation>Windows Credential Manager. Persists forever across all sessions.
+Also stores as session fact for immediate use this session.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_route_secret" sourceRef="gw_storage_route" targetRef="capture_secret">
+      <bpmn:conditionExpression>storage_target == "credential"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- Auto-memory write -->
+    <bpmn:scriptTask id="capture_automemory" name="[AUTOMEMORY] Write .md File + Update MEMORY.md Index" scriptFormat="python">
+      <bpmn:incoming>f_route_automemory</bpmn:incoming>
+      <bpmn:outgoing>f_am_to_merge</bpmn:outgoing>
+      <bpmn:script>
+# Claude Code built-in: writes file with frontmatter (name, description, type)
+# Updates MEMORY.md index (one line per entry, under 150 chars)
+# Types: user, feedback, project, reference
+# GAP: No deconfliction with DB memory system.
+# Decision: keep both as complementary (auto-memory = cross-project user prefs,
+#           DB memory = project-specific learned knowledge)
+automemory_written = True
+      </bpmn:script>
+      <bpmn:documentation>Parallel file-based system. NOT searched by recall_memories().
+MEMORY.md always loaded into context. 200 line truncation.
+GAP: Same knowledge can exist in both auto-memory and DB with no dedup.
+User decision: acceptable, systems serve different purposes.</bpmn:documentation>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_route_automemory" sourceRef="gw_storage_route" targetRef="capture_automemory">
+      <bpmn:conditionExpression>storage_target == "auto_memory"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="gw_capture_merge" name="Capture Complete">
+      <bpmn:incoming>f_rem_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_fact_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_stash_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_cat_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_sec_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_am_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_capture_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="f_rem_to_merge" sourceRef="capture_remember" targetRef="gw_capture_merge"/>
+    <bpmn:sequenceFlow id="f_fact_to_merge" sourceRef="capture_fact" targetRef="gw_capture_merge"/>
+    <bpmn:sequenceFlow id="f_stash_to_merge" sourceRef="capture_stash" targetRef="gw_capture_merge"/>
+    <bpmn:sequenceFlow id="f_cat_to_merge" sourceRef="capture_catalog" targetRef="gw_capture_merge"/>
+    <bpmn:sequenceFlow id="f_sec_to_merge" sourceRef="capture_secret" targetRef="gw_capture_merge"/>
+    <bpmn:sequenceFlow id="f_am_to_merge" sourceRef="capture_automemory" targetRef="gw_capture_merge"/>
+
+    <!-- Check for maintenance hint after capture -->
+    <bpmn:exclusiveGateway id="gw_maint_hint" name="Maintenance Hint Returned?" default="f_no_hint">
+      <bpmn:incoming>f_capture_done</bpmn:incoming>
+      <bpmn:outgoing>f_has_hint</bpmn:outgoing>
+      <bpmn:outgoing>f_no_hint</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:sequenceFlow id="f_capture_done" sourceRef="gw_capture_merge" targetRef="gw_maint_hint"/>
+
+    <bpmn:userTask id="act_on_hint" name="[CLAUDE] Act on Maintenance Hint (list, archive, merge stale entries)">
+      <bpmn:incoming>f_has_hint</bpmn:incoming>
+      <bpmn:outgoing>f_hint_done</bpmn:outgoing>
+      <bpmn:documentation>GAP IDENTIFIED: This handoff was unmodeled before.
+When remember() or recall_memories() returns maintenance_hint (5+ stale or 100+ total),
+Claude should list_memories, review, and archive/merge as needed.
+This is the self-maintenance feedback loop.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_has_hint" sourceRef="gw_maint_hint" targetRef="act_on_hint">
+      <bpmn:conditionExpression>maintenance_hint_present == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:endEvent id="end_capture" name="Capture Complete">
+      <bpmn:incoming>f_no_hint</bpmn:incoming>
+      <bpmn:incoming>f_hint_done</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_no_hint" sourceRef="gw_maint_hint" targetRef="end_capture"/>
+    <bpmn:sequenceFlow id="f_hint_done" sourceRef="act_on_hint" targetRef="end_capture"/>
+
+    <!-- =============================== -->
+    <!-- PHASE 2: RETRIEVE               -->
+    <!-- =============================== -->
+    <bpmn:sequenceFlow id="f_phase_retrieve" sourceRef="gw_phase" targetRef="gw_retrieve_type">
+      <bpmn:conditionExpression>phase == "retrieve"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="gw_retrieve_type" name="Retrieval Type?" default="f_ret_active">
+      <bpmn:incoming>f_phase_retrieve</bpmn:incoming>
+      <bpmn:outgoing>f_ret_active</bpmn:outgoing>
+      <bpmn:outgoing>f_ret_passive</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Active retrieval: Claude explicitly calls tools -->
+    <bpmn:userTask id="retrieve_active" name="[CLAUDE] recall_memories / recall_entities / unstash / get_secret">
+      <bpmn:incoming>f_ret_active</bpmn:incoming>
+      <bpmn:outgoing>f_ret_active_done</bpmn:outgoing>
+      <bpmn:documentation>Active retrieval via MCP tools:
+- recall_memories(query, budget, query_type): 3-tier search with composite scoring
+  SHORT (20%): session_facts | MID (40%): knowledge | LONG (40%): knowledge + graph walk
+  Scoring: similarity*0.4 + recency*0.3 + access_freq*0.2 + confidence*0.1
+  Updates access_count + last_accessed_at. Returns maintenance_hint.
+- recall_entities(query, entity_type): RRF fusion (vector + BM25)
+- unstash(component, title): Load workfile from filing cabinet
+- get_secret(key, project): Check WCM, fallback session facts, prompt user</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_ret_active" sourceRef="gw_retrieve_type" targetRef="retrieve_active"/>
+
+    <!-- Passive retrieval: Hooks inject context automatically -->
+    <bpmn:scriptTask id="retrieve_passive_protocol" name="[HOOK:protocol_inject] BM25 Keyword Search + Domain Concepts" scriptFormat="python">
+      <bpmn:incoming>f_ret_passive</bpmn:incoming>
+      <bpmn:outgoing>f_protocol_to_rag</bpmn:outgoing>
+      <bpmn:script>
+# Fast path: BM25 keyword search on claude.knowledge (under 20ms)
+# Also searches domain_concepts via keyword, embedding fallback
+# Injects core_protocol.txt + session context cache + pending messages
+protocol_injected = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_ret_passive" sourceRef="gw_retrieve_type" targetRef="retrieve_passive_protocol">
+      <bpmn:conditionExpression>retrieval_type == "passive"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="retrieve_passive_rag" name="[HOOK:rag_query] 7-Source RAG Assembly (3000 token cap)" scriptFormat="python">
+      <bpmn:incoming>f_protocol_to_rag</bpmn:incoming>
+      <bpmn:outgoing>f_rag_to_feedback</bpmn:outgoing>
+      <bpmn:script>
+# Priority-based assembly (P0=pinned, P1-P11=trimmable):
+# P0: core protocol, critical session facts, context health warnings
+# P4: knowledge graph (via query_knowledge_graph)
+# P5: entity catalog (via query_entity_catalog)
+# P7: workfiles (via query_workfiles)
+# WCC replaces per-source queries when activity detected
+rag_assembled = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_protocol_to_rag" sourceRef="retrieve_passive_protocol" targetRef="retrieve_passive_rag"/>
+
+    <bpmn:scriptTask id="retrieve_implicit_feedback" name="[HOOK:rag_feedback] Process Implicit Feedback" scriptFormat="python">
+      <bpmn:incoming>f_rag_to_feedback</bpmn:incoming>
+      <bpmn:outgoing>f_ret_passive_done</bpmn:outgoing>
+      <bpmn:script>
+# Detects phrases in user prompt:
+# "that didn't work" -> confidence down on last-retrieved knowledge
+# query rephrasing -> signals knowledge gap
+# success signals -> confidence up
+# Updates claude.knowledge.confidence_level directly
+# GAP: This subsystem was unmodeled until this process.
+implicit_feedback_processed = True
+      </bpmn:script>
+      <bpmn:documentation>Previously unmodeled subsystem. rag_feedback.py runs inside rag_query_hook.
+Adjusts knowledge confidence based on conversational signals.
+No explicit Claude action needed; fully automatic.</bpmn:documentation>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_rag_to_feedback" sourceRef="retrieve_passive_rag" targetRef="retrieve_implicit_feedback"/>
+
+    <bpmn:endEvent id="end_retrieve" name="Retrieval Complete">
+      <bpmn:incoming>f_ret_active_done</bpmn:incoming>
+      <bpmn:incoming>f_ret_passive_done</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_ret_active_done" sourceRef="retrieve_active" targetRef="end_retrieve"/>
+    <bpmn:sequenceFlow id="f_ret_passive_done" sourceRef="retrieve_implicit_feedback" targetRef="end_retrieve"/>
+
+    <!-- =============================== -->
+    <!-- PHASE 3: MAINTAIN (Self-Service) -->
+    <!-- =============================== -->
+    <bpmn:sequenceFlow id="f_phase_maintain" sourceRef="gw_phase" targetRef="gw_maintain_action">
+      <bpmn:conditionExpression>phase == "maintain"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="gw_maintain_action" name="Maintenance Action?" default="f_maint_list">
+      <bpmn:incoming>f_phase_maintain</bpmn:incoming>
+      <bpmn:outgoing>f_maint_list</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_update</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_archive</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_merge</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_link</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_arch_wf</bpmn:outgoing>
+      <bpmn:outgoing>f_maint_pickup</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="maint_list" name="[CLAUDE] list_memories(project, tier, type, include_archived)">
+      <bpmn:incoming>f_maint_list</bpmn:incoming>
+      <bpmn:outgoing>f_ml_done</bpmn:outgoing>
+      <bpmn:documentation>Browse memory metadata (not full content). Pagination with total_count.
+Filters: tier (mid|long), memory_type, include_archived.
+Returns preview (200 chars), confidence, timestamps, access_count.
+Use this to spot duplicates, stale entries, or assess knowledge health.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_list" sourceRef="gw_maintain_action" targetRef="maint_list"/>
+
+    <bpmn:userTask id="maint_update" name="[CLAUDE] update_memory(id, content, title, tier, type)">
+      <bpmn:incoming>f_maint_update</bpmn:incoming>
+      <bpmn:outgoing>f_mu_done</bpmn:outgoing>
+      <bpmn:documentation>Fix incorrect memory content. Re-embeds if content changes.
+Audit-logged. Updates last_accessed_at.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_update" sourceRef="gw_maintain_action" targetRef="maint_update">
+      <bpmn:conditionExpression>action == "update"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_archive" name="[CLAUDE] archive_memory(id, reason)">
+      <bpmn:incoming>f_maint_archive</bpmn:incoming>
+      <bpmn:outgoing>f_ma_done</bpmn:outgoing>
+      <bpmn:documentation>Soft-delete: status='archived', archived_at, archived_reason, archived_by.
+Excluded from recall. Background curator handles permanent purge.
+HANDOFF: Claude archives -> Curator later checks age, reason, relations before purge.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_archive" sourceRef="gw_maintain_action" targetRef="maint_archive">
+      <bpmn:conditionExpression>action == "archive"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_merge" name="[CLAUDE] merge_memories(keep_id, archive_id, reason)">
+      <bpmn:incoming>f_maint_merge</bpmn:incoming>
+      <bpmn:outgoing>f_mm_done</bpmn:outgoing>
+      <bpmn:documentation>Keep better memory, archive other. Transfers all relations from archived to kept.
+Deletes self-referencing relations created by transfer. Boosts confidence +5 (cap 100).
+HANDOFF: Curator later cleans orphaned relations.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_merge" sourceRef="gw_maintain_action" targetRef="maint_merge">
+      <bpmn:conditionExpression>action == "merge"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_link" name="[CLAUDE] link_knowledge(from_id, to_id, relation_type, strength)">
+      <bpmn:incoming>f_maint_link</bpmn:incoming>
+      <bpmn:outgoing>f_mlk_done</bpmn:outgoing>
+      <bpmn:documentation>Create typed relation: extends, contradicts, supports, supersedes,
+depends_on, relates_to, part_of, caused_by. Upsert by (from, to, type).
+Strength 0-1 (default 1.0). Decays over time via consolidate_memories phase 3.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_link" sourceRef="gw_maintain_action" targetRef="maint_link">
+      <bpmn:conditionExpression>action == "link"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_arch_workfile" name="[CLAUDE] archive_workfile(component, title)">
+      <bpmn:incoming>f_maint_arch_wf</bpmn:incoming>
+      <bpmn:outgoing>f_maw_done</bpmn:outgoing>
+      <bpmn:documentation>Mark workfile inactive. Excluded from unstash by default.
+is_active=False hides from normal queries. Remains in DB.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_arch_wf" sourceRef="gw_maintain_action" targetRef="maint_arch_workfile">
+      <bpmn:conditionExpression>action == "archive_workfile"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:userTask id="maint_pickup_flags" name="[CLAUDE] Review Curator Feedback Items from Previous Run">
+      <bpmn:incoming>f_maint_pickup</bpmn:incoming>
+      <bpmn:outgoing>f_mpf_done</bpmn:outgoing>
+      <bpmn:documentation>Curator creates feedback items for issues it found.
+Next Claude picks these up via pending feedback list at session start.
+GAP: No guaranteed pickup. Relies on session start loading feedback.
+Currently works because get_build_board shows pending feedback.</bpmn:documentation>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="f_maint_pickup" sourceRef="gw_maintain_action" targetRef="maint_pickup_flags">
+      <bpmn:conditionExpression>action == "pickup_curator_flags"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:endEvent id="end_maintain" name="Maintenance Complete">
+      <bpmn:incoming>f_ml_done</bpmn:incoming>
+      <bpmn:incoming>f_mu_done</bpmn:incoming>
+      <bpmn:incoming>f_ma_done</bpmn:incoming>
+      <bpmn:incoming>f_mm_done</bpmn:incoming>
+      <bpmn:incoming>f_mlk_done</bpmn:incoming>
+      <bpmn:incoming>f_maw_done</bpmn:incoming>
+      <bpmn:incoming>f_mpf_done</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_ml_done" sourceRef="maint_list" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_mu_done" sourceRef="maint_update" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_ma_done" sourceRef="maint_archive" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_mm_done" sourceRef="maint_merge" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_mlk_done" sourceRef="maint_link" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_maw_done" sourceRef="maint_arch_workfile" targetRef="end_maintain"/>
+    <bpmn:sequenceFlow id="f_mpf_done" sourceRef="maint_pickup_flags" targetRef="end_maintain"/>
+
+    <!-- =============================== -->
+    <!-- PHASE 4: PROMOTE + DECAY        -->
+    <!-- =============================== -->
+    <bpmn:sequenceFlow id="f_phase_promote" sourceRef="gw_phase" targetRef="gw_promote_trigger">
+      <bpmn:conditionExpression>phase == "promote"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:exclusiveGateway id="gw_promote_trigger" name="Promotion Trigger?" default="f_trig_session_end">
+      <bpmn:incoming>f_phase_promote</bpmn:incoming>
+      <bpmn:outgoing>f_trig_session_end</bpmn:outgoing>
+      <bpmn:outgoing>f_trig_periodic</bpmn:outgoing>
+      <bpmn:outgoing>f_trig_manual</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Session End: hook promotes facts, then consolidate adds embeddings -->
+    <bpmn:scriptTask id="promote_session_end_hook" name="[HOOK:session_end] Promote Session Facts to Mid-Tier" scriptFormat="python">
+      <bpmn:incoming>f_trig_session_end</bpmn:incoming>
+      <bpmn:outgoing>f_hook_to_embed</bpmn:outgoing>
+      <bpmn:script>
+# Filter: type IN (decision, reference, note, data), value >= 50 chars
+# Insert into claude.knowledge: tier='mid', confidence=65, source='consolidation'
+# NO EMBEDDINGS generated here
+# HANDOFF: embed_knowledge background job must run to add embeddings
+facts_promoted = True
+      </bpmn:script>
+      <bpmn:documentation>HANDOFF GAP: Promoted entries have no embeddings.
+They're invisible to semantic search until embed_knowledge runs.
+Timing depends on job_runner schedule (hourly via Windows Task Scheduler).
+In worst case, entries sit without embeddings for up to 1 hour.</bpmn:documentation>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_trig_session_end" sourceRef="gw_promote_trigger" targetRef="promote_session_end_hook"/>
+
+    <bpmn:scriptTask id="promote_embed_batch" name="[JOB:embed_knowledge] Batch Embed Entries Missing Vectors" scriptFormat="python">
+      <bpmn:incoming>f_hook_to_embed</bpmn:incoming>
+      <bpmn:outgoing>f_embed_done</bpmn:outgoing>
+      <bpmn:script>
+# Queries knowledge entries with NULL embedding
+# Formats: title + type + description + code_example + projects
+# Batches via FastEmbed (local ONNX) or Voyage AI
+embeddings_generated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_hook_to_embed" sourceRef="promote_session_end_hook" targetRef="promote_embed_batch"/>
+
+    <!-- Periodic: consolidate_memories phases 2+3 -->
+    <bpmn:scriptTask id="promote_mid_to_long" name="[MCP:consolidate_memories] Phase 2: Mid to Long Promotion" scriptFormat="python">
+      <bpmn:incoming>f_trig_periodic</bpmn:incoming>
+      <bpmn:outgoing>f_mid_to_decay</bpmn:outgoing>
+      <bpmn:script>
+# Criteria: access_count >= 5, confidence >= 60, created > 7 days, has embedding
+# This is retrieval-frequency driven, NOT mark_knowledge_applied()
+# GAP: mark_knowledge_applied() exists but is orphaned. access_count is the real signal.
+mid_to_long_promoted = True
+      </bpmn:script>
+      <bpmn:documentation>GAP: mark_knowledge_applied() tool exists but nobody calls it.
+The actual promotion signal is access_count (incremented by RAG hook on every retrieval).
+Consider: deprecate mark_knowledge_applied or enforce its use via protocol.</bpmn:documentation>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_trig_periodic" sourceRef="gw_promote_trigger" targetRef="promote_mid_to_long">
+      <bpmn:conditionExpression>trigger == "periodic"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="promote_decay" name="[MCP:consolidate_memories] Phase 3: Decay Edges + Archive Stale" scriptFormat="python">
+      <bpmn:incoming>f_mid_to_decay</bpmn:incoming>
+      <bpmn:outgoing>f_decay_done</bpmn:outgoing>
+      <bpmn:script>
+# Decay: edge strength *= 0.95^days_since_last_access, floor at 0.05
+# Archive: confidence &lt; 30 AND not accessed in 90+ days -> status='archived'
+# Also calls decay_knowledge() DB stored procedure
+decay_completed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_mid_to_decay" sourceRef="promote_mid_to_long" targetRef="promote_decay"/>
+
+    <!-- Manual: all 3 phases -->
+    <bpmn:scriptTask id="promote_manual" name="[MCP:consolidate_memories] Manual: All 3 Phases" scriptFormat="python">
+      <bpmn:incoming>f_trig_manual</bpmn:incoming>
+      <bpmn:outgoing>f_manual_done</bpmn:outgoing>
+      <bpmn:script>
+# Runs all 3 phases: short->mid, mid->long, decay+archive
+# Called via consolidate_memories(trigger="manual")
+manual_all_phases = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_trig_manual" sourceRef="gw_promote_trigger" targetRef="promote_manual">
+      <bpmn:conditionExpression>trigger == "manual"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:endEvent id="end_promote" name="Promotion/Decay Complete">
+      <bpmn:incoming>f_embed_done</bpmn:incoming>
+      <bpmn:incoming>f_decay_done</bpmn:incoming>
+      <bpmn:incoming>f_manual_done</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_embed_done" sourceRef="promote_embed_batch" targetRef="end_promote"/>
+    <bpmn:sequenceFlow id="f_decay_done" sourceRef="promote_decay" targetRef="end_promote"/>
+    <bpmn:sequenceFlow id="f_manual_done" sourceRef="promote_manual" targetRef="end_promote"/>
+
+    <!-- =============================== -->
+    <!-- PHASE 5: CURATE (Background)    -->
+    <!-- =============================== -->
+    <bpmn:sequenceFlow id="f_phase_curate" sourceRef="gw_phase" targetRef="curate_scan">
+      <bpmn:conditionExpression>phase == "curate"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:scriptTask id="curate_scan" name="[JOB:knowledge_curator] Stage 1: Scan Knowledge Entries" scriptFormat="python">
+      <bpmn:incoming>f_phase_curate</bpmn:incoming>
+      <bpmn:outgoing>f_cur_scan</bpmn:outgoing>
+      <bpmn:script>
+entries = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="curate_cluster" name="[JOB:knowledge_curator] Stage 2: Cluster by Similarity (0.80)" scriptFormat="python">
+      <bpmn:incoming>f_cur_scan</bpmn:incoming>
+      <bpmn:outgoing>f_cur_cluster</bpmn:outgoing>
+      <bpmn:script>
+clusters = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_cur_scan" sourceRef="curate_scan" targetRef="curate_cluster"/>
+
+    <bpmn:scriptTask id="curate_classify" name="[JOB:LLM:Haiku] Stage 3: Classify Relationships" scriptFormat="python">
+      <bpmn:incoming>f_cur_cluster</bpmn:incoming>
+      <bpmn:outgoing>f_cur_classify</bpmn:outgoing>
+      <bpmn:script>
+# duplicate / complementary / contradicting / stale
+classifications = []
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_cur_cluster" sourceRef="curate_cluster" targetRef="curate_classify"/>
+
+    <bpmn:scriptTask id="curate_act" name="[JOB:LLM:Sonnet] Stage 4: Merge Dupes, Link, Resolve Contradictions" scriptFormat="python">
+      <bpmn:incoming>f_cur_classify</bpmn:incoming>
+      <bpmn:outgoing>f_cur_act</bpmn:outgoing>
+      <bpmn:script>
+actions_taken = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_cur_classify" sourceRef="curate_classify" targetRef="curate_act"/>
+
+    <bpmn:scriptTask id="curate_report" name="[JOB:knowledge_curator] Stage 5: Quality Report + Flag Issues" scriptFormat="python">
+      <bpmn:incoming>f_cur_act</bpmn:incoming>
+      <bpmn:outgoing>f_cur_report</bpmn:outgoing>
+      <bpmn:script>
+# Quality score: 100 - 5*dups - 10*contradictions - 2*stale + 3*links
+# Store as workfile via stash()
+# HANDOFF: Create feedback items for issues needing Claude review
+report_generated = True
+      </bpmn:script>
+      <bpmn:documentation>HANDOFF: Curator -> Next Claude Session
+Curator creates feedback items for issues it cannot auto-resolve.
+Next Claude picks these up via get_build_board or check_inbox at session start.
+GAP: Pickup not guaranteed if feedback list is long or Claude doesn't check.</bpmn:documentation>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_cur_act" sourceRef="curate_act" targetRef="curate_report"/>
+
+    <!-- Domain concept consolidation (separate background job) -->
+    <bpmn:scriptTask id="curate_domain_concepts" name="[JOB:knowledge_consolidation] Match Memories to Domain Concepts" scriptFormat="python">
+      <bpmn:incoming>f_cur_report</bpmn:incoming>
+      <bpmn:outgoing>f_dc_done</bpmn:outgoing>
+      <bpmn:script>
+# Load domain_concepts from claude.entities
+# Find unconsolidated mid/long memories (30 days)
+# Match via cosine similarity >= 0.65
+# Dedup gotchas (60%+ word overlap = skip)
+# Append new gotchas to concept JSONB properties
+# Re-embed updated concept
+# Mark memories: consolidated_into = concept_id
+domain_concepts_updated = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f_cur_report" sourceRef="curate_report" targetRef="curate_domain_concepts"/>
+
+    <bpmn:endEvent id="end_curate" name="Curation Complete">
+      <bpmn:incoming>f_dc_done</bpmn:incoming>
+    </bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_dc_done" sourceRef="curate_domain_concepts" targetRef="end_curate"/>
+
+    <!-- =============================== -->
+    <!-- CONTEXT PRESERVATION (PreCompact) -->
+    <!-- =============================== -->
+    <bpmn:scriptTask id="precompact" name="[HOOK:precompact] Preserve Critical State Before Compaction (2000 tokens)" scriptFormat="python">
+      <bpmn:incoming>f_precompact_trigger</bpmn:incoming>
+      <bpmn:outgoing>f_precompact_done</bpmn:outgoing>
+      <bpmn:script>
+# Priority-based injection:
+# P0: in-progress + pending todos (reference only)
+# P1: current focus + next steps
+# P2: active features with task counts
+# P3: session facts (decisions/references/notes)
+# P3.5: pinned workfiles
+# Includes tool reminder: list_session_facts, recall_memories, unstash
+precompact_injected = True
+      </bpmn:script>
+      <bpmn:documentation>Fires on PreCompact event (before context window compaction).
+Ensures Claude retains critical knowledge references even after compaction.
+Does NOT re-inject full knowledge content, only pointers and reminders.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+  </bpmn:process>
+
+</bpmn:definitions>
