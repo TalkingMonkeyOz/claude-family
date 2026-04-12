@@ -17,19 +17,19 @@
       Knowledge Sources:
         1. Direct capture: Claude formulates insight → Voyage AI embedding → claude.knowledge
         2. Vault embedding: Scan .md files → chunk → Voyage AI → pgvector (batch pipeline)
-        3. Book references: store_book → store_book_reference (concept + embedding)
+        3. Book references: book_store() → book_store(concept=...) (concept + embedding)
         4. Conversation mining: extract_conversation → extract_insights → auto-create entries
-        5. Knowledge relations: link_knowledge between entries (graph structure)
+        5. Knowledge relations: link() between entries (graph structure)
 
       Retrieval Paths (DB-first priority):
         1. Direct search: recall_memories (semantic search, primary source)
-        2. Entity catalog: recall_entities (structured data search)
-        3. Book search: recall_book_reference (semantic search over book concepts)
-        4. Graph traversal: get_related_knowledge (follow typed edges)
+        2. Entity catalog: entity_read() (structured data search)
+        3. Book search: book_read() (semantic search over book concepts)
+        4. Graph traversal: link(knowledge_id=...) (follow typed edges)
         5. Vault RAG: UserPromptSubmit hook (human docs, supplementary)
 
       Feedback Loop:
-        - mark_knowledge_applied(success=True/False) adjusts confidence_level
+        - memory_manage(action="mark_applied",success=True/False) adjusts confidence_level
         - High-confidence knowledge surfaces more readily
 
       Actors:
@@ -40,7 +40,7 @@
         [SCRIPT] = scriptTask (embed_vault_documents.py batch pipeline)
 
       Implementation:
-        - mcp-servers/project-tools/server_v2.py (store_knowledge, recall_knowledge, etc.)
+        - mcp-servers/project-tools/server_v2.py (remember(), recall_memories(), etc.)
         - scripts/embed_vault_documents.py (vault batch embedding)
         - scripts/rag_query_hook.py (automatic retrieval)
     -->
@@ -116,7 +116,7 @@ except NameError:
       <bpmn:incoming>flow_link</bpmn:incoming>
       <bpmn:outgoing>flow_link_to_capture_end</bpmn:outgoing>
       <bpmn:script>
-# link_knowledge(from_id, to_id, relation_type, strength, notes)
+# link(from_id, to_id, relation_type, strength, notes)
 # Relation types: extends, contradicts, supports, supersedes,
 #   depends_on, relates_to, part_of, caused_by
 # Stored in claude.knowledge_relations
@@ -181,11 +181,11 @@ vectors_stored = True
     <!-- PATH 3: BOOK REFERENCE                                              -->
     <!-- ================================================================== -->
 
-    <bpmn:scriptTask id="store_book" name="[MCP] Store Book Record (claude.books)" scriptFormat="python">
+    <bpmn:scriptTask id="store_book" name="[MCP] book_store() — Store Book Record" scriptFormat="python">
       <bpmn:incoming>flow_book_ref</bpmn:incoming>
       <bpmn:outgoing>flow_book_to_ref</bpmn:outgoing>
       <bpmn:script>
-# store_book(title, author, isbn, year, topics, summary)
+# book_store(title, author, isbn, year, topics, summary)
 # INSERT claude.books
 # Returns: book_id
 try:
@@ -196,11 +196,11 @@ except NameError:
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="store_book_reference" name="[MCP] Store Book Reference (concept + embedding)" scriptFormat="python">
+    <bpmn:scriptTask id="store_book_reference" name="[MCP] book_store(concept=...) — Store Book Reference" scriptFormat="python">
       <bpmn:incoming>flow_book_to_ref</bpmn:incoming>
       <bpmn:outgoing>flow_ref_to_book_end</bpmn:outgoing>
       <bpmn:script>
-# store_book_reference(book_title, concept, chapter, page_range, description, quote, tags)
+# book_store(concept=...,book_title, concept, chapter, page_range, description, quote, tags)
 # 1. Look up book_id by title (ILIKE)
 # 2. Generate embedding for "{concept}: {description}" via Voyage AI
 # 3. INSERT claude.book_references with embedding vector
@@ -314,11 +314,11 @@ context_injected = True
     </bpmn:scriptTask>
 
     <!-- 5b: Direct search (MCP tool) -->
-    <bpmn:scriptTask id="direct_search" name="[MCP] recall_knowledge (semantic search + filters)" scriptFormat="python">
+    <bpmn:scriptTask id="direct_search" name="[MCP] recall_memories() (semantic search + filters)" scriptFormat="python">
       <bpmn:incoming>flow_direct_search</bpmn:incoming>
       <bpmn:outgoing>flow_direct_to_apply</bpmn:outgoing>
       <bpmn:script>
-# recall_knowledge(query, knowledge_type, project, min_similarity, domain, tags, date_range_days)
+# recall_memories(query, memory_type, project, min_similarity, domain, tags, date_range_days)
 # Generates query embedding, cosine similarity against claude.knowledge.embedding
 # Returns: [{knowledge_id, title, description, similarity, confidence_level, code_example}]
 try:
@@ -330,11 +330,11 @@ except NameError:
     </bpmn:scriptTask>
 
     <!-- 5c: Book search -->
-    <bpmn:scriptTask id="book_search" name="[MCP] recall_book_reference (semantic search)" scriptFormat="python">
+    <bpmn:scriptTask id="book_search" name="[MCP] book_read() — Semantic Search" scriptFormat="python">
       <bpmn:incoming>flow_book_search</bpmn:incoming>
       <bpmn:outgoing>flow_book_search_to_apply</bpmn:outgoing>
       <bpmn:script>
-# recall_book_reference(query, book_title, tags, limit)
+# book_read(query, book_title, tags, limit)
 # Cosine similarity against claude.book_references.embedding
 # Returns: [{ref_id, book, concept, description, quote, chapter, page_range, similarity}]
 try:
@@ -346,11 +346,11 @@ except NameError:
     </bpmn:scriptTask>
 
     <!-- 5d: Graph traversal -->
-    <bpmn:scriptTask id="graph_traverse" name="[MCP] get_related_knowledge (graph edges)" scriptFormat="python">
+    <bpmn:scriptTask id="graph_traverse" name="[MCP] link(knowledge_id=...) — Graph Edges" scriptFormat="python">
       <bpmn:incoming>flow_graph_traverse</bpmn:incoming>
       <bpmn:outgoing>flow_graph_to_apply</bpmn:outgoing>
       <bpmn:script>
-# get_related_knowledge(knowledge_id, relation_types, include_reverse=True)
+# link(knowledge_id=...,knowledge_id, relation_types, include_reverse=True)
 # Traverses outgoing and incoming edges in claude.knowledge_relations
 # Returns: [{relation_type, direction, related: {knowledge_id, title, description}}]
 try:
@@ -378,7 +378,7 @@ except NameError:
       <bpmn:incoming>flow_apply_to_feedback</bpmn:incoming>
       <bpmn:outgoing>flow_feedback_to_retrieve_end</bpmn:outgoing>
       <bpmn:script>
-# mark_knowledge_applied(knowledge_id, success=True/False)
+# memory_manage(action="mark_applied",knowledge_id, success=True/False)
 # Success: confidence_level += 5 (capped at 100)
 # Failure: confidence_level -= 10 (floored at 0)
 # High-confidence knowledge surfaces more readily in future searches

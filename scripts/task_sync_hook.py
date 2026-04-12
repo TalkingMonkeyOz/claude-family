@@ -535,7 +535,7 @@ def handle_task_update(tool_input: dict, tool_output: str, project_name: str) ->
                     logger.info(f"All tasks for {feature_code} complete - surfacing to Claude")
                     conn.commit()
                     conn.close()
-                    return f"All build tasks for {feature_code} ({feature_name}) are now completed. Consider running: advance_status('feature', '{feature_code}', 'completed')"
+                    return f"All build tasks for {feature_code} ({feature_name}) are now completed. Consider running: work_status(item_code='{feature_code}', action='complete')"
 
             elif new_status == 'in_progress':
                 cur.execute("""

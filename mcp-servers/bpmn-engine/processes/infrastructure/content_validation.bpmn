@@ -59,8 +59,8 @@ has_file_path = has_file_path if has_file_path is not None else True
       <bpmn:outgoing>flow_governed_to_gw</bpmn:outgoing>
       <bpmn:script>
 # Governed files that must be modified through tools, not direct Write/Edit:
-#   CLAUDE.md -> use update_claude_md()
-#   .claude/settings.local.json -> use regenerate_settings()
+#   CLAUDE.md -> use config_manage(action="update_section",)
+#   .claude/settings.local.json -> use config_manage(action="regenerate_settings",)
 #   .claude/skills/**/*.md (deployed) -> use update_config()
 # Check file_path against governed patterns
 is_governed = is_governed if is_governed is not None else False

@@ -104,7 +104,7 @@ has_heavy_tasks = heavy_count > 0
     <bpmn:scriptTask id="execute_with_checkpoints" name="[CLAUDE] Execute With Progressive Checkpoints" scriptFormat="python">
       <bpmn:documentation>Execute all tasks in current context, but save checkpoint after each.
 Progressive checkpoints prevent total context loss even if we underestimated.
-After each task: save_checkpoint(focus=current_task, progress_notes=completed_so_far).
+After each task: session_manage(action="checkpoint",focus=current_task, progress_notes=completed_so_far).
 This is the key difference from pre-crash behavior (no checkpoints at all).</bpmn:documentation>
       <bpmn:incoming>flow_within_budget</bpmn:incoming>
       <bpmn:outgoing>flow_direct_to_end</bpmn:outgoing>
@@ -160,8 +160,8 @@ instructions_prepared = True
     <bpmn:scriptTask id="checkpoint_before_delegate" name="[MCP] Save Checkpoint Before Delegation" scriptFormat="python">
       <bpmn:documentation>Save state before spawning agents:
 - store_session_fact: what's being delegated, expected outcomes
-- save_checkpoint: current progress, which tasks are delegated
-- store_session_notes: agent task assignments for recovery
+- session_manage(action="checkpoint"): current progress, which tasks are delegated
+- session_manage(action="store_notes"): agent task assignments for recovery
 This ensures we can resume even if main context is lost during collection.</bpmn:documentation>
       <bpmn:incoming>flow_prep_all_to_checkpoint</bpmn:incoming>
       <bpmn:outgoing>flow_checkpoint_to_spawn</bpmn:outgoing>

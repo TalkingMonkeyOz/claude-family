@@ -953,7 +953,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "work_on_task": {
         "type": "mcp_tool",
-        "tool": "start_work / complete_work",
+        "tool": "work_status(action=start/complete)",
         "description": "project-tools MCP workflow tools",
     },
     # feature_workflow.bpmn elements → MCP tools
@@ -1022,7 +1022,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "check_feature": {
         "type": "mcp_tool",
-        "tool": "complete_work",
+        "tool": "work_status(action=complete)",
         "description": "complete_work() checks sibling tasks - but requires manual invocation",
     },
     "record_blocker": {
@@ -1129,7 +1129,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "capture_knowledge": {
         "type": "mcp_tool",
-        "tool": "store_knowledge / extract_insights",
+        "tool": "remember() / extract_insights",
         "description": "Knowledge capture via project-tools MCP",
     },
     "manual_close": {
@@ -1216,12 +1216,12 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "keep_and_strengthen": {
         "type": "mcp_tool",
-        "tool": "mark_knowledge_applied",
+        "tool": "memory_manage(action=mark_applied)",
         "description": "Keep knowledge and boost confidence",
     },
     "merge_duplicates": {
         "type": "mcp_tool",
-        "tool": "link_knowledge(type=supersedes)",
+        "tool": "link(type=supersedes)",
         "description": "Merge duplicate knowledge entries",
     },
     "delete_knowledge": {
@@ -1231,42 +1231,42 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     # messaging.bpmn elements → MCP tools (project-tools)
     "validate_send": {
         "type": "mcp_tool",
-        "tool": "send_message",
+        "tool": "send_msg()",
         "description": "Validates params, resolves from_project, validates recipient against workspaces",
     },
     "insert_message": {
         "type": "mcp_tool",
-        "tool": "send_message",
+        "tool": "send_msg()",
         "description": "INSERT into claude.messages (from_project, parent_message_id, thread_id)",
     },
     "prepare_broadcast": {
         "type": "mcp_tool",
-        "tool": "broadcast",
+        "tool": "send_msg(is_broadcast=true)",
         "description": "Sets to_project=None for all-instance delivery",
     },
     "build_inbox_query": {
         "type": "mcp_tool",
-        "tool": "check_inbox",
+        "tool": "inbox()",
         "description": "Builds parameterized WHERE clause with from_project, threading fields",
     },
     "execute_inbox_query": {
         "type": "mcp_tool",
-        "tool": "check_inbox",
+        "tool": "inbox()",
         "description": "SELECT from claude.messages with from_project, parent_message_id, thread_id",
     },
     "format_messages": {
         "type": "mcp_tool",
-        "tool": "check_inbox",
+        "tool": "inbox()",
         "description": "Formats inbox results with ISO dates",
     },
     "fetch_original_message": {
         "type": "mcp_tool",
-        "tool": "reply_to",
+        "tool": "send_msg(reply_to_id=...)",
         "description": "Fetches original message for reply (from_project, thread_id)",
     },
     "prepare_reply": {
         "type": "mcp_tool",
-        "tool": "reply_to",
+        "tool": "send_msg(reply_to_id=...)",
         "description": "Routes reply to from_project, sets parent_message_id and thread_id",
     },
     "query_valid_recipients": {
@@ -1281,11 +1281,11 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "determine_intent": {
         "type": "claude_behavior",
-        "description": "Claude selects messaging intent: send/broadcast/check_inbox/acknowledge/reply/discover",
+        "description": "Claude selects messaging intent: send/broadcast/inbox/inbox(ack_action)/send_msg(reply)/discover",
     },
     "determine_ack_action": {
         "type": "claude_behavior",
-        "description": "Claude selects acknowledge action: read/acknowledged/actioned/deferred",
+        "description": "Claude selects inbox(ack_action=...) action: read/acknowledged/actioned/deferred",
     },
     # ==================================================================================
     # cognitive_memory_capture.bpmn elements → KMS + DB operations
@@ -1374,7 +1374,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "search_entities": {
         "type": "mcp_tool",
-        "tool": "recall_entities",
+        "tool": "entity_read()",
         "description": "Search cataloged entities (entity tier)",
     },
     "rank_results": {
@@ -1402,12 +1402,12 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     # ==================================================================================
     "collect_short": {
         "type": "kms_operation",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Collect short-term session facts for evaluation",
     },
     "evaluate_short": {
         "type": "kms_operation",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Evaluate short-term facts for promotion to mid-tier",
     },
     "promote_to_mid": {
@@ -1417,12 +1417,12 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "scan_mid": {
         "type": "kms_operation",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Scan mid-term memories older than 7 days for promotion/decay",
     },
     "evaluate_mid": {
         "type": "kms_operation",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Evaluate mid-term memories for promotion or decay",
     },
     "promote_to_long": {
@@ -1509,7 +1509,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "recall_fact": {
         "type": "mcp_tool",
-        "tool": "recall_session_fact",
+        "tool": "session_facts(fact_key=...)",
         "description": "Recall a specific session fact by key",
     },
     "apply_fact": {
@@ -1551,8 +1551,8 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "route_workfile": {
         "type": "mcp_tool",
-        "tool": "stash / unstash",
-        "description": "Route to workfile operation (stash or unstash)",
+        "tool": "workfile_store / workfile_read",
+        "description": "Route to workfile operation (workfile_store or workfile_read)",
     },
     # ==================================================================================
     # knowledge_curator.bpmn elements → background job scripts
@@ -1610,7 +1610,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "capture_stash": {
         "type": "claude_behavior",
-        "description": "Claude calls stash(component, title, content) for workfiles",
+        "description": "Claude calls workfile_store(component, title, content) for workfiles",
     },
     "capture_catalog": {
         "type": "claude_behavior",
@@ -1630,7 +1630,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "retrieve_active": {
         "type": "claude_behavior",
-        "description": "Claude calls recall_memories / recall_entities / unstash / get_secret",
+        "description": "Claude calls recall_memories / recall_entities / workfile_read / get_secret",
     },
     "retrieve_passive_protocol": {
         "type": "hook_script",
@@ -1665,7 +1665,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "maint_link": {
         "type": "claude_behavior",
-        "description": "Claude calls link_knowledge(from_id, to_id, relation_type, strength)",
+        "description": "Claude calls link(from_id, to_id, relation_type, strength)",
     },
     "maint_arch_workfile": {
         "type": "claude_behavior",
@@ -1704,17 +1704,17 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "promote_mid_to_long": {
         "type": "mcp_tool",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Phase 2: Mid to long promotion",
     },
     "promote_decay": {
         "type": "mcp_tool",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Phase 3: Decay edges + archive stale entries",
     },
     "promote_manual": {
         "type": "mcp_tool",
-        "tool": "consolidate_memories",
+        "tool": "memory_manage(action=consolidate)",
         "description": "Manual: All 3 phases of memory consolidation",
     },
     "curate_scan": {
@@ -1819,17 +1819,17 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     # inject_context already in registry
     "direct_search": {
         "type": "mcp_tool",
-        "tool": "recall_knowledge",
+        "tool": "recall_memories()",
         "description": "Semantic search with filters",
     },
     "book_search": {
         "type": "mcp_tool",
-        "tool": "recall_book_reference",
+        "tool": "book_read()",
         "description": "Semantic search over book references",
     },
     "graph_traverse": {
         "type": "mcp_tool",
-        "tool": "get_related_knowledge",
+        "tool": "link(knowledge_id=...)",
         "description": "Graph edge traversal for related knowledge",
     },
     "apply_knowledge": {
@@ -1838,7 +1838,7 @@ _ARTIFACT_REGISTRY: dict[str, dict] = {
     },
     "mark_applied": {
         "type": "mcp_tool",
-        "tool": "mark_knowledge_applied",
+        "tool": "memory_manage(action=mark_applied)",
         "description": "Mark knowledge applied (confidence feedback)",
     },
 }
@@ -2048,9 +2048,9 @@ def _suggest_artifact(task_name: str) -> str:
     if "[mcp]" in name_lower or "[mcp:" in name_lower:
         return "MCP tool call in project-tools MCP server"
     if "[workfile]" in name_lower:
-        return "Workfile operation (stash/unstash) in project-tools MCP"
+        return "Workfile operation (workfile_store/workfile_read) in project-tools MCP"
     if "[entity]" in name_lower:
-        return "Entity catalog operation (catalog/recall_entities) in project-tools MCP"
+        return "Entity catalog operation (entity_store/entity_read) in project-tools MCP"
     if "[logic]" in name_lower:
         return "Internal logic/routing - no external artifact"
 

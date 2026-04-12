@@ -179,7 +179,7 @@ This avoids duplicating resolution logic.</bpmn:documentation>
 # Create knowledge_relations for complementary entries
 for comp_cluster in complementary_clusters:
     for pair in combinations(comp_cluster, 2):
-        link_knowledge(pair[0], pair[1], "complements")
+        link(pair[0], pair[1], "complements")
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -211,7 +211,7 @@ report = {
   + 3 per complementary link created (coherence)
   Score capped at 0-100.
 
-Report stored as a workfile (stash) for the project.
+Report stored as a workfile (workfile_store) for the project.
 Also updates project metadata with curated_at timestamp
 so the scheduler knows when this project was last audited.</bpmn:documentation>
     </bpmn:scriptTask>

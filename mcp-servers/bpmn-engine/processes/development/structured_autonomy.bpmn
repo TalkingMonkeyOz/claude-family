@@ -66,11 +66,11 @@
     <!-- PHASE 1: PLAN (Premium model, one-time)                             -->
     <!-- ================================================================== -->
 
-    <bpmn:scriptTask id="create_feature_record" name="[DB] Create Feature Record" scriptFormat="python">
+    <bpmn:scriptTask id="create_feature_record" name="[DB] work_create(type=&quot;feature&quot;) — Create Feature" scriptFormat="python">
       <bpmn:incoming>flow_use_sa</bpmn:incoming>
       <bpmn:outgoing>flow_feature_to_research</bpmn:outgoing>
       <bpmn:script>
-# create_feature() → status='draft'
+# work_create(type="feature",) → status='draft'
 feature_created = True
 status = "draft"
       </bpmn:script>
@@ -111,7 +111,7 @@ status = "draft"
       <bpmn:incoming>flow_plan_approved</bpmn:incoming>
       <bpmn:outgoing>flow_planned_to_generate</bpmn:outgoing>
       <bpmn:script>
-# advance_status(features, id, 'planned')
+# work_status(action="advance",features, id, 'planned')
 status = "planned"
       </bpmn:script>
     </bpmn:scriptTask>
@@ -125,7 +125,7 @@ status = "planned"
       <bpmn:incoming>flow_specs_to_tasks</bpmn:incoming>
       <bpmn:outgoing>flow_tasks_to_init</bpmn:outgoing>
       <bpmn:script>
-# create_linked_task() for each spec step
+# work_create(type="task",) for each spec step
 # Sets: task_count, current_task_index
 task_count = task_count if task_count else 0
 current_task_index = 0
@@ -142,7 +142,7 @@ failed_tasks = 0
       <bpmn:incoming>flow_tasks_to_init</bpmn:incoming>
       <bpmn:outgoing>flow_init_to_pick</bpmn:outgoing>
       <bpmn:script>
-# advance_status(features, id, 'in_progress')
+# work_status(action="advance",features, id, 'in_progress')
 status = "in_progress"
       </bpmn:script>
     </bpmn:scriptTask>
@@ -152,7 +152,7 @@ status = "in_progress"
       <bpmn:incoming>flow_continue_loop</bpmn:incoming>
       <bpmn:outgoing>flow_pick_to_agent_gw</bpmn:outgoing>
       <bpmn:script>
-# start_work(task_code) → loads task context
+# work_status(action="start",task_code) → loads task context
 current_task_index = current_task_index
 task_started = True
       </bpmn:script>
@@ -201,7 +201,7 @@ task_started = True
       <bpmn:incoming>flow_step_passed</bpmn:incoming>
       <bpmn:outgoing>flow_complete_to_more_gw</bpmn:outgoing>
       <bpmn:script>
-# complete_work(task_code)
+# work_status(action="complete",task_code)
 completed_tasks = completed_tasks + 1
 current_task_index = current_task_index + 1
 tasks_remaining = current_task_index &lt; task_count
@@ -276,7 +276,7 @@ tasks_remaining = current_task_index &lt; task_count
       <bpmn:incoming>flow_commit_to_complete</bpmn:incoming>
       <bpmn:outgoing>flow_complete_to_end</bpmn:outgoing>
       <bpmn:script>
-# advance_status(features, id, 'completed')
+# work_status(action="advance",features, id, 'completed')
 status = "completed"
 feature_complete = True
       </bpmn:script>

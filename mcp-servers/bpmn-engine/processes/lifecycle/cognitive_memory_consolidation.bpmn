@@ -128,7 +128,7 @@ mid_memories = locals().get('mid_memories', [])
 # 2. confidence >= 60
 # 3. age >= 7 days (proven useful over time, not just within one session)
 # 4. embedding IS NOT NULL (searchable)
-# NOTE: times_applied requirement removed — mark_knowledge_applied() is never
+# NOTE: times_applied requirement removed — memory_manage(action="mark_applied",) is never
 # called in practice. access_count is the reliable signal (incremented by RAG hook).
 # Decay criteria:
 # - Not accessed in 14+ days AND confidence below 50

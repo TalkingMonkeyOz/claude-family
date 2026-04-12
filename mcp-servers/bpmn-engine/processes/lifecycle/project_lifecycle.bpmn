@@ -214,7 +214,7 @@ except NameError:
 #   All projects: UPDATE config_templates (template_name='hooks-base')
 #   All of type:  UPDATE project_type_configs
 #   Single:       UPDATE workspaces.startup_config (JSONB merge)
-# Or use MCP tools: update_claude_md(), regenerate_settings()
+# Or use MCP tools: config_manage(action="update_section",), config_manage(action="regenerate_settings",)
 try:
     if config_updated is None:
         config_updated = True
@@ -227,9 +227,9 @@ except NameError:
       <bpmn:incoming>flow_db_to_regen</bpmn:incoming>
       <bpmn:outgoing>flow_regen_to_verify</bpmn:outgoing>
       <bpmn:script>
-# regenerate_settings(project) -> .claude/settings.local.json
-# deploy_claude_md(project) -> CLAUDE.md from profiles.config->'behavior'
-# deploy_project(project, components) -> rules, skills, instructions
+# config_manage(action="regenerate_settings",project) -> .claude/settings.local.json
+# config_manage(action="deploy_claude_md",project) -> CLAUDE.md from profiles.config->'behavior'
+# config_manage(action="deploy_project",project, components) -> rules, skills, instructions
 # Logged to config_deployment_log
 try:
     if files_regenerated is None:

@@ -108,7 +108,7 @@ feedback_reused = True
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="create_feedback" name="[DB] Create Feedback (type=bug)" scriptFormat="python">
+    <bpmn:scriptTask id="create_feedback" name="[DB] work_create(type=&quot;feedback&quot;) — Create Bug" scriptFormat="python">
       <bpmn:incoming>flow_not_duplicate</bpmn:incoming>
       <bpmn:outgoing>flow_create_to_surface</bpmn:outgoing>
       <bpmn:script>
@@ -161,11 +161,11 @@ surfaced = True
       <bpmn:outgoing>flow_fix_to_resolve</bpmn:outgoing>
     </bpmn:userTask>
 
-    <bpmn:scriptTask id="resolve_feedback" name="[DB] Resolve Feedback" scriptFormat="python">
+    <bpmn:scriptTask id="resolve_feedback" name="[DB] work_status(action=&quot;resolve&quot;)" scriptFormat="python">
       <bpmn:incoming>flow_fix_to_resolve</bpmn:incoming>
       <bpmn:outgoing>flow_resolve_to_end</bpmn:outgoing>
       <bpmn:script>
-# advance_status(feedback, id, 'resolved')
+# work_status(action="advance",feedback, id, 'resolved')
 resolved = True
       </bpmn:script>
     </bpmn:scriptTask>
@@ -179,7 +179,7 @@ resolved = True
       <bpmn:incoming>flow_defer</bpmn:incoming>
       <bpmn:outgoing>flow_triaged_to_end</bpmn:outgoing>
       <bpmn:script>
-# advance_status(feedback, id, 'triaged')
+# work_status(action="advance",feedback, id, 'triaged')
 # Will surface again on next prompt until resolved
 triaged = True
       </bpmn:script>

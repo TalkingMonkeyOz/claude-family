@@ -14,7 +14,7 @@
 
       Flow: Validate → Version → Update → Deploy → Audit → Done
 
-      Extends the update_claude_md() pattern to all deployable config.
+      Extends the config_manage(action="update_section",) pattern to all deployable config.
       Populates *_versions tables (skills_versions, rules_versions, instructions_versions).
 
       Actors:
@@ -70,7 +70,7 @@ Version number is MAX(version_number) + 1 for the component.</bpmn:documentation
 - skill → claude.skills SET content = new_content, updated_at = NOW()
 - rule → claude.rules SET content = new_content, updated_at = NOW()
 - instruction → claude.instructions SET content = new_content, updated_at = NOW()
-- claude_md → delegates to existing update_claude_md() logic</bpmn:documentation>
+- claude_md → delegates to existing config_manage(action="update_section",) logic</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Step 4: Deploy to filesystem -->
@@ -84,7 +84,7 @@ Version number is MAX(version_number) + 1 for the component.</bpmn:documentation
 - skill (scope=agent) → .claude/agents/{name}.md
 - rule → .claude/rules/{name}.md
 - instruction → .claude/instructions/{name}.instructions.md
-- claude_md → CLAUDE.md (via deploy_claude_md pattern)</bpmn:documentation>
+- claude_md → CLAUDE.md (via config_manage(action="deploy_claude_md") pattern)</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Step 5: Audit log -->

@@ -19,10 +19,10 @@
       on a specific component without relying on session memory or RAG retrieval.
 
       Paths:
-        1. stash  (default): Store/update a workfile for a component.
+        1. workfile_store  (default): Store/update a workfile for a component.
                              validate_type → resolve_project → upsert_workfile
                              → generate_embedding → link_session → end
-        2. unstash: Retrieve workfile(s) for a component (optionally filtered by title).
+        2. workfile_read: Retrieve workfile(s) for a component (optionally filtered by title).
                     resolve_project → query_workfiles → update_access_stats → end
         3. list:   Browse cabinet metadata — what drawers (components) exist and how many files.
                    resolve_project → query_components → end
@@ -39,8 +39,8 @@
         - workfile_type: notes, findings, questions, approach, investigation, reference
         - Upsert on (project_id, component, title) — no duplicate titled files per drawer
         - Embeddings: Voyage AI voyage-3, 1024 dimensions, stored in project_workfiles.embedding
-        - access_count and last_accessed_at updated on every unstash
-        - session_id linked at stash time for audit trail
+        - access_count and last_accessed_at updated on every workfile_read
+        - session_id linked at workfile_store time for audit trail
 
       Implementation: mcp-servers/project-tools/server_v2.py + claude.project_workfiles table
     -->

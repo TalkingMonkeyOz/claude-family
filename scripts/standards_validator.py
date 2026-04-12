@@ -363,21 +363,21 @@ def main():
             block_with_reason(
                 f"BLOCKED: '{file_basename}' is generated from database and must not be edited directly. "
                 f"To change MCP or settings config permanently:\n"
-                f"  1. Send a task_request message to claude-family via send_message()\n"
+                f"  1. Send a task_request message to claude-family via send_msg()\n"
                 f"  2. claude-family updates claude.config_templates or claude.workspaces\n"
                 f"  3. File regenerates on next session start\n"
                 f"Manual edits will be overwritten."
             )
 
-        # GOVERNANCE: Block direct CLAUDE.md edits — must use update_claude_md() MCP tool
+        # GOVERNANCE: Block direct CLAUDE.md edits — must use config_manage() MCP tool
         if file_basename == 'CLAUDE.md' or file_basename == 'claude.md':
             logger.warning(f"BLOCKED: Direct edit to CLAUDE.md: {file_path}")
             block_with_reason(
                 f"BLOCKED: CLAUDE.md is version-tracked in the database. Do not edit directly.\n"
                 f"Use the MCP tool instead:\n"
-                f"  update_claude_md(project, section, content, mode='replace'|'append')\n"
+                f"  config_manage(action='update_section', project=project, section=section, content=content)\n"
                 f"This updates the file, syncs to profiles DB, and creates a version snapshot.\n"
-                f"Example: update_claude_md('my-project', 'Recent Changes', '| 2026-03-15 | New feature |', mode='append')"
+                f"Example: config_manage(action='update_section', project='my-project', section='Recent Changes', content='| 2026-03-15 | New feature |', mode='append')"
             )
 
         # GOVERNANCE: Block direct edits to DB-deployed components

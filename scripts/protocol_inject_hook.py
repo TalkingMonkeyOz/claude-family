@@ -59,7 +59,7 @@ def _check_pending_messages(project_name: str) -> str:
             return (
                 f"PENDING MESSAGES:\n"
                 f"  {count} unread message(s) from: {senders}. Priority: {priority}.\n"
-                f"  Use check_inbox() to read. Address urgent messages before other work."
+                f"  Use inbox() to read. Address urgent messages before other work."
             )
     except Exception:
         pass  # Fail silently — don't block the hook

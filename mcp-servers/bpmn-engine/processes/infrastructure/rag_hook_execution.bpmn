@@ -210,12 +210,12 @@ design_map = load_design_map(project)
     </bpmn:scriptTask>
 
     <!-- Parallel branch 7: Entity catalog -->
-    <bpmn:scriptTask id="task_entity_catalog" name="[HOOK] Query Entity Catalog" scriptFormat="python">
+    <bpmn:scriptTask id="task_entity_catalog" name="[HOOK] entity_read() — Query Entity Catalog" scriptFormat="python">
       <bpmn:incoming>flow_fork_to_entity_catalog</bpmn:incoming>
       <bpmn:outgoing>flow_entity_catalog_to_join</bpmn:outgoing>
       <bpmn:script>
 # Semantic search against claude.entities (domain concepts, OData, APIs, etc.)
-# Uses Voyage AI embeddings via recall_entities for RRF fusion search
+# Uses Voyage AI embeddings via entity_read() for RRF fusion search
 # Condition: needs_rag = True
 if needs_rag:
     entity_results = query_entity_catalog(prompt, limit=5)
@@ -230,7 +230,7 @@ else:
       <bpmn:outgoing>flow_workfile_search_to_join</bpmn:outgoing>
       <bpmn:script>
 # Semantic search against claude.workfiles (component working notes, findings, approaches)
-# Uses Voyage AI embeddings via search_workfiles for similarity matching
+# Uses Voyage AI embeddings via workfile_read(query=) for similarity matching
 # Condition: needs_rag = True
 if needs_rag:
     workfile_results = query_workfile_search(prompt, limit=3)

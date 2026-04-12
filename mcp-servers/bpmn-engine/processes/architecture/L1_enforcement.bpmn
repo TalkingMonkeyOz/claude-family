@@ -102,11 +102,11 @@
       <bpmn:outgoing>flow_sql_warn_to_merge</bpmn:outgoing>
       <bpmn:script>
 # Warn (not block) when raw INSERT/UPDATE/DELETE on governed tables:
-#   features -> create_feature / advance_status
-#   build_tasks -> create_linked_task / start_work / complete_work
-#   feedback -> create_feedback / resolve_feedback
+#   features -> work_create(type="feature") / work_status(action="advance")
+#   build_tasks -> work_create(type="task") / work_status(action="start") / work_status(action="complete")
+#   feedback -> work_create(type="feedback") / work_status(action="resolve")
 #   knowledge -> remember
-#   entities -> catalog / update_entity
+#   entities -> catalog / entity_store()
 # Log the warning, suggest correct tool, but allow operation
 sql_governance_warned = True
       </bpmn:script>

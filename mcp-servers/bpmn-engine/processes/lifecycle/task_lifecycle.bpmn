@@ -205,7 +205,7 @@ task_completed_hook.py preserves the completed status in claude.todos DB.</bpmn:
       <bpmn:incoming>flow_completed_reconcile</bpmn:incoming>
       <bpmn:outgoing>flow_reconcile_feature_check</bpmn:outgoing>
       <bpmn:script>reconciled = True</bpmn:script>
-      <bpmn:documentation>When complete_work(BT123) finishes a build_task, the task_completed_hook
+      <bpmn:documentation>When work_status(action="complete",BT123) finishes a build_task, the task_completed_hook
 finds the matching todo in claude.todos by content fuzzy match and marks it
 completed too. This prevents "Add version history" staying open after F180/BT529
 was completed. Uses same similarity_ratio function (75% threshold) as dedup.</bpmn:documentation>

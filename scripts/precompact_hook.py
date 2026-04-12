@@ -89,7 +89,7 @@ def _apply_precompact_budget(sections: list) -> str:
                 if last_nl > 0:
                     partial_text = partial_text[:last_nl]
                 kept.append(partial_text)
-                kept.append(f"  ... ({label} truncated, use list_session_facts() for full)")
+                kept.append(f"  ... ({label} truncated, use session_facts() for full)")
                 total_tokens += _estimate_tokens(partial_text)
             trimmed_labels.append(label)
 
@@ -236,7 +236,7 @@ def get_session_state_for_compact(project_name: str) -> Optional[str]:
                         wf_lines.append(f"  [{comp}]")
                         current_component = comp
                     wf_lines.append(f"    - {title}")
-                wf_lines.append("  Use unstash(component) to load full content")
+                wf_lines.append("  Use workfile_read(component) to load full content")
                 sections.append((3, "pinned_workfiles", wf_lines))
         except Exception:
             pass  # Table might not exist yet in older deployments
@@ -285,7 +285,7 @@ def build_refresh_message(hook_input: Dict) -> str:
                 if notes_content and len(notes_content) > 20:
                     max_chars = min(remaining_budget * 4, 400)
                     if len(notes_content) > max_chars:
-                        notes_content = notes_content[:max_chars] + "\n  ... (use get_session_notes() for full)"
+                        notes_content = notes_content[:max_chars] + "\n  ... (use session_manage(action='get_notes') for full)"
                     parts.append("")
                     parts.append("SESSION NOTES:")
                     parts.append(notes_content)
@@ -296,8 +296,8 @@ def build_refresh_message(hook_input: Dict) -> str:
         "",
         "=" * 40,
         "IMPORTANT: Tasks persist natively — DO NOT re-create tasks listed above.",
-        "RECOVERY: list_session_facts() | get_session_notes() | get_work_context('current')",
-        "Then recall_memories('<what you were working on>'), unstash(component) for workfiles, and resume.",
+        "RECOVERY: session_facts() | session_manage(action='get_notes') | get_work_context('current')",
+        "Then recall_memories('<what you were working on>'), workfile_read(component) for workfiles, and resume.",
         "CLAUDE.md and rules are re-loaded automatically by the system prompt — no manual re-injection needed.",
     ])
 

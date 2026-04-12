@@ -715,7 +715,7 @@ def _create_curator_feedback(report: dict, project_id: str, conn):
                 "description": f"Knowledge curator scored {project_name} at {score}/100. "
                                f"Actions: {actions.get('duplicates_merged', 0)} dupes merged, "
                                f"{contradictions} contradictions, {actions.get('stale_archived', 0)} stale archived. "
-                               f"Review with list_memories() and clean up.",
+                               f"Review with memory_manage(action='list') and clean up.",
             })
 
         if contradictions >= 3:

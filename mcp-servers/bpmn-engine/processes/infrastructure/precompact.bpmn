@@ -146,7 +146,7 @@ budget_applied = True
 # - SESSION CONTEXT (decisions, user_intent)
 # - SESSION NOTES (if budget allows)
 # - POST-COMPACTION RECOVERY PROTOCOL:
-#   STEP 1: list_session_facts(), get_session_notes(), get_work_context('current')
+#   STEP 1: session_facts(), session_manage(action="get_notes",), get_work_context('current')
 #   STEP 2: Re-read CLAUDE.md, recall_memories()
 #   STEP 3: Resume from task in session facts (don't start new work)
 state_injected = True

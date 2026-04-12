@@ -62,7 +62,7 @@ Outputs are stored as plan_data JSONB in claude.features.plan_data:
   - risks: identified risks and mitigations
   - implementation_specs: step-by-step implementation details
   - complexity: 'simple' or 'high' (drives complexity_gateway)
-Use create_linked_task to add build tasks after planning.</bpmn:documentation>
+Use work_create(type="task") to add build tasks after planning.</bpmn:documentation>
     </bpmn:userTask>
 
     <!-- Script Task: Set Planned -->
@@ -73,10 +73,10 @@ Use create_linked_task to add build tasks after planning.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- User Task: Create Build Tasks -->
-    <bpmn:userTask id="create_build_tasks" name="[CLAUDE] Create Build Tasks (create_linked_task)">
+    <bpmn:userTask id="create_build_tasks" name="[CLAUDE] Create Build Tasks (work_create(type=&quot;task&quot;))">
       <bpmn:incoming>flow_set_planned_to_create_tasks</bpmn:incoming>
       <bpmn:outgoing>flow_create_tasks_to_set_in_progress</bpmn:outgoing>
-      <bpmn:documentation>Claude creates build tasks using create_linked_task MCP tool.
+      <bpmn:documentation>Claude creates build tasks using work_create(type="task") MCP tool.
 Each task should have: name, description, verification criteria, files_affected.
 Tasks are linked to the feature via feature_code (e.g., F42).
 After creation, tasks appear in claude.build_tasks with status='todo'.</bpmn:documentation>
@@ -88,7 +88,7 @@ After creation, tasks appear in claude.build_tasks with status='todo'.</bpmn:doc
       <bpmn:outgoing>flow_set_in_progress_to_complexity</bpmn:outgoing>
       <bpmn:script>status = "in_progress"</bpmn:script>
       <bpmn:documentation>Transitions feature status from 'planned' to 'in_progress' via WorkflowEngine.
-Uses advance_status MCP tool internally. Transition logged to claude.audit_log.</bpmn:documentation>
+Uses work_status(action="advance") MCP tool internally. Transition logged to claude.audit_log.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Exclusive Gateway: Complexity Check -->
@@ -103,7 +103,7 @@ Uses advance_status MCP tool internally. Transition logged to claude.audit_log.<
       <bpmn:incoming>flow_high_complexity</bpmn:incoming>
       <bpmn:outgoing>flow_spawn_to_merge</bpmn:outgoing>
       <bpmn:documentation>For high-complexity features, Claude spawns sub-agents via native Task tool.
-Each agent handles a subset of build tasks. Agents use start_work / complete_work
+Each agent handles a subset of build tasks. Agents use work_status(action="start") / work_status(action="complete")
 MCP tools to track progress. After all agents complete, implementation_merge
 gateway consolidates results into the test phase.</bpmn:documentation>
     </bpmn:userTask>
@@ -130,11 +130,11 @@ Execution proceeds through the per-task work loop (next_task_gw → start_task
     </bpmn:exclusiveGateway>
 
     <!-- Script Task: Start the next build task -->
-    <bpmn:scriptTask id="start_task" name="[MCP] start_work(task_code)" scriptFormat="python">
+    <bpmn:scriptTask id="start_task" name="[MCP] work_status(action=&quot;start&quot;, task_code)" scriptFormat="python">
       <bpmn:incoming>flow_has_next_task</bpmn:incoming>
       <bpmn:outgoing>flow_start_task_to_implement</bpmn:outgoing>
       <bpmn:script>task_started = True</bpmn:script>
-      <bpmn:documentation>Calls start_work(task_code) MCP tool to transition build task
+      <bpmn:documentation>Calls work_status(action="start",task_code) MCP tool to transition build task
 from 'todo' to 'in_progress' via WorkflowEngine state machine.
 Loads plan_data context for the task into Claude's working memory.</bpmn:documentation>
     </bpmn:scriptTask>
@@ -146,11 +146,11 @@ Loads plan_data context for the task into Claude's working memory.</bpmn:documen
     </bpmn:userTask>
 
     <!-- Script Task: Complete the current task -->
-    <bpmn:scriptTask id="complete_task" name="[MCP] complete_work(task_code)" scriptFormat="python">
+    <bpmn:scriptTask id="complete_task" name="[MCP] work_status(action=&quot;complete&quot;, task_code)" scriptFormat="python">
       <bpmn:incoming>flow_implement_task_to_complete</bpmn:incoming>
       <bpmn:outgoing>flow_complete_task_loop</bpmn:outgoing>
       <bpmn:script>task_completed = True</bpmn:script>
-      <bpmn:documentation>Calls complete_work(task_code) MCP tool to transition build task
+      <bpmn:documentation>Calls work_status(action="complete",task_code) MCP tool to transition build task
 from 'in_progress' to 'completed'. WorkflowEngine checks if all sibling tasks
 are done and auto-transitions the feature status if complete.
 Suggests the next pending task for Claude to pick up.</bpmn:documentation>

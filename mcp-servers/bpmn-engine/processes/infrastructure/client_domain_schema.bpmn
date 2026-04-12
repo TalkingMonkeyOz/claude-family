@@ -36,7 +36,7 @@
         - NULL = unassigned
 
       Search Enhancement:
-        - search_bpmn_processes gains client_domain parameter
+        - bpmn_search() gains client_domain parameter
         - Joins bpmn_processes.project_name -> projects.client_domain
         - Infrastructure processes always included when scope='all'
 
@@ -165,10 +165,10 @@ index_created = True
     <!-- PHASE 5: UPDATE SEARCH TOOL                                         -->
     <!-- ================================================================== -->
 
-    <bpmn:userTask id="update_search_tool" name="[CLAUDE] Update search_bpmn_processes in server_v2.py">
+    <bpmn:userTask id="update_search_tool" name="[CLAUDE] Update bpmn_search() in server_v2.py">
       <bpmn:incoming>flow_index_done</bpmn:incoming>
       <bpmn:outgoing>flow_tool_updated</bpmn:outgoing>
-      <!-- Add client_domain parameter to search_bpmn_processes function.
+      <!-- Add client_domain parameter to bpmn_search() function.
            When client_domain is specified:
              JOIN claude.projects p ON bp.project_name = p.project_name
              WHERE p.client_domain = %s

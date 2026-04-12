@@ -198,8 +198,8 @@ report = {"errors": [], "warnings": [], "info": [], "pass_rate": 0.0}
       <bpmn:incoming>flow_has_errors</bpmn:incoming>
       <bpmn:outgoing>to_end_with_errors</bpmn:outgoing>
       <bpmn:script>
-# For each ERROR: create_feedback(type='bug', title='Broken link: ...')
-# For each WARNING: create_feedback(type='improvement', title='Missing frontmatter: ...')
+# For each ERROR: work_create(type="feedback",type='bug', title='Broken link: ...')
+# For each WARNING: work_create(type="feedback",type='improvement', title='Missing frontmatter: ...')
 # Dedup against existing open feedback
 filed_count = 0
       </bpmn:script>

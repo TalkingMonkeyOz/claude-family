@@ -10235,6 +10235,1077 @@ def load_project_secrets(
 
 
 # ============================================================================
+# Consolidated Tools — Multi-Action Dispatch Pattern
+# 97 tools → 32 tools (67% reduction)
+# These dispatch wrappers call existing tool functions based on parameters.
+# Old tool names remain as-is above — they become aliases in a future phase.
+# ============================================================================
+
+
+def _detect_item_type(code: str) -> str:
+    """Detect work item type from short code prefix.
+
+    Args:
+        code: Short code like 'BT5', 'F12', 'FB3' or a UUID.
+
+    Returns:
+        Item type: 'build_tasks', 'features', or 'feedback'.
+    """
+    if code.startswith("BT"):
+        return "build_tasks"
+    elif code.startswith("FB"):
+        return "feedback"
+    elif code.startswith("F"):
+        return "features"
+    else:
+        return "build_tasks"
+
+
+# --- Work Tracking (14 old → 3 new) ---
+
+@mcp.tool()
+def work_create(
+    type: Literal["feature", "feedback", "task", "simple_task"],
+    project: str,
+    name: str,
+    description: str,
+    feature_type: Literal["feature", "enhancement", "refactor", "infrastructure", "documentation", "stream"] = "feature",
+    plan_data: dict | None = None,
+    feedback_type: Literal["bug", "design", "idea", "question", "change", "improvement"] = "bug",
+    feature_code: str = "",
+    verification: str = "",
+    files_affected: list[str] | None = None,
+    task_type: Literal["implementation", "testing", "documentation", "deployment", "investigation"] = "implementation",
+    blocked_by: str | None = None,
+    estimated_hours: float | None = None,
+    priority: int = 3,
+    title: str = "",
+) -> dict:
+    """Create any work item: feature, feedback, or task.
+
+    Use when: Creating features, filing bugs/ideas, or adding tasks to features.
+    Returns: {success, item_code, item_id, item_type, status}.
+
+    Args:
+        type: Item type to create.
+        project: Project name.
+        name: Item name/title.
+        description: Detailed description.
+        feature_type: Feature type (feature, enhancement, refactor, infrastructure, documentation, stream).
+        plan_data: Optional structured plan data for features.
+        feedback_type: Bug, design, idea, question, change, or improvement.
+        feature_code: Parent feature code for tasks (e.g., 'F12').
+        verification: How to verify task completion (required for type='task').
+        files_affected: Files this item affects (required for type='task').
+        task_type: Task type (implementation, testing, documentation, deployment, investigation).
+        blocked_by: Task code that blocks this one (e.g., 'BT316').
+        estimated_hours: Rough estimate for tasks.
+        priority: 1=critical, 2=high, 3=normal, 4=low, 5=backlog.
+        title: Title override (defaults to name for feedback).
+    """
+    if type == "feature":
+        return create_feature(
+            project=project, feature_name=name, description=description,
+            feature_type=feature_type, priority=priority, plan_data=plan_data,
+        )
+    elif type == "feedback":
+        priority_map = {1: "high", 2: "high", 3: "medium", 4: "low", 5: "low"}
+        return create_feedback(
+            project=project, feedback_type=feedback_type, description=description,
+            title=name or title, priority=priority_map.get(priority, "medium"),
+        )
+    elif type == "task":
+        return create_linked_task(
+            feature_code=feature_code, task_name=name, task_description=description,
+            verification=verification, files_affected=files_affected or [],
+            task_type=task_type, priority=priority, estimated_hours=estimated_hours,
+            blocked_by=blocked_by,
+        )
+    elif type == "simple_task":
+        return add_build_task(
+            feature_id=feature_code, task_name=name, task_description=description,
+            task_type=task_type, files_affected=files_affected,
+            blocked_by_task_id=blocked_by or "",
+        )
+    else:
+        return {"success": False, "error": f"Unknown work type: {type}"}
+
+
+@mcp.tool()
+def work_status(
+    item_code: str,
+    action: Literal["start", "complete", "advance", "promote", "resolve", "add_dep"],
+    new_status: str = "",
+    override_reason: str = "",
+    feature_name: str = "",
+    feature_type: str = "feature",
+    plan_data: dict | None = None,
+    resolution_note: str = "",
+    predecessor_id: str = "",
+    successor_id: str = "",
+) -> dict:
+    """Change status of any work item.
+
+    Use when: Starting/completing tasks, advancing feedback, managing dependencies.
+    Returns: {success, item_code, from_status, to_status}.
+
+    Args:
+        item_code: Item short code (e.g., 'BT5', 'F12', 'FB3').
+        action: Action to take: start, complete, advance, promote, resolve, or add_dep.
+        new_status: Target status for advance action.
+        override_reason: Reason to bypass condition checks (rare).
+        feature_name: Override feature name for promote action.
+        feature_type: Feature type for promote action.
+        plan_data: Plan data for promote action.
+        resolution_note: Note for resolve action.
+        predecessor_id: Predecessor item code for add_dep (defaults to item_code).
+        successor_id: Successor item code for add_dep.
+    """
+    if action == "start":
+        return start_work(task_code=item_code)
+    elif action == "complete":
+        return complete_work(task_code=item_code)
+    elif action == "advance":
+        item_type = _detect_item_type(item_code)
+        return advance_status(
+            item_type=item_type, item_id=item_code,
+            new_status=new_status, override_reason=override_reason,
+        )
+    elif action == "promote":
+        return promote_feedback(
+            feedback_id=item_code, feature_name=feature_name,
+            feature_type=feature_type, priority=3, plan_data=plan_data,
+        )
+    elif action == "resolve":
+        return resolve_feedback(feedback_id=item_code, resolution_note=resolution_note)
+    elif action == "add_dep":
+        pred_type = _detect_item_type(predecessor_id or item_code)
+        succ_type = _detect_item_type(successor_id)
+        return add_dependency(
+            predecessor_type=pred_type, predecessor_id=predecessor_id or item_code,
+            successor_type=succ_type, successor_id=successor_id,
+        )
+    else:
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+
+@mcp.tool()
+def work_board(
+    project: str,
+    view: Literal["board", "ready", "todos"] = "board",
+) -> dict:
+    """Read work tracking state: build board, ready tasks, or incomplete todos.
+
+    Use when: Checking project status, finding next work, reviewing outstanding items.
+    Returns: {project, streams/features/tasks} for board; {tasks} for ready; {todos} for todos.
+
+    Args:
+        project: Project name.
+        view: View type: board (full hierarchy), ready (next tasks), or todos (incomplete).
+    """
+    if view == "board":
+        return get_build_board(project=project)
+    elif view == "ready":
+        return get_ready_tasks(project=project)
+    elif view == "todos":
+        return get_incomplete_todos(project=project)
+    else:
+        return {"success": False, "error": f"Unknown view: {view}"}
+
+
+# --- Memory Management (8 old → 1 new, remember + recall_memories stay) ---
+
+@mcp.tool()
+def memory_manage(
+    action: Literal["list", "update", "archive", "merge", "mark_applied", "consolidate"],
+    memory_id: str = "",
+    content: str = "",
+    title: str = "",
+    tier: str = "",
+    memory_type: str = "",
+    reason: str = "",
+    keep_id: str = "",
+    archive_id: str = "",
+    success: bool = True,
+    project: str = "",
+    tier_filter: str = "",
+    memory_type_filter: str = "",
+    include_archived: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    trigger: Literal["session_end", "periodic", "manual"] = "session_end",
+    project_name: str = "",
+) -> dict:
+    """Memory admin operations: list, update, archive, merge, mark applied, consolidate.
+
+    Use when: Managing stored memories, fixing stale entries, deduplicating, running lifecycle.
+    Returns: {success, action_result}.
+
+    Args:
+        action: Operation to perform.
+        memory_id: Target memory UUID (for update/archive/mark_applied).
+        content: New content for update (re-embeds automatically).
+        title: New title for update.
+        tier: New tier for update ('mid' or 'long').
+        memory_type: New type for update.
+        reason: Reason for archive or merge.
+        keep_id: Memory to keep in merge.
+        archive_id: Memory to archive in merge.
+        success: Whether knowledge application was successful (mark_applied).
+        project: Project filter for list.
+        tier_filter: Tier filter for list.
+        memory_type_filter: Type filter for list.
+        include_archived: Include archived in list.
+        limit: Max results for list.
+        offset: Pagination offset for list.
+        trigger: Consolidation trigger mode.
+        project_name: Project for consolidation.
+    """
+    if action == "list":
+        return list_memories(
+            project=project, tier=tier_filter, memory_type=memory_type_filter,
+            include_archived=include_archived, limit=limit, offset=offset,
+        )
+    elif action == "update":
+        return update_memory(
+            memory_id=memory_id, content=content, title=title,
+            tier=tier, memory_type=memory_type,
+        )
+    elif action == "archive":
+        return archive_memory(memory_id=memory_id, reason=reason)
+    elif action == "merge":
+        return merge_memories(keep_id=keep_id, archive_id=archive_id, reason=reason)
+    elif action == "mark_applied":
+        return mark_knowledge_applied(knowledge_id=memory_id, success=success)
+    elif action == "consolidate":
+        return consolidate_memories(trigger=trigger, project_name=project_name or project)
+    else:
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+
+# --- Session Facts (4 old → 1 new, store_session_fact stays) ---
+
+@mcp.tool()
+def session_facts(
+    fact_key: str = "",
+    project_name: str = "",
+    include_sensitive: bool = False,
+    n_sessions: int = 0,
+    fact_types: list[str] | None = None,
+) -> dict:
+    """Read session facts: recall one, list all, or recall from previous sessions.
+
+    Use when: Retrieving notepad entries from this or prior sessions.
+    Returns: {success, fact_key, fact_value} or {facts} or {sessions_checked}.
+
+    Args:
+        fact_key: Specific fact key to recall. If provided, recalls that fact.
+        project_name: Project name filter.
+        include_sensitive: Include sensitive values in list.
+        n_sessions: If >0, search previous N sessions instead of current.
+        fact_types: Filter by fact types (for previous session recall).
+    """
+    if fact_key:
+        return recall_session_fact(fact_key=fact_key, project_name=project_name)
+    elif n_sessions > 0:
+        return recall_previous_session_facts(
+            project_name=project_name, n_sessions=n_sessions, fact_types=fact_types,
+        )
+    else:
+        return list_session_facts(project_name=project_name, include_sensitive=include_sensitive)
+
+
+# --- Session Lifecycle (6 old → 1 new, start/end_session stay) ---
+
+@mcp.tool()
+def session_manage(
+    action: Literal["checkpoint", "recover", "store_notes", "get_notes", "search_conversations", "extract_conversation", "extract_insights"],
+    focus: str = "",
+    progress_notes: str = "",
+    content: str = "",
+    section: Literal["general", "decisions", "progress", "blockers", "findings"] = "general",
+    append: bool = True,
+    query: str = "",
+    date_range_days: int | None = None,
+    limit: int = 10,
+    session_id: str = "",
+    project: str = "",
+) -> dict:
+    """Session management: checkpoint, recovery, notes, conversation search/extract.
+
+    Use when: Saving mid-session progress, recovering from crashes, managing notes, searching history.
+    Returns: {success, action_result}.
+
+    Args:
+        action: Operation to perform.
+        focus: Current focus for checkpoint.
+        progress_notes: Progress notes for checkpoint.
+        content: Note content for store_notes.
+        section: Note section for store/get notes.
+        append: Append to section (True) or replace (False).
+        query: Search query for search_conversations.
+        date_range_days: Limit conversation search to last N days.
+        limit: Max results for search.
+        session_id: Session ID for extract operations.
+        project: Project name.
+    """
+    if action == "checkpoint":
+        return save_checkpoint(focus=focus, progress_notes=progress_notes, project=project)
+    elif action == "recover":
+        return recover_session(project=project)
+    elif action == "store_notes":
+        return store_session_notes(content=content, section=section, append=append)
+    elif action == "get_notes":
+        return get_session_notes(section=section)
+    elif action == "search_conversations":
+        return search_conversations(query=query, project=project, date_range_days=date_range_days, limit=limit)
+    elif action == "extract_conversation":
+        return extract_conversation(session_id=session_id, project=project)
+    elif action == "extract_insights":
+        return extract_insights(session_id=session_id, project=project)
+    else:
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+
+# --- Workfiles (6 old → 2 new) ---
+
+@mcp.tool()
+def workfile_store(
+    component: str,
+    title: str,
+    content: str = "",
+    project: str = "",
+    workfile_type: str = "notes",
+    tags: list[str] | None = None,
+    feature_code: str | None = None,
+    is_pinned: bool = False,
+    mode: Literal["replace", "append", "archive", "delete"] = "replace",
+) -> dict:
+    """Store, archive, or delete workfiles in the filing cabinet.
+
+    Use when: Saving component working notes, archiving stale files, or deleting wrong content.
+    Returns: {success, workfile_id, action}.
+
+    Args:
+        component: Drawer name (e.g., 'auth-flow', 'parallel-runner').
+        title: File title within component.
+        content: Content to store (required for replace/append).
+        project: Project name. Defaults to current directory.
+        workfile_type: notes, findings, questions, approach, investigation, or reference.
+        tags: Optional tags for categorization.
+        feature_code: Optional link to a feature (e.g., 'F12').
+        is_pinned: If True, auto-surfaces at session start.
+        mode: replace (overwrite), append (add to end), archive (soft-delete), delete (hard-delete).
+    """
+    if mode == "archive":
+        return archive_workfile(component=component, title=title, project=project)
+    elif mode == "delete":
+        return delete_workfile(component=component, title=title, project=project)
+    else:
+        return stash(
+            component=component, title=title, content=content, project=project,
+            workfile_type=workfile_type, tags=tags, feature_code=feature_code,
+            is_pinned=is_pinned, mode=mode,
+        )
+
+
+@mcp.tool()
+def workfile_read(
+    query: str = "",
+    component: str = "",
+    title: str = "",
+    project: str = "",
+    is_active: bool = True,
+    limit: int = 5,
+) -> dict:
+    """Read, search, or list workfiles from the filing cabinet.
+
+    Use when: Loading component context, finding notes by topic, browsing drawers.
+    Returns: {success, files} or {success, components}.
+
+    Args:
+        query: Semantic search query. If provided, searches across all workfiles.
+        component: Drawer name. If provided, reads files from this component.
+        title: Specific file within component.
+        project: Project name. Defaults to current directory.
+        is_active: Filter by active status (default True).
+        limit: Max results for search.
+    """
+    if query:
+        return search_workfiles(query=query, project=project, component=component, limit=limit)
+    elif component:
+        return unstash(component=component, title=title, project=project)
+    else:
+        return list_workfiles(project=project, component=component, is_active=is_active)
+
+
+# --- Entities (4 old → 2 new) ---
+
+@mcp.tool()
+def entity_store(
+    entity_type: str = "",
+    properties: dict | None = None,
+    entity_id: str = "",
+    entity_name: str = "",
+    patch: dict | None = None,
+    tags: list[str] | None = None,
+    is_archived: bool | None = None,
+    project: str = "",
+    relationships: list[dict] | None = None,
+) -> dict:
+    """Create or update entities in the reference library.
+
+    Use when: Cataloging structured data (API endpoints, OData entities, domain concepts) or patching existing entities.
+    Returns: {success, entity_id, action}.
+
+    Args:
+        entity_type: Type name for new entities (e.g., 'odata_entity', 'domain_concept').
+        properties: JSONB properties for new entities.
+        entity_id: UUID for updating existing entity.
+        entity_name: Name lookup for updating (case-insensitive).
+        patch: Targeted property patches (set/append/remove/remove_key operations).
+        tags: Tags for filtering.
+        is_archived: Set archive status.
+        project: Project scope.
+        relationships: List of {to_entity_id, relationship_type} for new entities.
+    """
+    if entity_id or entity_name or patch:
+        return update_entity(
+            entity_id=entity_id, entity_name=entity_name, entity_type=entity_type,
+            patch=patch, tags=tags, is_archived=is_archived,
+        )
+    elif entity_type and properties:
+        return catalog(
+            entity_type=entity_type, properties=properties, project=project,
+            tags=tags, relationships=relationships,
+        )
+    else:
+        return {"success": False, "error": "Provide entity_type+properties to create, or entity_id/entity_name+patch to update"}
+
+
+@mcp.tool()
+def entity_read(
+    query: str = "",
+    entity_type: str = "",
+    entity_id: str = "",
+    tags: list | None = None,
+    project: str = "",
+    detail: Literal["summary", "full"] = "summary",
+    limit: int = 10,
+    page: int = 1,
+    page_size: int = 30,
+    min_similarity: float = 0.5,
+) -> dict:
+    """Search or browse entities in the reference library.
+
+    Use when: Finding structured data by meaning, browsing by type, or viewing entity details.
+    Returns: {success, results} or {success, tree} or {success, entity}.
+
+    Args:
+        query: Semantic search query.
+        entity_type: Filter by type name.
+        entity_id: Specific entity UUID for detail view.
+        tags: Filter by tags.
+        project: Project filter.
+        detail: 'summary' (compact) or 'full' (all properties).
+        limit: Max search results.
+        page: Page number for browsing.
+        page_size: Entities per page.
+        min_similarity: Minimum vector similarity threshold.
+    """
+    if entity_id and not query:
+        return explore_entities(entity_id=entity_id, project=project)
+    elif query:
+        return recall_entities(
+            query=query, entity_type=entity_type, project=project, tags=tags,
+            limit=limit, min_similarity=min_similarity, detail=detail, entity_id=entity_id,
+        )
+    elif entity_type or tags:
+        return explore_entities(
+            tags=tags, entity_type=entity_type, project=project,
+            page=page, page_size=page_size,
+        )
+    else:
+        return explore_entities(project=project, page=page, page_size=page_size)
+
+
+# --- Articles (5 old → 2 new) ---
+
+@mcp.tool()
+def article_write(
+    title: str = "",
+    abstract: str = "",
+    article_id: str = "",
+    article_type: str = "research",
+    tags: list | None = None,
+    project: str = "",
+    project_ids: list | None = None,
+    section_title: str = "",
+    section_body: str = "",
+    section_id: str = "",
+    section_order: int = 0,
+    summary: str = "",
+    linked_entity_ids: list | None = None,
+    change_reason: str = "",
+    status_action: Literal["", "publish", "archive", "revert_draft", "info"] = "",
+) -> dict:
+    """Create/update knowledge articles, sections, and lifecycle.
+
+    Use when: Writing narrative knowledge, adding sections, or managing article lifecycle.
+    Returns: {success, article_id} or {success, section_id}.
+
+    Args:
+        title: Article title (required for new articles).
+        abstract: Article summary (required for new articles).
+        article_id: Existing article UUID for updates.
+        article_type: investigation, reference, tutorial, architecture, or research.
+        tags: Classification tags.
+        project: Project name.
+        project_ids: Project UUIDs this article relates to.
+        section_title: Section title (triggers section write).
+        section_body: Section content (triggers section write).
+        section_id: Existing section UUID for updates.
+        section_order: Position in reading order.
+        summary: Section summary for index.
+        linked_entity_ids: Entity UUIDs discussed in section.
+        change_reason: Why section was updated (version history).
+        status_action: Lifecycle action: publish, archive, revert_draft, or info.
+    """
+    if status_action:
+        return manage_article(article_id=article_id, action=status_action)
+    elif section_title and section_body:
+        return write_article_section(
+            article_id=article_id, title=section_title, body=section_body,
+            section_order=section_order, summary=summary,
+            linked_entity_ids=linked_entity_ids, section_id=section_id,
+            change_reason=change_reason,
+        )
+    elif title:
+        return write_article(
+            title=title, abstract=abstract, article_type=article_type,
+            tags=tags, project_ids=project_ids, article_id=article_id, project=project,
+        )
+    else:
+        return {"success": False, "error": "Provide title+abstract for article, section_title+section_body for section, or status_action for lifecycle"}
+
+
+@mcp.tool()
+def article_read(
+    query: str = "",
+    article_id: str = "",
+    section_id: str = "",
+    project: str = "",
+    article_type: str = "",
+    entity_id: str = "",
+    tags: list | None = None,
+    limit: int = 5,
+) -> dict:
+    """Search or read knowledge articles.
+
+    Use when: Finding narrative knowledge or reading specific articles/sections.
+    Returns: {success, results} for search or {success, content} for read.
+
+    Args:
+        query: Semantic search query.
+        article_id: Specific article UUID to read.
+        section_id: Specific section within article.
+        project: Project filter.
+        article_type: Filter by article type.
+        entity_id: Find articles linked to this entity.
+        tags: Filter by tags.
+        limit: Max search results.
+    """
+    if article_id:
+        return read_article(article_id=article_id, section_id=section_id)
+    elif query:
+        return recall_articles(
+            query=query, project=project, article_type=article_type,
+            entity_id=entity_id, tags=tags, limit=limit,
+        )
+    else:
+        return {"success": False, "error": "Provide query for search or article_id to read"}
+
+
+# --- Messaging (8 old → 2 new) ---
+
+@mcp.tool()
+def inbox(
+    view: Literal["pending", "unactioned", "history"] = "pending",
+    project_name: str = "",
+    message_id: str = "",
+    message_ids: list[str] | None = None,
+    ack_action: Literal["", "read", "acknowledged", "actioned", "deferred"] = "",
+    project_id: str = "",
+    defer_reason: str = "",
+    priority: int = 3,
+    days: int = 7,
+    message_type: str = "",
+    limit: int = 50,
+    session_id: str = "",
+    include_broadcasts: bool = True,
+    include_read: bool = False,
+) -> dict:
+    """Check, search, and manage incoming messages from other Claude instances.
+
+    Use when: Checking inbox, acknowledging messages, or reviewing message history.
+    Returns: {count, messages} or {success, acknowledged_count}.
+
+    Args:
+        view: View type: pending (unread), unactioned (needs response), history (past messages).
+        project_name: Project name filter.
+        message_id: Single message ID to acknowledge.
+        message_ids: Multiple message IDs to bulk acknowledge.
+        ack_action: Acknowledge action: read, acknowledged, actioned, deferred.
+        project_id: Project UUID for actioned acks (creates todo).
+        defer_reason: Reason for deferred acks.
+        priority: Priority for actioned ack todos.
+        days: History lookback days.
+        message_type: Filter history by message type.
+        limit: Max history results.
+        session_id: Filter by session.
+        include_broadcasts: Include broadcast messages in pending.
+        include_read: Include already-read messages in pending.
+    """
+    if message_ids:
+        return bulk_acknowledge(message_ids=message_ids, action=ack_action or "read")
+    if message_id:
+        return acknowledge(
+            message_id=message_id, action=ack_action or "read",
+            project_id=project_id, defer_reason=defer_reason, priority=priority,
+        )
+    if view == "history":
+        return get_message_history(
+            project_name=project_name, days=days, message_type=message_type, limit=limit,
+        )
+    if view == "unactioned":
+        return get_unactioned_messages(project_name=project_name)
+    return check_inbox(
+        project_name=project_name, session_id=session_id,
+        include_broadcasts=include_broadcasts, include_read=include_read,
+    )
+
+
+@mcp.tool()
+def send_msg(
+    body: str,
+    message_type: Literal["task_request", "status_update", "question", "notification", "handoff", "broadcast"] = "notification",
+    to_project: str = "",
+    subject: str = "",
+    priority: Literal["urgent", "normal", "low"] = "normal",
+    reply_to_id: str = "",
+    thread_status: str = "",
+    is_broadcast: bool = False,
+    from_project: str = "",
+    from_session_id: str = "",
+    to_session_id: str = "",
+    parent_message_id: str = "",
+    metadata: dict | None = None,
+    conversation_mode: str = "fire_and_forget",
+) -> dict:
+    """Send a message, reply, or broadcast to other Claude instances.
+
+    Use when: Communicating with other instances, replying, or broadcasting.
+    Returns: {success, message_id, created_at}.
+
+    Args:
+        body: Message content.
+        message_type: Type of message.
+        to_project: Target project name.
+        subject: Message subject.
+        priority: Message priority.
+        reply_to_id: Original message ID to reply to (triggers reply mode).
+        thread_status: Thread lifecycle marker for replies.
+        is_broadcast: If True, broadcast to all instances.
+        from_project: Sender project name.
+        from_session_id: Sender session ID.
+        to_session_id: Target session ID.
+        parent_message_id: Parent message for threading.
+        metadata: Optional metadata dict.
+        conversation_mode: Conversation protocol mode.
+    """
+    if is_broadcast:
+        return broadcast(
+            body=body, subject=subject, from_session_id=from_session_id,
+            from_project=from_project, priority=priority,
+        )
+    if reply_to_id:
+        return reply_to(
+            original_message_id=reply_to_id, body=body,
+            from_session_id=from_session_id, from_project=from_project,
+            message_type=message_type, thread_status=thread_status,
+        )
+    return send_message(
+        message_type=message_type, body=body, subject=subject,
+        to_project=to_project, to_session_id=to_session_id, priority=priority,
+        from_session_id=from_session_id, from_project=from_project,
+        parent_message_id=parent_message_id, metadata=metadata,
+        conversation_mode=conversation_mode,
+    )
+
+
+# --- Secrets (5 old → 1 new) ---
+
+@mcp.tool()
+def secret(
+    action: Literal["get", "set", "list", "delete", "load_all"],
+    secret_key: str = "",
+    secret_value: str = "",
+    description: str = "",
+    project: str = "",
+) -> dict:
+    """Manage credentials in the OS credential vault (Windows Credential Manager).
+
+    Use when: Storing, retrieving, listing, or deleting API keys, tokens, and credentials.
+    Returns: {success, secret_key, value} or {success, secrets} or {success, loaded}.
+
+    Args:
+        action: Operation: get, set, list, delete, or load_all.
+        secret_key: Key name (required for get/set/delete).
+        secret_value: Secret value (required for set).
+        description: Description of what this secret is for (set only).
+        project: Project name. Defaults to current directory.
+    """
+    if action == "get":
+        return get_secret(secret_key=secret_key, project=project)
+    elif action == "set":
+        return set_secret(
+            secret_key=secret_key, secret_value=secret_value,
+            project=project, description=description,
+        )
+    elif action == "list":
+        return list_secrets(project=project)
+    elif action == "delete":
+        return delete_secret(secret_key=secret_key, project=project)
+    elif action == "load_all":
+        return load_project_secrets(project=project)
+    else:
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+
+# --- Config (4 old → 1 new) ---
+
+@mcp.tool()
+def config_manage(
+    action: Literal["update_section", "deploy_claude_md", "deploy_project", "regenerate_settings"],
+    project: str,
+    section: str = "",
+    content: str = "",
+    mode: Literal["replace", "append"] = "replace",
+    components: list[str] | None = None,
+) -> dict:
+    """Manage project configuration and deployment.
+
+    Use when: Updating CLAUDE.md sections, deploying configs, or regenerating settings.
+    Returns: {success, diff_summary} or {success, deployed_components}.
+
+    Args:
+        action: Operation to perform.
+        project: Project name.
+        section: CLAUDE.md section name (for update_section).
+        content: Content to write (for update_section).
+        mode: 'replace' or 'append' (for update_section).
+        components: Components to deploy (for deploy_project).
+    """
+    if action == "update_section":
+        return update_claude_md(project=project, section=section, content=content, mode=mode)
+    elif action == "deploy_claude_md":
+        return deploy_claude_md(project=project)
+    elif action == "deploy_project":
+        return deploy_project(project=project, components=components)
+    elif action == "regenerate_settings":
+        return regenerate_settings(project=project)
+    else:
+        return {"success": False, "error": f"Unknown action: {action}"}
+
+
+# --- Code Intelligence (8 old → 2 new) ---
+
+@mcp.tool()
+def code_search(
+    query: str = "",
+    name: str = "",
+    symbol_id: str = "",
+    project: str = "",
+    file_path: str = "",
+    kind: str = "",
+    limit: int = 20,
+) -> dict:
+    """Search code symbols by name, meaning, or structure.
+
+    Use when: Finding functions/classes, checking name collisions, exploring module structure.
+    Returns: {success, symbols} or {success, has_collision} or {success, files}.
+
+    Args:
+        query: Semantic search query.
+        name: Check if symbol name exists (collision detection).
+        symbol_id: Find symbols similar to this one.
+        project: Project filter.
+        file_path: Get module structure for file (or exclude from collision check).
+        kind: Filter by symbol kind (function, class, method, etc.).
+        limit: Max results.
+    """
+    if name:
+        return check_collision(name=name, project=project, file_path=file_path)
+    elif symbol_id:
+        return find_similar(symbol_id=symbol_id, limit=limit)
+    elif file_path and not query and not name and not symbol_id:
+        return get_module_map(project=project, file_path=file_path)
+    elif query:
+        return find_symbol(query=query, project=project, kind=kind, limit=limit)
+    else:
+        return get_module_map(project=project)
+
+
+@mcp.tool()
+def code_context(
+    symbol_name: str = "",
+    symbol_id: str = "",
+    project: str = "",
+    depth: int = 1,
+    direction: str = "both",
+) -> dict:
+    """Get deep symbol analysis: full context, callers, callees, and dependency graph.
+
+    Use when: Understanding symbol usage, preparing to modify code, tracing call chains.
+    Returns: {success, symbol, body, callers, callees} or {success, root, edges}.
+
+    Args:
+        symbol_name: Get full context (body, callers, callees, siblings).
+        symbol_id: Get dependency graph (walk reference graph).
+        project: Project name.
+        depth: How many levels to traverse (1=direct, 2=transitive).
+        direction: For dependency graph: 'incoming', 'outgoing', or 'both'.
+    """
+    if symbol_name:
+        return get_context(symbol_name=symbol_name, project=project, depth=depth)
+    elif symbol_id:
+        return get_dependency_graph(symbol_id=symbol_id, depth=depth, direction=direction)
+    else:
+        return {"success": False, "error": "Provide symbol_name for context or symbol_id for dependency graph"}
+
+
+# --- Books (3 old → 2 new) ---
+
+@mcp.tool()
+def book_store(
+    book_title: str,
+    author: str = "",
+    isbn: str = "",
+    year: int | None = None,
+    topics: list[str] | None = None,
+    summary: str = "",
+    concept: str = "",
+    chapter: str = "",
+    page_range: str = "",
+    description: str = "",
+    quote: str = "",
+    tags: list[str] | None = None,
+) -> dict:
+    """Store books and references in the reference library.
+
+    Use when: Adding a new book or capturing specific concepts/quotes from books.
+    Returns: {success, book_id} or {success, ref_id}.
+
+    Args:
+        book_title: Title of the book (required).
+        author: Book author.
+        isbn: ISBN identifier.
+        year: Publication year.
+        topics: Topic tags for the book.
+        summary: Brief summary of the book.
+        concept: Concept/idea from the book (if provided, stores a reference instead).
+        chapter: Chapter for the reference.
+        page_range: Pages for the reference.
+        description: Explanation of the concept.
+        quote: Direct quote from the book.
+        tags: Tags for the reference.
+    """
+    if concept:
+        return store_book_reference(
+            book_title=book_title, concept=concept, chapter=chapter,
+            page_range=page_range, description=description, quote=quote, tags=tags,
+        )
+    else:
+        return store_book(
+            title=book_title, author=author, isbn=isbn,
+            year=year, topics=topics, summary=summary,
+        )
+
+
+@mcp.tool()
+def book_read(
+    query: str,
+    book_title: str = "",
+    tags: list[str] | None = None,
+    limit: int = 5,
+) -> dict:
+    """Search book references using semantic similarity.
+
+    Use when: Looking for ideas or patterns from books.
+    Returns: {success, references}.
+
+    Args:
+        query: Natural language search query.
+        book_title: Optional filter by book title.
+        tags: Filter by tags.
+        limit: Max results.
+    """
+    return recall_book_reference(query=query, book_title=book_title, tags=tags, limit=limit)
+
+
+# --- Knowledge Graph (4 old → 1 new) ---
+
+@mcp.tool()
+def link(
+    from_knowledge_id: str = "",
+    to_knowledge_id: str = "",
+    relation_type: Literal["", "extends", "contradicts", "supports", "supersedes", "depends_on", "relates_to", "part_of", "caused_by"] = "",
+    strength: float = 1.0,
+    notes: str = "",
+    from_type: str = "",
+    from_id: str = "",
+    to_type: str = "",
+    to_id: str = "",
+    link_type: str = "related_to",
+    metadata: dict | None = None,
+    knowledge_id: str = "",
+    resource_type: str = "",
+    resource_id: str = "",
+    direction: str = "both",
+    include_reverse: bool = True,
+    relation_types: list[str] | None = None,
+) -> dict:
+    """Create or read links between resources and knowledge entries.
+
+    Use when: Connecting related knowledge, linking resources, or exploring relationships.
+    Returns: {success, relation_id} or {success, link_id} or {success, relations/links}.
+
+    Args:
+        from_knowledge_id: Source knowledge UUID (creates knowledge link).
+        to_knowledge_id: Target knowledge UUID (creates knowledge link).
+        relation_type: Relation type for knowledge links.
+        strength: Link strength 0-1.
+        notes: Notes about the relation.
+        from_type: Source resource type (creates resource link).
+        from_id: Source resource UUID.
+        to_type: Target resource type.
+        to_id: Target resource UUID.
+        link_type: Relationship type for resource links.
+        metadata: Optional metadata for resource links.
+        knowledge_id: Get relations for this knowledge entry (read mode).
+        resource_type: Resource type to query (read mode).
+        resource_id: Resource UUID to query (read mode).
+        direction: 'both', 'incoming', or 'outgoing' for reads.
+        include_reverse: Include incoming relations for knowledge reads.
+        relation_types: Filter by relation types for knowledge reads.
+    """
+    if from_knowledge_id and to_knowledge_id:
+        return link_knowledge(
+            from_knowledge_id=from_knowledge_id, to_knowledge_id=to_knowledge_id,
+            relation_type=relation_type, strength=strength, notes=notes,
+        )
+    elif from_type and from_id and to_type and to_id:
+        return link_resources(
+            from_type=from_type, from_id=from_id, to_type=to_type, to_id=to_id,
+            link_type=link_type, strength=strength, metadata=metadata,
+        )
+    elif knowledge_id:
+        return get_related_knowledge(
+            knowledge_id=knowledge_id, relation_types=relation_types,
+            include_reverse=include_reverse,
+        )
+    elif resource_type and resource_id:
+        return get_linked_resources(
+            resource_type=resource_type, resource_id=resource_id,
+            link_type=link_type, direction=direction,
+        )
+    else:
+        return {"success": False, "error": "Provide from/to IDs to create a link, or knowledge_id/resource_id to read links"}
+
+
+# --- BPMN (2 old → 1 new, sync becomes background) ---
+
+@mcp.tool()
+def bpmn_search(
+    query: str,
+    project: str = "",
+    level: str = "",
+    category: str = "",
+    client_domain: str = "",
+    limit: int = 10,
+) -> dict:
+    """Search BPMN processes using semantic similarity.
+
+    Use when: Finding processes by keyword, understanding workflow relationships.
+    Returns: {success, processes}.
+
+    Args:
+        query: Natural language search query.
+        project: Filter by project name.
+        level: Filter by level (L0, L1, L2).
+        category: Filter by category.
+        client_domain: Filter by client domain.
+        limit: Max results.
+    """
+    return search_bpmn_processes(
+        query=query, project=project, level=level,
+        category=category, client_domain=client_domain, limit=limit,
+    )
+
+
+# --- Protocol (3 old → 1 new) ---
+
+@mcp.tool()
+def protocol(
+    content: str = "",
+    change_reason: str = "",
+    protocol_name: str = "CORE_PROTOCOL",
+    limit: int = 0,
+) -> dict:
+    """Protocol version management: view, history, or update.
+
+    Use when: Checking active protocol, viewing history, or updating protocol content.
+    Returns: {success, content} or {success, versions} or {success, new_version}.
+
+    Args:
+        content: New protocol content (triggers update).
+        change_reason: Why this change was made (required with content).
+        protocol_name: Protocol to manage (default: CORE_PROTOCOL).
+        limit: Number of history versions to return (triggers history view).
+    """
+    if content and change_reason:
+        return update_protocol(content=content, change_reason=change_reason, protocol_name=protocol_name)
+    elif limit > 0:
+        return get_protocol_history(protocol_name=protocol_name, limit=limit)
+    else:
+        return get_active_protocol(protocol_name=protocol_name)
+
+
+# --- System (3 old → 1 new) ---
+
+@mcp.tool()
+def system_info(
+    view: Literal["channel", "sessions", "recipients"] = "sessions",
+) -> dict:
+    """Check system status: channel connectivity, active sessions, or message recipients.
+
+    Use when: Checking who's online, verifying messaging, or discovering recipients.
+    Returns: {connected} or {count, sessions} or {count, recipients}.
+
+    Args:
+        view: What to check: channel (messaging status), sessions (who's active), recipients (valid targets).
+    """
+    if view == "channel":
+        return channel_status()
+    elif view == "sessions":
+        return get_active_sessions()
+    elif view == "recipients":
+        return list_recipients()
+    else:
+        return {"success": False, "error": f"Unknown view: {view}"}
+
+
+# ============================================================================
 # Main Entry Point
 # ============================================================================
 

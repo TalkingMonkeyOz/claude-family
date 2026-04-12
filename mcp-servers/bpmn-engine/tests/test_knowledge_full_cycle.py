@@ -9,7 +9,7 @@ Paths tested:
   2. Direct capture (with link): identify(capture) → formulate → embed → store → link_gw(yes) → link → end
   3. Vault embedding (changes found): identify(embed_vault) → scan(True) → chunk → upsert → end
   4. Vault embedding (no changes): identify(embed_vault) → scan(False) → end
-  5. Book reference: identify(book_reference) → store_book → store_book_reference → end
+  5. Book reference: identify(book_reference) → book_store() → book_store(concept=...) → end
   6. Conversation mining: identify(mine_conversation) → extract_conversation → extract_insights → end
   7. RAG retrieval (needs RAG): identify(retrieve) → source(rag) → classify(True) → query → inject → end
   8. RAG retrieval (skip): identify(retrieve) → source(rag) → classify(False) → end
@@ -19,11 +19,11 @@ Paths tested:
 Key notes:
   - action_gw default routes to formulate_knowledge (direct capture)
   - action == "embed_vault" → scan_vault (script)
-  - action == "book_reference" → store_book (script)
+  - action == "book_reference" → book_store() (script)
   - action == "mine_conversation" → extract_conversation (script)
   - action == "retrieve" → retrieve_source_gw
   - retrieve_source_gw default → rag_classify; source == "direct"/"books"/"graph"
-  - link_gw: has_related == True → link_knowledge; default → end_merge
+  - link_gw: has_related == True → link(); default → end_merge
   - changes_gw: changes_found == True → chunk_and_embed; default → end_merge
   - needs_rag_gw: needs_rag == False → end_merge (skip); default → rag_query
   - direct/book/graph → apply_merge → apply_knowledge → mark_applied → end_merge
@@ -136,7 +136,7 @@ class TestDirectCaptureNoLink:
 class TestDirectCaptureWithLink:
     """
     identify(capture) → formulate → embed → store
-    → link_gw(has_related=True) → link_knowledge → end_merge → end.
+    → link_gw(has_related=True) → link() → end_merge → end.
     """
 
     def test_direct_capture_with_link(self):
@@ -145,7 +145,7 @@ class TestDirectCaptureWithLink:
         complete_user_task(wf, "identify_action", {"action": "capture"})
         complete_user_task(wf, "formulate_knowledge", {"has_related": True})
 
-        # link_knowledge is a scriptTask → end_merge → end
+        # link() is a scriptTask → end_merge → end
         assert wf.is_completed()
         names = completed_spec_names(wf)
 
@@ -219,7 +219,7 @@ class TestVaultEmbeddingNoChanges:
 
 class TestBookReference:
     """
-    identify(book_reference) → store_book (script) → store_book_reference (script) → end.
+    identify(book_reference) → book_store() (script) → book_store(concept=...) (script) → end.
     """
 
     def test_book_reference_path(self):

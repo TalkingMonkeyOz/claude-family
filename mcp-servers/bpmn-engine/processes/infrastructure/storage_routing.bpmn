@@ -26,17 +26,17 @@
         - check_first_result: What the dedup/exists check found
         - store_success: Whether storage succeeded
       Scenarios:
-        1. API key/token/password → Credential Vault (set_secret)
+        1. API key/token/password → Credential Vault (secret(action="set"))
         2. Endpoint URL, config value → Notepad (store_session_fact)
         3. Decision made this session → Notepad (store_session_fact)
         4. Pattern, gotcha, lesson → Memory (remember)
         5. Decision for future sessions → Memory (remember)
-        6. Component working notes → Filing Cabinet (stash)
+        6. Component working notes → Filing Cabinet (workfile_store)
         7. API endpoint, OData entity, schema → Reference Library (catalog)
         8. Procedure or process → Skill or BPMN model
         9. User-requested "remember this" → Auto Memory (.md file)
       Anti-patterns caught by classification:
-        - Credentials in session facts (should be set_secret)
+        - Credentials in session facts (should be secret(action="set"))
         - Secrets in memory (NEVER)
         - Task acks/progress in memory (should be session fact)
         - OData entities in memory (should be catalog)
@@ -126,9 +126,9 @@ except NameError:
       <bpmn:outgoing>f_check_first_to_gw</bpmn:outgoing>
     </bpmn:userTask>
     <!--
-      Check first rules: Credential=get_secret, Notepad=list_session_facts,
-      Memory=recall_memories, Filing Cabinet=list_workfiles,
-      Reference Library=recall_entities, Skill/BPMN=search_processes,
+      Check first rules: Credential=secret(action="get"), Notepad=session_facts(),
+      Memory=recall_memories, Filing Cabinet=workfile_read(),
+      Reference Library=entity_read(), Skill/BPMN=search_processes,
       Auto Memory=Read MEMORY.md index.
     -->
     <bpmn:exclusiveGateway id="gw_already_exists" name="Already Exists?" default="f_not_exists">
@@ -165,15 +165,15 @@ except NameError:
       <bpmn:outgoing>f_route_automemory</bpmn:outgoing>
     </bpmn:exclusiveGateway>
     <!-- Route 1: Credential Vault -->
-    <bpmn:scriptTask id="store_credential" name="[MCP] set_secret(key, value, project)" scriptFormat="python">
+    <bpmn:scriptTask id="store_credential" name="[MCP] secret(action=&quot;set&quot;, key, value, project)" scriptFormat="python">
       <bpmn:incoming>f_route_credential</bpmn:incoming>
       <bpmn:outgoing>f_cred_to_validate</bpmn:outgoing>
       <bpmn:script>
-# Calls set_secret(secret_key, secret_value, project)
+# Calls secret(action="set",secret_key, secret_value, project)
 # Persists in Windows Credential Manager forever
 # Also stores as session_fact for immediate use
 storage_target = "credential_vault"
-storage_tool = "set_secret"
+storage_tool = 'secret(action="set")'
 store_success = True
       </bpmn:script>
     </bpmn:scriptTask>
@@ -205,21 +205,21 @@ store_success = True
       </bpmn:script>
     </bpmn:scriptTask>
     <!-- Route 4: Filing Cabinet (workfiles) -->
-    <bpmn:scriptTask id="store_workfile" name="[MCP] stash(component, title, content)" scriptFormat="python">
+    <bpmn:scriptTask id="store_workfile" name="[MCP] workfile_store(component, title, content)" scriptFormat="python">
       <bpmn:incoming>f_route_workfile</bpmn:incoming>
       <bpmn:outgoing>f_workfile_to_validate</bpmn:outgoing>
       <bpmn:script>
-# Calls stash(component, title, content)
+# Calls workfile_store(component, title, content)
 # UPSERT on (project, component, title)
 # Types: notes, findings, questions, approach, investigation, reference
 # Use mode="append" for incremental additions
 storage_target = "filing_cabinet"
-storage_tool = "stash"
+storage_tool = "workfile_store"
 store_success = True
       </bpmn:script>
     </bpmn:scriptTask>
     <!-- Route 5: Reference Library (entity catalog) -->
-    <bpmn:scriptTask id="store_entity" name="[MCP] catalog(entity_type, properties)" scriptFormat="python">
+    <bpmn:scriptTask id="store_entity" name="[MCP] entity_store(entity_type, properties)" scriptFormat="python">
       <bpmn:incoming>f_route_entity</bpmn:incoming>
       <bpmn:outgoing>f_entity_to_validate</bpmn:outgoing>
       <bpmn:script>

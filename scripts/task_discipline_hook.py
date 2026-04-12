@@ -18,7 +18,7 @@ How it works (5-way cascade - FB108 + FB109):
    b. Tasks exist + no session_id -> allow (edge case)
    c. Tasks exist + session mismatch + map fresh (< 2h) -> allow with warning (continuation)
    d. No tasks + map recently modified (< 30s) -> allow (race condition)
-   e. DB fallback: query build_tasks for active tasks (covers MCP create_linked_task) -> allow
+   e. DB fallback: query build_tasks for active tasks (covers MCP work_create) -> allow
    f. Otherwise -> deny
 
 Delegation advisory (FB139):
@@ -312,7 +312,7 @@ def _get_project_name(cwd: str) -> str:
 def check_db_for_recent_tasks(project_name: str, max_age_hours: int = 2) -> bool:
     """Fallback: check database for recent tasks when task_map is empty.
 
-    This covers the case where tasks were created via MCP create_linked_task
+    This covers the case where tasks were created via MCP work_create
     (which writes to DB but not the task_map file). Only queries DB when
     the fast task_map check fails - not on every tool call.
 
@@ -439,7 +439,7 @@ def check_context_health_gate() -> str | None:
         logger.warning(f"Context red ({remaining}%) with no recent checkpoint - blocking")
         return (
             f"Context critically low ({remaining}% remaining). "
-            f"Run save_checkpoint() or store_session_fact() before continuing. "
+            f"Run session_manage(action='checkpoint') or store_session_fact() before continuing. "
             f"Gated tools are blocked until cognitive state is preserved."
         )
     except Exception as e:
@@ -593,7 +593,7 @@ def main():
         _do_allow(tool_name, tool_input, project_name, task_map)
     else:
         # FB109 fix: Before denying, check DB for active build_tasks.
-        # This covers tasks created via MCP create_linked_task (which writes
+        # This covers tasks created via MCP work_create (which writes
         # to DB but not the task_map file). Only fires on the deny path,
         # so no performance impact on the normal allow path.
         if check_db_for_recent_tasks(project_name):

@@ -2,7 +2,7 @@
 Tests for the Crash Recovery BPMN process.
 
 Crash Recovery (crash_recovery):
-  Trigger: User invokes /crash-recovery or recover_session() MCP tool
+  Trigger: User invokes /crash-recovery or session_manage(action="recover",) MCP tool
   Input: project_name, unclosed_sessions (list), filtered_sessions (list)
 
   Key behaviors:
@@ -21,7 +21,7 @@ Crash Recovery (crash_recovery):
     3. Common path → facts, sessions, work, git always execute
     4. Re-fire filtering → reduces unclosed session count
 
-Implementation: mcp-servers/project-tools/server_v2.py (recover_session)
+Implementation: mcp-servers/project-tools/server_v2.py (session_manage(action="recover"))
 """
 
 import os

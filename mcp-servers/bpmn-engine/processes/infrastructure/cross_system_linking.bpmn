@@ -9,7 +9,7 @@
   <!--
     PROCESS 1: MANUAL LINKING
     Claude or a tool explicitly creates a link between two resources.
-    Tools: link_resources(), link_knowledge(), get_linked_resources().
+    Tools: link(), link(), get_linked_resources().
     Table: claude.resource_links (unique on from_type+from_id+to_type+to_id+link_type).
 
     PROCESS 2: AUTO CONTEXT ASSEMBLY (WCC)
@@ -119,7 +119,7 @@ link_action = "updated"
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="create_new_link" name="[MCP] link_resources(from_type, from_id, to_type, to_id, link_type)" scriptFormat="python">
+    <bpmn:scriptTask id="create_new_link" name="[MCP] link(from_type, from_id, to_type, to_id, link_type)" scriptFormat="python">
       <bpmn:incoming>f_new_link</bpmn:incoming>
       <bpmn:outgoing>f_create_to_merge</bpmn:outgoing>
       <bpmn:script>
@@ -234,7 +234,7 @@ link_action = "removed"
       Output: assembled context with proportional budget allocation
 
       6 sources queried in parallel (modeled as sequence for BPMN):
-        1. Workfiles (stash) linked to activity
+        1. Workfiles (workfile_read) linked to activity
         2. Knowledge (memories) linked to activity
         3. Entity catalog entries linked to activity
         4. Session facts for current session
@@ -315,7 +315,7 @@ bpmn_budget = int(budget * 0.05)
       <bpmn:outgoing>f_fetch_to_assemble</bpmn:outgoing>
       <bpmn:script>
 # For each linked resource, fetch content up to its budget allocation:
-# workfile -> unstash content
+# workfile -> workfile_read content
 # knowledge -> recall memory content
 # entity -> recall entity properties
 # session_fact -> list current session facts

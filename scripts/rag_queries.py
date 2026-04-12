@@ -415,7 +415,7 @@ def query_critical_session_facts(project_name: str, session_id: str = None,
 
             lines.append(f"  [{ftype}] {key}: {value}")
 
-        lines.append(f"  (Use list_session_facts() for full notepad | {latency_ms}ms)")
+        lines.append(f"  (Use session_facts() for full notepad | {latency_ms}ms)")
         lines.append("")
 
         logger.info(f"Session facts auto-inject: {len(facts)} facts, {latency_ms}ms")
@@ -1153,7 +1153,7 @@ def query_entity_catalog_bm25(user_prompt: str, project_name: str,
                     context_lines.append(f"   Tags: {tag_str}")
                 if summary_short:
                     context_lines.append(f"   {summary_short}")
-                context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+                context_lines.append(f"   Use: entity_read(\"{name}\") for full details")
                 context_lines.append("")
 
         conn.close()
@@ -1354,7 +1354,7 @@ def query_entity_catalog(user_prompt: str, project_name: str,
                     context_lines.append(f"   Tags: {tag_str}")
                 if summary_short:
                     context_lines.append(f"   {summary_short}")
-                context_lines.append(f"   Use: recall_entities(\"{name}\") for full details")
+                context_lines.append(f"   Use: entity_read(\"{name}\") for full details")
                 context_lines.append("")
 
         conn.close()
@@ -1436,7 +1436,7 @@ def query_workfiles(user_prompt: str, project_name: str,
             context_lines.append(f">> {comp}/{title} ({wtype}, {round(sim, 2)} match){pin_marker}")
             if preview_clean:
                 context_lines.append(f"   {preview_clean[:120]}...")
-            context_lines.append(f"   Use: unstash(\"{comp}\") for full content")
+            context_lines.append(f"   Use: workfile_read(\"{comp}\") for full content")
             context_lines.append("")
 
         logger.info(f"Workfile search: {len(results)} matches in {elapsed_ms:.0f}ms, similarities={similarities}")

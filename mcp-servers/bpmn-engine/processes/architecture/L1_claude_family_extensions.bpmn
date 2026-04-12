@@ -68,7 +68,7 @@
       <bpmn:script>stale_archived = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="hook_check_inbox" name="[HOOK] Check Inbox Messages" scriptFormat="python">
+    <bpmn:scriptTask id="hook_check_inbox" name="[HOOK] inbox() — Check Messages" scriptFormat="python">
       <bpmn:incoming>f4</bpmn:incoming>
       <bpmn:outgoing>f5</bpmn:outgoing>
       <bpmn:script>inbox_checked = True</bpmn:script>
@@ -212,7 +212,7 @@
       <bpmn:script>precompact_injected = True</bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="save_checkpoint" name="[DB] Save Checkpoint" scriptFormat="python">
+    <bpmn:scriptTask id="save_checkpoint" name="[DB] session_manage(action=&quot;checkpoint&quot;)" scriptFormat="python">
       <bpmn:incoming>f_compact_save</bpmn:incoming>
       <bpmn:outgoing>f_compact_detect</bpmn:outgoing>
       <bpmn:script>checkpoint_saved = True</bpmn:script>

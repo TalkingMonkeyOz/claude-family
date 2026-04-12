@@ -39,7 +39,7 @@
     </bpmn:exclusiveGateway>
 
     <!-- Feature path: full lifecycle -->
-    <bpmn:scriptTask id="create_feature" name="[DB/WF] Create Feature (draft)" scriptFormat="python">
+    <bpmn:scriptTask id="create_feature" name="[DB/WF] work_create(type=&quot;feature&quot;, draft)" scriptFormat="python">
       <bpmn:incoming>flow_feature</bpmn:incoming>
       <bpmn:outgoing>f3</bpmn:outgoing>
       <bpmn:script>feature_status = "draft"</bpmn:script>
@@ -81,7 +81,7 @@
     </bpmn:scriptTask>
 
     <!-- Feedback path: bug/idea/change -->
-    <bpmn:scriptTask id="create_feedback" name="[DB/WF] Create Feedback" scriptFormat="python">
+    <bpmn:scriptTask id="create_feedback" name="[DB/WF] work_create(type=&quot;feedback&quot;)" scriptFormat="python">
       <bpmn:incoming>flow_feedback</bpmn:incoming>
       <bpmn:outgoing>f_fb_end</bpmn:outgoing>
       <bpmn:script>feedback_created = True</bpmn:script>

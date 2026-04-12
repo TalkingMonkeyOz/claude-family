@@ -688,7 +688,7 @@ def main():
                     pri_marker = "[URGENT] " if msg['priority'] == 'urgent' else ""
                     from_proj = msg['from_project'] or 'broadcast'
                     context_lines.append(f"  {pri_marker}{msg['message_type']}: {msg['subject']} (from {from_proj}, {msg['created_date']})")
-                context_lines.append("Use check_inbox() to see full details. Use acknowledge() to action or defer.")
+                context_lines.append("Use inbox() to see full details. Use inbox(ack_action='acknowledged') to action or defer.")
 
             # Show valid recipients for messaging
             recipients = get_valid_recipients()
@@ -794,7 +794,7 @@ def main():
                                 context_lines.append(f"  [{comp}] {title}")
                                 if preview:
                                     context_lines.append(f"    {preview[:150]}...")
-                            context_lines.append("  Use unstash(component) to load full workfile content")
+                            context_lines.append("  Use workfile_read(component) to load full workfile content")
                             logger.info(f"F156: Auto-detected {len(dossiers)} dossier(s) for component '{dossier_component}'")
             except Exception as e:
                 logger.warning(f"Dossier auto-detection skipped (non-fatal): {e}")
@@ -945,12 +945,12 @@ def main():
             """)
             articles = cache_cur.fetchall()
             if articles:
-                cache_parts.append("ARCHITECTURE ARTICLES (use recall_articles for details):")
+                cache_parts.append("ARCHITECTURE ARTICLES (use article_read for details):")
                 for a in articles:
                     title = a['title'] if isinstance(a, dict) else a[0]
                     abstract_preview = a['abstract_preview'] if isinstance(a, dict) else a[1]
                     cache_parts.append(f"  - {title}: {abstract_preview}")
-                cache_parts.append("  Use recall_articles(query) to search, read_article(id) to read full content.")
+                cache_parts.append("  Use article_read(query) to search, article_read(article_id) to read full content.")
 
             cache_conn.close()
 

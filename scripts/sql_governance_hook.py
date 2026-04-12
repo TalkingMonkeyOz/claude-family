@@ -99,27 +99,27 @@ def is_write_operation(sql: str) -> bool:
 # Warn (not block) because sometimes raw SQL is legitimately needed.
 TOOL_GOVERNED_TABLES = {
     'features': {
-        'tools': 'create_feature(), advance_status(), get_build_board()',
+        'tools': 'work_create(), work_status(), work_board()',
         'reason': 'Features have workflow state machines, audit logging, and side effects',
     },
     'build_tasks': {
-        'tools': 'create_linked_task(), start_work(), complete_work(), add_build_task()',
+        'tools': 'work_create(), work_status()',
         'reason': 'Build tasks have dependency checks, feature completion cascades, and audit logging',
     },
     'feedback': {
-        'tools': 'create_feedback(), resolve_feedback(), promote_feedback(), advance_status()',
+        'tools': 'work_create(), work_status()',
         'reason': 'Feedback has multi-step state transitions and audit logging',
     },
     'knowledge': {
-        'tools': 'remember(), update_memory(), archive_memory(), merge_memories()',
+        'tools': 'remember(), memory_manage()',
         'reason': 'Knowledge entries need embedding generation, dedup checks, and relation linking',
     },
     'entities': {
-        'tools': 'catalog(), update_entity(), recall_entities()',
+        'tools': 'entity_store(), entity_read()',
         'reason': 'Entities need schema validation, embedding generation, and dedup by key properties',
     },
     'sessions': {
-        'tools': 'start_session(), end_session(), save_checkpoint()',
+        'tools': 'start_session(), end_session(), session_manage()',
         'reason': 'Sessions need proper lifecycle management and state persistence',
     },
     'todos': {
@@ -127,23 +127,23 @@ TOOL_GOVERNED_TABLES = {
         'reason': 'Todos sync with Claude Code task system via hooks',
     },
     'messages': {
-        'tools': 'send_message(), reply_to(), broadcast(), acknowledge()',
+        'tools': 'send_msg(), inbox()',
         'reason': 'Messages need recipient validation, threading, and pg_notify triggers',
     },
     'workfiles': {
-        'tools': 'stash(), unstash(), archive_workfile(), search_workfiles()',
+        'tools': 'workfile_store(), workfile_read()',
         'reason': 'Workfiles need embedding generation and access tracking',
     },
     'knowledge_relations': {
-        'tools': 'link_knowledge(), get_related_knowledge()',
+        'tools': 'link()',
         'reason': 'Knowledge relations need bidirectional consistency and strength management',
     },
     'resource_links': {
-        'tools': 'link_resources(), get_linked_resources()',
+        'tools': 'link()',
         'reason': 'Resource links have unique constraints and bidirectional queries',
     },
     'secret_registry': {
-        'tools': 'set_secret(), get_secret(), list_secrets(), delete_secret()',
+        'tools': 'secret()',
         'reason': 'Secrets need Windows Credential Manager sync and session fact caching',
     },
 }
@@ -254,7 +254,7 @@ def main():
                 deny(
                     f"BLOCKED: Project '{project}' cannot modify infrastructure tables ({tables_str}). "
                     f"Config changes must go through claude-family:\n"
-                    f"  send_message(message_type='task_request', to_project='claude-family', "
+                    f"  send_msg(message_type='task_request', to_project='claude-family', "
                     f"body='Requesting config change: ...')\n"
                     f"Only claude-family can modify config_templates, workspaces, and other infrastructure tables."
                 )
@@ -273,7 +273,7 @@ def main():
                 f"BLOCKED: Project '{project}' cannot query sensitive tables ({tables_str}). "
                 f"These tables contain credentials and infrastructure config.\n"
                 f"To request config changes, send a message to claude-family:\n"
-                f"  send_message(message_type='task_request', to_project='claude-family', "
+                f"  send_msg(message_type='task_request', to_project='claude-family', "
                 f"body='Need config change: ...')"
             )
 

@@ -47,7 +47,7 @@
         * scripts/schema_docs.py (full pipeline for schema repair)
         * scripts/embed_schema.py (schema embedding repair)
         * scripts/embed_vault_documents.py (incremental vault repair)
-        * mcp_servers/project_tools/server_v2.py (sync_bpmn_processes, consolidate_memories)
+        * mcp_servers/project_tools/server_v2.py (sync_bpmn_processes, memory_manage(action="consolidate"))
         * scripts/schema_docs.py (sync column registry for column registry repair)
     -->
 
@@ -291,7 +291,7 @@ bpmn_processes_synced = 0
       <bpmn:incoming>flow_memory_do_repair</bpmn:incoming>
       <bpmn:outgoing>flow_memory_repair_to_join</bpmn:outgoing>
       <bpmn:script>
-# consolidate_memories(trigger='maintenance') via project-tools MCP
+# memory_manage(action="consolidate",trigger='maintenance') via project-tools MCP
 # Lifecycle operations: short->mid promotion, mid->long promotion,
 # decay confidence on stale entries, archive very low confidence
 # Specifically: generate Voyage AI embeddings for tier='mid' entries

@@ -80,7 +80,7 @@ def main():
                 logger.debug(f"No matching todo found for: {task_subject}")
 
             # Step 2: Build task reconciliation
-            # If a build_task was just completed (via complete_work), find and
+            # If a build_task was just completed (via work_status(action='complete')), find and
             # close the matching todo so both systems stay in sync.
             try:
                 cur.execute("""

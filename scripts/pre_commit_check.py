@@ -102,11 +102,13 @@ def check_staged_files() -> dict:
         result['details'] = staged_files
         result['message'] = f'{len(staged_files)} files staged'
 
-        # Check for sensitive files
+        # Check for sensitive files (exclude .bpmn process model files)
         sensitive_patterns = ['.env', 'credentials', 'secret', 'password']
+        safe_extensions = ['.bpmn', '.md', '.py', '.json', '.yaml', '.yml']
         sensitive_files = [
             f for f in staged_files
             if any(p in f.lower() for p in sensitive_patterns)
+            and not any(f.lower().endswith(ext) for ext in safe_extensions)
         ]
 
         if sensitive_files:

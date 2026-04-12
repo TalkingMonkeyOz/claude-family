@@ -18,7 +18,7 @@
       store summary on row → generate/update embedding → done.
       Note: DB trigger auto-populates tsvector from JSONB properties (BT555).
 
-    Path 2 — recall_entities() (Search with RRF Fusion):
+    Path 2 — entity_read() (Search with RRF Fusion):
       Search requested → generate query embedding → RRF fusion search
       (vector similarity + BM25 full-text including JSONB property content) →
       gateway on detail_level:
@@ -27,7 +27,7 @@
         "entity_id": return single entity full properties
       → update access stats → done.
 
-    Path 3 — explore_entities() (Browse with Relationship Walking):
+    Path 3 — entity_read() (Browse with Relationship Walking):
       Browse requested → gateway on stage:
         "inventory": aggregate entity type counts with tag filter → ASCII tree
         "browse": paginated entity list for a type → compact summaries
@@ -37,8 +37,8 @@
       → update access stats (detail only) → done.
 
     Decision: Search vs Browse
-      - "I need to find X" → recall_entities() (semantic + keyword search)
-      - "Show me what exists" → explore_entities() (structured navigation)
+      - "I need to find X" → entity_read() (semantic + keyword search)
+      - "Show me what exists" → entity_read() (structured navigation)
 
     Actors:
       [CLAUDE] = userTask (Claude provides input)
@@ -109,7 +109,7 @@
   </bpmn:process>
 
   <!-- ================================================================== -->
-  <!-- PROCESS 2: recall_entities() — Progressive Read                    -->
+  <!-- PROCESS 2: entity_read() — Progressive Read                    -->
   <!-- ================================================================== -->
   <bpmn:process id="entity_catalog_retrieval" name="Entity Catalog: Progressive Disclosure Read" isExecutable="true">
 
@@ -200,7 +200,7 @@
   </bpmn:process>
 
   <!-- ================================================================== -->
-  <!-- PROCESS 3: explore_entities() — Browse with Relationship Walking   -->
+  <!-- PROCESS 3: entity_read() — Browse with Relationship Walking   -->
   <!-- ================================================================== -->
   <bpmn:process id="entity_catalog_browse" name="Entity Catalog: Browse with Relationship Walking" isExecutable="true">
 

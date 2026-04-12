@@ -144,7 +144,7 @@ has_linked_build_task = has_linked_build_task if has_linked_build_task is not No
       <bpmn:incoming>flow_completed_and_linked</bpmn:incoming>
       <bpmn:outgoing>flow_checkpoint_to_advance</bpmn:outgoing>
       <bpmn:script>
-# save_checkpoint() persists task completion state before advancing build task
+# session_manage(action="checkpoint",) persists task completion state before advancing build task
 # Ensures completion is durable even if subsequent steps fail
 checkpoint_saved = True
       </bpmn:script>
@@ -155,7 +155,7 @@ checkpoint_saved = True
       <bpmn:outgoing>flow_advance_to_sibling_check</bpmn:outgoing>
       <bpmn:script>
 # UPDATE claude.build_tasks SET status='completed'
-# Uses advance_status() for state machine enforcement
+# Uses work_status(action="advance",) for state machine enforcement
 build_task_advanced = True
       </bpmn:script>
     </bpmn:scriptTask>

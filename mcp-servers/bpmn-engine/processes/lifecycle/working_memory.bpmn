@@ -14,16 +14,16 @@
 
       Paths:
         1. Store: Encounter context → Classify → Store fact (upsert)
-        2. Recall (same session): Need fact → recall_session_fact
+        2. Recall (same session): Need fact → session_facts(fact_key=...)
         3. Survive compaction: PreCompact hook → inject facts into system message
         4. Post-compaction recovery: recall user_intent → check work items
         5. Cross-session recall: recall_previous_session_facts(n_sessions=3)
-        6. Workfile: stash/unstash component-scoped working context
-        7. Session notes (parallel): store_session_notes → markdown file
+        6. Workfile: workfile_store/workfile_read component-scoped working context
+        7. Session notes (parallel): session_manage(action="store_notes") → markdown file
 
       Actors:
         [CLAUDE] = userTask (decides what to store/recall)
-        [MCP]    = scriptTask (store_session_fact, recall_session_fact)
+        [MCP]    = scriptTask (store_session_fact, session_facts(fact_key=...))
         [HOOK]   = scriptTask (precompact_hook.py injection)
         [DB]     = scriptTask (claude.session_facts table)
 
@@ -82,7 +82,7 @@
       <bpmn:outgoing>flow_sensitive_to_merge</bpmn:outgoing>
       <bpmn:script>
 # store_session_fact(fact_key, fact_value, fact_type, is_sensitive=True)
-# Sensitive facts: REDACTED in list_session_facts, EXCLUDED from precompact injection
+# Sensitive facts: REDACTED in session_facts(), EXCLUDED from precompact injection
 # Survives in DB but never leaked to context
 try:
     if stored is None:
@@ -124,7 +124,7 @@ is_sensitive = False
       <bpmn:incoming>flow_recall</bpmn:incoming>
       <bpmn:outgoing>flow_recall_to_found</bpmn:outgoing>
       <bpmn:script>
-# recall_session_fact(fact_key)
+# session_facts(fact_key=...,fact_key)
 # 1. Try current session first (WHERE session_id = current AND fact_key = key)
 # 2. Fall back to recent sessions (ORDER BY session_id match, created_at DESC)
 # Returns: {fact_key, fact_value, fact_type, session_id, stored_at}
@@ -237,9 +237,9 @@ except NameError:
       <bpmn:incoming>flow_workfile</bpmn:incoming>
       <bpmn:outgoing>flow_workfile_to_end</bpmn:outgoing>
       <bpmn:script>
-# Routes to stash() or unstash() based on sub-action
-# stash(component, title, content) → UPSERT workfile with embedding
-# unstash(component, title?) → retrieve workfile(s) by component
+# Routes to workfile_store() or workfile_read() based on sub-action
+# workfile_store(component, title, content) → UPSERT workfile with embedding
+# workfile_read(component, title?) → retrieve workfile(s) by component
 # Component-scoped context that bridges sessions
 # Unlike session_facts: persists across sessions, has semantic search
 # Unlike knowledge: project+component scoped, transient lifecycle

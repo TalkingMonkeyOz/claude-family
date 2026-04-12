@@ -488,11 +488,11 @@ indexed_count += 1
       claude.code_symbols and claude.code_references.
 
       Tools:
-        1. find_symbol(query, project, kind) - Semantic search via embeddings + exact name match
+        1. code_search(query, project, kind) - Semantic search via embeddings + exact name match
         2. check_collision(name, project, file_path) - Check if symbol name exists elsewhere
         3. get_module_map(project, file_path) - List all symbols in a file or project overview
         4. find_similar(symbol_id, project) - Find semantically similar symbols (embedding cosine)
-        5. get_dependency_graph(symbol_id, depth) - Walk references graph from a symbol
+        5. code_context(symbol_id=...,symbol_id, depth) - Walk references graph from a symbol
 
       This process models the tool dispatch and common query patterns.
     -->
@@ -506,7 +506,7 @@ indexed_count += 1
       <bpmn:outgoing>flow_validate_check</bpmn:outgoing>
       <bpmn:script>
 # Check claude.code_symbols has entries for this project
-# If not indexed, return helpful error: "Project not indexed. Run index_codebase(project) first."
+# If not indexed, return helpful error: "Project not indexed. Run background job (index_codebase)(project) first."
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -529,8 +529,8 @@ indexed_count += 1
       <bpmn:outgoing>flow_dep_graph</bpmn:outgoing>
     </bpmn:exclusiveGateway>
 
-    <!-- Tool 1: find_symbol -->
-    <bpmn:scriptTask id="find_symbol" name="[DB] find_symbol(query, kind)" scriptFormat="python">
+    <!-- Tool 1: code_search() -->
+    <bpmn:scriptTask id="find_symbol" name="[DB] code_search(query, kind)" scriptFormat="python">
       <bpmn:incoming>flow_find_symbol</bpmn:incoming>
       <bpmn:outgoing>flow_find_symbol_end</bpmn:outgoing>
       <bpmn:script>
@@ -577,8 +577,8 @@ indexed_count += 1
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <!-- Tool 5: get_dependency_graph -->
-    <bpmn:scriptTask id="dep_graph" name="[DB] get_dependency_graph(symbol, depth)" scriptFormat="python">
+    <!-- Tool 5: code_context(symbol_id=...) -->
+    <bpmn:scriptTask id="dep_graph" name="[DB] code_context(symbol_id=...,symbol, depth)" scriptFormat="python">
       <bpmn:incoming>flow_dep_graph</bpmn:incoming>
       <bpmn:outgoing>flow_dep_graph_end</bpmn:outgoing>
       <bpmn:script>
@@ -610,7 +610,7 @@ indexed_count += 1
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_not_valid" sourceRef="project_valid_gw" targetRef="end_not_indexed_error" />
     <bpmn:sequenceFlow id="flow_find_symbol" sourceRef="tool_dispatch_gw" targetRef="find_symbol">
-      <bpmn:conditionExpression>tool == 'find_symbol'</bpmn:conditionExpression>
+      <bpmn:conditionExpression>tool == 'code_search()'</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_check_collision" sourceRef="tool_dispatch_gw" targetRef="check_collision_tool">
       <bpmn:conditionExpression>tool == 'check_collision'</bpmn:conditionExpression>
@@ -622,7 +622,7 @@ indexed_count += 1
       <bpmn:conditionExpression>tool == 'find_similar'</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_dep_graph" sourceRef="tool_dispatch_gw" targetRef="dep_graph">
-      <bpmn:conditionExpression>tool == 'get_dependency_graph'</bpmn:conditionExpression>
+      <bpmn:conditionExpression>tool == 'code_context(symbol_id=...)'</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_find_symbol_end" sourceRef="find_symbol" targetRef="end_query" />
     <bpmn:sequenceFlow id="flow_check_collision_end" sourceRef="check_collision_tool" targetRef="end_query" />

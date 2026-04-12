@@ -53,7 +53,7 @@ budget_workfiles = 100
       <bpmn:outgoing>to_search_short</bpmn:outgoing>
       <bpmn:outgoing>to_search_mid</bpmn:outgoing>
       <bpmn:outgoing>to_search_long</bpmn:outgoing>
-      <bpmn:outgoing>to_search_workfiles</bpmn:outgoing>
+      <bpmn:outgoing>to_workfile_read(query=)</bpmn:outgoing>
       <bpmn:outgoing>to_search_entities</bpmn:outgoing>
     </bpmn:parallelGateway>
     <bpmn:sequenceFlow id="to_parallel_search" sourceRef="allocate_budget" targetRef="parallel_search" />
@@ -103,8 +103,8 @@ long_results = []
     <bpmn:sequenceFlow id="to_search_long" sourceRef="parallel_search" targetRef="search_long" />
 
     <!-- WORKFILES: Project-scoped component context (semantic search) -->
-    <bpmn:scriptTask id="search_workfiles" name="[WORKFILE] Search Component Working Context">
-      <bpmn:incoming>to_search_workfiles</bpmn:incoming>
+    <bpmn:scriptTask id="workfile_read(query=)" name="[WORKFILE] Search Component Working Context">
+      <bpmn:incoming>to_workfile_read(query=)</bpmn:incoming>
       <bpmn:outgoing>to_parallel_join_from_workfiles</bpmn:outgoing>
       <bpmn:script>
 # Query claude.project_workfiles WHERE project_id = project_id AND is_active = TRUE
@@ -115,7 +115,7 @@ long_results = []
 workfile_results = []
       </bpmn:script>
     </bpmn:scriptTask>
-    <bpmn:sequenceFlow id="to_search_workfiles" sourceRef="parallel_search" targetRef="search_workfiles" />
+    <bpmn:sequenceFlow id="to_workfile_read(query=)" sourceRef="parallel_search" targetRef="workfile_read(query=)" />
 
     <!-- ENTITIES: Structured reference data (semantic search) -->
     <bpmn:scriptTask id="search_entities" name="[ENTITY] Search Cataloged Entities">
@@ -144,7 +144,7 @@ entity_results = []
     <bpmn:sequenceFlow id="to_parallel_join_from_short" sourceRef="search_short" targetRef="parallel_join" />
     <bpmn:sequenceFlow id="to_parallel_join_from_mid" sourceRef="search_mid" targetRef="parallel_join" />
     <bpmn:sequenceFlow id="to_parallel_join_from_long" sourceRef="search_long" targetRef="parallel_join" />
-    <bpmn:sequenceFlow id="to_parallel_join_from_workfiles" sourceRef="search_workfiles" targetRef="parallel_join" />
+    <bpmn:sequenceFlow id="to_parallel_join_from_workfiles" sourceRef="workfile_read(query=)" targetRef="parallel_join" />
     <bpmn:sequenceFlow id="to_parallel_join_from_entities" sourceRef="search_entities" targetRef="parallel_join" />
 
     <!-- Rank all results across tiers -->

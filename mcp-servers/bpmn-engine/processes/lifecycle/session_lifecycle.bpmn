@@ -19,7 +19,7 @@
            → work_action(end_session) → save_summary → close_session → end_normal
         2. Resumed session: ... → inject_handoff → has_prior_state(True) → display_session_summary
            → has_prior_tasks → ... → work_merge → do_work
-        3. Compact cycle: do_work → action(compact) → save_checkpoint → do_work (loop)
+        3. Compact cycle: do_work → action(compact) → session_manage(action="checkpoint") → do_work (loop)
         4. Continue loop: do_work → action(continue/default) → do_work (loop)
         5. Auto-close: do_work → action(auto_close) → auto_close_session → end_auto
 
@@ -75,7 +75,7 @@ against zombie sessions accumulating in the table.</bpmn:documentation>
       <bpmn:incoming>flow_zombie_cleanup_to_check_messages</bpmn:incoming>
       <bpmn:outgoing>flow_check_messages_to_load_state</bpmn:outgoing>
       <bpmn:script>messages_checked = True</bpmn:script>
-      <bpmn:documentation>Calls check_inbox MCP tool to surface any pending messages from other
+      <bpmn:documentation>Calls inbox() MCP tool to surface any pending messages from other
 Claude instances or the orchestration system. Messages are displayed to Claude
 at session start so they can be addressed immediately.</bpmn:documentation>
     </bpmn:scriptTask>
@@ -263,7 +263,7 @@ This ensures critical context survives compaction and is available post-compacti
       <bpmn:script>session_auto_closed = True</bpmn:script>
       <bpmn:documentation>session_end_hook.py fires on SessionEnd event (Claude process exits).
 Auto-closes the session in claude.sessions without requiring manual /session-end.
-Also triggers consolidate_memories() for cognitive memory lifecycle management.
+Also triggers memory_manage(action="consolidate",) for cognitive memory lifecycle management.
 Runs regardless of whether /session-end was called.</bpmn:documentation>
     </bpmn:scriptTask>
 
@@ -420,7 +420,7 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <dc:Bounds x="2334" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
-      <!-- save_checkpoint (compact branch, below) -->
+      <!-- session_manage(action="checkpoint") (compact branch, below) -->
       <bpmndi:BPMNShape id="shape_save_checkpoint" bpmnElement="save_checkpoint">
         <dc:Bounds x="1870" y="340" width="160" height="80"/>
       </bpmndi:BPMNShape>
@@ -548,7 +548,7 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <di:waypoint x="2010" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <!-- work_action_gateway → save_checkpoint (compact branch) -->
+      <!-- work_action_gateway → session_manage(action="checkpoint") (compact branch) -->
       <bpmndi:BPMNEdge id="edge_flow_compact" bpmnElement="flow_compact">
         <di:waypoint x="1925" y="243"/>
         <di:waypoint x="1925" y="380"/>
@@ -582,7 +582,7 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <di:waypoint x="2334" y="218"/>
       </bpmndi:BPMNEdge>
 
-      <!-- save_checkpoint → do_work (compact loop back) -->
+      <!-- session_manage(action="checkpoint") → do_work (compact loop back) -->
       <bpmndi:BPMNEdge id="edge_flow_checkpoint_to_do_work" bpmnElement="flow_checkpoint_to_do_work">
         <di:waypoint x="1870" y="380"/>
         <di:waypoint x="1780" y="380"/>

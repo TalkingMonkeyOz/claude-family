@@ -12,7 +12,7 @@
       MCP tool that recovers context after a session crash or unexpected exit.
       Single-call replacement for the raw SQL crash-recovery command.
 
-      Trigger: User invokes /crash-recovery or calls recover_session() MCP tool
+      Trigger: User invokes /crash-recovery or calls session_manage(action="recover",) MCP tool
       Input: project_name
 
       Key behaviors:
@@ -23,7 +23,7 @@
         - Parses most recent transcript for crash signals
         - Returns structured recovery context in one call
 
-      Implementation: mcp-servers/project-tools/server_v2.py (recover_session)
+      Implementation: mcp-servers/project-tools/server_v2.py (session_manage(action="recover"))
     -->
 
     <bpmn:startEvent id="start" name="Recovery Requested">

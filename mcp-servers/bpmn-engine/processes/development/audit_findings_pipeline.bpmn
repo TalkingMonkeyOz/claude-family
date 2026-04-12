@@ -30,7 +30,7 @@
         - Knowledge: Observation only, document for future reference
 
       Implementation: Manual process executed by Claude during audits.
-      MCP tools used: create_feature, create_feedback, store_knowledge, add_build_task
+      MCP tools used: work_create(type="feature"), work_create(type="feedback"), remember(), work_create(type="simple_task")
     -->
 
     <bpmn:startEvent id="start" name="Audit Complete">
@@ -102,7 +102,7 @@ needs_planning = needs_planning if needs_planning is not None else False
       <bpmn:incoming>flow_not_actionable</bpmn:incoming>
       <bpmn:outgoing>flow_knowledge_to_advance</bpmn:outgoing>
       <bpmn:script>
-# store_knowledge(title, description, type='learned', category='audit')
+# remember(content, memory_type='learned')
 knowledge_stored = knowledge_stored + 1
       </bpmn:script>
     </bpmn:scriptTask>
@@ -117,11 +117,11 @@ knowledge_stored = knowledge_stored + 1
 
     <!-- Feature path -->
 
-    <bpmn:scriptTask id="create_feature" name="[MCP] Create Feature" scriptFormat="python">
+    <bpmn:scriptTask id="create_feature" name="[MCP] work_create(type=&quot;feature&quot;)" scriptFormat="python">
       <bpmn:incoming>flow_needs_planning</bpmn:incoming>
       <bpmn:outgoing>flow_feature_to_tasks</bpmn:outgoing>
       <bpmn:script>
-# create_feature(project, feature_name, description, feature_type, priority)
+# work_create(type="feature",project, feature_name, description, feature_type, priority)
 # Returns feature_code (e.g. F42)
 features_created = features_created + 1
       </bpmn:script>
@@ -132,7 +132,7 @@ features_created = features_created + 1
       <bpmn:outgoing>flow_tasks_to_link</bpmn:outgoing>
       <bpmn:script>
 # For each subtask identified during classification:
-# create_linked_task(feature_code, task_name, description, verification, files)
+# work_create(type="task",feature_code, task_name, description, verification, files)
 # Decompose the finding into implementable steps
 pass
       </bpmn:script>
@@ -153,11 +153,11 @@ pass
       </bpmn:script>
     </bpmn:scriptTask>
 
-    <bpmn:scriptTask id="create_feedback" name="[MCP] Create Feedback" scriptFormat="python">
+    <bpmn:scriptTask id="create_feedback" name="[MCP] work_create(type=&quot;feedback&quot;)" scriptFormat="python">
       <bpmn:incoming>flow_fb_type_to_create</bpmn:incoming>
       <bpmn:outgoing>flow_feedback_to_link</bpmn:outgoing>
       <bpmn:script>
-# create_feedback(project, feedback_type, description, title, priority)
+# work_create(type="feedback",project, feedback_type, description, title, priority)
 # Returns feedback_code (e.g. FB42)
 feedback_filed = feedback_filed + 1
       </bpmn:script>

@@ -18,13 +18,13 @@
 
     <!-- SMALL PATH: 1 file -->
     <bpmn2:task id="small_ckg_check" name="[CKG] Check for similar symbols">
-      <bpmn2:documentation>Single file task: invoke find_symbol() for main function/class, check_collision() for naming, find_similar() for existing implementations. Load 5-10 related symbols.</bpmn2:documentation>
+      <bpmn2:documentation>Single file task: invoke code_search() for main function/class, check_collision() for naming, find_similar() for existing implementations. Load 5-10 related symbols.</bpmn2:documentation>
       <bpmn2:incoming>flow_small</bpmn2:incoming>
       <bpmn2:outgoing>flow_small_dossier</bpmn2:outgoing>
     </bpmn2:task>
 
     <bpmn2:task id="small_dossier" name="[Dossier] Assemble from CKG results">
-      <bpmn2:documentation>Populate dossier: CKG symbols + related patterns (check memory for decisions), existing code patterns in file. Single unstash() call.</bpmn2:documentation>
+      <bpmn2:documentation>Populate dossier: CKG symbols + related patterns (check memory for decisions), existing code patterns in file. Single workfile_read() call.</bpmn2:documentation>
       <bpmn2:incoming>flow_small_dossier</bpmn2:incoming>
       <bpmn2:outgoing>flow_small_implement</bpmn2:outgoing>
     </bpmn2:task>
@@ -37,7 +37,7 @@
 
     <!-- MEDIUM PATH: 2-3 files -->
     <bpmn2:task id="medium_research" name="[Research] Analyze file relationships">
-      <bpmn2:documentation>Research phase: Run get_dependency_graph() for root file, identify shared state/logic, review existing implementations. Query vault for related patterns. Check memory for decisions. Build a 200-500 word analysis.</bpmn2:documentation>
+      <bpmn2:documentation>Research phase: Run code_context(symbol_id=...,) for root file, identify shared state/logic, review existing implementations. Query vault for related patterns. Check memory for decisions. Build a 200-500 word analysis.</bpmn2:documentation>
       <bpmn2:incoming>flow_medium</bpmn2:incoming>
       <bpmn2:outgoing>flow_medium_plan</bpmn2:outgoing>
     </bpmn2:task>
@@ -49,7 +49,7 @@
     </bpmn2:task>
 
     <bpmn2:task id="medium_dossier" name="[Dossier] Populate from research + plan">
-      <bpmn2:documentation>Dossier now contains: research findings, plan points, related CKG symbols from each file, module maps, existing patterns. Use stash(component, research_findings) to persist across sessions if needed.</bpmn2:documentation>
+      <bpmn2:documentation>Dossier now contains: research findings, plan points, related CKG symbols from each file, module maps, existing patterns. Use workfile_store(component, research_findings) to persist across sessions if needed.</bpmn2:documentation>
       <bpmn2:incoming>flow_medium_plan</bpmn2:incoming>
       <bpmn2:outgoing>flow_medium_implement</bpmn2:outgoing>
     </bpmn2:task>

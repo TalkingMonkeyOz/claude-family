@@ -21,7 +21,7 @@
 
     <bpmn:startEvent id="start_consolidation" name="Consolidation Triggered">
       <bpmn:documentation>Triggered by: (1) background job on schedule, (2) session_end hook,
-or (3) manual invocation via consolidate_memories(trigger='manual').</bpmn:documentation>
+or (3) manual invocation via memory_manage(action="consolidate",trigger='manual').</bpmn:documentation>
     </bpmn:startEvent>
 
     <bpmn:scriptTask id="task_load_concepts" name="[DB] Load active domain_concepts with embeddings" scriptFormat="python">

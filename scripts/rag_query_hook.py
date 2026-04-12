@@ -25,7 +25,7 @@ Output Format:
 # CORE PROTOCOL - Injected on EVERY prompt (no semantic search required)
 # =============================================================================
 # Source of truth: claude.protocol_versions table (is_active=true)
-# Deployed to: scripts/core_protocol.txt via deploy_project() or update_protocol()
+# Deployed to: scripts/core_protocol.txt via config_manage() or protocol()
 # Fallback: hardcoded DEFAULT_CORE_PROTOCOL below (in case file is missing)
 
 DEFAULT_CORE_PROTOCOL = """
@@ -35,14 +35,14 @@ STOP STOP STOP!!! do point 1 before anything ANYTHING else!!!!
    SCOPE: Prefix every task with [S] (session — dies at session end: reminders, research, coordination) or [P] (persistent — survives sessions: bugs, features, ideas, real work). Default [S] if unsure.
 2. Verify before claiming - read files, query DB, do research. Never guess.
 3. STORAGE: 6 systems, use the right one. See `storage-rules.md` (auto-loaded). `/skill-load-memory-storage` for detailed guide.
-   - **Credential Vault** (set_secret/get_secret) — API keys, tokens, passwords. Persists forever across ALL sessions. Check get_secret() BEFORE asking the user.
+   - **Credential Vault** (secret(action="set")/secret(action="get")) — API keys, tokens, passwords. Persists forever across ALL sessions. Check secret(action="get") BEFORE asking the user.
    - **Notepad** (store_session_fact) — endpoints, decisions, findings. This session only.
    - **Memory** (remember) — patterns, gotchas, decisions for FUTURE sessions. Min 80 chars. NOT for task acks, progress, handoffs.
-   - **Filing Cabinet** (stash) — component working papers across sessions. unstash() to reload.
-   - **Reference Library** (catalog/recall_entities) — structured data (APIs, schemas, entities).
+   - **Filing Cabinet** (workfile_store) — component working papers across sessions. workfile_read() to reload.
+   - **Reference Library** (entity_store/entity_read) — structured data (APIs, schemas, entities).
    - **Skills/BPMN** — procedures and processes. NOT vault markdown.
-4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. save_checkpoint() after each task.
-5. OFFLOAD: After completing a task group, store_session_notes(findings, "progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
+4. DELEGATE: 3+ files = spawn agent. Agents MUST write results to session notes or files, return only 1-line summaries. Never let agent output flood your context. session_manage(action="checkpoint") after each task.
+5. OFFLOAD: After completing a task group, session_manage(action="store_notes", content=findings, section="progress") before moving on. Keep main context lean. Don't carry raw research/exploration forward.
 6. BPMN-FIRST: For process/system changes - model in BPMN first, write tests, then code.
 7. RECALL FIRST: Before starting work, call recall_memories() + recall_entities() to load domain knowledge. This is your primary knowledge source — DB-stored knowledge from all past sessions. Don't re-discover what's already known. project-tools has 60+ tools — don't build what already exists.
 8. CORRECT: When you discover stored knowledge is wrong — whether through correction, API response, or observation — IMMEDIATELY call remember() with the correction. Tag it with the domain_concept name if one exists. The test: would a different Claude instance hit this same problem? Yes = remember(). No = skip.

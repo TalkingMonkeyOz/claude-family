@@ -500,7 +500,7 @@ class TestUserTaskSequencing:
     """Verify that user tasks execute in the correct order.
 
     Order:
-      1. update_search_tool (add client_domain parameter to search_bpmn_processes)
+      1. update_search_tool (add client_domain parameter to bpmn_search())
       2. update_sync_tool (record created_by_session on upsert)
     """
 

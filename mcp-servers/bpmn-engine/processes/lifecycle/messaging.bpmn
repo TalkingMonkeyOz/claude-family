@@ -10,8 +10,8 @@
 
     <!--
       Models the messaging lifecycle between Claude instances.
-      6 core operations: send_message, broadcast, check_inbox, acknowledge, reply, discover.
-      Also: get_active_sessions, action_message, defer_message.
+      6 core operations: send_msg(), broadcast, inbox(), inbox(ack_action=...), reply, discover.
+      Also: system_info(view="sessions"), action_message, defer_message.
 
       Table: claude.messages
       Columns: from_project, parent_message_id, thread_id (added for sender identity + threading)
@@ -41,7 +41,7 @@
       <bpmn:incoming>flow_start_to_intent</bpmn:incoming>
       <bpmn:outgoing>flow_intent_to_gw</bpmn:outgoing>
       <bpmn:documentation>Claude determines what messaging operation to perform.
-Sets intent = "send" | "broadcast" | "check_inbox" | "acknowledge" | "reply" | "discover"</bpmn:documentation>
+Sets intent = "send" | "broadcast" | "inbox()" | "inbox(ack_action=...)" | "reply" | "discover"</bpmn:documentation>
     </bpmn:userTask>
 
     <bpmn:exclusiveGateway id="intent_gw" name="What Intent?" default="flow_check_inbox">
@@ -230,7 +230,7 @@ inbox_checked = True
     <bpmn:userTask id="determine_ack_action" name="[CLAUDE] Determine Ack Action">
       <bpmn:incoming>flow_acknowledge</bpmn:incoming>
       <bpmn:outgoing>flow_ack_to_action_gw</bpmn:outgoing>
-      <bpmn:documentation>Claude chooses acknowledge action.
+      <bpmn:documentation>Claude chooses inbox(ack_action=...) action.
 Sets ack_action = "read" | "acknowledged" | "actioned" | "deferred"</bpmn:documentation>
     </bpmn:userTask>
 

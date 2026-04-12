@@ -3,7 +3,7 @@
 Broadcast Governance Hook — PreToolUse nudge for targeted messaging.
 
 Fires before mcp__project-tools__broadcast. Injects additionalContext
-reminding the Claude instance to prefer send_message(to_project=X)
+reminding the Claude instance to prefer send_msg(to_project=X)
 for directed communication. Does NOT block — always allows.
 
 Matcher: mcp__project-tools__broadcast
@@ -30,9 +30,9 @@ def main():
         guidance = (
             "BROADCAST GOVERNANCE: This message will go to ALL 19 projects. "
             "If this is directed at a specific project, CANCEL this broadcast "
-            "and use send_message(to_project='project-name') instead. "
-            "Use list_recipients() to discover valid targets. "
-            "Only use broadcast() for genuine all-hands announcements "
+            "and use send_msg(to_project='project-name') instead. "
+            "Use system_info(view='recipients') to discover valid targets. "
+            "Only use send_msg(is_broadcast=True) for genuine all-hands announcements "
             "(maintenance, infrastructure changes affecting everyone, team-wide updates)."
         )
 

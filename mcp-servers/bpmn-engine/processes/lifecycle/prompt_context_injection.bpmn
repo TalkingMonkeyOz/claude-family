@@ -78,7 +78,7 @@ for inclusion in the pre-computed session context cache.</bpmn:documentation>
       <bpmn:script>workfiles_loaded = True</bpmn:script>
       <bpmn:documentation>Queries claude.project_workfiles WHERE is_pinned=true AND project matches.
 Pinned workfiles contain critical component context that should be available
-on every prompt without explicit unstash() calls.</bpmn:documentation>
+on every prompt without explicit workfile_read() calls.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <bpmn:scriptTask id="load_previous_session_facts" name="[HOOK] Load Session Facts from Previous Sessions" scriptFormat="python">

@@ -41,11 +41,11 @@ REMINDER_INTERVALS = {
 
 # Rotating storage nudges — cycle through these to reinforce filing habits
 STORAGE_NUDGES = [
-    "📁 **Filing Cabinet**: Working on a component? `stash()` your notes. `unstash()` to reload next session.",
+    "📁 **Filing Cabinet**: Working on a component? `stash()` your notes. `workfile_read(component)` to reload next session.",
     "🧠 **Memory**: Learned a pattern or gotcha? `remember()` it for future sessions (min 80 chars).",
     "📋 **Notepad**: Important finding or decision? `store_session_fact()` — survives compaction.",
     "📚 **Reference Library**: Found structured data (API, schema, entity)? `catalog()` it.",
-    "📂 **Filing Check**: `list_workfiles()` before starting work — check if a dossier already exists.",
+    "📂 **Filing Check**: `workfile_read()` before starting work — check if a dossier already exists.",
 ]
 
 # State file for tracking interaction count
@@ -75,7 +75,7 @@ FALLBACK_THRESHOLDS = {
 CONTEXT_HEALTH_MESSAGES = {
     "yellow": (
         "**CONTEXT ADVISORY ({remaining}% remaining).** Consider saving cognitive state:\n"
-        "  - save_checkpoint(\"<current focus>\", \"<progress notes>\")\n"
+        "  - session_manage(action=\"checkpoint\", focus=\"<current focus>\", progress_notes=\"<progress notes>\")\n"
         "  - store_session_fact(\"current_task\", \"<what you're working on>\")"
     ),
     "orange": (
@@ -83,7 +83,7 @@ CONTEXT_HEALTH_MESSAGES = {
         "1. store_session_fact(\"current_task\", \"<what you're working on>\")\n"
         "2. store_session_fact(\"approach\", \"<strategy being used>\")\n"
         "3. store_session_fact(\"progress\", \"<what's done, what remains>\")\n"
-        "4. save_checkpoint(\"<current focus>\", \"<progress summary>\")\n"
+        "4. session_manage(action=\"checkpoint\", focus=\"<current focus>\", progress_notes=\"<progress summary>\")\n"
         "Then continue your work."
     ),
     "red_ok": (
@@ -95,8 +95,8 @@ CONTEXT_HEALTH_MESSAGES = {
         "1. store_session_fact(\"current_task\", \"<what you're working on>\")\n"
         "2. store_session_fact(\"approach\", \"<strategy being used>\")\n"
         "3. store_session_fact(\"progress\", \"<what's done, what remains>\")\n"
-        "4. store_session_notes(\"<progress narrative>\", section=\"progress\")\n"
-        "5. save_checkpoint(\"<current focus>\", \"<progress notes>\")\n"
+        "4. session_manage(action=\"store_notes\", content=\"<progress narrative>\", section=\"progress\")\n"
+        "5. session_manage(action=\"checkpoint\", focus=\"<current focus>\", progress_notes=\"<progress notes>\")\n"
         "6. remember() any patterns or decisions from this session\n"
         "Gated tools (Write/Edit/Bash/Task) are BLOCKED until checkpoint is saved."
     ),
@@ -201,7 +201,7 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
     # Check each interval
     if count > 0 and count % REMINDER_INTERVALS["inbox_check"] == 0:
         if count != state.get("last_inbox_check", 0):
-            reminders.append("📬 **Inbox Check**: Use `mcp__project-tools__check_inbox` to see pending messages")
+            reminders.append("📬 **Inbox Check**: Use `mcp__project-tools__inbox` to see pending messages")
             state["last_inbox_check"] = count
 
     if count > 0 and count % REMINDER_INTERVALS["vault_refresh"] == 0:
@@ -217,8 +217,8 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
     if count > 0 and count % REMINDER_INTERVALS["tool_awareness"] == 0:
         if count != state.get("last_tool_awareness", 0):
             reminders.append("""🔧 **When to use MCP tools**:
-  - **User reports bug/idea?** → `create_feedback` (NOT raw SQL)
-  - **Planning 3+ file feature?** → `create_feature` + `add_build_task`
+  - **User reports bug/idea?** → `work_create` (NOT raw SQL)
+  - **Planning 3+ file feature?** → `work_create` + `work_create` (tasks)
   - **Task too complex?** → Native `Task` tool (delegate to agents)
   - **Need deep reasoning?** → `sequential-thinking`
   - **Processing data?** → `python-repl` (keep out of context)""")
@@ -237,7 +237,7 @@ def get_periodic_reminders(state: Dict[str, Any]) -> Optional[str]:
   - Medium tasks (single edit, test writing): ~400 tokens each
   - Light tasks (query, status, git): ~100 tokens each
   - **3+ heavy tasks remaining?** DELEGATE to agents (native Task tool)
-  - **Run save_checkpoint()** after each completed task to preserve progress
+  - **Run session_manage(action="checkpoint")** after each completed task to preserve progress
   - **Over budget?** Stop, save state, let next session continue""".format(count=count))
             state["last_budget_check"] = count
 
