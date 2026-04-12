@@ -9,8 +9,8 @@ When the user says to end the session (or you invoke /session-end), follow this 
 Before ending, check for unfinished business:
 
 1. Run `TaskList` — are any tasks still in_progress? Complete or create follow-up tasks.
-2. Run `get_unactioned_messages(project_name)` — any task_requests, questions, or handoffs not actioned or deferred? Address or defer with reason.
-3. Check for "TODO" or "we should do X later" in your conversation — each needs a tracking item (`TaskCreate` or `create_feedback`).
+2. Run `inbox(view="unactioned", project_name)` — any task_requests, questions, or handoffs not actioned or deferred? Address or defer with reason.
+3. Check for "TODO" or "we should do X later" in your conversation — each needs a tracking item (`TaskCreate` or `work_create(type="feedback",`).
 4. Any deferred decisions? File them.
 
 **Rule**: No loose ends. Every piece of deferred work becomes a tracked item. Every message gets a disposition.
@@ -22,7 +22,7 @@ Before ending, check for unfinished business:
 Review what you learned this session. For each significant finding:
 
 - **Reusable pattern/gotcha/decision?** → `remember(content, memory_type)` (min 80 chars, include why + how to apply)
-- **Component working notes?** → `stash(component, title, content)` if not already stashed during session
+- **Component working notes?** → `workfile_store(component, title, content)` if not already stashed during session
 
 Skip if nothing new was learned — don't force it.
 
@@ -59,7 +59,7 @@ This single call handles ALL of the following automatically:
 - Extracts conversation to `claude.conversations`
 - Converts learnings to knowledge entries with FastEmbed embeddings
 - Extracts insights from conversation
-- Runs `consolidate_memories("session_end")` for short→mid tier promotion
+- Runs `memory_manage(action="consolidate""session_end")` for short→mid tier promotion
 
 **Do NOT** write raw SQL, call individual DB operations, or use retired tools. `end_session()` is the single entry point.
 

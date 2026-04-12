@@ -15,18 +15,18 @@ Stream (feature_type='stream')
 
 ## Required Workflow
 
-1. **Orient first**: Call `get_build_board(project)` at session start to see what's ready
-2. **Respect dependencies**: `start_work()` will BLOCK if predecessors aren't completed
-3. **Use the tools**: `start_work()` / `complete_work()` — don't raw UPDATE status
-4. **Add deps explicitly**: Use `add_dependency()` when tasks depend on each other
+1. **Orient first**: Call `work_board(view="board")(project)` at session start to see what's ready
+2. **Respect dependencies**: `work_status(action="start")` will BLOCK if predecessors aren't completed
+3. **Use the tools**: `work_status(action="start")` / `work_status(action="complete")` — don't raw UPDATE status
+4. **Add deps explicitly**: Use `work_status(action="add_dep")` when tasks depend on each other
 
 ## Dependency Rules
 
 - Tasks can depend on other tasks or features
 - Features can depend on other features
 - Circular dependencies are rejected
-- `start_work()` validates all predecessors are completed before allowing start
-- `complete_work()` reports when parent feature is ready for completion
+- `work_status(action="start")` validates all predecessors are completed before allowing start
+- `work_status(action="complete")` reports when parent feature is ready for completion
 
 ## Override Mechanism
 
@@ -40,4 +40,4 @@ Override is logged to audit_log. Use sparingly.
 
 - A stream is complete when ALL child features are completed/cancelled
 - A feature is complete when ALL build tasks are completed/cancelled
-- `complete_work()` auto-detects and reports readiness up the chain
+- `work_status(action="complete")` auto-detects and reports readiness up the chain

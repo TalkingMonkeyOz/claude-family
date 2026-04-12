@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "description": "Tool index for deferred loading - search tools by keywords",
+  "version": "2.0",
+  "description": "Tool index for deferred loading - search tools by keywords. Updated for 32-tool consolidation.",
   "tools": {
     "query_database": {
       "server": "postgres",
@@ -37,55 +37,6 @@
       "keywords": ["directory", "list", "files", "folders", "ls", "dir"],
       "example": "mcp__filesystem__list_directory(path=\"C:/Projects\")"
     },
-    "search_memory": {
-      "server": "memory",
-      "tool": "mcp__memory__search_nodes",
-      "description": "Search knowledge graph for entities matching query",
-      "keywords": ["memory", "search", "knowledge", "graph", "entities", "find"],
-      "example": "mcp__memory__search_nodes(query=\"session patterns\")"
-    },
-    "create_entities": {
-      "server": "memory",
-      "tool": "mcp__memory__create_entities",
-      "description": "Create new entities in knowledge graph",
-      "keywords": ["memory", "create", "entity", "knowledge", "store", "save"],
-      "example": "mcp__memory__create_entities(entities=[{\"name\": \"Pattern\", \"entityType\": \"concept\", \"observations\": [\"details\"]}])"
-    },
-    "spawn_agent": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__spawn_agent",
-      "description": "Spawn a specialized Claude agent for a task",
-      "keywords": ["agent", "spawn", "delegate", "task", "orchestrate", "parallel"],
-      "example": "mcp__orchestrator__spawn_agent(agent_type=\"coder-haiku\", task=\"Write function\", workspace_dir=\"C:/Projects/myproject\")"
-    },
-    "spawn_agent_async": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__spawn_agent_async",
-      "description": "Spawn agent asynchronously - returns immediately with task_id",
-      "keywords": ["agent", "spawn", "async", "background", "parallel", "non-blocking"],
-      "example": "mcp__orchestrator__spawn_agent_async(agent_type=\"reviewer-sonnet\", task=\"Review code\", workspace_dir=\"C:/Projects\")"
-    },
-    "check_inbox": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__check_inbox",
-      "description": "Check for messages from other Claude instances",
-      "keywords": ["messages", "inbox", "check", "receive", "communication"],
-      "example": "mcp__orchestrator__check_inbox(project_name=\"claude-family\")"
-    },
-    "send_message": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__send_message",
-      "description": "Send message to another Claude instance or project",
-      "keywords": ["message", "send", "communicate", "notify", "broadcast"],
-      "example": "mcp__orchestrator__send_message(message_type=\"status_update\", body=\"Task complete\")"
-    },
-    "execute_python": {
-      "server": "python-repl",
-      "tool": "mcp__python-repl__execute_python",
-      "description": "Execute Python code and return output",
-      "keywords": ["python", "execute", "code", "run", "script", "repl"],
-      "example": "mcp__python-repl__execute_python(code=\"print('Hello World')\")"
-    },
     "sequential_thinking": {
       "server": "sequential-thinking",
       "tool": "mcp__sequential-thinking__sequentialthinking",
@@ -114,13 +65,6 @@
       "keywords": ["database", "slow", "queries", "performance", "top", "resources"],
       "example": "mcp__postgres__get_top_queries(sort_by=\"mean_time\", limit=10)"
     },
-    "read_graph": {
-      "server": "memory",
-      "tool": "mcp__memory__read_graph",
-      "description": "Read entire knowledge graph with all entities and relations",
-      "keywords": ["memory", "graph", "read", "all", "entities", "relations", "full"],
-      "example": "mcp__memory__read_graph()"
-    },
     "directory_tree": {
       "server": "filesystem",
       "tool": "mcp__filesystem__directory_tree",
@@ -142,40 +86,296 @@
       "keywords": ["search", "find", "files", "pattern", "recursive", "locate"],
       "example": "mcp__filesystem__search_files(path=\"C:/Projects\", pattern=\"*.py\")"
     },
-    "list_agent_types": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__list_agent_types",
-      "description": "List all available agent types with descriptions and costs",
-      "keywords": ["agent", "types", "list", "available", "capabilities"],
-      "example": "mcp__orchestrator__list_agent_types()"
+
+    "start_session": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__start_session",
+      "description": "Begin a work session — loads project context, todos, messages, and previous state in one call. Always call this first.",
+      "keywords": ["session", "start", "begin", "context", "load", "initialize", "resume"],
+      "replaces": [],
+      "example": "start_session(project=\"claude-family\")"
     },
-    "broadcast": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__broadcast",
-      "description": "Send message to ALL active Claude instances",
-      "keywords": ["broadcast", "all", "message", "notify", "everyone"],
-      "example": "mcp__orchestrator__broadcast(body=\"Important update\", priority=\"normal\")"
+    "end_session": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__end_session",
+      "description": "End a work session — saves summary, next steps, learnings, and stores conversation for future recall.",
+      "keywords": ["session", "end", "close", "save", "summary", "finish", "wrap"],
+      "replaces": [],
+      "example": "end_session(summary=\"Done X\", next_steps=[\"Do Y\"], learnings=[\"Z\"])"
     },
-    "get_active_sessions": {
-      "server": "orchestrator",
-      "tool": "mcp__orchestrator__get_active_sessions",
-      "description": "Get all currently active Claude sessions (who's online)",
-      "keywords": ["sessions", "active", "online", "instances", "who"],
-      "example": "mcp__orchestrator__get_active_sessions()"
+    "remember": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__remember",
+      "description": "Store a memory for future sessions — auto-routes to mid/long tier, deduplicates, and links related knowledge. Minimum 80 chars.",
+      "keywords": ["memory", "remember", "store", "knowledge", "learn", "persist", "save", "pattern", "gotcha", "lesson", "decision"],
+      "replaces": ["store_knowledge", "store_session_fact (for cross-session)"],
+      "example": "remember(content=\"Pattern: always check X before Y\", memory_type=\"pattern\")"
     },
-    "install_package": {
-      "server": "python-repl",
-      "tool": "mcp__python-repl__install_package",
-      "description": "Install a Python package using uv",
-      "keywords": ["python", "install", "package", "pip", "dependency"],
-      "example": "mcp__python-repl__install_package(package=\"pandas\")"
+    "recall_memories": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__recall_memories",
+      "description": "Retrieve relevant memories from all 3 tiers (short/mid/long) in a single budget-capped call. Use before starting work on any topic.",
+      "keywords": ["memory", "recall", "retrieve", "knowledge", "find", "search", "remember", "lookup"],
+      "replaces": ["recall_knowledge", "list_session_facts (for lookup)"],
+      "example": "recall_memories(query=\"hook system architecture\")"
     },
-    "list_variables": {
-      "server": "python-repl",
-      "tool": "mcp__python-repl__list_variables",
-      "description": "List all variables in current Python session",
-      "keywords": ["python", "variables", "list", "session", "state"],
-      "example": "mcp__python-repl__list_variables()"
+    "store_session_fact": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__store_session_fact",
+      "description": "Store a session-scoped fact that survives context compaction but not the session. Use for credentials, endpoints, decisions made this session.",
+      "keywords": ["session", "fact", "notepad", "store", "config", "credential", "endpoint", "decision", "note"],
+      "replaces": [],
+      "example": "store_session_fact(fact_key=\"api_endpoint\", fact_value=\"https://api.example.com\", fact_type=\"endpoint\")"
+    },
+    "get_work_context": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__get_work_context",
+      "description": "Get token-budgeted work context at current/feature/project zoom level. Use mid-task for current, feature for planning, project for orientation.",
+      "keywords": ["work", "context", "current", "task", "feature", "project", "status", "active"],
+      "replaces": ["get_session_context"],
+      "example": "get_work_context(scope=\"current\")"
+    },
+    "get_schema": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__get_schema",
+      "description": "Get database schema reference with column constraints inlined. Use before writing SQL to understand table structures.",
+      "keywords": ["schema", "database", "tables", "columns", "structure", "constraints", "reference"],
+      "replaces": [],
+      "example": "get_schema(tier=1)"
+    },
+
+    "work_create": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__work_create",
+      "description": "Create any work item: feature, feedback (bug/idea/improvement/change/question/design), task, or simple_task. Single entry point for all work item creation.",
+      "keywords": ["create", "feature", "bug", "feedback", "task", "idea", "improvement", "change", "question", "design", "work", "new", "file", "track"],
+      "replaces": ["create_feature", "create_feedback", "add_build_task", "create_linked_task", "promote_feedback"],
+      "example": "work_create(type=\"feedback\", project=\"claude-family\", name=\"Login broken\", description=\"...\", feedback_type=\"bug\")"
+    },
+    "work_status": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__work_status",
+      "description": "Change status of any work item — start, complete, advance to a new status, promote feedback to feature, resolve feedback, or add a dependency.",
+      "keywords": ["status", "start", "complete", "advance", "promote", "resolve", "dependency", "transition", "workflow", "progress", "done", "finish"],
+      "replaces": ["start_work", "complete_work", "advance_status", "resolve_feedback", "promote_feedback", "add_dependency"],
+      "example": "work_status(item_code=\"BT5\", action=\"start\")"
+    },
+    "work_board": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__work_board",
+      "description": "Read work tracking state: full board (streams/features/tasks), ready tasks (not blocked), or incomplete todos.",
+      "keywords": ["board", "ready", "todos", "tasks", "features", "streams", "work", "view", "status", "next", "blocked"],
+      "replaces": ["get_build_board", "get_ready_tasks", "get_incomplete_todos"],
+      "example": "work_board(project=\"claude-family\", view=\"board\")"
+    },
+    "memory_manage": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__memory_manage",
+      "description": "Memory admin operations: list memories, update content, archive stale entries, merge duplicates, mark applied, or run consolidation lifecycle.",
+      "keywords": ["memory", "manage", "list", "update", "archive", "merge", "duplicate", "stale", "consolidate", "lifecycle", "fix", "admin"],
+      "replaces": ["archive_memory", "update_memory", "merge_memories", "mark_knowledge_applied", "consolidate_memories", "list_memories"],
+      "example": "memory_manage(action=\"list\", project=\"claude-family\", tier_filter=\"mid\")"
+    },
+    "session_facts": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__session_facts",
+      "description": "Read session facts: recall one fact by key, list all facts in current session, or recall facts from previous N sessions.",
+      "keywords": ["session", "facts", "notepad", "recall", "list", "previous", "key", "value", "config", "endpoint"],
+      "replaces": ["recall_session_fact", "list_session_facts", "recall_previous_session_facts"],
+      "example": "session_facts(fact_key=\"api_endpoint\")"
+    },
+    "session_manage": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__session_manage",
+      "description": "Session operations: save a checkpoint, recover from a crash, store/get session notes, or search/extract conversation history.",
+      "keywords": ["session", "checkpoint", "recover", "crash", "notes", "progress", "conversation", "search", "extract", "history"],
+      "replaces": ["save_checkpoint", "recover_session", "store_session_notes", "get_session_notes", "search_conversations", "extract_conversation", "extract_insights"],
+      "example": "session_manage(action=\"checkpoint\", focus=\"Implementing auth flow\")"
+    },
+    "workfile_store": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__workfile_store",
+      "description": "Write and manage workfiles in the Filing Cabinet: replace content, append to it, archive a stale file, or hard-delete it.",
+      "keywords": ["workfile", "filing", "cabinet", "store", "save", "write", "append", "archive", "delete", "component", "notes", "working", "stash"],
+      "replaces": ["stash", "archive_workfile", "delete_workfile"],
+      "example": "workfile_store(component=\"auth-flow\", title=\"approach notes\", content=\"...\", mode=\"replace\")"
+    },
+    "workfile_read": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__workfile_read",
+      "description": "Read and search workfiles in the Filing Cabinet: load a component's files, retrieve a specific file by title, or search by semantic query.",
+      "keywords": ["workfile", "filing", "cabinet", "read", "load", "search", "find", "component", "unstash", "list", "browse"],
+      "replaces": ["unstash", "list_workfiles", "search_workfiles"],
+      "example": "workfile_read(component=\"auth-flow\")"
+    },
+    "entity_store": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__entity_store",
+      "description": "Write and manage structured entities in the Reference Library: create new entities, update existing ones, or apply targeted property patches.",
+      "keywords": ["entity", "catalog", "store", "create", "update", "patch", "reference", "library", "structured", "odata", "api", "domain", "concept"],
+      "replaces": ["catalog", "update_entity"],
+      "example": "entity_store(entity_type=\"domain_concept\", properties={\"name\": \"Auth Flow\", \"description\": \"...\"})"
+    },
+    "entity_read": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__entity_read",
+      "description": "Search and browse structured entities in the Reference Library: by semantic query, by entity type, or by specific entity ID.",
+      "keywords": ["entity", "catalog", "search", "find", "browse", "reference", "library", "recall", "odata", "api", "domain", "concept", "lookup"],
+      "replaces": ["recall_entities", "explore_entities"],
+      "example": "entity_read(query=\"nimbus auth\", entity_type=\"domain_concept\")"
+    },
+    "article_write": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__article_write",
+      "description": "Create or update knowledge articles and their sections, or manage article lifecycle (publish, archive). Use for narrative knowledge linking multiple concepts.",
+      "keywords": ["article", "knowledge", "write", "create", "update", "section", "publish", "archive", "narrative", "research", "investigation", "findings"],
+      "replaces": ["write_article", "write_article_section", "manage_article"],
+      "example": "article_write(title=\"Auth System Architecture\", abstract=\"How auth works across services\", article_type=\"architecture\")"
+    },
+    "article_read": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__article_read",
+      "description": "Search and read knowledge articles: by semantic query, by specific article ID, or retrieve a single section by ID.",
+      "keywords": ["article", "knowledge", "read", "search", "find", "recall", "retrieve", "narrative", "research", "architecture", "investigation"],
+      "replaces": ["recall_articles", "read_article"],
+      "example": "article_read(query=\"embedding system architecture\")"
+    },
+    "inbox": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__inbox",
+      "description": "Read and manage incoming messages from other Claude instances: view pending/unactioned/history, or acknowledge individual/bulk messages.",
+      "keywords": ["inbox", "messages", "receive", "check", "pending", "unread", "acknowledge", "read", "history", "communication"],
+      "replaces": ["check_inbox", "get_unactioned_messages", "acknowledge", "bulk_acknowledge", "get_message_history"],
+      "example": "inbox(view=\"pending\", project_name=\"claude-family\")"
+    },
+    "send_msg": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__send_msg",
+      "description": "Send messages to other Claude instances: direct message to a project, reply to a message thread, or broadcast to all active instances.",
+      "keywords": ["send", "message", "communicate", "reply", "broadcast", "notify", "all", "project", "thread", "inter-claude"],
+      "replaces": ["send_message", "reply_to", "broadcast"],
+      "example": "send_msg(body=\"Task complete\", to_project=\"nimbus\", message_type=\"status_update\")"
+    },
+    "secret": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__secret",
+      "description": "Credential vault operations: get, set, list, delete secrets stored in Windows Credential Manager, or load all project secrets at once.",
+      "keywords": ["secret", "credential", "vault", "api", "key", "token", "password", "store", "retrieve", "secure", "auth", "persistent"],
+      "replaces": ["get_secret", "set_secret", "list_secrets", "delete_secret", "load_project_secrets"],
+      "example": "secret(action=\"get\", secret_key=\"voyage_api_key\")"
+    },
+    "config_manage": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__config_manage",
+      "description": "Config and deployment operations: update a CLAUDE.md section, deploy CLAUDE.md from DB, deploy all project components (settings/rules/skills), or regenerate settings.",
+      "keywords": ["config", "deploy", "settings", "claude.md", "section", "update", "regenerate", "project", "sync", "rules", "skills"],
+      "replaces": ["update_claude_md", "deploy_claude_md", "deploy_project", "regenerate_settings"],
+      "example": "config_manage(action=\"update_section\", project=\"claude-family\", section=\"Problem Statement\", content=\"...\")"
+    },
+    "code_search": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__code_search",
+      "description": "Find code symbols by name or semantic meaning, check for name collisions, find similar symbols, or get a module structure map for a file.",
+      "keywords": ["code", "search", "symbol", "function", "class", "method", "find", "collision", "module", "structure", "map", "similar"],
+      "replaces": ["find_symbol", "check_collision", "get_module_map"],
+      "example": "code_search(query=\"session startup hook\", project=\"claude-family\")"
+    },
+    "code_context": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__code_context",
+      "description": "Deep symbol analysis: get full context (body, callers, callees, siblings) for a symbol, or walk the dependency graph from a symbol ID.",
+      "keywords": ["code", "context", "symbol", "callers", "callees", "dependency", "graph", "analysis", "usage", "references", "deep"],
+      "replaces": ["get_context", "get_dependency_graph", "find_similar", "code_context"],
+      "example": "code_context(symbol_name=\"protocol_inject_hook\", project=\"claude-family\")"
+    },
+    "book_store": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__book_store",
+      "description": "Store books and reference concepts in the reference library: add a book record or capture a specific concept, quote, or insight from a book.",
+      "keywords": ["book", "reference", "store", "concept", "quote", "insight", "library", "reading", "research"],
+      "replaces": ["store_book", "store_book_reference"],
+      "example": "book_store(book_title=\"Designing Data-Intensive Applications\", concept=\"Write-ahead log\", description=\"...\")"
+    },
+    "book_read": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__book_read",
+      "description": "Search book references using semantic similarity to find concepts, quotes, and insights from books in the reference library.",
+      "keywords": ["book", "reference", "search", "find", "concept", "quote", "insight", "library", "recall", "lookup"],
+      "replaces": ["recall_book_reference"],
+      "example": "book_read(query=\"event sourcing patterns\")"
+    },
+    "link": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__link",
+      "description": "Create or read links between resources (entities, skills, workfiles, features, tasks, knowledge, BPMN) or between knowledge entries.",
+      "keywords": ["link", "connect", "relate", "relationship", "knowledge", "entity", "resource", "graph", "association"],
+      "replaces": ["link_resources", "link_knowledge", "get_linked_resources", "get_related_knowledge"],
+      "example": "link(from_type=\"feature\", from_id=\"<uuid>\", to_type=\"bpmn_process\", to_id=\"<uuid>\", link_type=\"implements\")"
+    },
+    "bpmn_search": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__bpmn_search",
+      "description": "Search BPMN process models using semantic similarity — find processes by keyword, understand workflow relationships, filter by level or project.",
+      "keywords": ["bpmn", "process", "workflow", "search", "find", "model", "L0", "L1", "L2", "business"],
+      "replaces": ["search_bpmn_processes"],
+      "example": "bpmn_search(query=\"session lifecycle management\")"
+    },
+    "protocol": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__protocol",
+      "description": "Protocol version management: view active protocol content, see version history, or update the protocol to a new version.",
+      "keywords": ["protocol", "core", "version", "history", "update", "view", "inject", "rules"],
+      "replaces": ["get_active_protocol", "get_protocol_history", "update_protocol"],
+      "example": "protocol(limit=5)"
+    },
+    "system_info": {
+      "server": "project-tools",
+      "tool": "mcp__project-tools__system_info",
+      "description": "System status checks: messaging channel connectivity, all active Claude sessions (who's online), or valid message recipients.",
+      "keywords": ["system", "status", "channel", "sessions", "online", "active", "recipients", "who", "connected", "instances"],
+      "replaces": ["channel_status", "get_active_sessions", "list_recipients"],
+      "example": "system_info(view=\"sessions\")"
+    },
+
+    "bpmn_get_current_step": {
+      "server": "bpmn-engine",
+      "tool": "mcp__bpmn-engine__get_current_step",
+      "description": "GPS-style BPMN navigation — given completed steps, returns what tasks are available next in a process.",
+      "keywords": ["bpmn", "process", "step", "next", "navigate", "workflow", "current", "available"],
+      "replaces": [],
+      "example": "get_current_step(process_id=\"session_lifecycle\", completed_steps=[\"start_session\"])"
+    },
+    "bpmn_get_process": {
+      "server": "bpmn-engine",
+      "tool": "mcp__bpmn-engine__get_process",
+      "description": "Get a human-readable overview of a BPMN process — all elements, flows, and subprocesses.",
+      "keywords": ["bpmn", "process", "overview", "elements", "flows", "structure", "model"],
+      "replaces": [],
+      "example": "get_process(process_id=\"crash_recovery\")"
+    },
+    "bpmn_list_processes": {
+      "server": "bpmn-engine",
+      "tool": "mcp__bpmn-engine__list_processes",
+      "description": "List all available BPMN processes in the processes directory for discovery.",
+      "keywords": ["bpmn", "list", "processes", "discover", "available", "all"],
+      "replaces": [],
+      "example": "list_processes()"
+    },
+    "bpmn_validate_process": {
+      "server": "bpmn-engine",
+      "tool": "mcp__bpmn-engine__validate_process",
+      "description": "Validate a BPMN process — parse check and optional pytest run to confirm it's well-formed and tests pass.",
+      "keywords": ["bpmn", "validate", "test", "parse", "check", "well-formed", "pytest"],
+      "replaces": [],
+      "example": "validate_process(process_id=\"session_lifecycle\")"
+    },
+    "bpmn_check_alignment": {
+      "server": "bpmn-engine",
+      "tool": "mcp__bpmn-engine__check_alignment",
+      "description": "Check alignment between a BPMN process model and actual code artifacts — finds gaps between model and implementation.",
+      "keywords": ["bpmn", "alignment", "code", "gap", "coverage", "model", "implementation", "check"],
+      "replaces": [],
+      "example": "check_alignment(process_id=\"session_lifecycle\")"
     }
   }
 }

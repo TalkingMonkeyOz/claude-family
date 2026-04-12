@@ -120,7 +120,7 @@ Open Items Summary:
 1. Detect current project from working directory
 2. Ask user for feedback type: bug, design, question, change, idea
 3. Ask for description (detailed)
-4. Use `mcp__project-tools__create_feedback` with project, type, description, priority
+4. Use `work_create(type="feedback",` with project, type, description, priority
 5. Confirm creation with short_code
 
 ---

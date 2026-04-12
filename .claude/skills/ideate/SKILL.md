@@ -21,7 +21,7 @@ Ask the user (or determine from context):
 
 ### Log as Feedback
 
-Use `mcp__project-tools__create_feedback` with:
+Use `work_create(type="feedback",` with:
 - `project_path`: Current project
 - `feedback_type`: `idea`
 - `description`: Combined what + why
@@ -55,7 +55,7 @@ Present to user:
 
 ## Step 3: Create Feature
 
-Use `mcp__project-tools__create_feature` with:
+Use `work_create(type="feature",` with:
 - `project_path`: Current project
 - `feature_name`: Clear, concise name
 - `description`: Full description including approach
@@ -66,7 +66,7 @@ Use `mcp__project-tools__create_feature` with:
 
 ## Step 4: Break Down into Build Tasks
 
-Create ordered build tasks using `mcp__project-tools__add_build_task`:
+Create ordered build tasks using `work_create(type="simple_task",`:
 
 | Order | Type | Example |
 |-------|------|---------|

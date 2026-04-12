@@ -78,41 +78,44 @@ python scripts/embed_vault_documents.py --all-projects
 
 | I need... | Search |
 |-----------|--------|
-| **System architecture (start here)** | `recall_articles("Claude Family architecture")` |
-| **Subsystem deep-dive** | `recall_articles("embedding system")` or `recall_articles("hook system")` etc. |
+| **System architecture (start here)** | `article_read(query="Claude Family architecture")` |
+| **Subsystem deep-dive** | `article_read(query="embedding system")` or `article_read(query="hook system")` etc. |
 | Hook architecture, how hooks work | `recall_memories("hook system architecture")` |
 | Storage systems, which to use | Load skill: `/skill-load-memory-storage` |
 | Config management, how files regenerate | `recall_memories("config management SOP")` |
 | Database schema, table structures | `get_schema()` tool |
-| Embedding pipeline, FastEmbed | `recall_articles("embedding system")` |
+| Embedding pipeline, FastEmbed | `article_read(query="embedding system")` |
 | Session lifecycle, startup/end | `recall_memories("session lifecycle")` |
-| BPMN process models | `search_processes("keyword")` |
+| BPMN process models | `bpmn_search("keyword")` |
 | Agent delegation patterns | `recall_memories("agent selection")` |
-| Nimbus API patterns | `recall_entities("nimbus", entity_type="domain_concept")` |
-| Any domain concept | `explore_entities(entity_type="domain_concept")` |
-| Component working notes | `list_workfiles()` then `unstash("component")` |
-| Credentials/API keys | `get_secret(key, project)` -- check before asking user |
-| Narrative knowledge (how systems connect) | `recall_articles("topic")` |
+| Nimbus API patterns | `entity_read(query="nimbus", entity_type="domain_concept")` |
+| Any domain concept | `entity_read(entity_type="domain_concept")` |
+| Component working notes | `workfile_read()` then `workfile_read(component="name")` |
+| Credentials/API keys | `secret(action="get", secret_key=k)` -- check before asking user |
+| Narrative knowledge (how systems connect) | `article_read(query="topic")` |
 
 
 ## Work Tracking
 
+
 | I have... | Tool |
 |-----------|------|
-| A bug | `create_feedback(type='bug', title='...', description='...')` |
-| An idea | `create_feedback(type='idea', title='...', description='...')` |
-| A feature to build | `create_feature(name='...', description='...')` |
-| A task within a feature | `create_linked_task(feature_code, name, desc, verification, files)` |
-| Work to start | `start_work(task_code)` / `complete_work(task_code)` |
-| Status to check | `get_work_context(scope='current')` or `get_build_board(project)` |
-| Config to update | `update_config(component_type, project, name, content, reason)` |
-| CLAUDE.md section to update | `update_claude_md(project, section, content)` |
-| Narrative knowledge (research, investigations) | `write_article` + `write_article_section` |
-| Find articles | `recall_articles(query)` or `read_article(article_id)` |
+| A bug | `work_create(type="feedback", feedback_type="bug", name="...", description="...")` |
+| An idea | `work_create(type="feedback", feedback_type="idea", name="...", description="...")` |
+| A feature to build | `work_create(type="feature", name="...", description="...")` |
+| A task within a feature | `work_create(type="task", feature_code="F1", name="...", description="...", verification="...", files_affected=[...])` |
+| Work to start | `work_status(item_code="BT1", action="start")` / `work_status(action="complete")` |
+| Status to check | `get_work_context(scope='current')` or `work_board(project="...")` |
+| Config to update | `config_manage(action="update_section", project="...", section="...", content="...")` |
+| CLAUDE.md section to update | `config_manage(action="update_section", project="...", section="...", content="...")` |
+| Narrative knowledge (research, investigations) | `article_write(title, abstract)` + `article_write(article_id, section_title, section_body)` |
+| Find articles | `article_read(query="...")` or `article_read(article_id="...")` |
 
 **Data Gateway**: Before INSERT/UPDATE on constrained columns, check `claude.column_registry`.
 
+
 ## Project-Specific Rules
+
 
 ### Config Management (CRITICAL)
 
@@ -121,8 +124,8 @@ python scripts/embed_vault_documents.py --all-projects
 | File | Source | Rule |
 |------|--------|------|
 | `.claude/settings.local.json` | `config_templates` + `workspaces.startup_config` | NEVER edit manually |
-| `CLAUDE.md` | `profiles.config->behavior` | Edit via `update_claude_md()` |
-| Skills, rules, instructions | `claude.skills`, `claude.rules`, `claude.instructions` | Edit via `update_config()` |
+| `CLAUDE.md` | `profiles.config->behavior` | Edit via `config_manage(action="update_section")` |
+| Skills, rules, instructions | `claude.skills`, `claude.rules`, `claude.instructions` | Edit via DB, deploy with `config_manage(action="deploy_project")` |
 
 ### Schema Rules
 
@@ -136,9 +139,4 @@ Before modifying hooks, workflow code, config management, or enforcement rules:
 2. Update BPMN model FIRST, then implement code
 3. Commit model + code together
 
----
 
-**Version**: 5.0
-**Created**: 2025-10-21
-**Updated**: 2026-04-08
-**Template**: claude-md-standard v1.0

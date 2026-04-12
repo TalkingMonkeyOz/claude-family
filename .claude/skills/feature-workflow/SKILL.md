@@ -46,7 +46,7 @@ IDEA → FEEDBACK → FEATURE → TASKS → IMPLEMENTATION → REVIEW → DEPLOY
 **Preferred**: Use the MCP tool to bypass raw SQL and let WorkflowEngine handle state:
 
 ```python
-mcp__project-tools__create_feedback(
+mcp__project-tools__work_create(type="feedback", 
     project_id="project-uuid-here",
     feedback_type="idea",  # Valid: bug, design, question, change, idea, improvement
     description="Description of the idea",
@@ -76,7 +76,7 @@ When an idea is approved for implementation:
 **Preferred**: Use the MCP tool (handles state machine transitions automatically):
 
 ```python
-mcp__project-tools__promote_feedback(
+mcp__project-tools__work_status(action="promote", 
     feedback_id="FB42",  # Feedback short code or UUID
     feature_name="Optional override name",  # Defaults to feedback title
     feature_type="feature",
@@ -111,7 +111,7 @@ WHERE feedback_id = 'feedback-uuid';
 **Preferred**: Use the MCP tool to route through WorkflowEngine:
 
 ```python
-mcp__project-tools__create_linked_task(
+mcp__project-tools__work_create(type="task", 
     feature_code="F1",  # Feature short code
     name="Create API endpoint",
     description="...",

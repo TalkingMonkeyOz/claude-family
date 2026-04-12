@@ -186,7 +186,7 @@ result = do_thing()
 
 When you encounter a process failure (hook error, state machine violation, unexpected behavior):
 
-1. File feedback: `create_feedback(type='bug', description='...')`
+1. File feedback: `work_create(type="feedback", type='bug', description='...')`
 2. Search if the failing system is modeled in BPMN
 3. Model the fix in BPMN first, then implement
 4. Store the finding as knowledge: `remember(content, "gotcha")`

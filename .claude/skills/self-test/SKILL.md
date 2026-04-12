@@ -47,7 +47,7 @@ Show: total routes tested, critical/warning/info finding counts, list each criti
 
 ## Step 5: Offer to File Feedback
 
-If findings exist, ask user whether to create feedback items. Use `mcp__project-tools__create_feedback` for each critical/warning finding.
+If findings exist, ask user whether to create feedback items. Use `work_create(type="feedback",` for each critical/warning finding.
 
 ## Route Manifest Format
 
