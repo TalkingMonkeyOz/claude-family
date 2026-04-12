@@ -42,8 +42,9 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'  # Prevent tokenizer fork warning
 os.environ.setdefault('OMP_NUM_THREADS', '1')  # Prevent ONNX OpenMP thread contention
 os.environ.setdefault('ONNXRUNTIME_PROVIDERS', 'CPUExecutionProvider')  # CPU only, no GPU probing
 
-# Provider selection: 'fastembed' (default) or 'voyage'
-PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'fastembed').lower()
+# Provider selection: 'http' (shared service, default), 'fastembed' (in-process), or 'voyage' (API)
+PROVIDER = os.environ.get('EMBEDDING_PROVIDER', 'http').lower()
+HTTP_SERVICE_URL = os.environ.get('EMBEDDING_SERVICE_URL', 'http://127.0.0.1:9900')
 
 # Import FastEmbed at module level to avoid Python import lock deadlock.
 # When _run_async spawns a thread that tries `from fastembed import TextEmbedding`
@@ -97,6 +98,59 @@ def _get_voyage_client():
     return _voyage_client
 
 
+def _http_embed(text: str) -> Optional[List[float]]:
+    """Call shared embedding service for a single text."""
+    import urllib.request
+    import json as _json
+    try:
+        data = _json.dumps({'text': text}).encode('utf-8')
+        req = urllib.request.Request(
+            f'{HTTP_SERVICE_URL}/embed',
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = _json.loads(resp.read())
+            return result.get('embedding')
+    except urllib.error.URLError as e:
+        logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
+        # Fallback: try loading model in-process if service is down
+        logger.warning("Falling back to in-process FastEmbed")
+        model = _get_fastembed_model()
+        embeddings = list(model.embed([text]))
+        return embeddings[0].tolist()
+    except Exception as e:
+        logger.error(f"HTTP embed failed: {e}")
+        return None
+
+
+def _http_embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
+    """Call shared embedding service for batch texts."""
+    import urllib.request
+    import json as _json
+    try:
+        data = _json.dumps({'texts': texts}).encode('utf-8')
+        req = urllib.request.Request(
+            f'{HTTP_SERVICE_URL}/embed_batch',
+            data=data,
+            headers={'Content-Type': 'application/json'},
+            method='POST'
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = _json.loads(resp.read())
+            return result.get('embeddings')
+    except urllib.error.URLError as e:
+        logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
+        logger.warning("Falling back to in-process FastEmbed")
+        model = _get_fastembed_model()
+        embeddings = list(model.embed(texts))
+        return [e.tolist() for e in embeddings]
+    except Exception as e:
+        logger.error(f"HTTP batch embed failed: {e}")
+        return None
+
+
 def embed(text: str) -> Optional[List[float]]:
     """Generate embedding for a single text. Returns list[float] or None on failure."""
     global _embed_call_count
@@ -107,7 +161,9 @@ def embed(text: str) -> Optional[List[float]]:
         return None
     try:
         start = time.time()
-        if PROVIDER == 'voyage':
+        if PROVIDER == 'http':
+            vec = _http_embed(text)
+        elif PROVIDER == 'voyage':
             client = _get_voyage_client()
             result = client.embed([text], model="voyage-3", input_type="query")
             vec = result.embeddings[0]
@@ -115,6 +171,10 @@ def embed(text: str) -> Optional[List[float]]:
             model = _get_fastembed_model()
             embeddings = list(model.embed([text]))
             vec = embeddings[0].tolist()
+
+        if vec is None:
+            logger.warning(f"embed() returned None (call #{_embed_call_count}, provider={PROVIDER})")
+            return None
 
         elapsed = time.time() - start
         # Log slow calls (>2s suggests cold start or issue)
@@ -137,7 +197,9 @@ def embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
         return None
     try:
         start = time.time()
-        if PROVIDER == 'voyage':
+        if PROVIDER == 'http':
+            vecs = _http_embed_batch(texts)
+        elif PROVIDER == 'voyage':
             client = _get_voyage_client()
             result = client.embed(texts, model="voyage-3", input_type="document")
             vecs = result.embeddings
@@ -156,11 +218,13 @@ def embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
 
 def get_provider_info() -> dict:
     """Return info about the current embedding provider."""
+    model_map = {"fastembed": "BAAI/bge-large-en-v1.5", "voyage": "voyage-3", "http": "BAAI/bge-large-en-v1.5 (via service)"}
     return {
         "provider": PROVIDER,
-        "model": "BAAI/bge-large-en-v1.5" if PROVIDER == "fastembed" else "voyage-3",
+        "model": model_map.get(PROVIDER, "unknown"),
         "dimensions": 1024,
-        "local": PROVIDER == "fastembed",
+        "local": PROVIDER in ("fastembed", "http"),
+        "service_url": HTTP_SERVICE_URL if PROVIDER == "http" else None,
         "model_loaded": _model_loaded,
         "embed_call_count": _embed_call_count,
     }
