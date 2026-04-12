@@ -75,20 +75,24 @@ python scripts/embed_vault_documents.py --all-projects
 ## Information Discovery
 
 
+
 | I need... | Search |
 |-----------|--------|
+| **System architecture (start here)** | `recall_articles("Claude Family architecture")` |
+| **Subsystem deep-dive** | `recall_articles("embedding system")` or `recall_articles("hook system")` etc. |
 | Hook architecture, how hooks work | `recall_memories("hook system architecture")` |
 | Storage systems, which to use | Load skill: `/skill-load-memory-storage` |
 | Config management, how files regenerate | `recall_memories("config management SOP")` |
 | Database schema, table structures | `get_schema()` tool |
-| Embedding pipeline, FastEmbed | `recall_memories("FastEmbed embedding pipeline")` |
+| Embedding pipeline, FastEmbed | `recall_articles("embedding system")` |
 | Session lifecycle, startup/end | `recall_memories("session lifecycle")` |
 | BPMN process models | `search_processes("keyword")` |
 | Agent delegation patterns | `recall_memories("agent selection")` |
 | Nimbus API patterns | `recall_entities("nimbus", entity_type="domain_concept")` |
 | Any domain concept | `explore_entities(entity_type="domain_concept")` |
 | Component working notes | `list_workfiles()` then `unstash("component")` |
-| Credentials/API keys | `get_secret(key, project)` — check before asking user |
+| Credentials/API keys | `get_secret(key, project)` -- check before asking user |
+| Narrative knowledge (how systems connect) | `recall_articles("topic")` |
 
 
 ## Work Tracking

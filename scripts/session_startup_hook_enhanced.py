@@ -933,6 +933,25 @@ def main():
                     cache_parts.append(f"  [{ftype}] {key}")
                 cache_parts.append("  Use recall_session_fact(key) to retrieve values.")
 
+            # Architecture articles — surface top-level articles so Claude knows they exist
+            # Shows all published architecture articles (cross-project by design)
+            cache_cur.execute("""
+                SELECT title, LEFT(abstract, 150) as abstract_preview
+                FROM claude.knowledge_articles
+                WHERE status = 'published'
+                  AND article_type = 'architecture'
+                ORDER BY updated_at DESC
+                LIMIT 5
+            """)
+            articles = cache_cur.fetchall()
+            if articles:
+                cache_parts.append("ARCHITECTURE ARTICLES (use recall_articles for details):")
+                for a in articles:
+                    title = a['title'] if isinstance(a, dict) else a[0]
+                    abstract_preview = a['abstract_preview'] if isinstance(a, dict) else a[1]
+                    cache_parts.append(f"  - {title}: {abstract_preview}")
+                cache_parts.append("  Use recall_articles(query) to search, read_article(id) to read full content.")
+
             cache_conn.close()
 
         # Write cache file
