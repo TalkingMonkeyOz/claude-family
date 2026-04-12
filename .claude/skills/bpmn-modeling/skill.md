@@ -6,7 +6,7 @@ description: BPMN-first process design using the bpmn-engine MCP server. Use whe
 # BPMN Modeling Skill
 
 **Status**: Active
-**Last Updated**: 2026-02-20
+**Last Updated**: 2026-04-11
 
 ---
 
@@ -21,16 +21,65 @@ description: BPMN-first process design using the bpmn-engine MCP server. Use whe
 
 ---
 
-## BPMN-First Design Flow
+## BPMN-First Design Flow (MANDATORY)
 
 ```
-1. QUERY existing processes  (search_processes, list_processes)
-2. IDENTIFY if the flow is already modeled
-3. DESIGN the BPMN XML (follow conventions below)
-4. TEST with SpiffWorkflow (pytest)
-5. IMPLEMENT the actual code
-6. VERIFY model matches implementation
+1. IDENTIFY ACTORS    — Who/what participates? (User, Claude, Hooks, Jobs, External Systems)
+2. QUERY EXISTING     — search_processes, list_processes — is it already modeled?
+3. GAP ANALYSIS       — Run the Gap Analysis Checklist (see below)
+4. DESIGN the BPMN    — Follow conventions, include non-happy paths
+5. TEST with pytest   — All paths, including error/edge cases
+6. IMPLEMENT code     — Only after model + tests are green
+7. VERIFY ALIGNMENT   — check_alignment(process_id) — does model match code?
+8. SYNC REGISTRY      — sync_bpmn_processes(project) after creating/modifying .bpmn files
 ```
+
+---
+
+## Gap Analysis Checklist (CRITICAL)
+
+Run this checklist for EVERY new or updated BPMN model. The value of BPMN is gap identification, not just documentation.
+
+### 1. CRUD Completeness
+For every data entity the process touches, verify all operations exist:
+- [ ] **Create** — Can the entity be created?
+- [ ] **Read** — Can it be queried/retrieved?
+- [ ] **Update** — Can it be modified after creation?
+- [ ] **Delete** — Can it be removed (soft or hard)?
+If any operation is missing, document WHY (intentional omission vs gap).
+
+### 2. Actor Coverage
+- [ ] List ALL actors who interact with the system (not just the primary one)
+- [ ] Include the **User** as an actor when they trigger or participate in flows
+- [ ] Include **background jobs** and **hooks** as separate actors
+- [ ] For each actor, verify they have entry points (start events or message catches)
+- [ ] Check: can each actor initiate the operations they need?
+
+### 3. Handoff Identification
+For every transition between actors (e.g., Claude -> Hook, Hook -> Background Job):
+- [ ] Is the handoff explicit in the model? (message flow, signal, or documented)
+- [ ] What data passes across the boundary?
+- [ ] What happens if the receiving actor is unavailable?
+- [ ] Is there a guaranteed pickup mechanism, or is it best-effort?
+- [ ] Document any timing gaps (e.g., "up to 1 hour until background job runs")
+
+### 4. Non-Happy-Path Coverage
+- [ ] What happens on failure at each step?
+- [ ] What happens with invalid/malformed input?
+- [ ] What happens when a dependency is unavailable?
+- [ ] Are there timeout or retry mechanisms?
+- [ ] Edge cases: concurrent access, cross-session conflicts, empty datasets
+
+### 5. Alignment Verification
+- [ ] Run `check_alignment(process_id)` after creating the model
+- [ ] For each unmapped element, determine: tooling gap or real gap?
+- [ ] For each missing artifact, determine: not yet built or wrong deployment target?
+- [ ] Verify deployment target: does this model describe the RIGHT system?
+
+### 6. User Story Cross-Reference
+- [ ] Who are the users of this process? (Developer, Admin, Claude, Background System)
+- [ ] For each user, can they accomplish their goal through the modeled paths?
+- [ ] Reference: "Fifty Quick Ideas to Improve Your User Stories" (Gojko Adzic) for story splitting and validation techniques
 
 ---
 
@@ -46,6 +95,7 @@ description: BPMN-first process design using the bpmn-engine MCP server. Use whe
 | `get_dependency_tree(process_id)` | Show L0->L1->L2 call hierarchy |
 | `search_processes(query, actor, level)` | Search by keyword, actor tag, or level |
 | `check_alignment(process_id)` | Compare BPMN model against actual code artifacts |
+| `file_alignment_gaps(process_id)` | Auto-file feedback for alignment gaps |
 
 ---
 
@@ -57,7 +107,7 @@ description: BPMN-first process design using the bpmn-engine MCP server. Use whe
 | L1 | Process flows (one per capability) | `L1_*.bpmn` | `processes/architecture/` |
 | L2 | Detailed subprocesses | Descriptive name | `processes/lifecycle/`, `processes/development/`, etc. |
 
-**Connection**: L0 uses `<bpmn:callActivity calledElement="L1_*">` to invoke L1 processes. L1 uses callActivity to invoke L2 subprocesses.
+**Connection**: L0 uses `<bpmn:callActivity calledElement="L1_*">` to invoke L1 processes.
 
 ---
 
@@ -67,11 +117,26 @@ Use `[ACTOR]` prefix in task names to indicate who/what performs the action:
 
 | Tag | Meaning | BPMN Element |
 |-----|---------|--------------|
-| `[HOOK]` | Automated hook system | `scriptTask` |
+| `[USER]` | Human user triggering or participating | `userTask` |
 | `[CLAUDE]` | Claude AI instance | `userTask` |
+| `[HOOK]` | Automated hook system | `scriptTask` |
+| `[JOB]` | Background scheduled job | `scriptTask` |
 | `[DB]` | Database operation | `scriptTask` |
-| `[KM]` | Knowledge system (RAG, vault) | `scriptTask` |
-| `[TOOL]` | MCP tool or external service | `scriptTask` |
+| `[KMS]` | Knowledge management system | `scriptTask` |
+| `[AUTOMEMORY]` | Claude Code built-in MEMORY.md | `scriptTask` |
+| `[LLM:Model]` | LLM API call (e.g., `[LLM:Haiku]`) | `scriptTask` |
+
+---
+
+## Deployment Target (MANDATORY)
+
+Every BPMN model must declare its deployment target in the XML header comment:
+```xml
+<!-- Deployment: claude-family (Windows local) -->
+<!-- Deployment: metis (Linux server) -->
+<!-- Deployment: all (cross-platform) -->
+```
+This prevents AI bleed where models for one system contaminate another (FB264).
 
 ---
 
@@ -100,68 +165,22 @@ Use `[ACTOR]` prefix in task names to indicate who/what performs the action:
 
 - ALL variables used in ANY gateway condition must exist in `task.data` before the gateway evaluates
 - SpiffWorkflow evaluates ALL conditions (not short-circuit) - missing variables cause crashes
-- Script task data stays in task scope; use `completed_names` to verify path taken, not `wf.data`
+- Use Python syntax in conditions (`True` not `true`, `==` not `===`)
 
-### Test Pattern
-
-```python
-from tests.conftest import load_workflow, complete_user_task, completed_names
-
-def test_happy_path(self):
-    wf = load_workflow("my_process")
-    complete_user_task(wf, "first_task", {"decision": "approve"})
-    # Script tasks auto-execute via do_engine_steps()
-    names = completed_names(wf)
-    assert "expected_task" in names
-    assert wf.is_completed()
-```
-
----
-
-## BPMN XML Template
+### Script Tasks Need Bodies
 
 ```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions
-    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
-    targetNamespace="http://claude-family/bpmn/CATEGORY-PROCESS_NAME"
-    id="Definitions_PROCESS_NAME">
-
-  <bpmn:process id="process_name" name="Human Readable Name" isExecutable="true">
-
-    <bpmn:startEvent id="start" name="Trigger">
-      <bpmn:outgoing>f1</bpmn:outgoing>
-    </bpmn:startEvent>
-
-    <!-- [CLAUDE] tasks = userTask, [HOOK/DB/KM/TOOL] = scriptTask -->
-    <bpmn:userTask id="do_thing" name="[CLAUDE] Do The Thing">
-      <bpmn:incoming>f1</bpmn:incoming>
-      <bpmn:outgoing>f2</bpmn:outgoing>
-    </bpmn:userTask>
-
-    <bpmn:endEvent id="end" name="Done">
-      <bpmn:incoming>f2</bpmn:incoming>
-    </bpmn:endEvent>
-
-    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="do_thing"/>
-    <bpmn:sequenceFlow id="f2" sourceRef="do_thing" targetRef="end"/>
-  </bpmn:process>
-</bpmn:definitions>
+<bpmn:scriptTask id="task" name="[HOOK] Do Thing" scriptFormat="python">
+  <bpmn:incoming>f_in</bpmn:incoming>
+  <bpmn:outgoing>f_out</bpmn:outgoing>
+  <bpmn:script>
+result = do_thing()
+  </bpmn:script>
+  <bpmn:documentation>Detailed explanation of what this task does.</bpmn:documentation>
+</bpmn:scriptTask>
 ```
 
 ---
-
-## System Change Process (MANDATORY)
-
-When modifying hook scripts, workflows, config management, or MCP servers:
-
-1. **Search** existing BPMN models (`search_processes`, `list_processes`)
-2. **Model first** - update or create BPMN before writing code
-3. **Test model** - pytest the BPMN process
-4. **Implement** - write the actual code
-5. **Commit together** - BPMN + code in same commit
-
-See: `.claude/rules/system-change-process.md` and `processes/development/system_change_process.bpmn`
 
 ## Process Failure Capture
 
@@ -172,31 +191,17 @@ When you encounter a process failure (hook error, state machine violation, unexp
 3. Model the fix in BPMN first, then implement
 4. Store the finding as knowledge: `remember(content, "gotcha")`
 
-This creates a self-improving loop: failures drive model improvements.
-
----
-
-## Current Process Inventory
-
-**Architecture (L0/L1)**: claude_process (L0), session_management, work_tracking, knowledge_management, enforcement, agent_orchestration, config_management
-**Lifecycle (L2)**: session_lifecycle, task_lifecycle, feature_workflow, config_deployment, rag_pipeline, feedback_to_feature, agent_lifecycle, session_continuation
-**Development**: commit_workflow, system_change_process
-**Infrastructure**: hook_chain
-**Nimbus**: nimbus_delivery, support_triage, knowledge_ingestion
-
-Use `list_processes` for the live inventory.
-
 ---
 
 ## Related
 
-- Feature F111: BPMN Process Architecture Framework (L0/L1/L2 hierarchy)
-- Feature F112: BPMN Engine MCP - Full Integration
-- Feature F113: BPMN Process Coverage + Self-Enforcement
+- Feature F111: BPMN Process Architecture Framework
+- Knowledge: `recall_memories("BPMN gap analysis")` for past findings
+- Book: "Fifty Quick Ideas to Improve Your User Stories" (Gojko Adzic) for actor/story validation
 - `mcp-servers/bpmn-engine/` - Server source code
 - `mcp-servers/bpmn-engine/processes/` - All BPMN files
 - `mcp-servers/bpmn-engine/tests/` - All test files
 
 ---
 
-**Version**: 1.1
+**Version**: 2.0

@@ -1776,6 +1776,46 @@ async def tool_recall_memories(
                 })
                 long_tokens_used += tokens
 
+        # --- ARTICLE TIER: knowledge_articles sections (F198) ---
+        # Uses 10% of remaining budget, max 2 sections
+        article_budget = max(200, int(budget * 0.10))
+        article_tokens_used = 0
+        try:
+            cur.execute("""
+                SELECT s.section_id::text, s.title as section_title, s.body, s.summary,
+                       a.article_id::text, a.title as article_title, a.article_type,
+                       1 - (s.embedding <=> %s::vector) as similarity
+                FROM claude.article_sections s
+                JOIN claude.knowledge_articles a ON a.article_id = s.article_id
+                WHERE s.embedding IS NOT NULL
+                  AND a.status != 'archived'
+                  AND 1 - (s.embedding <=> %s::vector) >= 0.5
+                ORDER BY s.embedding <=> %s::vector
+                LIMIT 2
+            """, (query_embedding, query_embedding, query_embedding))
+
+            for row in cur.fetchall():
+                sim = float(row['similarity'])
+                # Use summary if available, otherwise truncate body
+                content = row['summary'] or row['body'][:500]
+                title = f"[Article: {row['article_title']}] {row['section_title']}"
+                tokens = _estimate_tokens(f"{title}: {content}")
+                if article_tokens_used + tokens > article_budget and article_tokens_used > 0:
+                    break
+                memories.append({
+                    "tier": "article",
+                    "title": title,
+                    "content": content,
+                    "memory_type": row['article_type'],
+                    "score": round(sim, 4),
+                    "similarity": round(sim, 4),
+                    "article_id": row['article_id'],
+                    "section_id": row['section_id'],
+                })
+                article_tokens_used += tokens
+        except Exception:
+            pass  # Fail gracefully if article tables don't exist yet
+
         # Update access stats for mid/long entries
         accessed_ids = [m['knowledge_id'] for m in memories if m.get('knowledge_id')]
         if accessed_ids:
@@ -1790,11 +1830,11 @@ async def tool_recall_memories(
         cur.close()
 
         # Count by tier
-        tier_counts = {"short": 0, "mid": 0, "long": 0}
+        tier_counts = {"short": 0, "mid": 0, "long": 0, "article": 0}
         for m in memories:
             tier_counts[m["tier"]] = tier_counts.get(m["tier"], 0) + 1
 
-        total_tokens = short_tokens_used + mid_tokens_used + long_tokens_used
+        total_tokens = short_tokens_used + mid_tokens_used + long_tokens_used + article_tokens_used
 
         result = {
             "query": query,

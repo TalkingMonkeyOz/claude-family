@@ -57,7 +57,7 @@ This single call handles ALL of the following automatically:
 - Saves state to `claude.session_state` (next session picks up here)
 - Auto-stashes a session handoff workfile
 - Extracts conversation to `claude.conversations`
-- Converts learnings to knowledge entries with Voyage AI embeddings
+- Converts learnings to knowledge entries with FastEmbed embeddings
 - Extracts insights from conversation
 - Runs `consolidate_memories("session_end")` for short→mid tier promotion
 

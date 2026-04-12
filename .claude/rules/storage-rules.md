@@ -1,6 +1,6 @@
 # Storage Rules
 
-## 6 Systems — Use the Right One
+## 7 Systems — Use the Right One
 
 | I have... | Put it in | Tool |
 |-----------|-----------|------|
@@ -12,6 +12,8 @@
 | Working notes on a component | **Filing Cabinet** | `stash(component, title, content)` |
 | API endpoint, OData entity, schema | **Reference Library** | `catalog(entity_type, properties)` |
 | Domain concept spanning multiple systems | **Reference Library** | `catalog("domain_concept", properties)` |
+| Narrative linking multiple concepts/entities | **Knowledge Articles** | `write_article` + `write_article_section` |
+| Research findings, investigation results | **Knowledge Articles** | `write_article(article_type="research")` |
 | Procedure or process | **Skill** or **BPMN** | Create skill or BPMN process model |
 
 ## Key Rules
@@ -21,6 +23,7 @@
 - **Memory** = future sessions. Min 80 chars. NOT for task acks or progress.
 - **Filing Cabinet** = component working papers across sessions. `unstash()` to reload.
 - **Reference Library** = structured data with schemas. Search via `recall_entities()`. Use `domain_concept` type for hub entities that tie together endpoints, workfiles, and knowledge.
+- **Knowledge Articles** = narrative knowledge linking entities/concepts. DB-stored, section-granular (500-5000 tokens/section), independently searchable. Cross-project. Search via `recall_articles()`. Also surfaces in `recall_memories()` results.
 - **Vault** = John's documentation layer (architecture overviews, research narratives, project descriptions). NOT for Claude's operational knowledge — use the DB systems above instead.
 
 ## Credential Workflow

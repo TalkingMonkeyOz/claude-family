@@ -7995,6 +7995,556 @@ def update_entity(
 
 
 # ============================================================================
+# KNOWLEDGE ARTICLES — Narrative knowledge linking multiple entities [F198]
+# ============================================================================
+
+
+@mcp.tool()
+def write_article(
+    title: str,
+    abstract: str,
+    article_type: str = "research",
+    tags: list | None = None,
+    project_ids: list | None = None,
+    article_id: str = "",
+    project: str = "",
+) -> dict:
+    """Create or update a knowledge article header.
+
+    Knowledge articles are narrative documents that explain how multiple entities
+    connect. They contain ordered sections, each independently searchable.
+
+    Use when: Capturing research findings, explaining entity relationships,
+    documenting investigations, or writing reference guides.
+    Returns: {success, article_id, title, action: 'created'|'updated'}.
+
+    Args:
+        title: Article title.
+        abstract: Short summary (1-3 sentences) for search results and index.
+        article_type: investigation, reference, tutorial, architecture, or research.
+        tags: Tags for classification and filtering.
+        project_ids: UUIDs of projects this article relates to. Empty = cross-project.
+        article_id: If provided, updates existing article. Otherwise creates new.
+        project: Project name (used to resolve project_id if project_ids not given).
+    """
+    # Validate article_type
+    valid_types = get_valid_values('knowledge_articles', 'article_type')
+    if valid_types and article_type not in valid_types:
+        return {"success": False, "error": f"Invalid article_type '{article_type}'. Valid: {valid_types}"}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Resolve project_ids from project name if needed
+        resolved_project_ids = project_ids or []
+        if not resolved_project_ids and project:
+            cur.execute("SELECT project_id FROM claude.projects WHERE project_name = %s", (project,))
+            row = cur.fetchone()
+            if row:
+                resolved_project_ids = [str(row['project_id'])]
+
+        # Generate embedding from title + abstract
+        embed_text = f"{title}. {abstract}"
+        embedding = generate_embedding(embed_text)
+
+        if article_id:
+            # UPDATE existing
+            cur.execute("""
+                UPDATE claude.knowledge_articles
+                SET title = %s, abstract = %s, article_type = %s,
+                    tags = %s, project_ids = %s::uuid[],
+                    updated_at = now(), version = version + 1,
+                    embedding = CASE WHEN %s IS NOT NULL THEN %s::vector ELSE embedding END
+                WHERE article_id = %s::uuid
+                RETURNING article_id, title, version
+            """, (title, abstract, article_type, tags or [],
+                  resolved_project_ids or None,
+                  embedding, embedding, article_id))
+            updated = cur.fetchone()
+            if not updated:
+                return {"success": False, "error": f"Article {article_id} not found"}
+            conn.commit()
+            return {"success": True, "article_id": str(updated['article_id']),
+                    "title": updated['title'], "version": updated['version'],
+                    "action": "updated"}
+        else:
+            # INSERT new
+            cur.execute("""
+                INSERT INTO claude.knowledge_articles
+                    (title, abstract, article_type, status, tags, project_ids, embedding)
+                VALUES (%s, %s, %s, 'draft', %s, %s::uuid[], %s::vector)
+                RETURNING article_id, title
+            """, (title, abstract, article_type, tags or [],
+                  resolved_project_ids or None, embedding))
+            created = cur.fetchone()
+            conn.commit()
+            return {"success": True, "article_id": str(created['article_id']),
+                    "title": created['title'], "action": "created", "status": "draft"}
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"write_article failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def write_article_section(
+    article_id: str,
+    title: str,
+    body: str,
+    section_order: int = 0,
+    summary: str = "",
+    linked_entity_ids: list | None = None,
+    section_id: str = "",
+    change_reason: str = "",
+) -> dict:
+    """Add or update a section in a knowledge article.
+
+    Each section covers ONE semantic topic (300-5000 tokens). Sections are
+    independently embeddable and retrievable. On update, previous version
+    is saved to article_section_versions.
+
+    Use when: Building out an article's content section by section.
+    Returns: {success, section_id, article_id, title, section_order, action}.
+
+    Args:
+        article_id: Parent article UUID.
+        title: Section title (e.g., "Mapping Results", "Key Findings").
+        body: Section content (300-5000 tokens recommended, one topic).
+        section_order: Position in reading order. 0 = auto-append at end.
+        summary: Optional 1-2 sentence summary for the article index.
+        linked_entity_ids: UUIDs of entities discussed in this section.
+        section_id: If provided, updates existing section. Otherwise creates new.
+        change_reason: Why this section was updated (stored in version history).
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Verify article exists
+        cur.execute("SELECT article_id, title FROM claude.knowledge_articles WHERE article_id = %s::uuid",
+                    (article_id,))
+        article = cur.fetchone()
+        if not article:
+            return {"success": False, "error": f"Article {article_id} not found"}
+
+        # Generate embedding from section title + body
+        embed_text = f"{title}. {body[:2000]}"
+        embedding = generate_embedding(embed_text)
+
+        if section_id:
+            # Save current version before updating
+            cur.execute("""
+                INSERT INTO claude.article_section_versions (section_id, version, body, changed_by_session, change_reason)
+                SELECT section_id, version, body, %s::uuid, %s
+                FROM claude.article_sections WHERE section_id = %s::uuid
+            """, (None, change_reason or "Updated", section_id))
+
+            # UPDATE existing section
+            cur.execute("""
+                UPDATE claude.article_sections
+                SET title = %s, body = %s, summary = %s,
+                    linked_entity_ids = %s::uuid[],
+                    section_order = CASE WHEN %s > 0 THEN %s ELSE section_order END,
+                    version = version + 1, updated_at = now(),
+                    embedding = CASE WHEN %s IS NOT NULL THEN %s::vector ELSE embedding END
+                WHERE section_id = %s::uuid
+                RETURNING section_id, title, section_order, version
+            """, (title, body, summary or None,
+                  linked_entity_ids or None,
+                  section_order, section_order,
+                  embedding, embedding, section_id))
+            updated = cur.fetchone()
+            if not updated:
+                return {"success": False, "error": f"Section {section_id} not found"}
+            conn.commit()
+            return {"success": True, "section_id": str(updated['section_id']),
+                    "article_id": article_id, "title": updated['title'],
+                    "section_order": updated['section_order'],
+                    "version": updated['version'], "action": "updated"}
+        else:
+            # Auto-assign section_order if 0
+            if section_order == 0:
+                cur.execute("""
+                    SELECT COALESCE(MAX(section_order), 0) + 1 as next_order
+                    FROM claude.article_sections WHERE article_id = %s::uuid
+                """, (article_id,))
+                section_order = cur.fetchone()['next_order']
+
+            # INSERT new section
+            cur.execute("""
+                INSERT INTO claude.article_sections
+                    (article_id, section_order, title, body, summary,
+                     embedding, linked_entity_ids)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s::vector, %s::uuid[])
+                RETURNING section_id, title, section_order
+            """, (article_id, section_order, title, body, summary or None,
+                  embedding, linked_entity_ids or None))
+            created = cur.fetchone()
+
+            # Update article's updated_at
+            cur.execute("UPDATE claude.knowledge_articles SET updated_at = now() WHERE article_id = %s::uuid",
+                        (article_id,))
+
+            conn.commit()
+            return {"success": True, "section_id": str(created['section_id']),
+                    "article_id": article_id, "title": created['title'],
+                    "section_order": created['section_order'], "action": "created"}
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"write_article_section failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def recall_articles(
+    query: str,
+    project: str = "",
+    article_type: str = "",
+    entity_id: str = "",
+    tags: list | None = None,
+    limit: int = 5,
+) -> dict:
+    """Search knowledge articles using semantic similarity.
+
+    Searches both article abstracts and section bodies. Returns article
+    headers with matching sections for progressive disclosure.
+
+    Use when: Looking for narrative knowledge about a topic, finding articles
+    linked to specific entities, or browsing articles by type/tag.
+    Returns: {success, query, result_count, results: [{article_id, title,
+              abstract, article_type, tags, similarity, matching_sections}]}.
+
+    Args:
+        query: Natural language search query.
+        project: Filter by project name (optional).
+        article_type: Filter by article type (optional).
+        entity_id: Find articles with sections linked to this entity (optional).
+        tags: Filter by tags overlap (optional).
+        limit: Max results (default 5).
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Generate query embedding
+        query_embedding = generate_query_embedding(query)
+        if not query_embedding:
+            return {"success": False, "error": "Failed to generate query embedding"}
+
+        # If entity_id provided, find articles with sections linking to that entity
+        if entity_id:
+            cur.execute("""
+                SELECT DISTINCT a.article_id, a.title, a.abstract, a.article_type,
+                       a.tags, a.status, a.version, a.updated_at,
+                       1 - (a.embedding <=> %s::vector) as similarity
+                FROM claude.knowledge_articles a
+                JOIN claude.article_sections s ON s.article_id = a.article_id
+                WHERE a.status != 'archived'
+                AND %s::uuid = ANY(s.linked_entity_ids)
+                ORDER BY similarity DESC
+                LIMIT %s
+            """, (query_embedding, entity_id, limit))
+        else:
+            # Semantic search on article abstracts
+            filters = ["a.status != 'archived'"]
+            params = [query_embedding]
+
+            if project:
+                filters.append("""
+                    EXISTS (SELECT 1 FROM claude.projects p
+                            WHERE p.project_name = %s
+                            AND p.project_id = ANY(a.project_ids))
+                """)
+                params.append(project)
+            if article_type:
+                filters.append("a.article_type = %s")
+                params.append(article_type)
+            if tags:
+                filters.append("a.tags && %s")
+                params.append(tags)
+
+            params.append(limit)
+            where = " AND ".join(filters)
+
+            cur.execute(f"""
+                SELECT a.article_id, a.title, a.abstract, a.article_type,
+                       a.tags, a.status, a.version, a.updated_at,
+                       1 - (a.embedding <=> %s::vector) as similarity
+                FROM claude.knowledge_articles a
+                WHERE {where}
+                AND a.embedding IS NOT NULL
+                ORDER BY similarity DESC
+                LIMIT %s
+            """, params)
+
+        articles = cur.fetchall()
+
+        # For each article, find matching sections
+        results = []
+        for art in articles:
+            cur.execute("""
+                SELECT section_id, title, summary,
+                       section_order, linked_entity_ids,
+                       1 - (embedding <=> %s::vector) as similarity
+                FROM claude.article_sections
+                WHERE article_id = %s::uuid
+                AND embedding IS NOT NULL
+                ORDER BY similarity DESC
+                LIMIT 3
+            """, (query_embedding, art['article_id']))
+            sections = cur.fetchall()
+
+            results.append({
+                "article_id": str(art['article_id']),
+                "title": art['title'],
+                "abstract": art['abstract'],
+                "article_type": art['article_type'],
+                "tags": art['tags'],
+                "status": art['status'],
+                "similarity": round(float(art['similarity']), 4) if art['similarity'] else 0,
+                "matching_sections": [{
+                    "section_id": str(s['section_id']),
+                    "title": s['title'],
+                    "summary": s['summary'],
+                    "section_order": s['section_order'],
+                    "similarity": round(float(s['similarity']), 4) if s['similarity'] else 0,
+                } for s in sections]
+            })
+
+        return {
+            "success": True,
+            "query": query,
+            "result_count": len(results),
+            "results": results,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": f"recall_articles failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def read_article(
+    article_id: str,
+    section_id: str = "",
+) -> dict:
+    """Read a full article or a single section, formatted as markdown.
+
+    Use when: Reading article content after finding it via recall_articles.
+    Full read returns all sections in order. Section read returns one section.
+    Returns: {success, article_id, title, abstract, content (markdown),
+              sections: [{section_id, title, body, section_order}]}.
+
+    Args:
+        article_id: Article UUID.
+        section_id: If provided, returns only this section. Otherwise full article.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # Get article header
+        cur.execute("""
+            SELECT article_id, title, abstract, article_type, status,
+                   tags, project_ids, version, created_at, updated_at
+            FROM claude.knowledge_articles WHERE article_id = %s::uuid
+        """, (article_id,))
+        article = cur.fetchone()
+        if not article:
+            return {"success": False, "error": f"Article {article_id} not found"}
+
+        if section_id:
+            # Single section
+            cur.execute("""
+                SELECT section_id, title, body, summary, section_order,
+                       linked_entity_ids, version
+                FROM claude.article_sections
+                WHERE section_id = %s::uuid AND article_id = %s::uuid
+            """, (section_id, article_id))
+            section = cur.fetchone()
+            if not section:
+                return {"success": False, "error": f"Section {section_id} not found"}
+
+            content = f"# {article['title']}\n## {section['title']}\n\n{section['body']}"
+            return {
+                "success": True,
+                "article_id": str(article['article_id']),
+                "title": article['title'],
+                "content": content,
+                "section": {
+                    "section_id": str(section['section_id']),
+                    "title": section['title'],
+                    "body": section['body'],
+                    "section_order": section['section_order'],
+                    "linked_entity_ids": [str(e) for e in (section['linked_entity_ids'] or [])],
+                },
+            }
+        else:
+            # Full article
+            cur.execute("""
+                SELECT section_id, title, body, summary, section_order,
+                       linked_entity_ids, version
+                FROM claude.article_sections
+                WHERE article_id = %s::uuid
+                ORDER BY section_order
+            """, (article_id,))
+            sections = cur.fetchall()
+
+            # Build markdown
+            lines = [f"# {article['title']}"]
+            lines.append(f"*{article['article_type']} | {article['status']} | v{article['version']}*")
+            lines.append(f"\n> {article['abstract']}\n")
+
+            if sections:
+                lines.append("## Table of Contents")
+                for s in sections:
+                    summary_text = f" — {s['summary']}" if s['summary'] else ""
+                    lines.append(f"{s['section_order']}. {s['title']}{summary_text}")
+                lines.append("")
+
+                for s in sections:
+                    lines.append(f"## {s['section_order']}. {s['title']}\n")
+                    lines.append(s['body'])
+                    lines.append("")
+
+            content = "\n".join(lines)
+
+            return {
+                "success": True,
+                "article_id": str(article['article_id']),
+                "title": article['title'],
+                "abstract": article['abstract'],
+                "article_type": article['article_type'],
+                "status": article['status'],
+                "tags": article['tags'],
+                "section_count": len(sections),
+                "content": content,
+                "sections": [{
+                    "section_id": str(s['section_id']),
+                    "title": s['title'],
+                    "section_order": s['section_order'],
+                    "summary": s['summary'],
+                    "linked_entity_ids": [str(e) for e in (s['linked_entity_ids'] or [])],
+                } for s in sections],
+            }
+
+    except Exception as e:
+        return {"success": False, "error": f"read_article failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def manage_article(
+    article_id: str,
+    action: str,
+    new_status: str = "",
+) -> dict:
+    """Manage article lifecycle: archive, publish, change status.
+
+    Use when: Publishing a draft article, archiving a stale one, or
+    checking article metadata.
+    Returns: {success, article_id, action, previous_status, new_status}.
+
+    Args:
+        article_id: Article UUID.
+        action: 'publish' (draft→published), 'archive' (any→archived),
+                'revert_draft' (published→draft), 'info' (return metadata).
+        new_status: Direct status override (optional, use action instead).
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT article_id, title, status, article_type, tags,
+                   version, created_at, updated_at
+            FROM claude.knowledge_articles WHERE article_id = %s::uuid
+        """, (article_id,))
+        article = cur.fetchone()
+        if not article:
+            return {"success": False, "error": f"Article {article_id} not found"}
+
+        if action == "info":
+            # Count sections
+            cur.execute("SELECT COUNT(*) as cnt FROM claude.article_sections WHERE article_id = %s::uuid",
+                        (article_id,))
+            section_count = cur.fetchone()['cnt']
+            return {
+                "success": True,
+                "article_id": str(article['article_id']),
+                "title": article['title'],
+                "status": article['status'],
+                "article_type": article['article_type'],
+                "tags": article['tags'],
+                "version": article['version'],
+                "section_count": section_count,
+                "created_at": str(article['created_at']),
+                "updated_at": str(article['updated_at']),
+                "action": "info",
+            }
+
+        # Determine target status
+        prev_status = article['status']
+        if action == "publish":
+            target = "published"
+        elif action == "archive":
+            target = "archived"
+        elif action == "revert_draft":
+            target = "draft"
+        elif new_status:
+            valid_statuses = get_valid_values('knowledge_articles', 'status')
+            if valid_statuses and new_status not in valid_statuses:
+                return {"success": False, "error": f"Invalid status '{new_status}'. Valid: {valid_statuses}"}
+            target = new_status
+        else:
+            return {"success": False, "error": f"Unknown action '{action}'. Use: publish, archive, revert_draft, info"}
+
+        cur.execute("""
+            UPDATE claude.knowledge_articles
+            SET status = %s, updated_at = now()
+            WHERE article_id = %s::uuid
+        """, (target, article_id))
+
+        conn.commit()
+        return {
+            "success": True,
+            "article_id": str(article['article_id']),
+            "title": article['title'],
+            "action": action,
+            "previous_status": prev_status,
+            "new_status": target,
+        }
+
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"manage_article failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+# ============================================================================
 # RESOURCE LINKING — Universal cross-system bridge
 # ============================================================================
 

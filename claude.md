@@ -103,10 +103,10 @@ python scripts/embed_vault_documents.py --all-projects
 | Status to check | `get_work_context(scope='current')` or `get_build_board(project)` |
 | Config to update | `update_config(component_type, project, name, content, reason)` |
 | CLAUDE.md section to update | `update_claude_md(project, section, content)` |
+| Narrative knowledge (research, investigations) | `write_article` + `write_article_section` |
+| Find articles | `recall_articles(query)` or `read_article(article_id)` |
 
 **Data Gateway**: Before INSERT/UPDATE on constrained columns, check `claude.column_registry`.
-
----
 
 ## Project-Specific Rules
 
