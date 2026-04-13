@@ -89,7 +89,7 @@ def find_unconsolidated_memories(conn):
     """Find mid/long tier memories not yet consolidated."""
     cur = conn.cursor()
     cur.execute("""
-        SELECT knowledge_id, title, description, tags, embedding
+        SELECT knowledge_id, title, description, knowledge_type, embedding
         FROM claude.knowledge
         WHERE tier IN ('mid', 'long')
           AND consolidated_into IS NULL
@@ -105,7 +105,7 @@ def find_unconsolidated_memories(conn):
         else:
             memories.append({
                 'knowledge_id': r[0], 'title': r[1], 'description': r[2],
-                'tags': r[3], 'embedding': r[4]
+                'knowledge_type': r[3], 'embedding': r[4]
             })
     logger.info(f"Found {len(memories)} unconsolidated memories (last {LOOKBACK_DAYS} days)")
     return memories
@@ -282,7 +282,7 @@ def consolidate_session(conn, session_id=None, threshold=SIMILARITY_THRESHOLD):
             params = [session_id]
 
         cur.execute(f"""
-            SELECT knowledge_id, title, description, tags, embedding
+            SELECT knowledge_id, title, description, knowledge_type, embedding
             FROM claude.knowledge k
             WHERE tier IN ('mid', 'long')
               AND consolidated_into IS NULL
@@ -300,7 +300,7 @@ def consolidate_session(conn, session_id=None, threshold=SIMILARITY_THRESHOLD):
             else:
                 memories.append({
                     'knowledge_id': r[0], 'title': r[1], 'description': r[2],
-                    'tags': r[3], 'embedding': r[4]
+                    'knowledge_type': r[3], 'embedding': r[4]
                 })
 
         if not memories:
