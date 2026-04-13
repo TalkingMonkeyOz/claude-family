@@ -44,6 +44,7 @@ from typing import Optional
 PORT_RANGE_START = 9800
 PORT_RANGE_SIZE = 100
 IDLE_TIMEOUT_SECS = 30 * 60  # 30 minutes
+REINDEX_DEBOUNCE_SECS = 2.0   # Wait this long after last request before running indexer
 PID_DIR = Path.home() / ".claude"
 LOG_DIR = Path.home() / ".claude" / "logs"
 
@@ -173,6 +174,106 @@ def check_collisions(db: DBPool, names: list[str], file_path: str) -> list[dict]
 
 
 # ---------------------------------------------------------------------------
+# Reindex Queue — debounces and serializes indexer runs
+# ---------------------------------------------------------------------------
+class ReindexQueue:
+    """Debouncing, serializing queue for code_indexer.py runs.
+
+    Accepts reindex requests (file paths), waits REINDEX_DEBOUNCE_SECS after
+    the last request, then runs code_indexer.py ONCE. If the indexer is already
+    running, the queued files are held until it finishes, then a new run starts.
+    """
+
+    def __init__(self, project_name: str, project_path: str):
+        self.project_name = project_name
+        self.project_path = project_path
+        self._pending_files: set[str] = set()
+        self._lock = threading.Lock()
+        self._debounce_timer: Optional[threading.Timer] = None
+        self._indexer_running = False
+        self._run_again_after = False  # Files arrived while indexer was running
+
+    def enqueue(self, file_path: str) -> dict:
+        """Add a file to the reindex queue. Returns status info."""
+        with self._lock:
+            self._pending_files.add(file_path)
+            queued_count = len(self._pending_files)
+
+            # Reset debounce timer — wait for more files before running
+            if self._debounce_timer:
+                self._debounce_timer.cancel()
+
+            if self._indexer_running:
+                # Indexer is already running — will run again when it finishes
+                self._run_again_after = True
+                return {
+                    'status': 'queued',
+                    'message': f'Indexer running, {queued_count} files queued for next run',
+                    'queued_files': queued_count,
+                }
+
+            self._debounce_timer = threading.Timer(
+                REINDEX_DEBOUNCE_SECS, self._run_indexer
+            )
+            self._debounce_timer.daemon = True
+            self._debounce_timer.start()
+
+            return {
+                'status': 'accepted',
+                'message': f'{queued_count} files queued, indexer starts in {REINDEX_DEBOUNCE_SECS}s',
+                'queued_files': queued_count,
+            }
+
+    def _run_indexer(self):
+        """Run code_indexer.py once for all pending files."""
+        with self._lock:
+            if self._indexer_running:
+                self._run_again_after = True
+                return
+            files = self._pending_files.copy()
+            self._pending_files.clear()
+            self._indexer_running = True
+            self._run_again_after = False
+
+        logger.info(f"Reindex starting: {len(files)} files queued")
+
+        try:
+            import subprocess as _sp
+            indexer_script = Path(__file__).parent / "code_indexer.py"
+            if not indexer_script.exists():
+                logger.error("code_indexer.py not found")
+                return
+
+            # Run synchronously in this thread — we ARE the serializer
+            result = _sp.run(
+                [sys.executable, str(indexer_script),
+                 self.project_name, self.project_path],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Indexer exited with code {result.returncode}: {result.stderr[:500]}")
+            else:
+                logger.info(f"Reindex completed for {len(files)} files")
+
+        except _sp.TimeoutExpired:
+            logger.error("Indexer timed out after 300s")
+        except Exception as e:
+            logger.error(f"Indexer error: {e}")
+        finally:
+            with self._lock:
+                self._indexer_running = False
+                # If more files arrived while we were running, schedule another run
+                if self._run_again_after or self._pending_files:
+                    self._run_again_after = False
+                    self._debounce_timer = threading.Timer(
+                        REINDEX_DEBOUNCE_SECS, self._run_indexer
+                    )
+                    self._debounce_timer.daemon = True
+                    self._debounce_timer.start()
+                    logger.info(f"More files queued during run, scheduling another indexer pass")
+
+
+# ---------------------------------------------------------------------------
 # HTTP Handler
 # ---------------------------------------------------------------------------
 class CKGHandler(BaseHTTPRequestHandler):
@@ -290,38 +391,22 @@ class CKGHandler(BaseHTTPRequestHandler):
             self._send_json({'decision': 'allow'})
 
     def _handle_reindex(self):
-        """Trigger incremental re-index for the project.
+        """Queue a file for re-indexing via the serializing ReindexQueue.
 
-        The indexer checks file hashes internally, so calling it after a Write
-        will only re-index files that actually changed. Runs async in background.
+        The queue debounces requests (waits 2s after last request) and runs
+        code_indexer.py at most once at a time, preventing the N-process
+        explosion that was causing 90%+ CPU/memory (FB278).
         """
         start = time.perf_counter()
         try:
             data = self._read_body()
             file_path = data.get('file_path', '')
 
-            # Spawn code_indexer.py in background (incremental mode)
-            import subprocess as _sp
-            indexer_script = Path(__file__).parent / "code_indexer.py"
-            if not indexer_script.exists():
-                self._send_json({'status': 'error', 'message': 'Indexer not found'}, 500)
-                return
-
-            _sp.Popen(
-                [sys.executable, str(indexer_script),
-                 self.server.project_name, self.server.project_path],
-                stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                creationflags=0x00000008 if sys.platform == 'win32' else 0,
-                start_new_session=True if sys.platform != 'win32' else False,
-            )
+            result = self.server.reindex_queue.enqueue(file_path or 'project')
 
             elapsed_ms = (time.perf_counter() - start) * 1000
-            logger.info(f"Reindex triggered for {file_path or 'project'} [{elapsed_ms:.1f}ms]")
-            self._send_json({
-                'status': 'accepted',
-                'message': f'Incremental re-index spawned for {self.server.project_name}',
-                'file_hint': file_path,
-            })
+            logger.info(f"Reindex queued for {file_path or 'project'} [{elapsed_ms:.1f}ms]")
+            self._send_json(result)
         except Exception as e:
             logger.error(f"Reindex error: {e}")
             self._send_json({'status': 'error', 'message': str(e)}, 500)
@@ -344,6 +429,9 @@ class CKGServer(ThreadingHTTPServer):
         self.start_time = time.time()
         self.symbol_count = 0
         self._idle_timer: Optional[threading.Timer] = None
+
+        # Initialize reindex queue (serializes indexer runs — FB278 fix)
+        self.reindex_queue = ReindexQueue(project_name, project_path)
 
         # Initialize DB
         self.db = DBPool(project_name)

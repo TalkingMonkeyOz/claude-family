@@ -115,11 +115,8 @@ def _http_embed(text: str) -> Optional[List[float]]:
             return result.get('embedding')
     except urllib.error.URLError as e:
         logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
-        # Fallback: try loading model in-process if service is down
-        logger.warning("Falling back to in-process FastEmbed")
-        model = _get_fastembed_model()
-        embeddings = list(model.embed([text]))
-        return embeddings[0].tolist()
+        logger.warning("Skipping embedding — service down, CKG will use stale data until service recovers")
+        return None
     except Exception as e:
         logger.error(f"HTTP embed failed: {e}")
         return None
@@ -142,10 +139,8 @@ def _http_embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
             return result.get('embeddings')
     except urllib.error.URLError as e:
         logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
-        logger.warning("Falling back to in-process FastEmbed")
-        model = _get_fastembed_model()
-        embeddings = list(model.embed(texts))
-        return [e.tolist() for e in embeddings]
+        logger.warning("Skipping batch embedding — service down, CKG will use stale data until service recovers")
+        return None
     except Exception as e:
         logger.error(f"HTTP batch embed failed: {e}")
         return None
