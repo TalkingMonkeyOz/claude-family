@@ -13,7 +13,7 @@
       Session lifecycle with full hook chain detail.
 
       Paths:
-        1. Fresh session: start → auto_archive → session_start → check_messages → load_state
+        1. Fresh session: start → auto_archive → session_start → deploy_standing_orders → check_messages → load_state
            → check_workfiles → surface_entities → inject_handoff
            → has_prior_state(False) → fresh_start → work_merge → do_work
            → work_action(end_session) → save_summary → close_session → end_normal
@@ -61,7 +61,7 @@ Sets CLAUDE_SESSION_ID env var for subsequent hooks.</bpmn:documentation>
     <!-- Close any zombie sessions left open beyond 24h (distinct from auto_archive pre-check) -->
     <bpmn:scriptTask id="zombie_cleanup" name="[DB] Close Zombie Sessions (&gt;24h)" scriptFormat="python">
       <bpmn:incoming>flow_session_start_to_zombie_cleanup</bpmn:incoming>
-      <bpmn:outgoing>flow_zombie_cleanup_to_check_messages</bpmn:outgoing>
+      <bpmn:outgoing>flow_zombie_to_standing_orders</bpmn:outgoing>
       <bpmn:script>zombie_sessions_closed = True</bpmn:script>
       <bpmn:documentation>After the new session row is written, close any claude.sessions rows
 where session_end IS NULL AND session_start &lt; NOW() - INTERVAL '24 hours'.
@@ -71,8 +71,18 @@ against zombie sessions accumulating in the table.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <!-- Check inbox for pending messages before loading state -->
+    <bpmn:scriptTask id="deploy_standing_orders" name="[HOOK] Deploy Standing Orders to MEMORY.md" scriptFormat="python">
+      <bpmn:incoming>flow_zombie_to_standing_orders</bpmn:incoming>
+      <bpmn:outgoing>flow_standing_orders_to_check_messages</bpmn:outgoing>
+      <bpmn:script>standing_orders_deployed = True</bpmn:script>
+      <bpmn:documentation>session_startup_hook_enhanced.py deploy_standing_orders() reads the active
+STANDING_ORDERS protocol from claude.protocol_versions and deploys it as a
+## Standing Orders section at the top of the project's MEMORY.md file.
+Fail-open: logs warning and continues if deployment fails.</bpmn:documentation>
+    </bpmn:scriptTask>
+
     <bpmn:scriptTask id="check_messages" name="[MCP] Check Inbox for Pending Messages" scriptFormat="python">
-      <bpmn:incoming>flow_zombie_cleanup_to_check_messages</bpmn:incoming>
+      <bpmn:incoming>flow_standing_orders_to_check_messages</bpmn:incoming>
       <bpmn:outgoing>flow_check_messages_to_load_state</bpmn:outgoing>
       <bpmn:script>messages_checked = True</bpmn:script>
       <bpmn:documentation>Calls inbox() MCP tool to surface any pending messages from other
@@ -281,7 +291,8 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_start_to_auto_archive" sourceRef="start_event" targetRef="auto_archive"/>
     <bpmn:sequenceFlow id="flow_auto_archive_to_session_start" sourceRef="auto_archive" targetRef="session_start"/>
     <bpmn:sequenceFlow id="flow_session_start_to_zombie_cleanup" sourceRef="session_start" targetRef="zombie_cleanup"/>
-    <bpmn:sequenceFlow id="flow_zombie_cleanup_to_check_messages" sourceRef="zombie_cleanup" targetRef="check_messages"/>
+    <bpmn:sequenceFlow id="flow_zombie_to_standing_orders" sourceRef="zombie_cleanup" targetRef="deploy_standing_orders"/>
+    <bpmn:sequenceFlow id="flow_standing_orders_to_check_messages" sourceRef="deploy_standing_orders" targetRef="check_messages"/>
     <bpmn:sequenceFlow id="flow_check_messages_to_load_state" sourceRef="check_messages" targetRef="load_state"/>
     <bpmn:sequenceFlow id="flow_load_state_to_check_workfiles" sourceRef="load_state" targetRef="check_workfiles"/>
     <bpmn:sequenceFlow id="flow_check_workfiles_to_surface_entities" sourceRef="check_workfiles" targetRef="surface_entities"/>
@@ -353,6 +364,9 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <dc:Bounds x="520" y="180" width="140" height="80"/>
       </bpmndi:BPMNShape>
 
+      <bpmndi:BPMNShape id="shape_deploy_standing_orders" bpmnElement="deploy_standing_orders">
+        <dc:Bounds x="430" y="160" width="140" height="80"/>
+      </bpmndi:BPMNShape>
       <bpmndi:BPMNShape id="shape_check_messages" bpmnElement="check_messages">
         <dc:Bounds x="720" y="180" width="120" height="80"/>
       </bpmndi:BPMNShape>
@@ -450,11 +464,15 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <di:waypoint x="520" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_zombie_cleanup_to_check_messages" bpmnElement="flow_zombie_cleanup_to_check_messages">
+      <bpmndi:BPMNEdge id="edge_flow_zombie_to_standing_orders" bpmnElement="flow_zombie_to_standing_orders">
         <di:waypoint x="660" y="220"/>
         <di:waypoint x="720" y="220"/>
       </bpmndi:BPMNEdge>
 
+      <bpmndi:BPMNEdge id="edge_flow_standing_orders_to_check_messages" bpmnElement="flow_standing_orders_to_check_messages">
+        <di:waypoint x="570" y="200"/>
+        <di:waypoint x="610" y="200"/>
+      </bpmndi:BPMNEdge>
       <bpmndi:BPMNEdge id="edge_flow_check_messages_to_load_state" bpmnElement="flow_check_messages_to_load_state">
         <di:waypoint x="840" y="220"/>
         <di:waypoint x="900" y="220"/>

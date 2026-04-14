@@ -482,6 +482,86 @@ def _replay_session_end_fallback():
         logger.warning(f"session_end fallback replay skipped: {e}")
 
 
+def deploy_standing_orders():
+    """Deploy standing orders from DB to project's MEMORY.md.
+
+    Reads the active STANDING_ORDERS from protocol_versions and ensures
+    it exists as a section at the top of the project's MEMORY.md file.
+    Fail-open: if anything goes wrong, log and continue.
+    """
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT content FROM claude.protocol_versions
+            WHERE protocol_name = 'STANDING_ORDERS' AND is_active = true
+        """)
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not row:
+            logger.info("No active standing orders found")
+            return
+
+        standing_orders_content = row['content'].strip()
+
+        # Find MEMORY.md path
+        cwd = os.getcwd()
+        # Encode path: C:\Projects\claude-family -> C--Projects--claude-family
+        encoded_path = cwd.replace(':\\', '--').replace('\\', '--').replace('/', '--')
+        memory_dir = Path.home() / ".claude" / "projects" / encoded_path / "memory"
+        memory_file = memory_dir / "MEMORY.md"
+
+        # Ensure directory exists
+        memory_dir.mkdir(parents=True, exist_ok=True)
+
+        # Read existing content
+        existing_content = ""
+        if memory_file.exists():
+            existing_content = memory_file.read_text(encoding='utf-8')
+
+        # Check if standing orders section already exists and is current
+        section_marker = "## Standing Orders"
+        if section_marker in existing_content:
+            # Find the section boundaries
+            start_idx = existing_content.index(section_marker)
+            # Find the next ## heading after the standing orders section
+            rest_after_section = existing_content[start_idx + len(section_marker):]
+            next_heading_idx = rest_after_section.find('\n## ')
+
+            if next_heading_idx >= 0:
+                # There's content after the section
+                end_idx = start_idx + len(section_marker) + next_heading_idx
+                current_section = existing_content[start_idx:end_idx].strip()
+                rest_content = existing_content[end_idx:]
+            else:
+                # Standing orders is the last section
+                current_section = existing_content[start_idx:].strip()
+                rest_content = ""
+
+            before_section = existing_content[:start_idx]
+
+            # Only rewrite if content changed
+            if current_section.strip() != standing_orders_content.strip():
+                new_content = before_section + standing_orders_content + "\n\n" + rest_content.lstrip('\n')
+                memory_file.write_text(new_content, encoding='utf-8')
+                logger.info("Standing orders updated in MEMORY.md")
+            else:
+                logger.info("Standing orders already current in MEMORY.md")
+        else:
+            # Prepend standing orders at the top
+            if existing_content:
+                new_content = standing_orders_content + "\n\n" + existing_content
+            else:
+                new_content = standing_orders_content + "\n"
+            memory_file.write_text(new_content, encoding='utf-8')
+            logger.info("Standing orders deployed to MEMORY.md")
+
+    except Exception as e:
+        logger.warning(f"Standing orders deployment failed (non-fatal): {e}")
+
+
 def main():
     """Run session startup with lean output."""
 
@@ -545,6 +625,9 @@ def main():
             else:
                 context_lines.append(f"Could not log session: {error or 'unknown error'}")
                 session_id = None
+
+            # Deploy standing orders to MEMORY.md
+            deploy_standing_orders()
 
             # Close zombie sessions (open > 24h, excluding the session just created)
             try:

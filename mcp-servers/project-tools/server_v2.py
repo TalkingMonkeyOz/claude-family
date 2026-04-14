@@ -6514,6 +6514,225 @@ def get_active_protocol(
 
 
 # ============================================================================
+# Standing Orders Tool
+# ============================================================================
+
+STANDING_ORDERS_PROTOCOL = "STANDING_ORDERS"
+STANDING_ORDERS_SECTION = "## Standing Orders"
+
+
+@mcp.tool()
+def standing_orders(
+    action: str,
+    content: str = "",
+    change_reason: str = "",
+) -> dict:
+    """Manage standing orders — persistent behavioral reinforcements deployed to MEMORY.md.
+
+    Standing orders are DB-versioned rules that get deployed to each project's
+    auto-memory MEMORY.md file at session start. They reinforce key behaviors
+    (storage routing, task decomposition, etc.) in a high-visibility location.
+
+    Use when: Viewing, updating, or deploying standing orders.
+    Returns: {success, content, version} for get; {success, new_version} for update;
+             {success, versions} for history; {success, deployed_to} for deploy.
+
+    Args:
+        action: get, update, history, or deploy.
+        content: New standing orders text (required for update).
+        change_reason: Why this change was made (required for update).
+    """
+    if action == "get":
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT version, content, change_reason, changed_by, created_at::text
+                FROM claude.protocol_versions
+                WHERE protocol_name = %s AND is_active = true
+            """, (STANDING_ORDERS_PROTOCOL,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"No active version for {STANDING_ORDERS_PROTOCOL}"}
+            return {
+                "success": True,
+                "protocol_name": STANDING_ORDERS_PROTOCOL,
+                "version": row["version"],
+                "content": row["content"],
+                "change_reason": row["change_reason"],
+                "changed_by": row["changed_by"],
+                "created_at": row["created_at"],
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    elif action == "update":
+        if not content:
+            return {"success": False, "error": "content is required for update action"}
+        if not change_reason:
+            return {"success": False, "error": "change_reason is required for update action"}
+
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+
+            # Get current active version
+            cur.execute("""
+                SELECT version_id, version FROM claude.protocol_versions
+                WHERE protocol_name = %s AND is_active = true
+            """, (STANDING_ORDERS_PROTOCOL,))
+            current = cur.fetchone()
+            old_version = current["version"] if current else 0
+            new_version = old_version + 1
+
+            # Deactivate current
+            if current:
+                cur.execute("""
+                    UPDATE claude.protocol_versions
+                    SET is_active = false
+                    WHERE version_id = %s
+                """, (current["version_id"],))
+
+            # Insert new version
+            cur.execute("""
+                INSERT INTO claude.protocol_versions
+                (protocol_name, version, content, change_reason, changed_by, is_active)
+                VALUES (%s, %s, %s, %s, %s, true)
+                RETURNING version_id
+            """, (STANDING_ORDERS_PROTOCOL, new_version, content.strip(), change_reason,
+                  f"session:{os.environ.get('SESSION_ID', 'unknown')}"))
+
+            new_id = cur.fetchone()["version_id"]
+            conn.commit()
+
+            return {
+                "success": True,
+                "protocol_name": STANDING_ORDERS_PROTOCOL,
+                "old_version": old_version,
+                "new_version": new_version,
+                "version_id": new_id,
+                "note": "Standing orders updated in DB. Run deploy action to push to MEMORY.md files.",
+            }
+        except Exception as e:
+            conn.rollback()
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    elif action == "history":
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT version, content, change_reason, changed_by,
+                       created_at::text, is_active
+                FROM claude.protocol_versions
+                WHERE protocol_name = %s
+                ORDER BY version DESC
+                LIMIT 10
+            """, (STANDING_ORDERS_PROTOCOL,))
+
+            versions = []
+            for row in cur.fetchall():
+                versions.append({
+                    "version": row["version"],
+                    "content": row["content"],
+                    "change_reason": row["change_reason"],
+                    "changed_by": row["changed_by"],
+                    "created_at": row["created_at"],
+                    "is_active": row["is_active"],
+                })
+
+            return {
+                "success": True,
+                "protocol_name": STANDING_ORDERS_PROTOCOL,
+                "version_count": len(versions),
+                "versions": versions,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        finally:
+            conn.close()
+
+    elif action == "deploy":
+        # Step 1: Get active standing orders from DB
+        conn = get_db_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT version, content
+                FROM claude.protocol_versions
+                WHERE protocol_name = %s AND is_active = true
+            """, (STANDING_ORDERS_PROTOCOL,))
+            row = cur.fetchone()
+            if not row:
+                return {"success": False, "error": f"No active version for {STANDING_ORDERS_PROTOCOL} — create one with action='update' first"}
+            active_version = row["version"]
+            active_content = row["content"].strip()
+        except Exception as e:
+            return {"success": False, "error": f"DB error: {str(e)}"}
+        finally:
+            conn.close()
+
+        # Step 2: Determine MEMORY.md path from CWD
+        cwd = os.getcwd()
+        # Encode path: replace drive colon+backslash and remaining separators with --
+        # e.g. C:\Projects\claude-family -> C--Projects--claude-family
+        encoded = cwd.replace(":\\", "--").replace("\\", "--").replace("/", "--")
+        memory_dir = Path.home() / ".claude" / "projects" / encoded / "memory"
+        memory_path = memory_dir / "MEMORY.md"
+
+        # Step 3: Read existing MEMORY.md (or start with empty string)
+        if memory_path.exists():
+            existing = memory_path.read_text(encoding="utf-8")
+        else:
+            existing = ""
+            # Ensure directory exists
+            memory_dir.mkdir(parents=True, exist_ok=True)
+
+        # Step 4: Build new standing orders block
+        section_block = f"{STANDING_ORDERS_SECTION}\n\n{active_content}\n"
+
+        # Step 5: Replace or prepend the standing orders section
+        if STANDING_ORDERS_SECTION in existing:
+            # Find start of section
+            start_idx = existing.index(STANDING_ORDERS_SECTION)
+            # Find end of section: next ## heading after the section header, or end of file
+            after_header = existing[start_idx + len(STANDING_ORDERS_SECTION):]
+            # Search for the next ## heading
+            import re
+            next_heading = re.search(r'\n##\s', after_header)
+            if next_heading:
+                end_idx = start_idx + len(STANDING_ORDERS_SECTION) + next_heading.start()
+                # Preserve everything before the section, insert new block, then rest
+                new_content = existing[:start_idx] + section_block + "\n" + existing[end_idx:].lstrip("\n")
+            else:
+                # Standing orders is the last section — replace to end of file
+                new_content = existing[:start_idx] + section_block
+        else:
+            # Prepend at top, separated from existing content by a blank line
+            if existing:
+                new_content = section_block + "\n" + existing
+            else:
+                new_content = section_block
+
+        # Step 6: Write back
+        memory_path.write_text(new_content, encoding="utf-8")
+
+        return {
+            "success": True,
+            "deployed_to": str(memory_path),
+            "version": active_version,
+            "section_existed": STANDING_ORDERS_SECTION in existing,
+        }
+
+    else:
+        return {"success": False, "error": f"Unknown action '{action}'. Valid actions: get, update, history, deploy"}
+
+
+# ============================================================================
 # Channel Messaging Status Tool
 # ============================================================================
 
