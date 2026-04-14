@@ -590,9 +590,13 @@ def main():
             sync_script = Path(__file__).parent / "sync_project.py"
             if sync_script.exists():
                 import subprocess
+                creationflags = 0
+                if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                    creationflags = subprocess.CREATE_NO_WINDOW
                 sync_result = subprocess.run(
                     [sys.executable, str(sync_script), "--no-interactive"],
-                    capture_output=True, text=True, timeout=30, cwd=cwd
+                    capture_output=True, text=True, timeout=30, cwd=cwd,
+                    creationflags=creationflags
                 )
                 if sync_result.returncode == 0:
                     logger.info("Self-heal: sync_project.py completed successfully")

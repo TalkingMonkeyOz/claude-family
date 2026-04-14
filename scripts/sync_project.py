@@ -16,7 +16,7 @@ Called from:
 
 Flags:
   --dry-run         Show what would change without writing files
-  --component       Deploy only one component: settings, mcp, skills, commands, rules, agents, claude_md
+  --component       Deploy only one component: settings, mcp, skills, commands, rules, agents, claude_md, global_claude_md
   --no-interactive  Skip user prompts (for hook/automated calls)
   [path-or-name]    Project path or project name (defaults to cwd)
 """
@@ -848,13 +848,15 @@ def sync_claude_md(
     dry_run: bool = False,
     interactive: bool = False,
 ) -> DeployResult:
-    """Check CLAUDE.md hash vs DB profiles. Reports drift; does not auto-import."""
+    """Deploy CLAUDE.md from DB profiles to disk. DB is source of truth.
+
+    One-way push: DB → disk. To change CLAUDE.md, use config_manage(action="update_section")
+    which updates the DB. This function then deploys the DB content to the file.
+    """
     result = DeployResult("CLAUDE.md")
     project_name = project_info.get("project_name", "")
 
     claude_md_path = Path(project_path) / "CLAUDE.md"
-    if not claude_md_path.exists():
-        return result.skip("CLAUDE.md not found in project")
 
     profile_config = get_claude_md_profile(conn, project_name)
     if not profile_config:
@@ -864,22 +866,64 @@ def sync_claude_md(
     if not db_content:
         return result.skip("profile has no behavior content")
 
-    try:
-        file_content = claude_md_path.read_text(encoding="utf-8")
-    except Exception as exc:
-        return result.warn(f"could not read CLAUDE.md: {exc}")
-
-    file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()[:8]
     db_hash = hashlib.md5(db_content.encode("utf-8")).hexdigest()[:8]
 
-    if file_hash == db_hash:
-        return result.ok("in sync with DB")
+    # Check if file exists and is already in sync
+    if claude_md_path.exists():
+        try:
+            file_content = claude_md_path.read_text(encoding="utf-8")
+            file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()[:8]
+            if file_hash == db_hash:
+                return result.ok("in sync with DB")
+        except Exception as exc:
+            return result.warn(f"could not read CLAUDE.md: {exc}")
 
-    # Non-interactive: report drift only
-    return result.warn(
-        f"file differs from DB (file={file_hash}, db={db_hash}) — "
-        "run generate_project_settings.py with --import to sync"
-    )
+    # Deploy DB content to disk
+    if dry_run:
+        return result.ok(f"would deploy from DB (db={db_hash})")
+
+    try:
+        claude_md_path.write_text(db_content, encoding="utf-8")
+        return result.ok(f"deployed from DB (hash={db_hash})")
+    except Exception as exc:
+        return result.warn(f"failed to write CLAUDE.md: {exc}")
+
+
+def sync_global_claude_md(conn, *, dry_run: bool = False) -> DeployResult:
+    """Deploy global ~/.claude/CLAUDE.md from the 'global' profile. DB → disk only."""
+    result = DeployResult("Global CLAUDE.md")
+
+    global_md_path = Path.home() / ".claude" / "CLAUDE.md"
+
+    profile_config = get_claude_md_profile(conn, "global")
+    if not profile_config:
+        return result.skip("no 'global' profile found")
+
+    db_content = profile_config.get("behavior", "") if isinstance(profile_config, dict) else ""
+    if not db_content:
+        return result.skip("global profile has no behavior content")
+
+    db_hash = hashlib.md5(db_content.encode("utf-8")).hexdigest()[:8]
+
+    # Check if file is already in sync
+    if global_md_path.exists():
+        try:
+            file_content = global_md_path.read_text(encoding="utf-8")
+            file_hash = hashlib.md5(file_content.encode("utf-8")).hexdigest()[:8]
+            if file_hash == db_hash:
+                return result.ok("in sync with DB")
+        except Exception as exc:
+            return result.warn(f"could not read global CLAUDE.md: {exc}")
+
+    if dry_run:
+        return result.ok(f"would deploy global from DB (db={db_hash})")
+
+    try:
+        global_md_path.parent.mkdir(parents=True, exist_ok=True)
+        global_md_path.write_text(db_content, encoding="utf-8")
+        return result.ok(f"deployed global from DB (hash={db_hash})")
+    except Exception as exc:
+        return result.warn(f"failed to write global CLAUDE.md: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -926,7 +970,7 @@ def resolve_project(conn, arg: str) -> Tuple[Optional[Dict], str]:
 # Main
 # ---------------------------------------------------------------------------
 
-ALL_COMPONENTS = ["settings", "mcp", "skills", "commands", "rules", "agents", "claude_md"]
+ALL_COMPONENTS = ["settings", "mcp", "skills", "commands", "rules", "agents", "claude_md", "global_claude_md"]
 
 
 def main() -> int:
@@ -1017,6 +1061,9 @@ def main() -> int:
             "claude_md": lambda: sync_claude_md(
                 conn, project_path, project_info,
                 dry_run=dry_run, interactive=interactive,
+            ),
+            "global_claude_md": lambda: sync_global_claude_md(
+                conn, dry_run=dry_run,
             ),
         }
 

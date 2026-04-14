@@ -294,11 +294,15 @@ def _get_project_name(cwd: str) -> str:
     correct project name for task map lookup.
     """
     import subprocess
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
     try:
         result = subprocess.run(
             ['git', 'rev-parse', '--show-toplevel'],
             capture_output=True, text=True, timeout=5,
-            cwd=cwd, stdin=subprocess.DEVNULL
+            cwd=cwd, stdin=subprocess.DEVNULL,
+            creationflags=creationflags
         )
         if result.returncode == 0 and result.stdout.strip():
             git_root = result.stdout.strip().replace('/', os.sep)
@@ -461,12 +465,16 @@ def _has_recent_checkpoint(max_age_seconds: int = 120) -> bool:
 
     try:
         import subprocess
+        creationflags = 0
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            creationflags = subprocess.CREATE_NO_WINDOW
         cwd = os.getcwd()
         try:
             result = subprocess.run(
                 ['git', 'rev-parse', '--show-toplevel'],
                 capture_output=True, text=True, timeout=5,
-                cwd=cwd, stdin=subprocess.DEVNULL
+                cwd=cwd, stdin=subprocess.DEVNULL,
+                creationflags=creationflags
             )
             if result.returncode == 0 and result.stdout.strip():
                 project_name = os.path.basename(result.stdout.strip().replace('/', os.sep))

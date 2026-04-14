@@ -71,11 +71,15 @@ def _get_project_name(cwd: str) -> str:
     correct project name for task map lookup.
     """
     import subprocess
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
     try:
         result = subprocess.run(
             ['git', 'rev-parse', '--show-toplevel'],
             capture_output=True, text=True, timeout=5,
-            cwd=cwd, stdin=subprocess.DEVNULL
+            cwd=cwd, stdin=subprocess.DEVNULL,
+            creationflags=creationflags
         )
         if result.returncode == 0 and result.stdout.strip():
             git_root = result.stdout.strip().replace('/', os.sep)

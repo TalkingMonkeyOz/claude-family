@@ -630,6 +630,10 @@ def repair_schema(conn=None) -> dict:
     schema_docs_script = str(SCRIPTS_DIR / 'schema_docs.py')
     embed_schema_script = str(SCRIPTS_DIR / 'embed_schema.py')
 
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
     logger.info("Repairing schema: running schema_docs.py --all ...")
     schema_docs_output = ""
     embed_output = ""
@@ -643,6 +647,7 @@ def repair_schema(conn=None) -> dict:
             text=True,
             timeout=300,
             cwd=str(SCRIPTS_DIR),
+            creationflags=creationflags,
         )
         schema_docs_output = (result.stdout + result.stderr).strip()
         schema_docs_success = result.returncode == 0
@@ -665,6 +670,7 @@ def repair_schema(conn=None) -> dict:
             text=True,
             timeout=300,
             cwd=str(SCRIPTS_DIR),
+            creationflags=creationflags,
         )
         embed_output = (result.stdout + result.stderr).strip()
         embed_success = result.returncode == 0
@@ -700,6 +706,10 @@ def repair_vault(conn=None) -> dict:
     """
     embed_vault_script = str(SCRIPTS_DIR / 'embed_vault_documents.py')
 
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
     logger.info("Repairing vault: running embed_vault_documents.py ...")
     try:
         result = subprocess.run(
@@ -708,6 +718,7 @@ def repair_vault(conn=None) -> dict:
             text=True,
             timeout=900,  # 15 min — vault with many new files is slow (Voyage AI per chunk)
             cwd=str(SCRIPTS_DIR),
+            creationflags=creationflags,
         )
         output = (result.stdout + result.stderr).strip()
         # Truncate output for return value (can be very large)
@@ -984,6 +995,10 @@ def repair_column_registry(conn=None) -> dict:
     """
     schema_docs_script = str(SCRIPTS_DIR / 'schema_docs.py')
 
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
     logger.info("Repairing column registry: running schema_docs.py --sync-column-registry ...")
     try:
         result = subprocess.run(
@@ -992,6 +1007,7 @@ def repair_column_registry(conn=None) -> dict:
             text=True,
             timeout=120,
             cwd=str(SCRIPTS_DIR),
+            creationflags=creationflags,
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
