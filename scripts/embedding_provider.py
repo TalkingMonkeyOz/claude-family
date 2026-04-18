@@ -35,6 +35,12 @@ if not logger.handlers:
     logger.addHandler(stderr_handler)
     logger.setLevel(logging.INFO)
 
+# Persistent cache outside %TEMP% — Windows Storage Sense prunes symlinks in %TEMP%
+# while blobs survive, leaving the cache half-broken (root cause of 2026-04-18 9h outage).
+# Must be set BEFORE `from fastembed import TextEmbedding` below.
+from pathlib import Path as _Path
+os.environ.setdefault('FASTEMBED_CACHE_PATH', str(_Path.home() / '.claude' / 'fastembed_cache'))
+
 # Prevent HuggingFace Hub network calls and ONNX threading issues at module load time
 # See: https://github.com/qdrant/fastembed/issues/218
 os.environ['HF_HUB_OFFLINE'] = '1'  # Force offline — no network calls during model load
@@ -57,6 +63,7 @@ except ImportError:
 
 # Lazy-loaded singletons (thread-safe)
 import threading
+
 _fastembed_model = None
 _fastembed_lock = threading.Lock()
 _voyage_client = None
@@ -98,8 +105,94 @@ def _get_voyage_client():
     return _voyage_client
 
 
+_PID_FILE = os.path.join(os.path.expanduser('~'), '.claude', 'embedding-service.pid')
+_LOCK_FILE = os.path.join(os.path.expanduser('~'), '.claude', 'embedding-service.starting')
+_LOCK_MAX_AGE = 120  # Seconds — lock older than this is considered stale
+
+
+def _ensure_service_running() -> None:
+    """Fire-and-forget auto-start. Uses a caller-side lock file to prevent races.
+
+    The lock file is written by THIS process BEFORE spawning, so concurrent
+    callers (parallel hook processes) all see it immediately. No race window.
+    """
+    import subprocess
+
+    # 1. PID file exists + process alive → already running or loading
+    try:
+        if os.path.exists(_PID_FILE):
+            pid_text = open(_PID_FILE).read().strip()
+            if pid_text:
+                pid = int(pid_text)
+                if sys.platform == 'win32':
+                    import ctypes
+                    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+                    if handle:
+                        ctypes.windll.kernel32.CloseHandle(handle)
+                        return  # Running
+                else:
+                    os.kill(pid, 0)
+                    return
+    except (ValueError, OSError, PermissionError):
+        pass
+
+    # 2. Lock file exists + not stale → someone else is already spawning
+    try:
+        if os.path.exists(_LOCK_FILE):
+            lock_age = time.time() - os.path.getmtime(_LOCK_FILE)
+            if lock_age < _LOCK_MAX_AGE:
+                logger.info(f"Embedding auto-start lock exists ({lock_age:.0f}s old) — skipping")
+                return
+            else:
+                logger.warning(f"Stale lock file ({lock_age:.0f}s old) — removing")
+                os.unlink(_LOCK_FILE)
+    except OSError:
+        pass
+
+    # 3. Write lock file FIRST (before spawning) — this is the cross-process mutex
+    try:
+        with open(_LOCK_FILE, 'w') as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        logger.error(f"Cannot write lock file: {e}")
+        return
+
+    # 4. Spawn the service detached
+    service_script = os.path.join(os.path.dirname(__file__), 'embedding_service.py')
+    if not os.path.exists(service_script):
+        logger.error(f"Cannot auto-start: {service_script} not found")
+        try:
+            os.unlink(_LOCK_FILE)
+        except OSError:
+            pass
+        return
+
+    try:
+        kwargs = {}
+        if sys.platform == 'win32':
+            kwargs['creationflags'] = 0x08000000 | 0x00000008  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        else:
+            kwargs['start_new_session'] = True
+
+        python_exe = sys.executable.replace('pythonw.exe', 'python.exe')
+        subprocess.Popen(
+            [python_exe, service_script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            **kwargs
+        )
+        logger.info("Embedding service spawned (fire-and-forget) — will be ready in ~30s")
+    except Exception as e:
+        logger.error(f"Failed to spawn embedding service: {e}")
+        try:
+            os.unlink(_LOCK_FILE)
+        except OSError:
+            pass
+
+
 def _http_embed(text: str) -> Optional[List[float]]:
-    """Call shared embedding service for a single text."""
+    """Call shared embedding service for a single text. Auto-starts if down (fire-and-forget)."""
     import urllib.request
     import json as _json
     try:
@@ -113,9 +206,10 @@ def _http_embed(text: str) -> Optional[List[float]]:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = _json.loads(resp.read())
             return result.get('embedding')
-    except urllib.error.URLError as e:
-        logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
-        logger.warning("Skipping embedding — service down, CKG will use stale data until service recovers")
+    except urllib.error.URLError:
+        # Service is down — try to auto-start (fire-and-forget, no blocking)
+        _ensure_service_running()
+        logger.warning(f"Embedding service unreachable at {HTTP_SERVICE_URL} — returning None (auto-start triggered)")
         return None
     except Exception as e:
         logger.error(f"HTTP embed failed: {e}")
@@ -123,7 +217,7 @@ def _http_embed(text: str) -> Optional[List[float]]:
 
 
 def _http_embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
-    """Call shared embedding service for batch texts."""
+    """Call shared embedding service for batch texts. Auto-starts if down (fire-and-forget)."""
     import urllib.request
     import json as _json
     try:
@@ -137,9 +231,9 @@ def _http_embed_batch(texts: List[str]) -> Optional[List[List[float]]]:
         with urllib.request.urlopen(req, timeout=60) as resp:
             result = _json.loads(resp.read())
             return result.get('embeddings')
-    except urllib.error.URLError as e:
-        logger.error(f"Embedding service unreachable at {HTTP_SERVICE_URL}: {e}")
-        logger.warning("Skipping batch embedding — service down, CKG will use stale data until service recovers")
+    except urllib.error.URLError:
+        _ensure_service_running()
+        logger.warning(f"Embedding service unreachable at {HTTP_SERVICE_URL} — returning None (auto-start triggered)")
         return None
     except Exception as e:
         logger.error(f"HTTP batch embed failed: {e}")

@@ -6,6 +6,14 @@ REM   terminal: Optional - 1=Windows Terminal, 2=WezTerm, 3=Direct
 
 title Claude Code Console Launcher
 
+REM Claude Code v2.1+ environment variables (F206 / BT677)
+REM ENABLE_PROMPT_CACHING_1H: v2.1.108 — extend prompt cache TTL to 60min (default 5min)
+REM   Meaningful cost savings for long sessions with heavy rule/skill context injection.
+REM CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: v2.1.98 — strip Anthropic and cloud creds from
+REM   subprocess env vars, hardening our Python hook scripts.
+set ENABLE_PROMPT_CACHING_1H=1
+set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1
+
 echo.
 echo ================================================================================
 echo Claude Code Console - Terminal AI Assistant
@@ -66,7 +74,8 @@ python "C:\Projects\claude-family\scripts\sync_project.py" "%PROJECT_PATH%" --no
 REM Launch Windows Terminal with Claude
 REM suppressApplicationTitle in WT profile blocks VT escape sequences (Claude CLI title override)
 REM cmd "title" command uses Win32 API (SetConsoleTitle) which is NOT blocked by suppressApplicationTitle
-start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_NAME%" -p "Claude Code" cmd /k "title Claude - %PROJECT_NAME%%WORKTREE_SUFFIX% && set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%%WORKTREE_SUFFIX% && claude --dangerously-load-development-channels server:channel-messaging"
+REM Inline env vars into cmd /k because `wt.exe -p "Claude Code"` uses the WT profile's own env, not the caller's.
+start "" wt.exe -d "%PROJECT_PATH%" --title "Claude - %PROJECT_NAME%" -p "Claude Code" cmd /k "title Claude - %PROJECT_NAME%%WORKTREE_SUFFIX% && set CLAUDE_CODE_TASK_LIST_ID=%PROJECT_NAME%%WORKTREE_SUFFIX% && set ENABLE_PROMPT_CACHING_1H=1 && set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 && claude --dangerously-load-development-channels server:channel-messaging"
 goto :END
 
 :WEZTERM
@@ -77,7 +86,7 @@ REM Sync all project config from database (settings, mcp, skills, commands, rule
 python "C:\Projects\claude-family\scripts\sync_project.py" "%PROJECT_PATH%" --no-interactive 2>nul
 
 REM Launch WezTerm with Claude (use cmd /k to keep window open)
-start "" "C:\Program Files\WezTerm\wezterm-gui.exe" start --cwd "%PROJECT_PATH%" -- cmd /k "title Claude - %PROJECT_NAME% && claude --dangerously-load-development-channels server:channel-messaging"
+start "" "C:\Program Files\WezTerm\wezterm-gui.exe" start --cwd "%PROJECT_PATH%" -- cmd /k "title Claude - %PROJECT_NAME% && set ENABLE_PROMPT_CACHING_1H=1 && set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 && claude --dangerously-load-development-channels server:channel-messaging"
 goto :END
 
 :DIRECT

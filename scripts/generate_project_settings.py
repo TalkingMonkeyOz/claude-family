@@ -101,19 +101,27 @@ def deep_merge(base: Dict, override: Dict) -> Dict:
 def validate_hooks(hooks_config: Dict) -> Dict:
     """Validate and clean hook configuration, removing invalid hook types.
 
-    Valid Claude Code hook types (as of 2025-12-29):
+    Valid Claude Code hook types (as of v2.1.113, 2026-04-18):
     - PreToolUse, PostToolUse, PostToolUseFailure
-    - UserPromptSubmit, PermissionRequest
+    - UserPromptSubmit, PermissionRequest, PermissionDenied
     - SessionStart, SessionEnd
-    - Stop, SubagentStart, SubagentStop
-    - PreCompact, Notification
+    - Stop, StopFailure, SubagentStart, SubagentStop
+    - PreCompact, PostCompact, Notification
+    - InstructionsLoaded (v2.1.69)
+    - CwdChanged, FileChanged (v2.1.83)
+    - TaskCompleted (v2.1.85+)
+    - ConfigChange, TeammateIdle
     """
     VALID_HOOK_TYPES = {
         'PreToolUse', 'PostToolUse', 'PostToolUseFailure',
-        'UserPromptSubmit', 'PermissionRequest',
+        'UserPromptSubmit', 'PermissionRequest', 'PermissionDenied',
         'SessionStart', 'SessionEnd',
-        'Stop', 'SubagentStart', 'SubagentStop',
-        'PreCompact', 'Notification'
+        'Stop', 'StopFailure', 'SubagentStart', 'SubagentStop',
+        'PreCompact', 'PostCompact', 'Notification',
+        'InstructionsLoaded',
+        'CwdChanged', 'FileChanged',
+        'TaskCompleted', 'TaskCreated',
+        'ConfigChange', 'TeammateIdle',
     }
 
     if not hooks_config:

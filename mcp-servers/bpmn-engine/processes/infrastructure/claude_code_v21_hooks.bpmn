@@ -1,0 +1,192 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+    targetNamespace="http://claude-family/bpmn/claude-code-v21-hooks"
+    id="Definitions_ClaudeCodeV21Hooks">
+
+  <!--
+    Claude Code v2.1 hook adoption (F206).
+    Three related extensions to our hook system:
+      1. InstructionsLoaded observer — rule-load audit trail
+      2. PostCompact payload consumer — capture compact_summary
+      3. Conditional `if` filter — declarative hook scoping
+
+    Supersedes parts of hook_chain (UserPromptSubmit → PreToolUse → PostToolUse).
+    Reference: Claude Code CHANGELOG v2.1.69 (InstructionsLoaded), v2.1.76
+    (PostCompact), v2.1.85 (conditional `if`).
+  -->
+
+  <!-- ========================================================
+       PROCESS 1: InstructionsLoaded Observer
+       Fires when CLAUDE.md or .claude/rules/*.md is loaded.
+       We log it — do not block. Enables rule-effectiveness audit.
+       ======================================================== -->
+  <bpmn:process id="instructions_loaded_observer" name="InstructionsLoaded Hook: Rule-Load Audit" isExecutable="true">
+
+    <bpmn:startEvent id="il_start" name="Rule File Loaded">
+      <bpmn:outgoing>il_flow_start_to_parse</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="il_parse_payload" name="[HOOK] Parse stdin payload" scriptFormat="python">
+      <bpmn:incoming>il_flow_start_to_parse</bpmn:incoming>
+      <bpmn:outgoing>il_flow_parse_to_store</bpmn:outgoing>
+      <bpmn:script>
+# Payload fields provided by Claude Code v2.1.69+:
+#   session_id, transcript_path, cwd, hook_event_name,
+#   file_path, memory_type, load_reason
+payload = json.loads(sys.stdin.read())
+file_path = payload['file_path']
+memory_type = payload['memory_type']  # 'CLAUDE.md' | 'rule' | 'local_claude_md'
+load_reason = payload['load_reason']  # 'session_start' | 'lazy_load_path_match'
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:serviceTask id="il_store_db" name="[DB] INSERT claude.rule_loads">
+      <bpmn:incoming>il_flow_parse_to_store</bpmn:incoming>
+      <bpmn:outgoing>il_flow_store_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="il_end" name="Logged — no block">
+      <bpmn:incoming>il_flow_store_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="il_flow_start_to_parse" sourceRef="il_start" targetRef="il_parse_payload"/>
+    <bpmn:sequenceFlow id="il_flow_parse_to_store" sourceRef="il_parse_payload" targetRef="il_store_db"/>
+    <bpmn:sequenceFlow id="il_flow_store_to_end" sourceRef="il_store_db" targetRef="il_end"/>
+
+  </bpmn:process>
+
+  <!-- ========================================================
+       PROCESS 2: PostCompact Payload Consumer
+       Upgrade existing postcompact_hook to capture compact_summary.
+       Addresses task #644 (session detail lost across compaction).
+       ======================================================== -->
+  <bpmn:process id="postcompact_summary_capture" name="PostCompact Hook: Capture compact_summary" isExecutable="true">
+
+    <bpmn:startEvent id="pc_start" name="Compaction Finished">
+      <bpmn:outgoing>pc_flow_start_to_parse</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="pc_parse" name="[HOOK] Parse trigger + compact_summary" scriptFormat="python">
+      <bpmn:incoming>pc_flow_start_to_parse</bpmn:incoming>
+      <bpmn:outgoing>pc_flow_parse_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# v2.1.76+ payload fields: trigger ('manual'|'auto'), compact_summary
+payload = json.loads(sys.stdin.read())
+trigger = payload.get('trigger', 'auto')
+compact_summary = payload.get('compact_summary', '')
+session_id = payload['session_id']
+has_summary = bool(compact_summary and len(compact_summary) > 20)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="pc_has_summary_gw" name="Has summary?" default="pc_flow_no_summary">
+      <bpmn:incoming>pc_flow_parse_to_gw</bpmn:incoming>
+      <bpmn:outgoing>pc_flow_has_summary</bpmn:outgoing>
+      <bpmn:outgoing>pc_flow_no_summary</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:serviceTask id="pc_persist" name="[DB] Append to sessions.compaction_summaries">
+      <bpmn:incoming>pc_flow_has_summary</bpmn:incoming>
+      <bpmn:outgoing>pc_flow_persist_to_end</bpmn:outgoing>
+    </bpmn:serviceTask>
+
+    <bpmn:endEvent id="pc_end_stored" name="Summary persisted">
+      <bpmn:incoming>pc_flow_persist_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="pc_end_skipped" name="Skipped — empty summary">
+      <bpmn:incoming>pc_flow_no_summary</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="pc_flow_start_to_parse" sourceRef="pc_start" targetRef="pc_parse"/>
+    <bpmn:sequenceFlow id="pc_flow_parse_to_gw" sourceRef="pc_parse" targetRef="pc_has_summary_gw"/>
+    <bpmn:sequenceFlow id="pc_flow_has_summary" sourceRef="pc_has_summary_gw" targetRef="pc_persist">
+      <bpmn:conditionExpression>has_summary == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="pc_flow_no_summary" sourceRef="pc_has_summary_gw" targetRef="pc_end_skipped"/>
+    <bpmn:sequenceFlow id="pc_flow_persist_to_end" sourceRef="pc_persist" targetRef="pc_end_stored"/>
+
+  </bpmn:process>
+
+  <!-- ========================================================
+       PROCESS 3: Conditional `if` Filter Pattern
+       Documents HOW v2.1.85 `if` field is applied to existing
+       hook registrations. No new script — settings-layer change.
+       ======================================================== -->
+  <bpmn:process id="conditional_hook_filter" name="Conditional Hook Filter: `if` Field Pattern" isExecutable="true">
+
+    <bpmn:startEvent id="cf_start" name="Hook event fires">
+      <bpmn:outgoing>cf_flow_start_to_matcher</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="cf_eval_matcher" name="[CLAUDE] Evaluate matcher (tool name regex)" scriptFormat="python">
+      <bpmn:incoming>cf_flow_start_to_matcher</bpmn:incoming>
+      <bpmn:outgoing>cf_flow_matcher_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Current behavior (pre-v2.1.85): matcher only filters on tool name.
+# Example: matcher="Write|Edit" fires for every Write/Edit.
+matcher_matches = regex_match(hook.matcher, event.tool_name)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="cf_matcher_gw" name="Matcher matches?" default="cf_flow_matcher_no">
+      <bpmn:incoming>cf_flow_matcher_to_gw</bpmn:incoming>
+      <bpmn:outgoing>cf_flow_matcher_yes</bpmn:outgoing>
+      <bpmn:outgoing>cf_flow_matcher_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="cf_eval_if" name="[CLAUDE v2.1.85] Evaluate `if` clause (permission syntax)" scriptFormat="python">
+      <bpmn:incoming>cf_flow_matcher_yes</bpmn:incoming>
+      <bpmn:outgoing>cf_flow_if_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# v2.1.85+: optional `if` field uses permission-rule syntax:
+#   "if": "Bash(git *)"         — only when bash calls git
+#   "if": "Write(**/*.py)"      — only when writing python files
+# If `if` not present, treat as pass.
+if_clause_passes = evaluate_permission_rule(hook.get('if'), event) if hook.get('if') else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="cf_if_gw" name="`if` passes?" default="cf_flow_if_no">
+      <bpmn:incoming>cf_flow_if_to_gw</bpmn:incoming>
+      <bpmn:outgoing>cf_flow_if_yes</bpmn:outgoing>
+      <bpmn:outgoing>cf_flow_if_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="cf_execute_hook" name="[HOOK] Spawn hook subprocess">
+      <bpmn:incoming>cf_flow_if_yes</bpmn:incoming>
+      <bpmn:outgoing>cf_flow_exec_to_end</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:endEvent id="cf_end_executed" name="Hook ran">
+      <bpmn:incoming>cf_flow_exec_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="cf_end_skipped_matcher" name="Skipped — matcher miss">
+      <bpmn:incoming>cf_flow_matcher_no</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="cf_end_skipped_if" name="Skipped — `if` clause false">
+      <bpmn:incoming>cf_flow_if_no</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:sequenceFlow id="cf_flow_start_to_matcher" sourceRef="cf_start" targetRef="cf_eval_matcher"/>
+    <bpmn:sequenceFlow id="cf_flow_matcher_to_gw" sourceRef="cf_eval_matcher" targetRef="cf_matcher_gw"/>
+    <bpmn:sequenceFlow id="cf_flow_matcher_yes" sourceRef="cf_matcher_gw" targetRef="cf_eval_if">
+      <bpmn:conditionExpression>matcher_matches == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="cf_flow_matcher_no" sourceRef="cf_matcher_gw" targetRef="cf_end_skipped_matcher"/>
+    <bpmn:sequenceFlow id="cf_flow_if_to_gw" sourceRef="cf_eval_if" targetRef="cf_if_gw"/>
+    <bpmn:sequenceFlow id="cf_flow_if_yes" sourceRef="cf_if_gw" targetRef="cf_execute_hook">
+      <bpmn:conditionExpression>if_clause_passes == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="cf_flow_if_no" sourceRef="cf_if_gw" targetRef="cf_end_skipped_if"/>
+    <bpmn:sequenceFlow id="cf_flow_exec_to_end" sourceRef="cf_execute_hook" targetRef="cf_end_executed"/>
+
+  </bpmn:process>
+
+</bpmn:definitions>

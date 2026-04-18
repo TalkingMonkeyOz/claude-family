@@ -29,18 +29,27 @@ def resolve_port(project_name: str) -> int:
 def main():
     try:
         input_data = json.load(sys.stdin)
-        tool_name = input_data.get('tool_name', '')
-        tool_input = input_data.get('tool_input', {})
 
-        # Only trigger for Write and Edit
-        if tool_name not in ('Write', 'Edit'):
-            return
+        # Support both event shapes:
+        #   - PostToolUse: {tool_name, tool_input: {file_path}}
+        #   - FileChanged (v2.1.83+): {file_path, change_type} or {path}
+        event_name = input_data.get('hook_event_name', '')
 
-        file_path = tool_input.get('file_path', '')
+        if event_name == 'FileChanged' or 'file_path' in input_data and 'tool_input' not in input_data:
+            # FileChanged payload: file_path at top level
+            file_path = input_data.get('file_path') or input_data.get('path', '')
+        else:
+            # PostToolUse payload (legacy fallback)
+            tool_name = input_data.get('tool_name', '')
+            if tool_name not in ('Write', 'Edit'):
+                return
+            tool_input = input_data.get('tool_input', {})
+            file_path = tool_input.get('file_path', '')
+
         if not file_path:
             return
 
-        # Skip non-source files
+        # Skip non-source files (in-script filter; also duplicated by v2.1.85 `if` clause on registration)
         skip_extensions = {'.md', '.json', '.yml', '.yaml', '.toml', '.txt', '.csv', '.log', '.bpmn'}
         ext = os.path.splitext(file_path)[1].lower()
         if ext in skip_extensions:

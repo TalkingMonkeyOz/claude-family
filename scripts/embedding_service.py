@@ -33,6 +33,7 @@ Created: 2026-04-12
 import sys
 import os
 import json
+import shutil
 import time
 import signal
 import logging
@@ -53,6 +54,11 @@ PID_DIR = Path.home() / ".claude"
 LOG_DIR = Path.home() / ".claude" / "logs"
 PID_FILE = PID_DIR / "embedding-service.pid"
 LOG_FILE = LOG_DIR / "embedding-service.log"
+
+# Persistent cache outside %TEMP% — Windows Storage Sense prunes symlinks in %TEMP%
+# while blobs survive, leaving the cache half-broken (root cause of 2026-04-18 9h outage).
+# Must be set BEFORE `from fastembed import TextEmbedding` anywhere in the import graph.
+os.environ.setdefault('FASTEMBED_CACHE_PATH', str(Path.home() / '.claude' / 'fastembed_cache'))
 
 # Prevent HuggingFace network calls and ONNX threading issues
 os.environ['HF_HUB_OFFLINE'] = '1'
@@ -91,6 +97,41 @@ _model_lock = threading.Lock()
 _model_load_time: Optional[float] = None
 
 
+def _ensure_snapshot_valid() -> None:
+    """Rebuild fastembed snapshot files from blobs if missing (Windows symlink recovery).
+
+    On Windows without admin/Developer Mode, huggingface_hub snapshot_download uses
+    file copies instead of symlinks, but %TEMP%-based caches can lose the snapshot
+    files to cleanup tools while blobs/ survives. This function uses files_metadata.json
+    to restore snapshots/<rev>/<filename> → blobs/<hash> copies. Idempotent.
+    """
+    cache_root = Path(os.environ['FASTEMBED_CACHE_PATH']) / 'models--qdrant--bge-large-en-v1.5-onnx'
+    meta_file = cache_root / 'files_metadata.json'
+    blobs_dir = cache_root / 'blobs'
+    if not meta_file.exists() or not blobs_dir.exists():
+        return  # Nothing to rebuild — fresh install, let fastembed handle it
+    try:
+        meta = json.loads(meta_file.read_text())
+    except Exception as exc:
+        logger.warning(f"_ensure_snapshot_valid: failed to read files_metadata.json: {exc}")
+        return
+    by_hash = {p.name: p for p in blobs_dir.iterdir() if p.is_file()}
+    by_size = {p.stat().st_size: p for p in blobs_dir.iterdir() if p.is_file()}
+    restored = 0
+    for rel_path, info in meta.items():
+        dest = cache_root / rel_path.replace('\\', '/')
+        if dest.exists():
+            continue
+        src = by_hash.get(info.get('blob_id', '')) or by_size.get(info.get('size', -1))
+        if not src:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+        restored += 1
+    if restored:
+        logger.warning(f"_ensure_snapshot_valid: restored {restored} snapshot file(s) from blobs")
+
+
 def _load_model():
     """Load FastEmbed ONNX model (thread-safe, one-time)."""
     global _model, _model_load_time
@@ -99,6 +140,8 @@ def _load_model():
     with _model_lock:
         if _model is not None:
             return _model
+        # Self-heal: rebuild snapshot from blobs if %TEMP% cleanup broke symlinks
+        _ensure_snapshot_valid()
         logger.info(f"Loading model {MODEL_NAME} (this takes ~10-30s)...")
         start = time.time()
         try:
@@ -107,8 +150,36 @@ def _load_model():
             _model_load_time = time.time() - start
             logger.info(f"Model loaded in {_model_load_time:.1f}s ({MODEL_DIMS} dims, ONNX)")
         except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            raise
+            msg = str(e)
+            if 'NO_SUCHFILE' in msg and 'snapshots' in msg:
+                # F208.3: emergency fallback — drop HF_HUB_OFFLINE and retry.
+                # First try another snapshot rebuild in case we missed a file.
+                logger.warning(f"Initial load failed with NO_SUCHFILE; attempting recovery: {e}")
+                _ensure_snapshot_valid()
+                try:
+                    from fastembed import TextEmbedding as _TE
+                    _model = TextEmbedding(MODEL_NAME)
+                    _model_load_time = time.time() - start
+                    logger.warning(f"Recovered via snapshot rebuild in {_model_load_time:.1f}s")
+                    return _model
+                except Exception:
+                    pass
+                # Last resort — allow network re-download for this load only
+                prev_offline = os.environ.pop('HF_HUB_OFFLINE', None)
+                try:
+                    from fastembed import TextEmbedding as _TE2
+                    _model = _TE2(MODEL_NAME)
+                    _model_load_time = time.time() - start
+                    logger.error(
+                        f"Model loaded via online re-download in {_model_load_time:.1f}s — "
+                        f"check cache at {os.environ.get('FASTEMBED_CACHE_PATH')}"
+                    )
+                finally:
+                    if prev_offline is not None:
+                        os.environ['HF_HUB_OFFLINE'] = prev_offline
+            else:
+                logger.error(f"Failed to load model: {e}")
+                raise
     return _model
 
 
@@ -120,18 +191,18 @@ _call_lock = threading.Lock()
 
 
 def embed_single(text: str) -> Optional[list]:
-    """Embed a single text string."""
+    """Embed a single text string. Serialized via _call_lock."""
     global _call_count
     if not text or not text.strip():
         return None
     model = _load_model()
     start = time.time()
-    embeddings = list(model.embed([text]))
-    vec = embeddings[0].tolist()
-    elapsed = time.time() - start
     with _call_lock:
+        embeddings = list(model.embed([text]))
         _call_count += 1
         count = _call_count
+    vec = embeddings[0].tolist()
+    elapsed = time.time() - start
     if elapsed > 2.0:
         logger.warning(f"Slow embed: {elapsed:.1f}s, {len(text)} chars (call #{count})")
     elif count <= 5 or count % 100 == 0:
@@ -140,18 +211,18 @@ def embed_single(text: str) -> Optional[list]:
 
 
 def embed_batch(texts: list) -> Optional[list]:
-    """Embed multiple texts."""
+    """Embed multiple texts. Serialized via _call_lock to prevent concurrent ONNX inference."""
     global _call_count
     if not texts:
         return None
     model = _load_model()
     start = time.time()
-    embeddings = list(model.embed(texts))
-    vecs = [e.tolist() for e in embeddings]
-    elapsed = time.time() - start
     with _call_lock:
+        embeddings = list(model.embed(texts))
         _call_count += len(texts)
         count = _call_count
+    vecs = [e.tolist() for e in embeddings]
+    elapsed = time.time() - start
     logger.info(f"Batch OK: {len(texts)} texts in {elapsed:.1f}s ({elapsed/len(texts):.3f}s/text, total #{count})")
     return vecs
 
@@ -388,15 +459,33 @@ def main():
             print(f"Embedding service already running (PID {existing_pid})")
             sys.exit(0)
         else:
-            logger.warning(f"Stale PID {existing_pid} (not healthy), taking over")
+            # Process exists but not healthy — could be loading model.
+            # Check PID file age: if < 60s, another instance is likely starting up.
+            try:
+                pid_age = time.time() - PID_FILE.stat().st_mtime
+                if pid_age < 60:
+                    logger.info(f"PID {existing_pid} exists, file age {pid_age:.0f}s < 60s — likely loading model, exiting")
+                    sys.exit(0)
+            except OSError:
+                pass
+            logger.warning(f"Stale PID {existing_pid} (not healthy, age > 60s), taking over")
             PID_FILE.unlink(missing_ok=True)
 
-    # Pre-load model before starting server
-    logger.info(f"Starting embedding service on port {port}...")
-    _load_model()
-
-    # Write PID and start server
+    # Write PID IMMEDIATELY — before model load — so other instances see us
+    # and don't try to spawn duplicates during the 10-30s model load window.
     write_pid_file()
+    logger.info(f"Starting embedding service on port {port} (PID {os.getpid()})...")
+
+    try:
+        _load_model()
+    except Exception as e:
+        logger.error(f"Model load failed: {e}")
+        PID_FILE.unlink(missing_ok=True)
+        raise
+    finally:
+        # Clean up the .starting lock file (written by embedding_provider auto-start)
+        lock_file = PID_DIR / "embedding-service.starting"
+        lock_file.unlink(missing_ok=True)
 
     try:
         server = EmbeddingServer(port)

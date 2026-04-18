@@ -34,7 +34,8 @@ from collections.abc import AsyncIterator
 # FastMCP Setup
 # ============================================================================
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
+from pydantic import BaseModel, Field
 
 
 # ============================================================================
@@ -4959,10 +4960,20 @@ def update_memory(
     return _run_async(tool_update_memory(memory_id, content, title, tier, memory_type))
 
 
+class _ArchiveMemoryReason(BaseModel):
+    """Elicitation schema for archive_memory reason prompt (F208/BT682 POC)."""
+    reason: str = Field(
+        ...,
+        description="Why this memory is being archived. 1-3 short sentences. "
+                    "E.g. 'superseded by FB299 fix', 'wrong — schema drifted', 'duplicate of 1234'.",
+    )
+
+
 @mcp.tool()
-def archive_memory(
+async def archive_memory(
     memory_id: str,
     reason: str = "",
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Soft-delete a memory by setting status to 'archived'. Excluded from recall by default.
 
@@ -4970,11 +4981,32 @@ def archive_memory(
     are not permanently deleted — the background curator handles purging.
     Returns: {success, memory_id, title, previous_status, reason}.
 
+    POC (BT682): if `reason` is empty and an MCP client supports elicitation,
+    prompts for a reason interactively. Falls back to archiving without reason
+    on decline/unsupported clients to preserve backward compatibility.
+
     Args:
         memory_id: UUID of the memory to archive.
         reason: Why this memory is being archived (stored for audit trail).
+        ctx: MCP Context (auto-injected by FastMCP). Do not supply directly.
     """
-    return _run_async(tool_archive_memory(memory_id, reason))
+    if not reason and ctx is not None:
+        try:
+            result = await ctx.elicit(
+                message=f"Archive memory {memory_id}: why is this memory being archived?",
+                schema=_ArchiveMemoryReason,
+            )
+            # ElicitationResult has .action ('accept'|'decline'|'cancel') and .data
+            if getattr(result, "action", None) == "accept" and getattr(result, "data", None):
+                reason = result.data.reason
+        except Exception as exc:
+            # Client doesn't support elicitation, or any other failure — proceed without reason
+            if ctx:
+                try:
+                    await ctx.debug(f"archive_memory elicitation skipped: {exc}")
+                except Exception:
+                    pass
+    return await tool_archive_memory(memory_id, reason)
 
 
 @mcp.tool()
@@ -10691,7 +10723,8 @@ def memory_manage(
             tier=tier, memory_type=memory_type,
         )
     elif action == "archive":
-        return archive_memory(memory_id=memory_id, reason=reason)
+        # archive_memory is async (BT682 elicitation POC); this wrapper is sync so bypass the tool façade
+        return _run_async(tool_archive_memory(memory_id, reason))
     elif action == "merge":
         return merge_memories(keep_id=keep_id, archive_id=archive_id, reason=reason)
     elif action == "mark_applied":

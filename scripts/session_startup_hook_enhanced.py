@@ -72,19 +72,43 @@ def check_system_health() -> dict:
             health['database'] = {'status': 'error', 'message': str(e)[:50]}
             issues.append(f'DB: {str(e)[:30]}')
 
-    # Check embedding provider (for RAG)
+    # Check embedding provider (for RAG) — F208.4: config + live /health ping
     try:
         from embedding_provider import get_provider_info
         pinfo = get_provider_info()
         provider_name = pinfo['provider']
         model_name = pinfo['model']
-        health['embeddings'] = {
-            'status': 'ok',
-            'message': f'{provider_name} ({model_name}, local={pinfo["local"]})'
-        }
+        live_status = ''
+        if provider_name == 'http':
+            # Ping the service /health endpoint to catch silent degradation (e.g. 2026-04-18 9h outage)
+            try:
+                import urllib.request as _ur
+                import json as _json
+                service_url = os.environ.get('EMBEDDING_SERVICE_URL', 'http://127.0.0.1:9900')
+                with _ur.urlopen(f'{service_url}/health', timeout=2) as resp:
+                    hdata = _json.loads(resp.read().decode('utf-8'))
+                if not hdata.get('model_loaded'):
+                    raise RuntimeError(f"model_loaded=False")
+                live_status = f", service-live (calls={hdata.get('call_count', 0)})"
+                health['embeddings'] = {
+                    'status': 'ok',
+                    'message': f'{provider_name} ({model_name}, local={pinfo["local"]}){live_status}'
+                }
+            except Exception as live_exc:
+                health['embeddings'] = {
+                    'status': 'error',
+                    'message': f'HTTP service unreachable: {str(live_exc)[:60]}'
+                }
+                issues.append(f'EMBEDDINGS DOWN: {str(live_exc)[:40]}')
+        else:
+            health['embeddings'] = {
+                'status': 'ok',
+                'message': f'{provider_name} ({model_name}, local={pinfo["local"]})'
+            }
     except Exception as e:
-        health['embeddings'] = {'status': 'warning', 'message': f'Embedding provider error: {str(e)[:50]}'}
-        issues.append(f'Embeddings: {str(e)[:30]}')
+        if health['embeddings'].get('status') != 'error':
+            health['embeddings'] = {'status': 'warning', 'message': f'Embedding provider error: {str(e)[:50]}'}
+            issues.append(f'Embeddings: {str(e)[:30]}')
 
     # Check required env vars
     required_vars = ['POSTGRES_PASSWORD']
@@ -691,10 +715,12 @@ def main():
             # === CKG STALENESS CHECK: async re-index if code changed ===
             try:
                 import subprocess as _sp
+                _cflags = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
                 # Get current git HEAD
                 git_result = _sp.run(
                     ['git', 'rev-parse', 'HEAD'],
-                    capture_output=True, text=True, timeout=5, cwd=cwd
+                    capture_output=True, text=True, timeout=5, cwd=cwd,
+                    creationflags=_cflags
                 )
                 if git_result.returncode == 0:
                     current_head = git_result.stdout.strip()
@@ -722,7 +748,7 @@ def main():
                                 _sp.Popen(
                                     [sys.executable, str(indexer_script), project_name, cwd],
                                     stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                                    creationflags=0x00000008 if sys.platform == 'win32' else 0,  # DETACHED_PROCESS on Windows
+                                    creationflags=0x08000008 if sys.platform == 'win32' else 0,  # CREATE_NO_WINDOW | DETACHED_PROCESS
                                     start_new_session=True if sys.platform != 'win32' else False,
                                 )
                                 logger.info(f"CKG: spawned async re-index for {project_name} ({sym_count} existing symbols)")
@@ -829,9 +855,11 @@ def main():
             # F156: Auto-detect and load dossier from git branch or active tasks
             try:
                 import subprocess as _git_sp
+                _git_cflags = 0x08000000 if sys.platform == 'win32' else 0  # CREATE_NO_WINDOW
                 branch_result = _git_sp.run(
                     ['git', 'branch', '--show-current'],
-                    capture_output=True, text=True, timeout=5, cwd=cwd
+                    capture_output=True, text=True, timeout=5, cwd=cwd,
+                    creationflags=_git_cflags
                 )
                 branch_name = branch_result.stdout.strip() if branch_result.returncode == 0 else ""
 

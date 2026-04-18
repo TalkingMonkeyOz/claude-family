@@ -40,16 +40,17 @@ from config import get_db_connection, setup_hook_logging
 logger = setup_hook_logging("sync_project")
 
 # ---------------------------------------------------------------------------
-# Valid Claude Code hook event types (as of 2026-03)
+# Valid Claude Code hook event types (as of v2.1.113, 2026-04-18)
 # ---------------------------------------------------------------------------
 VALID_HOOK_TYPES = {
     "PreToolUse", "PostToolUse", "PostToolUseFailure",
-    "UserPromptSubmit", "PermissionRequest",
+    "UserPromptSubmit", "PermissionRequest", "PermissionDenied",
     "SessionStart", "SessionEnd",
-    "Stop", "SubagentStart", "SubagentStop",
+    "Stop", "StopFailure", "SubagentStart", "SubagentStop",
     "PreCompact", "PostCompact", "Notification",
-    "InstructionsLoaded", "TaskCompleted", "ConfigChange",
-    "TeammateIdle", "Elicitation", "ElicitationResult",
+    "InstructionsLoaded", "TaskCompleted", "TaskCreated",
+    "CwdChanged", "FileChanged",
+    "ConfigChange", "TeammateIdle", "Elicitation", "ElicitationResult",
     "WorktreeCreate", "WorktreeRemove",
 }
 
@@ -341,7 +342,7 @@ def get_scoped_skills(conn, project_type: str, project_name: str, project_id: st
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT name, content, scope, scope_ref, description
+            SELECT name, content, scope, scope_ref, description, file_pattern
             FROM claude.skills
             WHERE is_active = true
               AND (
@@ -581,6 +582,32 @@ def deploy_mcp(
         return result.fail(str(exc))
 
 
+def inject_paths_frontmatter(content: str, file_pattern: Optional[str]) -> str:
+    """Inject `paths:` into YAML frontmatter from DB file_pattern column (v2.1.90+ skill scoping).
+
+    If file_pattern is empty or content already has `paths:`, returns content unchanged.
+    Otherwise appends `paths: "<pattern>"` inside the frontmatter block.
+    """
+    if not file_pattern:
+        return content
+    if not content.startswith("---\n"):
+        return content
+    end_idx = content.find("\n---\n", 4)
+    if end_idx == -1:
+        return content
+    frontmatter = content[4:end_idx]
+    rest = content[end_idx + 5:]
+    # Already has a paths: line? leave alone.
+    for line in frontmatter.splitlines():
+        if line.strip().startswith("paths:"):
+            return content
+    # Quote if pattern has special YAML chars
+    needs_quote = any(c in file_pattern for c in ":*|{}[],&")
+    value = f'"{file_pattern}"' if needs_quote else file_pattern
+    new_frontmatter = frontmatter.rstrip() + f"\npaths: {value}\n"
+    return f"---\n{new_frontmatter}---\n{rest}"
+
+
 def deploy_skills(
     conn,
     project_path: str,
@@ -606,6 +633,7 @@ def deploy_skills(
         name = skill.get("name", "").strip()
         content = skill.get("content", "") or ""
         scope = skill.get("scope", "global")
+        file_pattern = skill.get("file_pattern")
         if not name or not content:
             logger.debug("Skipping skill with missing name or content")
             continue
@@ -623,7 +651,7 @@ def deploy_skills(
 
         try:
             skill_dir.mkdir(parents=True, exist_ok=True)
-            _atomic_write(skill_file, content)
+            _atomic_write(skill_file, inject_paths_frontmatter(content, file_pattern))
             count += 1
             logger.debug("Wrote skill: %s", name)
         except Exception as exc:
@@ -652,7 +680,7 @@ def deploy_global_skills(conn, *, dry_run: bool = False) -> DeployResult:
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT name, content FROM claude.skills "
+            "SELECT name, content, file_pattern FROM claude.skills "
             "WHERE is_active = true AND scope = 'global' AND content IS NOT NULL AND content != ''"
         )
         rows = [_row_to_dict(row) for row in cur.fetchall()]
@@ -662,6 +690,7 @@ def deploy_global_skills(conn, *, dry_run: bool = False) -> DeployResult:
     for row in rows:
         name = row.get("name", "").strip()
         content = row.get("content", "") or ""
+        file_pattern = row.get("file_pattern")
         if not name or not content:
             continue
 
@@ -674,7 +703,7 @@ def deploy_global_skills(conn, *, dry_run: bool = False) -> DeployResult:
 
         try:
             skill_dir.mkdir(parents=True, exist_ok=True)
-            _atomic_write(skill_file, content)
+            _atomic_write(skill_file, inject_paths_frontmatter(content, file_pattern))
             count += 1
             logger.debug("Wrote global skill: %s", name)
         except Exception as exc:
