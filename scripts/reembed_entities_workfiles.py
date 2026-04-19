@@ -10,10 +10,10 @@ DB = get_database_uri()
 batch_size = 50
 
 with psycopg.connect(DB, row_factory=dict_row) as conn:
-    # Re-embed entities
+    # Re-embed entities (include rows with NULL embedding — FB301)
     rows = conn.execute(
         "SELECT entity_id::text, COALESCE(properties->>'name', properties->>'title', 'Unknown') as text "
-        "FROM claude.entities WHERE NOT is_archived AND embedding IS NOT NULL"
+        "FROM claude.entities WHERE NOT is_archived"
     ).fetchall()
     print(f"Entities to re-embed: {len(rows)}")
 
@@ -30,10 +30,10 @@ with psycopg.connect(DB, row_factory=dict_row) as conn:
         conn.commit()
         print(f"  Entities {i+1}-{i+len(batch)} done")
 
-    # Re-embed workfiles
+    # Re-embed workfiles (include rows with NULL embedding — FB301)
     rows = conn.execute(
         "SELECT workfile_id::text, title, SUBSTRING(content, 1, 500) as text "
-        "FROM claude.project_workfiles WHERE is_active = true AND embedding IS NOT NULL"
+        "FROM claude.project_workfiles WHERE is_active = true"
     ).fetchall()
     print(f"Workfiles to re-embed: {len(rows)}")
 
