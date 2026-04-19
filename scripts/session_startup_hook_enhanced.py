@@ -678,6 +678,32 @@ def main():
             except Exception as e:
                 logger.warning(f"Zombie cleanup failed (non-fatal): {e}")
 
+            # FB242: Archive stale [S]-prefixed session tasks from prior sessions
+            # Protocol convention: [S]=session-scope dies at session end, [P]=persistent survives
+            try:
+                sess_conn = get_db_connection()
+                if sess_conn:
+                    sess_cur = sess_conn.cursor()
+                    sess_cur.execute("""
+                        UPDATE claude.todos t
+                        SET status = 'archived', updated_at = NOW()
+                        FROM claude.projects p
+                        WHERE t.project_id = p.project_id
+                          AND p.project_name = %s
+                          AND NOT t.is_deleted
+                          AND t.status IN ('pending', 'in_progress')
+                          AND t.content LIKE '[S]%%'
+                          AND (%s::uuid IS NULL OR t.created_session_id IS DISTINCT FROM %s::uuid)
+                    """, (project_name, session_id, session_id))
+                    archived_session_tasks = sess_cur.rowcount
+                    sess_conn.commit()
+                    sess_conn.close()
+                    if archived_session_tasks > 0:
+                        context_lines.append(f"Archived {archived_session_tasks} stale [S]-prefixed task(s) from prior sessions")
+                        logger.info(f"FB242: archived {archived_session_tasks} stale session-scope tasks")
+            except Exception as e:
+                logger.warning(f"Session task cleanup failed (non-fatal): {e}")
+
             # 60-day retention: archive very old pending todos (holiday-safe threshold)
             try:
                 retention_conn = get_db_connection()

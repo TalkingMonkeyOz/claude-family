@@ -61,7 +61,7 @@ Sets CLAUDE_SESSION_ID env var for subsequent hooks.</bpmn:documentation>
     <!-- Close any zombie sessions left open beyond 24h (distinct from auto_archive pre-check) -->
     <bpmn:scriptTask id="zombie_cleanup" name="[DB] Close Zombie Sessions (&gt;24h)" scriptFormat="python">
       <bpmn:incoming>flow_session_start_to_zombie_cleanup</bpmn:incoming>
-      <bpmn:outgoing>flow_zombie_to_standing_orders</bpmn:outgoing>
+      <bpmn:outgoing>flow_zombie_to_archive_session_tasks</bpmn:outgoing>
       <bpmn:script>zombie_sessions_closed = True</bpmn:script>
       <bpmn:documentation>After the new session row is written, close any claude.sessions rows
 where session_end IS NULL AND session_start &lt; NOW() - INTERVAL '24 hours'.
@@ -70,9 +70,26 @@ Complements auto_archive (which runs pre-insert) as a belt-and-suspenders guard
 against zombie sessions accumulating in the table.</bpmn:documentation>
     </bpmn:scriptTask>
 
+    <!-- Archive session-scope tasks ([S]-prefixed) from prior sessions (FB242) -->
+    <bpmn:scriptTask id="archive_stale_session_tasks" name="[HOOK] Archive Stale Session Tasks" scriptFormat="python">
+      <bpmn:incoming>flow_zombie_to_archive_session_tasks</bpmn:incoming>
+      <bpmn:outgoing>flow_archive_session_tasks_to_standing_orders</bpmn:outgoing>
+      <bpmn:script>stale_session_tasks_archived = True</bpmn:script>
+      <bpmn:documentation>FB242: Session-scope tasks (content prefixed '[S]') from prior sessions
+are archived at session startup. Criteria:
+  status IN ('pending','in_progress')
+  AND content LIKE '[S]%'
+  AND created_session_id != current_session_id
+  AND NOT is_deleted
+Honors the [S]/[P] protocol convention that session tasks die at session end.
+Reclaims accumulated stale todos (15+ seen in claude-family from 8-9 day old sessions).
+Persistent tasks ([P]-prefixed) are left alone — they survive across sessions by design.
+Unprefixed tasks are also left alone to avoid breaking projects that don't follow the convention yet.</bpmn:documentation>
+    </bpmn:scriptTask>
+
     <!-- Check inbox for pending messages before loading state -->
     <bpmn:scriptTask id="deploy_standing_orders" name="[HOOK] Deploy Standing Orders to MEMORY.md" scriptFormat="python">
-      <bpmn:incoming>flow_zombie_to_standing_orders</bpmn:incoming>
+      <bpmn:incoming>flow_archive_session_tasks_to_standing_orders</bpmn:incoming>
       <bpmn:outgoing>flow_standing_orders_to_check_messages</bpmn:outgoing>
       <bpmn:script>standing_orders_deployed = True</bpmn:script>
       <bpmn:documentation>session_startup_hook_enhanced.py deploy_standing_orders() reads the active
@@ -291,7 +308,8 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
     <bpmn:sequenceFlow id="flow_start_to_auto_archive" sourceRef="start_event" targetRef="auto_archive"/>
     <bpmn:sequenceFlow id="flow_auto_archive_to_session_start" sourceRef="auto_archive" targetRef="session_start"/>
     <bpmn:sequenceFlow id="flow_session_start_to_zombie_cleanup" sourceRef="session_start" targetRef="zombie_cleanup"/>
-    <bpmn:sequenceFlow id="flow_zombie_to_standing_orders" sourceRef="zombie_cleanup" targetRef="deploy_standing_orders"/>
+    <bpmn:sequenceFlow id="flow_zombie_to_archive_session_tasks" sourceRef="zombie_cleanup" targetRef="archive_stale_session_tasks"/>
+    <bpmn:sequenceFlow id="flow_archive_session_tasks_to_standing_orders" sourceRef="archive_stale_session_tasks" targetRef="deploy_standing_orders"/>
     <bpmn:sequenceFlow id="flow_standing_orders_to_check_messages" sourceRef="deploy_standing_orders" targetRef="check_messages"/>
     <bpmn:sequenceFlow id="flow_check_messages_to_load_state" sourceRef="check_messages" targetRef="load_state"/>
     <bpmn:sequenceFlow id="flow_load_state_to_check_workfiles" sourceRef="load_state" targetRef="check_workfiles"/>
@@ -362,6 +380,10 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
 
       <bpmndi:BPMNShape id="shape_zombie_cleanup" bpmnElement="zombie_cleanup">
         <dc:Bounds x="520" y="180" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_archive_stale_session_tasks" bpmnElement="archive_stale_session_tasks">
+        <dc:Bounds x="520" y="60" width="160" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_deploy_standing_orders" bpmnElement="deploy_standing_orders">
@@ -464,9 +486,14 @@ Runs regardless of whether /session-end was called.</bpmn:documentation>
         <di:waypoint x="520" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_zombie_to_standing_orders" bpmnElement="flow_zombie_to_standing_orders">
-        <di:waypoint x="660" y="220"/>
-        <di:waypoint x="720" y="220"/>
+      <bpmndi:BPMNEdge id="edge_flow_zombie_to_archive_session_tasks" bpmnElement="flow_zombie_to_archive_session_tasks">
+        <di:waypoint x="600" y="180"/>
+        <di:waypoint x="600" y="140"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_archive_session_tasks_to_standing_orders" bpmnElement="flow_archive_session_tasks_to_standing_orders">
+        <di:waypoint x="550" y="140"/>
+        <di:waypoint x="500" y="160"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_standing_orders_to_check_messages" bpmnElement="flow_standing_orders_to_check_messages">
