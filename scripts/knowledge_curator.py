@@ -729,10 +729,11 @@ def _create_curator_feedback(report: dict, project_id: str, conn):
             })
 
         for item in items_to_create:
+            # Title prefixed with [knowledge_curator] since feedback table has no source column
             _execute(conn, """
-                INSERT INTO claude.feedback (project_id, feedback_type, title, description, priority, status, source)
-                VALUES (%s, %s, %s, %s, %s, 'new', 'knowledge_curator')
-            """, (project_id, item["type"], item["title"], item["description"], item["priority"]))
+                INSERT INTO claude.feedback (project_id, feedback_type, title, description, priority, status)
+                VALUES (%s, %s, %s, %s, %s, 'new')
+            """, (project_id, item["type"], f"[knowledge_curator] {item['title']}", item["description"], item["priority"]))
 
         if items_to_create:
             conn.commit()
