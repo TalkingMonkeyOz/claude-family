@@ -1617,7 +1617,10 @@ class WorkflowEngine:
         cur = self.conn.cursor()
         try:
             if side_effect_name == 'check_feature_completion':
-                # When a build_task completes, check if all tasks for the parent feature are done
+                # When a build_task completes, check if all tasks for the parent feature are done.
+                # F209: if feature is in_progress and all tasks done, auto-advance it to completed
+                # with change_source='auto_rollup'. Planned features are NOT auto-advanced (policy
+                # differs per project — e.g. METIS uses 'planned' as pre-gate). Sweep job handles those.
                 cur.execute("""
                     SELECT f.feature_id::text, f.status, 'F' || f.short_code as code,
                            f.parent_feature_id::text as parent_id,
@@ -1629,24 +1632,69 @@ class WorkflowEngine:
                     WHERE bt.task_id = %s::uuid
                 """, (entity_id,))
                 row = cur.fetchone()
-                if row and row['remaining'] == 0 and row['status'] == 'in_progress':
-                    msg = f"All tasks done for {row['code']}. Feature ready for completion."
-                    # Also check if parent stream has all children done
-                    if row.get('parent_id'):
-                        cur.execute("""
-                            SELECT 'F' || short_code as code,
-                                   (SELECT COUNT(*) FROM claude.features
-                                    WHERE parent_feature_id = %s::uuid
-                                      AND status NOT IN ('completed', 'cancelled')) as remaining
-                            FROM claude.features WHERE feature_id = %s::uuid
-                        """, (row['parent_id'], row['parent_id']))
-                        parent = cur.fetchone()
-                        if parent and parent['remaining'] <= 1:  # <= 1 because current feature not yet completed
-                            msg += f" Parent stream {parent['code']} may also be ready for completion."
-                    return msg
-                elif row:
+                if not row:
+                    return "No parent feature found"
+
+                if row['remaining'] > 0:
                     return f"{row['remaining']} task(s) remaining for {row['code']}"
-                return "No parent feature found"
+
+                # All tasks done. Auto-rollup only applies to in_progress features.
+                if row['status'] != 'in_progress':
+                    return (
+                        f"All tasks done for {row['code']} but feature status is "
+                        f"'{row['status']}' — rollup deferred to sweep."
+                    )
+
+                # F209 auto-rollup: advance feature to completed
+                rollup_result = self.execute_transition(
+                    entity_type='features',
+                    item_id=row['code'],
+                    new_status='completed',
+                    change_source='auto_rollup',
+                    metadata={
+                        'reason': 'all_children_completed',
+                        'trigger_task_id': entity_id,
+                    },
+                )
+                if not rollup_result.get('success'):
+                    return (
+                        f"All tasks done for {row['code']} but auto-rollup failed: "
+                        f"{rollup_result.get('error', 'unknown error')}"
+                    )
+                msg = f"{row['code']} auto-rolled up to completed (all children done)."
+
+                # Recurse for parent stream: if all sibling features are now completed,
+                # advance the stream too.
+                if row.get('parent_id'):
+                    cur.execute("""
+                        SELECT 'F' || short_code as code, status,
+                               (SELECT COUNT(*) FROM claude.features
+                                WHERE parent_feature_id = %s::uuid
+                                  AND status NOT IN ('completed', 'cancelled')) as remaining
+                        FROM claude.features WHERE feature_id = %s::uuid
+                    """, (row['parent_id'], row['parent_id']))
+                    parent = cur.fetchone()
+                    if parent and parent['remaining'] == 0 and parent['status'] == 'in_progress':
+                        stream_result = self.execute_transition(
+                            entity_type='features',
+                            item_id=parent['code'],
+                            new_status='completed',
+                            change_source='auto_rollup',
+                            metadata={
+                                'reason': 'all_child_features_completed',
+                                'trigger_feature': row['code'],
+                            },
+                        )
+                        if stream_result.get('success'):
+                            msg += f" Parent stream {parent['code']} also auto-rolled up."
+                        else:
+                            msg += (
+                                f" Parent stream {parent['code']} ready but rollup failed: "
+                                f"{stream_result.get('error', 'unknown')}"
+                            )
+                    elif parent and parent['remaining'] > 0:
+                        msg += f" Parent stream {parent['code']} has {parent['remaining']} sibling(s) remaining."
+                return msg
 
             if side_effect_name == 'set_started_at':
                 cur.execute("""
@@ -1939,27 +1987,39 @@ def start_work(
         conn.close()
 
 
-@mcp.tool()
-def complete_work(
+class _CompleteWorkNote(BaseModel):
+    """Elicitation schema for complete_work notes prompt (BT684, 2-field)."""
+    completion_note: str = Field(
+        ...,
+        description="What was done and verified. 1-3 short sentences. "
+                    "E.g. 'added elicit wrapper, smoke-tested against live MCP', "
+                    "'fixed race in hook, ran pytest suite, all green'.",
+    )
+    next_action: str = Field(
+        default="",
+        description="Optional. What should happen next? "
+                    "E.g. 'ready to commit', 'blocked — needs restart to verify', "
+                    "'next task is BT690'. Leave blank if nothing notable.",
+    )
+
+
+def _complete_work_impl(
     task_code: str,
+    completion_note: str = "",
+    next_action: str = "",
 ) -> dict:
-    """Complete a build task: transitions in_progress->completed, checks parent feature, returns next task.
-
-    Shortcut for advance_status('build_tasks', code, 'completed') plus
-    feature completion check and next-task suggestion.
-
-    Use when: Finishing a build task. Call this instead of advance_status -
-    it checks if all sibling tasks are done and suggests the next ready task.
-    Returns: {success, entity_code, next_task: {next_task_code, next_task_name,
-              next_task_type} or null, message}.
-
-    Args:
-        task_code: Task short code (e.g., 'BT3') or UUID.
-    """
+    """Shared sync implementation for complete_work. See MCP tool for docs."""
     session_id = os.environ.get('CLAUDE_SESSION_ID')
     conn = get_db_connection()
     try:
         engine = WorkflowEngine(conn)
+
+        # Build metadata dict only if fields supplied (avoid polluting audit with empty dicts)
+        transition_metadata = {}
+        if completion_note:
+            transition_metadata['completion_note'] = completion_note
+        if next_action:
+            transition_metadata['next_action'] = next_action
 
         # Transition to completed
         transition_result = engine.execute_transition(
@@ -1968,6 +2028,7 @@ def complete_work(
             new_status='completed',
             changed_by=session_id,
             change_source='complete_work',
+            metadata=transition_metadata or None,
         )
 
         if not transition_result.get('success'):
@@ -2021,12 +2082,65 @@ def complete_work(
             else:
                 transition_result['message'] = "No more ready tasks for this feature."
 
+        # Surface user-supplied notes in the result for downstream visibility
+        if completion_note:
+            transition_result['completion_note'] = completion_note
+        if next_action:
+            transition_result['next_action'] = next_action
+
         return transition_result
 
     except Exception as e:
         return {"success": False, "error": str(e)}
     finally:
         conn.close()
+
+
+@mcp.tool()
+async def complete_work(
+    task_code: str,
+    completion_note: str = "",
+    next_action: str = "",
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Complete a build task: transitions in_progress->completed, checks parent feature, returns next task.
+
+    Shortcut for advance_status('build_tasks', code, 'completed') plus
+    feature completion check and next-task suggestion.
+
+    Use when: Finishing a build task. Call this instead of advance_status -
+    it checks if all sibling tasks are done and suggests the next ready task.
+    Returns: {success, entity_code, next_task: {next_task_code, next_task_name,
+              next_task_type} or null, message, completion_note?, next_action?}.
+
+    BT684: if `completion_note` is empty and an MCP client supports elicitation,
+    prompts interactively for a 2-field note (completion_note + optional
+    next_action). Falls back to completing without notes on decline/unsupported
+    clients to preserve backward compatibility.
+
+    Args:
+        task_code: Task short code (e.g., 'BT3') or UUID.
+        completion_note: What was done and verified. Optional but encouraged.
+        next_action: What should happen next. Optional.
+        ctx: MCP Context (auto-injected by FastMCP). Do not supply directly.
+    """
+    if not completion_note and ctx is not None:
+        try:
+            result = await ctx.elicit(
+                message=f"Complete {task_code}: what was done and verified?",
+                schema=_CompleteWorkNote,
+            )
+            if getattr(result, "action", None) == "accept" and getattr(result, "data", None):
+                completion_note = result.data.completion_note
+                if not next_action and result.data.next_action:
+                    next_action = result.data.next_action
+        except Exception as exc:
+            if ctx:
+                try:
+                    await ctx.debug(f"complete_work elicitation skipped: {exc}")
+                except Exception:
+                    pass
+    return _complete_work_impl(task_code, completion_note, next_action)
 
 
 # ============================================================================
@@ -5828,26 +5942,20 @@ def promote_feedback(
         conn.close()
 
 
-@mcp.tool()
-def resolve_feedback(
+class _ResolveFeedbackNote(BaseModel):
+    """Elicitation schema for resolve_feedback note prompt (BT683)."""
+    resolution_note: str = Field(
+        ...,
+        description="How was this feedback resolved? 1-3 short sentences. "
+                    "E.g. 'fixed in commit abc123', 'superseded by F208', 'rootcause was X, fix was Y'.",
+    )
+
+
+def _resolve_feedback_impl(
     feedback_id: str,
     resolution_note: str = "",
 ) -> dict:
-    """Resolve a feedback item in one call, auto-advancing through intermediate states.
-
-    Convenience tool that handles multi-step state transitions automatically.
-    Each transition is individually logged to audit_log via WorkflowEngine.
-    Supports feedback at any status: new, triaged, or in_progress.
-
-    Use when: A feedback item has been fixed and you want to mark it resolved.
-    Avoids the need for multiple advance_status calls (new→in_progress→resolved).
-    Returns: {success, feedback_code, from_status, to_status, transitions_made,
-              path: [list of statuses traversed]}.
-
-    Args:
-        feedback_id: Feedback short code (e.g., 'FB42') or UUID.
-        resolution_note: Optional note about the resolution.
-    """
+    """Shared sync implementation for resolve_feedback. See MCP tool for docs."""
     session_id = os.environ.get('CLAUDE_SESSION_ID')
     conn = get_db_connection()
     try:
@@ -5964,6 +6072,49 @@ def resolve_feedback(
         return {"success": False, "error": f"Failed to resolve feedback: {str(e)}"}
     finally:
         conn.close()
+
+
+@mcp.tool()
+async def resolve_feedback(
+    feedback_id: str,
+    resolution_note: str = "",
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Resolve a feedback item in one call, auto-advancing through intermediate states.
+
+    Convenience tool that handles multi-step state transitions automatically.
+    Each transition is individually logged to audit_log via WorkflowEngine.
+    Supports feedback at any status: new, triaged, or in_progress.
+
+    Use when: A feedback item has been fixed and you want to mark it resolved.
+    Avoids the need for multiple advance_status calls (new→in_progress→resolved).
+    Returns: {success, feedback_code, from_status, to_status, transitions_made,
+              path: [list of statuses traversed]}.
+
+    BT683: if `resolution_note` is empty and an MCP client supports elicitation,
+    prompts for a note interactively. Falls back to resolving without note on
+    decline/unsupported clients to preserve backward compatibility.
+
+    Args:
+        feedback_id: Feedback short code (e.g., 'FB42') or UUID.
+        resolution_note: Optional note about the resolution.
+        ctx: MCP Context (auto-injected by FastMCP). Do not supply directly.
+    """
+    if not resolution_note and ctx is not None:
+        try:
+            result = await ctx.elicit(
+                message=f"Resolve {feedback_id}: how was this feedback resolved?",
+                schema=_ResolveFeedbackNote,
+            )
+            if getattr(result, "action", None) == "accept" and getattr(result, "data", None):
+                resolution_note = result.data.resolution_note
+        except Exception as exc:
+            if ctx:
+                try:
+                    await ctx.debug(f"resolve_feedback elicitation skipped: {exc}")
+                except Exception:
+                    pass
+    return _resolve_feedback_impl(feedback_id, resolution_note)
 
 
 @mcp.tool()
@@ -7584,7 +7735,7 @@ def _defer_message(message_id: str, reason: str) -> dict:
             UPDATE claude.messages
             SET status = 'deferred',
                 acknowledged_at = NOW(),
-                metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('defer_reason', %s, 'deferred_at', NOW()::text)
+                metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object('defer_reason', %s::text, 'deferred_at', NOW()::text)
             WHERE message_id = %s
             RETURNING message_id::text
         """, (reason, message_id))
@@ -10615,7 +10766,7 @@ def work_status(
     if action == "start":
         return start_work(task_code=item_code)
     elif action == "complete":
-        return complete_work(task_code=item_code)
+        return _complete_work_impl(task_code=item_code)
     elif action == "advance":
         item_type = _detect_item_type(item_code)
         return advance_status(
@@ -10628,7 +10779,7 @@ def work_status(
             feature_type=feature_type, priority=3, plan_data=plan_data,
         )
     elif action == "resolve":
-        return resolve_feedback(feedback_id=item_code, resolution_note=resolution_note)
+        return _resolve_feedback_impl(feedback_id=item_code, resolution_note=resolution_note)
     elif action == "add_dep":
         pred_type = _detect_item_type(predecessor_id or item_code)
         succ_type = _detect_item_type(successor_id)

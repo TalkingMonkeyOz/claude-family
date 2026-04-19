@@ -420,6 +420,23 @@ class TestNewModelElements:
             "complete_task scriptTask must exist"
         )
 
+    def test_f209_rollup_elements_in_spec(self):
+        """F209: rollup_check_gw, auto_rollup_feature, end_auto_rollup present."""
+        parser = BpmnParser()
+        parser.add_bpmn_file(BPMN_FILE)
+        spec = parser.get_spec(PROCESS_ID)
+        task_spec_names = list(spec.task_specs.keys())
+
+        assert "rollup_check_gw" in task_spec_names, (
+            "rollup_check_gw gateway must exist (F209 auto-rollup path)"
+        )
+        assert "auto_rollup_feature" in task_spec_names, (
+            "auto_rollup_feature scriptTask must exist (F209 auto-rollup path)"
+        )
+        assert "end_auto_rollup" in task_spec_names, (
+            "end_auto_rollup end event must exist (F209 auto-rollup path)"
+        )
+
     def test_enforcement_notes_in_bpmn_xml(self):
         """run_tests and review_code should have SHOULD BE ENFORCED in their documentation XML."""
         with open(BPMN_FILE, 'r', encoding='utf-8') as f:
@@ -443,4 +460,153 @@ class TestNewModelElements:
         names = completed_spec_names(workflow)
         assert "set_in_progress" in names, (
             "set_in_progress must auto-run after create_build_tasks"
+        )
+
+
+# ---------------------------------------------------------------------------
+# F209: Auto-rollup path tests
+# ---------------------------------------------------------------------------
+
+
+class TestAutoRollup:
+    """
+    F209: After the last build task completes on an in_progress feature, the
+    feature auto-advances to completed via the rollup_check_gw → auto_rollup_feature
+    → end_auto_rollup path. If the feature is still 'planned' (pre-gate projects
+    like METIS), rollup is deferred to the nightly sweep.
+    """
+
+    def test_auto_rollup_fires_on_last_task_complete(self):
+        """Last task completes on in_progress feature → auto_rollup_feature → end_auto_rollup."""
+        workflow = load_workflow()
+
+        complete_user_task(workflow, "create_feature", {})
+        complete_user_task(workflow, "plan_feature", {"complexity": "simple"})
+        complete_user_task(workflow, "create_build_tasks", {})
+
+        # Enter loop with one task, signalling rollup-ready on completion
+        complete_user_task(workflow, "implement_directly", {"has_next_task": True})
+
+        # Complete the task AND mark this as the last one — rollup should fire
+        complete_user_task(workflow, "implement_task", {
+            "has_next_task": False,
+            "all_tasks_complete": True,
+            "feature_status": "in_progress",
+        })
+
+        # Workflow should have routed through auto_rollup_feature and reached end_auto_rollup
+        assert workflow.is_completed(), "Workflow should complete via auto-rollup end event"
+        names = completed_spec_names(workflow)
+        assert "rollup_check_gw" in names, "rollup_check_gw must fire after complete_task"
+        assert "auto_rollup_feature" in names, "auto_rollup_feature script must run"
+        assert "end_auto_rollup" in names, "end_auto_rollup end event must be reached"
+        # Ceremonial path should NOT have run
+        assert "run_tests" not in names, "run_tests must NOT run on auto-rollup path"
+        assert "review_code" not in names, "review_code must NOT run on auto-rollup path"
+        assert "set_completed" not in names, "set_completed must NOT run on auto-rollup path"
+        # Feature status and source set by auto_rollup_feature script
+        assert workflow.data.get("status") == "completed", (
+            "auto_rollup_feature should set status='completed'"
+        )
+        assert workflow.data.get("change_source") == "auto_rollup", (
+            "auto_rollup_feature should set change_source='auto_rollup'"
+        )
+
+    def test_planned_feature_does_not_auto_rollup(self):
+        """Feature still in 'planned' status → rollup defers (continues to per-task loop)."""
+        workflow = load_workflow()
+
+        complete_user_task(workflow, "create_feature", {})
+        complete_user_task(workflow, "plan_feature", {"complexity": "simple"})
+        complete_user_task(workflow, "create_build_tasks", {})
+        complete_user_task(workflow, "implement_directly", {"has_next_task": True})
+
+        # Task done, all children done — but feature is still 'planned' (pre-gate)
+        # Rollup should NOT fire; loop should exit via normal has_next_task=False path
+        complete_user_task(workflow, "implement_task", {
+            "has_next_task": False,
+            "all_tasks_complete": True,
+            "feature_status": "planned",
+        })
+
+        # Workflow should continue to run_tests (ceremonial path), not auto_rollup
+        names = completed_spec_names(workflow)
+        assert "rollup_check_gw" in names, "rollup_check_gw must still fire"
+        assert "auto_rollup_feature" not in names, (
+            "auto_rollup_feature must NOT run for planned feature"
+        )
+        # Workflow continues — run_tests should be ready
+        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
+        assert "run_tests" in ready_names, (
+            f"run_tests should be READY after rollup-not-ready, got: {ready_names}"
+        )
+
+    def test_mid_loop_task_does_not_auto_rollup(self):
+        """Task completes but siblings remain → rollup does not fire, loop continues."""
+        workflow = load_workflow()
+
+        complete_user_task(workflow, "create_feature", {})
+        complete_user_task(workflow, "plan_feature", {"complexity": "simple"})
+        complete_user_task(workflow, "create_build_tasks", {})
+        complete_user_task(workflow, "implement_directly", {"has_next_task": True})
+
+        # Complete first task — more tasks remain
+        complete_user_task(workflow, "implement_task", {
+            "has_next_task": True,  # more work to do
+            "all_tasks_complete": False,
+            "feature_status": "in_progress",
+        })
+
+        # Rollup gateway fired, but not_ready branch taken → loop continues
+        names = completed_spec_names(workflow)
+        assert "rollup_check_gw" in names, "rollup_check_gw must fire"
+        assert "auto_rollup_feature" not in names, (
+            "auto_rollup_feature must NOT run when tasks remain"
+        )
+
+        # start_task should auto-run again for next task
+        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
+        assert "implement_task" in ready_names, (
+            f"implement_task should be READY for next iteration, got: {ready_names}"
+        )
+
+    def test_rollup_default_signals_safe_for_existing_path(self):
+        """
+        complete_task script provides safe defaults for all_tasks_complete/feature_status
+        when tests don't set them explicitly. The existing single-task loop exits via
+        has_next_task=False without hitting the auto-rollup path.
+        """
+        workflow = load_workflow()
+
+        complete_user_task(workflow, "create_feature", {})
+        complete_user_task(workflow, "plan_feature", {"complexity": "simple"})
+        complete_user_task(workflow, "create_build_tasks", {})
+        complete_user_task(workflow, "implement_directly", {"has_next_task": True})
+
+        # Don't set rollup vars — complete_task's defaults should keep us on the loop
+        complete_user_task(workflow, "implement_task", {"has_next_task": False})
+
+        names = completed_spec_names(workflow)
+        assert "rollup_check_gw" in names, "rollup_check_gw runs even with defaults"
+        assert "auto_rollup_feature" not in names, (
+            "defaults (all_tasks_complete=False) keep us off the rollup branch"
+        )
+        # Exits loop via has_next_task=False → run_tests
+        ready_names = [t.task_spec.name for t in get_ready_user_tasks(workflow)]
+        assert "run_tests" in ready_names, (
+            f"run_tests should be READY, got: {ready_names}"
+        )
+
+    def test_rollup_documentation_present_in_bpmn(self):
+        """BPMN XML documents the auto-rollup policy semantics."""
+        with open(BPMN_FILE, 'r', encoding='utf-8') as f:
+            bpmn_content = f.read()
+        assert "auto_rollup" in bpmn_content, (
+            "BPMN should reference 'auto_rollup' change_source"
+        )
+        assert "F209" in bpmn_content, (
+            "BPMN should reference feature F209 for traceability"
+        )
+        assert "all_children_completed" in bpmn_content, (
+            "BPMN should document the rollup reason metadata"
         )

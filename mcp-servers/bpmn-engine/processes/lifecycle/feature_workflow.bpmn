@@ -124,7 +124,7 @@ Execution proceeds through the per-task work loop (next_task_gw → start_task
     <!-- Gateway: Is there a next task to work on? -->
     <bpmn:exclusiveGateway id="next_task_gw" name="Next Task?" default="flow_no_next_task">
       <bpmn:incoming>flow_implement_to_next_task</bpmn:incoming>
-      <bpmn:incoming>flow_complete_task_loop</bpmn:incoming>
+      <bpmn:incoming>flow_rollup_not_ready</bpmn:incoming>
       <bpmn:outgoing>flow_has_next_task</bpmn:outgoing>
       <bpmn:outgoing>flow_no_next_task</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -148,13 +148,63 @@ Loads plan_data context for the task into Claude's working memory.</bpmn:documen
     <!-- Script Task: Complete the current task -->
     <bpmn:scriptTask id="complete_task" name="[MCP] work_status(action=&quot;complete&quot;, task_code)" scriptFormat="python">
       <bpmn:incoming>flow_implement_task_to_complete</bpmn:incoming>
-      <bpmn:outgoing>flow_complete_task_loop</bpmn:outgoing>
-      <bpmn:script>task_completed = True</bpmn:script>
+      <bpmn:outgoing>flow_complete_task_to_rollup_check</bpmn:outgoing>
+      <bpmn:script>task_completed = True
+# F209: default rollup signals. Real WorkflowEngine implementation computes these
+# from DB state (remaining sibling tasks, feature status). Defaulting here keeps
+# the per-task loop test path (has_next_task=False at next_task_gw) working when
+# auto-rollup is not exercised.
+try:
+    all_tasks_complete
+except NameError:
+    all_tasks_complete = False
+try:
+    feature_status
+except NameError:
+    feature_status = "in_progress"</bpmn:script>
       <bpmn:documentation>Calls work_status(action="complete",task_code) MCP tool to transition build task
-from 'in_progress' to 'completed'. WorkflowEngine checks if all sibling tasks
-are done and auto-transitions the feature status if complete.
-Suggests the next pending task for Claude to pick up.</bpmn:documentation>
+from 'in_progress' to 'completed'. After the transition, control flows to
+rollup_check_gw which decides whether the parent feature auto-advances.
+The WorkflowEngine side-effect computes all_tasks_complete and feature_status
+from DB state; the defaults here keep the simulation stable when those are
+not explicitly provided.</bpmn:documentation>
     </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- AUTO-ROLLUP PATH (F209): on last task complete, advance feature     -->
+    <!-- ================================================================== -->
+
+    <!-- Gateway: Should parent feature auto-rollup? -->
+    <bpmn:exclusiveGateway id="rollup_check_gw" name="All Tasks Done &amp; Feature In Progress?" default="flow_rollup_not_ready">
+      <bpmn:incoming>flow_complete_task_to_rollup_check</bpmn:incoming>
+      <bpmn:outgoing>flow_rollup_ready</bpmn:outgoing>
+      <bpmn:outgoing>flow_rollup_not_ready</bpmn:outgoing>
+      <bpmn:documentation>F209: Auto-rollup policy gateway.
+Condition for rollup_ready: all_tasks_complete == True AND feature_status == "in_progress".
+If feature_status == "planned", rollup is deferred to the nightly sweep (per-project policy may differ).
+Cancelled tasks count as complete for this decision.
+not_ready is the default branch (returns to per-task loop).</bpmn:documentation>
+    </bpmn:exclusiveGateway>
+
+    <!-- Script Task: Auto-advance feature to completed -->
+    <bpmn:scriptTask id="auto_rollup_feature" name="[DB] Auto-Advance Feature to Completed" scriptFormat="python">
+      <bpmn:incoming>flow_rollup_ready</bpmn:incoming>
+      <bpmn:outgoing>flow_auto_rollup_to_end</bpmn:outgoing>
+      <bpmn:script>status = "completed"
+change_source = "auto_rollup"</bpmn:script>
+      <bpmn:documentation>Administrative auto-rollup path (distinct from the ceremonial review path).
+Calls WorkflowEngine.execute_transition(entity_type="features", item_id=feature_code,
+new_status="completed", change_source="auto_rollup", metadata={"reason":"all_children_completed"}).
+Logs to claude.audit_log. If the feature has a parent stream, recursively checks
+whether the stream is now ready to roll up as well.
+Note: run_tests and review_code are quality gates that should have happened per-task
+or out-of-band. This scriptTask only flips the feature status record.</bpmn:documentation>
+    </bpmn:scriptTask>
+
+    <!-- End Event: Auto-Rollup Completed -->
+    <bpmn:endEvent id="end_auto_rollup" name="Feature Auto-Rolled Up">
+      <bpmn:incoming>flow_auto_rollup_to_end</bpmn:incoming>
+    </bpmn:endEvent>
 
     <!-- ================================================================== -->
     <!-- END OF PER-TASK LOOP                                               -->
@@ -252,7 +302,16 @@ Use Task tool to delegate: Task("reviewer-sonnet", "Review changes in ...")</bpm
     <bpmn:sequenceFlow id="flow_no_next_task" sourceRef="next_task_gw" targetRef="implementation_merge"/>
     <bpmn:sequenceFlow id="flow_start_task_to_implement" sourceRef="start_task" targetRef="implement_task"/>
     <bpmn:sequenceFlow id="flow_implement_task_to_complete" sourceRef="implement_task" targetRef="complete_task"/>
-    <bpmn:sequenceFlow id="flow_complete_task_loop" sourceRef="complete_task" targetRef="next_task_gw"/>
+    <!-- F209: complete_task now flows into the rollup gateway, not directly to next_task_gw -->
+    <bpmn:sequenceFlow id="flow_complete_task_to_rollup_check" sourceRef="complete_task" targetRef="rollup_check_gw"/>
+
+    <bpmn:sequenceFlow id="flow_rollup_ready" sourceRef="rollup_check_gw" targetRef="auto_rollup_feature">
+      <bpmn:conditionExpression>all_tasks_complete == True and feature_status == "in_progress"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_rollup_not_ready" sourceRef="rollup_check_gw" targetRef="next_task_gw"/>
+
+    <bpmn:sequenceFlow id="flow_auto_rollup_to_end" sourceRef="auto_rollup_feature" targetRef="end_auto_rollup"/>
 
     <!-- High complexity path: spawn_agents → merge -->
     <bpmn:sequenceFlow id="flow_spawn_to_merge" sourceRef="spawn_agents" targetRef="implementation_merge"/>
@@ -344,6 +403,19 @@ Use Task tool to delegate: Task("reviewer-sonnet", "Review changes in ...")</bpm
 
       <bpmndi:BPMNShape id="shape_complete_task" bpmnElement="complete_task">
         <dc:Bounds x="1920" y="490" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <!-- F209: auto-rollup path shapes (below per-task loop) -->
+      <bpmndi:BPMNShape id="shape_rollup_check_gw" bpmnElement="rollup_check_gw" isMarkerVisible="true">
+        <dc:Bounds x="1955" y="693" width="50" height="50"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_auto_rollup_feature" bpmnElement="auto_rollup_feature">
+        <dc:Bounds x="2100" y="680" width="160" height="80"/>
+      </bpmndi:BPMNShape>
+
+      <bpmndi:BPMNShape id="shape_end_auto_rollup" bpmnElement="end_auto_rollup">
+        <dc:Bounds x="2300" y="700" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
       <!-- implementation_merge gateway -->
@@ -469,11 +541,30 @@ Use Task tool to delegate: Task("reviewer-sonnet", "Review changes in ...")</bpm
         <di:waypoint x="1920" y="530"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_complete_task_loop" bpmnElement="flow_complete_task_loop">
+      <!-- F209: complete_task → rollup_check_gw (new gateway below complete_task) -->
+      <bpmndi:BPMNEdge id="edge_flow_complete_task_to_rollup_check" bpmnElement="flow_complete_task_to_rollup_check">
         <di:waypoint x="1980" y="570"/>
-        <di:waypoint x="1980" y="620"/>
-        <di:waypoint x="1475" y="620"/>
+        <di:waypoint x="1980" y="693"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- F209: rollup_check_gw → auto_rollup_feature (when ready) -->
+      <bpmndi:BPMNEdge id="edge_flow_rollup_ready" bpmnElement="flow_rollup_ready">
+        <di:waypoint x="2005" y="718"/>
+        <di:waypoint x="2100" y="720"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- F209: rollup_check_gw → next_task_gw (not ready, continue loop) -->
+      <bpmndi:BPMNEdge id="edge_flow_rollup_not_ready" bpmnElement="flow_rollup_not_ready">
+        <di:waypoint x="1980" y="743"/>
+        <di:waypoint x="1980" y="790"/>
+        <di:waypoint x="1475" y="790"/>
         <di:waypoint x="1475" y="553"/>
+      </bpmndi:BPMNEdge>
+
+      <!-- F209: auto_rollup_feature → end_auto_rollup -->
+      <bpmndi:BPMNEdge id="edge_flow_auto_rollup_to_end" bpmnElement="flow_auto_rollup_to_end">
+        <di:waypoint x="2260" y="720"/>
+        <di:waypoint x="2300" y="718"/>
       </bpmndi:BPMNEdge>
 
       <!-- spawn_agents to merge -->
