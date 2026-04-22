@@ -1140,7 +1140,21 @@ def end_session(
         project: Project name. Defaults to current directory.
     """
     project = project or os.path.basename(os.getcwd())
-    session_id = os.environ.get('CLAUDE_SESSION_ID')
+    # Session_id lookup priority:
+    #   1. .claude/.current_session_id (written by SessionStart hook from Claude Code's stdin)
+    #   2. CLAUDE_SESSION_ID env var (legacy; Claude Code does not set this)
+    #   3. Fallback to project-match inside the UPDATE below
+    session_id = None
+    try:
+        marker = Path(os.getcwd()) / ".claude" / ".current_session_id"
+        if marker.exists():
+            candidate = marker.read_text(encoding="utf-8").strip()
+            if candidate:
+                session_id = candidate
+    except Exception:
+        pass
+    if not session_id:
+        session_id = os.environ.get('CLAUDE_SESSION_ID')
     next_steps = next_steps or []
     tasks_completed = tasks_completed or []
     learnings = learnings or []
@@ -1380,6 +1394,17 @@ def end_session(
         consolidation_note = f", {results.get('consolidation', {}).get('promoted', 0)} facts promoted" if results.get("consolidation", {}).get("promoted") else ""
         dossier_note = f", {results.get('dossier_consolidation', {}).get('consolidated', 0)} corrections merged into dossiers" if results.get("dossier_consolidation", {}).get("consolidated") else ""
         results["summary"] = f"Session ended. {len(tasks_completed)} tasks logged, {len(next_steps)} next steps saved{knowledge_note}{insights_note}{consolidation_note}{dossier_note}."
+
+        # Remove the session_id marker so a stale id cannot be picked up
+        # on a re-run or next SessionStart.
+        if results.get("session_closed"):
+            try:
+                marker = Path(os.getcwd()) / ".claude" / ".current_session_id"
+                if marker.exists():
+                    marker.unlink()
+            except Exception:
+                pass
+
         return results
 
     except Exception as e:

@@ -140,18 +140,35 @@ def get_db_connection():
     """Get PostgreSQL connection using shared config."""
     return _config_get_db_connection(strict=False)
 
-def log_session_start(project_name: str, identity_id: str) -> tuple:
+def log_session_start(project_name: str, identity_id: str, claude_session_id: str = None) -> tuple:
     """Log session start to database, return (session_id, error_msg).
 
-    Uses ON CONFLICT upsert to prevent duplicate session crashes when the
-    SessionStart hook fires multiple times in quick succession (restart/resume).
-    If a session for this project started within the last 60 seconds, reuses it.
+    If claude_session_id is provided (from Claude Code's SessionStart stdin),
+    use it as the DB primary key so end_session() can locate the exact row.
+    Otherwise generate a UUID (legacy behavior — loses linkage).
     """
     try:
         conn = get_db_connection()
         cur = conn.cursor()
 
-        # Check for a very recent session (within 60s) to avoid duplicates
+        # If Claude Code gave us a session_id, prefer upsert on it so the DB
+        # row matches Claude Code's identity 1:1.
+        if claude_session_id:
+            cur.execute("""
+                INSERT INTO claude.sessions
+                    (session_id, identity_id, session_start, project_name, session_summary)
+                VALUES (%s::uuid, %s, NOW(), %s, 'Session auto-started via hook')
+                ON CONFLICT (session_id) DO UPDATE
+                    SET project_name = EXCLUDED.project_name
+                RETURNING session_id::text
+            """, (claude_session_id, identity_id, project_name))
+            result = cur.fetchone()
+            conn.commit()
+            cur.close()
+            conn.close()
+            return (result['session_id'] if result else None, None)
+
+        # Fallback: no Claude session_id — dedup within 60s window
         cur.execute("""
             SELECT session_id::text
             FROM claude.sessions
@@ -170,7 +187,6 @@ def log_session_start(project_name: str, identity_id: str) -> tuple:
             conn.close()
             return (session_id, None)
 
-        # No recent session - create new one
         cur.execute("""
             INSERT INTO claude.sessions
             (session_id, identity_id, session_start, project_name, session_summary)
@@ -609,6 +625,20 @@ def main():
         identity_name = 'claude-code-unified'
         identity_id = IDENTITY_MAP.get(identity_name, IDENTITY_MAP['claude-code-unified'])
 
+        # Read Claude Code's session_id from stdin JSON. Claude Code sends
+        # {session_id, transcript_path, hook_event_name, ...} on SessionStart.
+        # Using this as the DB primary key makes end_session() able to find
+        # the exact row later instead of guessing by project_name.
+        claude_session_id = None
+        try:
+            if not sys.stdin.isatty():
+                stdin_data = sys.stdin.read()
+                if stdin_data:
+                    payload = json.loads(stdin_data)
+                    claude_session_id = payload.get("session_id")
+        except Exception as e:
+            logger.warning(f"Could not parse SessionStart stdin: {e}")
+
         # === SELF-HEAL: Run sync_project.py if not launched via BAT ===
         try:
             sync_script = Path(__file__).parent / "sync_project.py"
@@ -646,10 +676,19 @@ def main():
             # Run before logging the new session so the DB is confirmed working first.
             _replay_session_end_fallback()
 
-            # Log session to database
-            session_id, error = log_session_start(project_name, identity_id)
+            # Log session to database (use Claude Code session_id if available)
+            session_id, error = log_session_start(project_name, identity_id, claude_session_id)
             if session_id:
                 context_lines.append(f"Session ID: {session_id}")
+                # Persist the session_id to disk so end_session() can find it
+                # without relying on env vars (which Claude Code does not set
+                # for MCP tools).
+                try:
+                    marker_dir = Path(cwd) / ".claude"
+                    marker_dir.mkdir(exist_ok=True)
+                    (marker_dir / ".current_session_id").write_text(session_id, encoding="utf-8")
+                except Exception as e:
+                    logger.warning(f"Could not write .current_session_id: {e}")
             else:
                 context_lines.append(f"Could not log session: {error or 'unknown error'}")
                 session_id = None

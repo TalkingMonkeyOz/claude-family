@@ -33,6 +33,7 @@ desktop.ini
 # Claude Code local settings (auto-generated permissions)
 .claude/settings.local.json
 .claude/mcp-*.log
+.claude/.current_session_id
 
 # But DO track shared slash commands
 !.claude/commands/
