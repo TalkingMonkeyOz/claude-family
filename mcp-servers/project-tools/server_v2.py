@@ -7387,6 +7387,9 @@ def get_active_sessions() -> dict:
             FROM claude.sessions sh
             JOIN claude.identities i ON sh.identity_id = i.identity_id
             WHERE sh.session_end IS NULL
+              -- Exclude orphans: CLIs that crashed without calling end_session.
+              -- Real sessions older than 6h without session_end are abandoned.
+              AND sh.session_start > NOW() - INTERVAL '6 hours'
             ORDER BY sh.session_start DESC
         """)
         sessions = cur.fetchall()
