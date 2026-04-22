@@ -3961,13 +3961,13 @@ def deploy_project(
         if 'settings' in components:
             # Read config_templates + merge with workspace startup_config
             cur.execute("""
-                SELECT template_config FROM claude.config_templates
+                SELECT content FROM claude.config_templates
                 WHERE template_id = 1  -- hooks-base template
             """)
             template_row = cur.fetchone()
 
             if template_row:
-                base_config = template_row['template_config'] or {}
+                base_config = template_row['content'] or {}
                 # Merge with startup_config (workspace overrides template)
                 merged_config = {**base_config, **startup_config}
 
@@ -3991,10 +3991,15 @@ def deploy_project(
             """)
             if cur.fetchone()['exists']:
                 cur.execute("""
-                    SELECT rule_name, rule_content
+                    SELECT name, content
                     FROM claude.rules
-                    WHERE project_id = %s::uuid OR project_id IS NULL
-                """, (project_id,))
+                    WHERE is_active = true
+                      AND (
+                        scope = 'global'
+                        OR (scope = 'project_type' AND scope_ref = %s)
+                        OR (scope = 'project' AND (scope_ref = %s OR scope_ref = %s))
+                      )
+                """, (project_type, project, project_id))
                 rules = cur.fetchall()
 
                 if rules:
@@ -4002,9 +4007,9 @@ def deploy_project(
                     rules_dir.mkdir(parents=True, exist_ok=True)
 
                     for rule in rules:
-                        rule_file = rules_dir / f"{rule['rule_name']}.md"
+                        rule_file = rules_dir / f"{rule['name']}.md"
                         with open(rule_file, 'w', encoding='utf-8') as f:
-                            f.write(rule['rule_content'])
+                            f.write(rule['content'])
 
                     deployed.append('rules')
                     changes_summary.append(f"rules: {len(rules)} files → {rules_dir}")
@@ -4197,7 +4202,7 @@ def regenerate_settings(
 
         # Get base template (template_id=1 = hooks-base)
         cur.execute("""
-            SELECT template_config FROM claude.config_templates
+            SELECT content FROM claude.config_templates
             WHERE template_id = 1
         """)
         template_row = cur.fetchone()
@@ -4205,7 +4210,7 @@ def regenerate_settings(
         if not template_row:
             return {"success": False, "error": "Base config template (template_id=1) not found"}
 
-        base_config = template_row['template_config'] or {}
+        base_config = template_row['content'] or {}
 
         # Merge: workspace overrides base
         merged_config = {**base_config, **startup_config}
