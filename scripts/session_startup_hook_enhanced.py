@@ -696,7 +696,11 @@ def main():
             # Deploy standing orders to MEMORY.md
             deploy_standing_orders()
 
-            # Close zombie sessions (open > 24h, excluding the session just created)
+            # Close zombie sessions (open > 12h, excluding the session just created).
+            # Threshold tightened from 24h → 12h (BT719, 2026-04-22): with the
+            # session_id fix landed, real sessions close properly; anything older
+            # than 12h without session_end is definitively abandoned. Stops the
+            # pre-fix orphan-accumulation pattern from recurring.
             try:
                 zombie_conn = get_db_connection()
                 if zombie_conn:
@@ -706,7 +710,7 @@ def main():
                         SET session_end = session_start + INTERVAL '1 hour',
                             session_summary = 'auto-closed (zombie cleanup on session start)'
                         WHERE session_end IS NULL
-                          AND session_start < NOW() - INTERVAL '24 hours'
+                          AND session_start < NOW() - INTERVAL '12 hours'
                           AND (%s IS NULL OR session_id != %s::uuid)
                     """, (session_id, session_id))
                     zombie_count = zombie_cur.rowcount
