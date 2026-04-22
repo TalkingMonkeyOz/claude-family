@@ -38,8 +38,26 @@ SIMILARITY_THRESHOLD = 0.65
 LOOKBACK_DAYS = 30
 
 
+def _parse_embedding(v):
+    """pgvector round-trips as a JSON-like string '[...]' when psycopg2 has no vector adapter."""
+    if v is None:
+        return None
+    if isinstance(v, (list, tuple)):
+        return v
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except (ValueError, TypeError):
+            return None
+    return v
+
+
 def cosine_similarity(a, b):
     """Compute cosine similarity between two vectors."""
+    a = _parse_embedding(a)
+    b = _parse_embedding(b)
+    if not a or not b:
+        return 0.0
     dot = sum(x * y for x, y in zip(a, b))
     norm_a = sum(x * x for x in a) ** 0.5
     norm_b = sum(x * x for x in b) ** 0.5
@@ -170,6 +188,11 @@ def extract_new_knowledge(matches):
         concept = data['concept']
         props = concept['properties'] or {}
         existing_gotchas = props.get('gotchas', [])
+        # Some concepts store gotchas as a single string; normalize to list
+        if isinstance(existing_gotchas, str):
+            existing_gotchas = [existing_gotchas] if existing_gotchas else []
+        elif not isinstance(existing_gotchas, list):
+            existing_gotchas = []
 
         new_gotchas = []
         for mem in data['memories']:
