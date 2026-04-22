@@ -39,15 +39,22 @@ def get_due_audits(conn) -> List[Dict]:
 
 
 def check_existing_message(conn, project_name: str, audit_type: str) -> bool:
-    """Check if a pending audit message already exists for this project/type."""
+    """Check if a non-terminal audit message already exists for this project/type.
+
+    FB303-adjacent fix (2026-04-19): previously deduped only on status='pending',
+    but sessionstart auto-ACKs inbox messages, so each run saw no 'pending' and
+    created a fresh reminder, flooding the inbox. Now dedupes on all non-terminal
+    statuses (pending, read, acknowledged) within the 7-day window — only
+    'actioned' (work done) or 'deferred' (explicit skip) clear the dedup.
+    """
     cur = conn.cursor()
     cur.execute("""
         SELECT COUNT(*) as count
         FROM claude.messages
         WHERE to_project = %s
           AND message_type = 'task_request'
-          AND subject LIKE %s
-          AND status = 'pending'
+          AND subject ILIKE %s
+          AND status IN ('pending', 'read', 'acknowledged')
           AND created_at > NOW() - INTERVAL '7 days'
     """, (project_name, f'%{audit_type}%audit%'))
     result = cur.fetchone()
@@ -71,12 +78,15 @@ After completing the audit, the results will be stored in claude.compliance_audi
 
     try:
         message_id = str(uuid.uuid4())
+        # FB317: set expires_at so unacted reminders auto-close after 30 days
+        # instead of accumulating (previous cron spam precedent).
         cur.execute("""
             INSERT INTO claude.messages (
                 message_id, to_project, message_type, subject, body,
-                priority, status, created_at
+                priority, status, created_at, expires_at
             )
-            VALUES (%s, %s, 'task_request', %s, %s, 'normal', 'pending', NOW())
+            VALUES (%s, %s, 'task_request', %s, %s, 'normal', 'pending', NOW(),
+                    NOW() + INTERVAL '30 days')
         """, (
             message_id,
             project_name,

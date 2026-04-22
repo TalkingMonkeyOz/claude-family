@@ -7255,12 +7255,15 @@ def send_message(
             else:
                 resolved_thread_id = resolved_parent_id
 
+        # FB317: default expires_at = now + 30 days so unacted messages
+        # auto-close via the SessionStart sweep instead of piling up forever.
         cur.execute("""
             INSERT INTO claude.messages
             (from_session_id, from_project, to_session_id, to_project,
              message_type, priority, subject, body, metadata,
-             parent_message_id, thread_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+             parent_message_id, thread_id, expires_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    NOW() + INTERVAL '30 days')
             RETURNING message_id::text, created_at
         """, (
             from_session_id or None,

@@ -721,6 +721,32 @@ def main():
             except Exception as e:
                 logger.warning(f"Zombie cleanup failed (non-fatal): {e}")
 
+            # FB317: Expire stale inbox messages. Anything with expires_at in
+            # the past that hasn't been actioned/deferred is auto-deferred.
+            # Mirrors the zombie-session cleanup pattern.
+            try:
+                exp_conn = get_db_connection()
+                if exp_conn:
+                    exp_cur = exp_conn.cursor()
+                    exp_cur.execute("""
+                        UPDATE claude.messages
+                        SET status = 'deferred',
+                            metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                              'auto_deferred_at', NOW()::text,
+                              'auto_deferred_reason', 'FB317 auto-expire (SessionStart sweep)'
+                            )
+                        WHERE status IN ('pending','read','acknowledged')
+                          AND expires_at IS NOT NULL
+                          AND expires_at < NOW()
+                    """)
+                    exp_count = exp_cur.rowcount
+                    exp_conn.commit()
+                    exp_conn.close()
+                    if exp_count > 0:
+                        logger.info(f"Auto-deferred {exp_count} expired messages")
+            except Exception as e:
+                logger.warning(f"Message expiry sweep failed (non-fatal): {e}")
+
             # FB242: Archive stale [S]-prefixed session tasks from prior sessions
             # Protocol convention: [S]=session-scope dies at session end, [P]=persistent survives
             try:
