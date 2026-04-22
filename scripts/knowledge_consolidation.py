@@ -263,11 +263,10 @@ def merge_and_mark(conn, results, dry_run=False):
                 WHERE entity_id = %s
             """, (str(new_embedding), cid))
 
-        # Audit log
+        # Audit log — use event_type + metadata (audit_log schema: no 'action'/'details' cols)
         cur.execute("""
-            INSERT INTO claude.audit_log (entity_type, entity_id, action, details, created_at)
-            VALUES ('entity', %s, 'knowledge_consolidated',
-                    %s::jsonb, NOW())
+            INSERT INTO claude.audit_log (entity_type, entity_id, event_type, metadata, created_at)
+            VALUES ('entity', %s, 'knowledge_consolidated', %s::jsonb, NOW())
         """, (cid, json.dumps({
             'memories_merged': len(memory_ids),
             'new_gotchas': len(new_gotchas),
