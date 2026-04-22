@@ -178,58 +178,61 @@ def validate_sql(sql: str) -> dict:
     return result
 
 
+def emit(decision: str, reason: str = ""):
+    """Emit PreToolUse hook response in current Claude Code schema."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow" if decision == "allow" else "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+
+
 def main():
     # Get input
     if len(sys.argv) < 2:
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "No input provided"
-        }))
+        emit("allow", "No input provided")
         return 0
 
     tool_name = sys.argv[1]
 
     # Only validate postgres execute_sql calls
     if 'postgres' not in tool_name.lower() and 'execute' not in tool_name.lower():
-        print(json.dumps({
-            "decision": "allow",
-            "reason": f"Not a database operation: {tool_name}"
-        }))
+        emit("allow", f"Not a database operation: {tool_name}")
         return 0
 
-    # Get SQL from remaining args or stdin
+    # Get SQL from remaining args or stdin. Stdin for this hook is Claude Code's
+    # JSON payload (tool_input.sql), not raw SQL — parse it if present.
     sql = ""
     if len(sys.argv) > 2:
         sql = " ".join(sys.argv[2:])
     else:
-        # Try reading from stdin
         if not sys.stdin.isatty():
-            sql = sys.stdin.read()
+            stdin_data = sys.stdin.read()
+            if stdin_data:
+                try:
+                    payload = json.loads(stdin_data)
+                    sql = (payload.get('tool_input') or payload.get('toolInput') or {}).get('sql', '')
+                except (ValueError, TypeError):
+                    sql = stdin_data
 
     if not sql:
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "No SQL provided"
-        }))
+        emit("allow", "No SQL provided")
         return 0
 
     # Only validate INSERT/UPDATE
     sql_lower = sql.lower()
     if 'insert' not in sql_lower and 'update' not in sql_lower:
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "Not an INSERT/UPDATE operation"
-        }))
+        emit("allow", "Not an INSERT/UPDATE operation")
         return 0
 
     # Validate
     result = validate_sql(sql)
-    print(json.dumps(result, indent=2))
-
     if result["decision"] == "block":
+        emit("deny", result["reason"])
         return 2
-    elif result["warnings"]:
-        return 1
+    emit("allow", result.get("reason", ""))
     return 0
 
 

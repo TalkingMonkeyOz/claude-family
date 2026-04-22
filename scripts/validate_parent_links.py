@@ -167,38 +167,45 @@ def validate_parent_links(sql: str) -> dict:
     return result
 
 
+def emit(decision: str, reason: str = ""):
+    """Emit PreToolUse hook response in current Claude Code schema."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow" if decision == "allow" else "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+
+
 def main():
-    # Get SQL from args or stdin
+    # Get SQL from args or stdin (Claude Code passes JSON on stdin).
     sql = ""
     if len(sys.argv) > 1:
         sql = " ".join(sys.argv[1:])
-    else:
-        if not sys.stdin.isatty():
-            sql = sys.stdin.read()
+    elif not sys.stdin.isatty():
+        stdin_data = sys.stdin.read()
+        if stdin_data:
+            try:
+                payload = json.loads(stdin_data)
+                sql = (payload.get('tool_input') or payload.get('toolInput') or {}).get('sql', '')
+            except (ValueError, TypeError):
+                sql = stdin_data
 
     if not sql:
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "No SQL provided"
-        }))
+        emit("allow", "No SQL provided")
         return 0
 
     # Only validate INSERT
     if 'insert' not in sql.lower():
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "Not an INSERT operation"
-        }))
+        emit("allow", "Not an INSERT operation")
         return 0
 
-    # Validate
     result = validate_parent_links(sql)
-    print(json.dumps(result, indent=2))
-
     if result["decision"] == "block":
+        emit("deny", result["reason"])
         return 2
-    elif result["warnings"]:
-        return 1
+    emit("allow", result.get("reason", ""))
     return 0
 
 

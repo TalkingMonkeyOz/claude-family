@@ -153,20 +153,41 @@ def validate_phase(sql: str) -> dict:
     return result
 
 
+def emit(decision: str, reason: str = ""):
+    """Emit PreToolUse hook response in current Claude Code schema."""
+    print(json.dumps({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow" if decision == "allow" else "deny",
+            "permissionDecisionReason": reason,
+        }
+    }))
+
+
 def main():
-    if len(sys.argv) < 2:
-        print(json.dumps({
-            "decision": "allow",
-            "reason": "No SQL provided"
-        }))
+    # Read SQL from args or Claude Code stdin payload.
+    sql = ""
+    if len(sys.argv) > 1:
+        sql = " ".join(sys.argv[1:])
+    elif not sys.stdin.isatty():
+        stdin_data = sys.stdin.read()
+        if stdin_data:
+            try:
+                payload = json.loads(stdin_data)
+                sql = (payload.get('tool_input') or payload.get('toolInput') or {}).get('sql', '')
+            except (ValueError, TypeError):
+                sql = stdin_data
+
+    if not sql:
+        emit("allow", "No SQL provided")
         return 0
 
-    sql = " ".join(sys.argv[1:])
-
     result = validate_phase(sql)
-    print(json.dumps(result, indent=2))
-
-    return 2 if result["decision"] == "block" else 0
+    if result["decision"] == "block":
+        emit("deny", result["reason"])
+        return 2
+    emit("allow", result.get("reason", ""))
+    return 0
 
 
 if __name__ == "__main__":
