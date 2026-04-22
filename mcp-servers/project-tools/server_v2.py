@@ -7337,24 +7337,32 @@ def acknowledge(
     defer_reason: str = "",
     priority: int = 3,
 ) -> dict:
-    """Mark a message as read, acknowledged, actioned (converted to todo), or deferred (explicitly skipped).
+    """Mark a message as read, acknowledged, actioned, or deferred.
 
-    Use when: Processing messages from your inbox. 'read' marks as seen,
-    'acknowledged' confirms receipt, 'actioned' converts to a todo,
-    'deferred' skips with a reason.
-    Returns: {success, message_id, new_status} or {success, todo_id} for actioned.
+    Use when: Processing messages from your inbox. Terminal states are
+    'actioned' (handled, no more follow-up needed) and 'deferred' (skipped
+    with reason). 'read' and 'acknowledged' are intermediate — prefer
+    terminal states so the message doesn't linger.
+    Returns: {success, message_id, new_status} or {success, todo_id} for
+    actioned-with-todo.
 
     Args:
         message_id: ID of message to acknowledge.
         action: Action to take.
-        project_id: Required if action='actioned' - UUID of project to create todo in.
-        defer_reason: Required if action='deferred' - Explanation for why message is being deferred.
-        priority: Optional priority for created todo (1-5, default 3). Only used if action='actioned'.
+        project_id: Optional for action='actioned'. Supply a project UUID to
+            also create a tracking todo; omit to just close the message.
+        defer_reason: Required if action='deferred' - Explanation for why.
+        priority: Todo priority (1-5, default 3). Only used when project_id
+            is supplied with action='actioned'.
     """
     if action == "actioned":
-        if not project_id:
-            return {"success": False, "error": "project_id required for actioned messages"}
-        return _action_message(message_id, project_id, priority)
+        # FB317: project_id is optional. When supplied, create a tracking todo.
+        # When omitted, just flip status to 'actioned' — "I've handled this,
+        # no tracking needed". Reduces friction that pushed people to use
+        # 'acknowledged' (which doesn't close the message).
+        if project_id:
+            return _action_message(message_id, project_id, priority)
+        return _action_message_no_todo(message_id)
 
     if action == "deferred":
         if not defer_reason:
@@ -7716,6 +7724,41 @@ def get_message_history(
 # ---------------------------------------------------------------------------
 # Internal helpers for acknowledge sub-actions
 # ---------------------------------------------------------------------------
+
+def _action_message_no_todo(message_id: str) -> dict:
+    """Mark a message as actioned without creating a todo (FB317).
+
+    Use when the recipient has handled the message and doesn't need a
+    separate tracking item — still terminates the message lifecycle.
+    """
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE claude.messages
+            SET status = 'actioned', acknowledged_at = NOW(),
+                metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object(
+                  'actioned_without_todo', true,
+                  'actioned_at', NOW()::text
+                )
+            WHERE message_id = %s
+            RETURNING message_id::text
+        """, (message_id,))
+        result = cur.fetchone()
+        cur.close()
+        conn.commit()
+        return {
+            "success": result is not None,
+            "message_id": message_id,
+            "new_status": "actioned",
+            "todo_created": False,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": str(e)}
+    finally:
+        conn.close()
+
 
 def _action_message(message_id: str, project_id: str, priority: int = 3) -> dict:
     """Convert a message into an actionable todo."""
