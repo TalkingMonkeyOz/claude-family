@@ -954,17 +954,63 @@ def start_session(
                 except Exception:
                     result["recent_decisions"] = []
 
-                # Relevant knowledge for this project
+                # Top-of-mind knowledge for this project (RECALL-FIRST at startup, Phase 4d)
+                # Ordered by proven-usefulness (tier + times_applied + confidence + recency) so
+                # Claude sees validated memories without needing an explicit recall call.
+                # Descriptions truncated to 240 chars — title + preview; use recall_memories
+                # for deep content, or memory_manage for full view.
                 try:
                     cur.execute("""
-                        SELECT k.title, k.description, k.knowledge_type, k.knowledge_category,
-                               k.confidence_level, k.created_at
+                        SELECT k.knowledge_id::text,
+                               k.title,
+                               LEFT(k.description, 240) AS preview,
+                               LENGTH(k.description) AS full_length,
+                               k.knowledge_type,
+                               k.knowledge_category,
+                               k.confidence_level,
+                               COALESCE(k.times_applied, 0) AS times_applied,
+                               COALESCE(k.access_count, 0) AS access_count,
+                               COALESCE(k.tier, 'mid') AS tier
                         FROM claude.knowledge k
-                        WHERE (k.applies_to_projects IS NULL OR %s = ANY(k.applies_to_projects))
-                        ORDER BY k.created_at DESC
+                        WHERE (k.applies_to_projects IS NULL
+                               OR cardinality(k.applies_to_projects) = 0
+                               OR %s = ANY(k.applies_to_projects))
+                          AND COALESCE(k.status, 'active') = 'active'
+                          AND COALESCE(k.tier, 'mid') != 'archived'
+                        ORDER BY
+                            CASE COALESCE(k.tier, 'mid')
+                                WHEN 'long' THEN 1
+                                WHEN 'mid'  THEN 2
+                                ELSE 3
+                            END,
+                            COALESCE(k.times_applied, 0) DESC,
+                            COALESCE(k.confidence_level, 50) DESC,
+                            COALESCE(k.last_accessed_at, k.created_at) DESC
                         LIMIT 5
                     """, (project,))
-                    result["relevant_knowledge"] = [dict(r) for r in cur.fetchall()]
+                    rows = cur.fetchall()
+                    top_memories = []
+                    for r in rows:
+                        entry = {
+                            "knowledge_id": r['knowledge_id'],
+                            "title": r['title'],
+                            "preview": r['preview'],
+                            "knowledge_type": r['knowledge_type'],
+                            "knowledge_category": r['knowledge_category'],
+                            "confidence_level": r['confidence_level'],
+                            "tier": r['tier'],
+                            "times_applied": r['times_applied'],
+                        }
+                        if r['full_length'] and r['full_length'] > 240:
+                            entry["content_truncated"] = True
+                            entry["full_body_length"] = r['full_length']
+                        top_memories.append(entry)
+                    result["relevant_knowledge"] = top_memories
+                    if top_memories:
+                        result["relevant_knowledge_note"] = (
+                            "Top-of-mind memories (proven + high-confidence). "
+                            "Use recall_memories(query) for deeper/semantic search."
+                        )
                 except Exception:
                     result["relevant_knowledge"] = []
 
