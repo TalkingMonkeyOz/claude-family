@@ -1178,13 +1178,41 @@ async def tool_stash(
         is_insert = row['is_insert'] if row else True
         action = "created" if is_insert else ("appended" if mode == "append" else "updated")
 
-        return {
+        # Chunking rule: 300-500 line target. Flag if exceeded so caller can split.
+        line_count = content.count('\n') + 1
+        result = {
             "success": True,
             "workfile_id": row['workfile_id'] if row else None,
             "action": action,
             "component": component,
             "title": title,
+            "line_count": line_count,
         }
+        if line_count > 500:
+            # Detect natural split points (H2 headers) for the caller.
+            h2_lines = [
+                i + 1 for i, ln in enumerate(content.split('\n'))
+                if re.match(r'^##\s', ln)
+            ]
+            result["chunking_required"] = True
+            result["chunking_reason"] = (
+                f"Workfile is {line_count} lines; chunking rule targets 300-500. "
+                "Split into linked workfiles: an index with summary + links, "
+                "and one sub-workfile per logical section."
+            )
+            if len(h2_lines) >= 2:
+                result["suggested_split_points"] = h2_lines
+                result["split_hint"] = (
+                    f"Found {len(h2_lines)} H2 headers — split at those line numbers. "
+                    f"Title the index '{title}' (keep) and name sub-workfiles "
+                    f"'{title}-<section-slug>'."
+                )
+            else:
+                result["split_hint"] = (
+                    f"No clear H2 split points — split at ~400-line boundaries "
+                    f"and name sub-workfiles '{title}-part-1', '{title}-part-2', etc."
+                )
+        return result
 
     except Exception as e:
         conn.rollback()
