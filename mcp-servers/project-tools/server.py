@@ -1796,13 +1796,27 @@ async def tool_recall_memories(
 
             for row in cur.fetchall():
                 sim = float(row['similarity'])
-                # Use summary if available, otherwise truncate body
-                content = row['summary'] or row['body'][:500]
+                body = row['body'] or ''
+                summary = row['summary']
+                # Use summary if available, otherwise truncate body — BUT make
+                # truncation visible so Claude knows to fetch the full body if needed.
+                if summary:
+                    content = summary
+                    content_truncated = len(body) > len(summary)
+                    truncation_source = "summary_used" if content_truncated else None
+                elif len(body) > 500:
+                    content = body[:500]
+                    content_truncated = True
+                    truncation_source = "body_truncated_500"
+                else:
+                    content = body
+                    content_truncated = False
+                    truncation_source = None
                 title = f"[Article: {row['article_title']}] {row['section_title']}"
                 tokens = _estimate_tokens(f"{title}: {content}")
                 if article_tokens_used + tokens > article_budget and article_tokens_used > 0:
                     break
-                memories.append({
+                entry = {
                     "tier": "article",
                     "title": title,
                     "content": content,
@@ -1811,7 +1825,16 @@ async def tool_recall_memories(
                     "similarity": round(sim, 4),
                     "article_id": row['article_id'],
                     "section_id": row['section_id'],
-                })
+                    "content_truncated": content_truncated,
+                }
+                if truncation_source:
+                    entry["truncation_source"] = truncation_source
+                    entry["full_body_length"] = len(body)
+                    entry["fetch_full"] = (
+                        f'read_article(article_id="{row["article_id"]}", '
+                        f'section_id="{row["section_id"]}")'
+                    )
+                memories.append(entry)
                 article_tokens_used += tokens
         except Exception:
             pass  # Fail gracefully if article tables don't exist yet
@@ -1978,19 +2001,64 @@ async def tool_remember(
 
             dup = cur.fetchone()
             if dup:
-                # Merge: boost confidence, keep longer description
+                # Union-merge: never discard content. Three cases:
+                #   1. new ⊆ existing → keep existing (no-op beyond access/confidence bump)
+                #   2. existing ⊆ new → promote new (replace)
+                #   3. distinct       → concatenate with separator
                 existing_desc = dup['description'] or ''
-                new_desc = content if len(content) > len(existing_desc) else existing_desc
-                new_conf = min(100, (dup['confidence_level'] or 50) + 5)
+                new_content = content
 
-                cur.execute("""
-                    UPDATE claude.knowledge
-                    SET description = %s,
-                        confidence_level = %s,
-                        last_accessed_at = NOW(),
-                        access_count = COALESCE(access_count, 0) + 1
-                    WHERE knowledge_id = %s::uuid
-                """, (new_desc, new_conf, dup['knowledge_id']))
+                def _norm(s: str) -> str:
+                    return ' '.join(s.split())
+
+                existing_norm = _norm(existing_desc)
+                new_norm = _norm(new_content)
+
+                if not new_norm or new_norm in existing_norm:
+                    merge_strategy = "kept_existing_superset"
+                    new_desc = existing_desc
+                    new_embedding = None  # unchanged
+                elif existing_norm in new_norm:
+                    merge_strategy = "promoted_new_superset"
+                    new_desc = new_content
+                    new_embedding = embedding
+                else:
+                    merge_strategy = "union_concatenated"
+                    new_desc = f"{existing_desc}\n\n---\n\n{new_content}"
+                    # Re-embed the combined text so future similarity matches reflect it
+                    new_embed_text = f"{context}\n\n{new_desc}" if context else new_desc
+                    new_embedding = generate_embedding(new_embed_text) or embedding
+
+                new_conf = min(100, (dup['confidence_level'] or 50) + 5)
+                line_count = new_desc.count('\n') + 1
+                chunking_required = line_count > 500
+
+                # Implicit apply: Claude is re-stating knowledge → mark it as applied.
+                # Increments times_applied + last_applied_at alongside access_count.
+                # Feeds the MID→LONG promotion signal (promotion rule: times_applied>=2 OR access_count>=5).
+                if new_embedding is None:
+                    # Case 1: content unchanged, skip embedding write
+                    cur.execute("""
+                        UPDATE claude.knowledge
+                        SET confidence_level = %s,
+                            last_accessed_at = NOW(),
+                            last_applied_at = NOW(),
+                            access_count = COALESCE(access_count, 0) + 1,
+                            times_applied = COALESCE(times_applied, 0) + 1
+                        WHERE knowledge_id = %s::uuid
+                    """, (new_conf, dup['knowledge_id']))
+                else:
+                    cur.execute("""
+                        UPDATE claude.knowledge
+                        SET description = %s,
+                            embedding = %s::vector,
+                            confidence_level = %s,
+                            last_accessed_at = NOW(),
+                            last_applied_at = NOW(),
+                            access_count = COALESCE(access_count, 0) + 1,
+                            times_applied = COALESCE(times_applied, 0) + 1
+                        WHERE knowledge_id = %s::uuid
+                    """, (new_desc, new_embedding, new_conf, dup['knowledge_id']))
 
                 conn.commit()
                 cur.close()
@@ -1999,10 +2067,12 @@ async def tool_remember(
                     "memory_id": dup['knowledge_id'],
                     "tier": tier,
                     "action": "merged",
+                    "merge_strategy": merge_strategy,
                     "existing_similarity": round(float(dup['similarity']), 4),
                     "new_confidence": new_conf,
                     "relations_created": 0,
-                    "message": f"Merged with existing: {dup['title']} (sim={round(float(dup['similarity']), 3)})",
+                    "chunking_required": chunking_required,
+                    "message": f"Merged ({merge_strategy}) with: {dup['title']} (sim={round(float(dup['similarity']), 3)})",
                 }
 
         # Check for contradiction: high-similarity entries with divergent confidence
@@ -2205,18 +2275,22 @@ async def tool_consolidate_memories(
 
         # ---- PHASE 2: MID→LONG promotion (periodic or manual) ----
         if trigger in ("periodic", "manual"):
-            # Retrieval-frequency promotion: if knowledge has been retrieved 5+
-            # times over 7+ days, it's proven useful regardless of explicit
-            # mark_knowledge_applied() calls (which are rarely made in practice).
-            # access_count IS reliably incremented by RAG hook and recall_memories.
+            # Dual-signal promotion:
+            # 1. access_count>=5 (retrieval-frequency) — incremented by recall_memories.
+            # 2. times_applied>=2 (implicit-apply) — incremented when remember()
+            #    hits the dedup path (Claude re-stating = stronger "this was useful").
+            # Either signal is sufficient alongside confidence and age thresholds.
             cur.execute("""
                 UPDATE claude.knowledge
                 SET tier = 'long'
                 WHERE tier = 'mid'
-                  AND COALESCE(access_count, 0) >= 5
                   AND confidence_level >= 60
                   AND created_at < NOW() - INTERVAL '7 days'
                   AND embedding IS NOT NULL
+                  AND (
+                    COALESCE(access_count, 0) >= 5
+                    OR COALESCE(times_applied, 0) >= 2
+                  )
                 RETURNING knowledge_id
             """)
             result["promoted_mid_to_long"] = cur.rowcount
