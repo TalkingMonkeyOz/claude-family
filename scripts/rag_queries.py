@@ -1072,7 +1072,10 @@ def query_entity_catalog_bm25(user_prompt: str, project_name: str,
 
         context_lines = []
 
-        # DOMAIN CONCEPTS: Full dossier delivery
+        # DOMAIN CONCEPTS: TOC-first delivery (full if small, TOC+overview if large)
+        # Threshold ~1500 chars ≈ 375 tokens. Below → full dossier (comprehension > budget).
+        # Above → TOC + overview only; Claude pulls sections on demand.
+        DOSSIER_TOC_THRESHOLD = 1500
         for dc in domain_concepts:
             props = dc['properties'] or {}
             if isinstance(props, str):
@@ -1081,49 +1084,93 @@ def query_entity_catalog_bm25(user_prompt: str, project_name: str,
 
             breadcrumb = _get_entity_breadcrumb(cur, dc['entity_id'], name)
 
-            context_lines.append(f"[DOMAIN CONCEPT DOSSIER — {name}]")
-            if breadcrumb != name:
-                context_lines.append(f"Hierarchy: {breadcrumb}")
+            # Estimate full dossier size to decide TOC vs full
+            full_size_estimate = sum(
+                len(str(v)) for v in props.values() if v
+            )
 
-            overview = props.get('overview', '')
-            if overview:
-                context_lines.append(f"Overview: {overview}")
+            if full_size_estimate > DOSSIER_TOC_THRESHOLD:
+                # TOC mode — header + overview + available sections list + fetch hint
+                context_lines.append(f"[DOMAIN CONCEPT DOSSIER — {name} (TOC)]")
+                if breadcrumb != name:
+                    context_lines.append(f"Hierarchy: {breadcrumb}")
+                overview = props.get('overview', '')
+                if overview:
+                    # Trim overview if very long
+                    ov = overview if len(overview) <= 500 else overview[:500] + "..."
+                    context_lines.append(f"Overview: {ov}")
+                # Available sections with sizes (chars ~= tokens/4)
+                section_order = [
+                    'usage_modes', 'gotchas', 'recipes', 'auth',
+                    'environment_notes', 'verified', 'examples',
+                    'endpoints', 'vault_refs', 'workfile_refs',
+                ]
+                sections_present = []
+                for key in section_order:
+                    val = props.get(key)
+                    if val:
+                        size_chars = len(str(val))
+                        sections_present.append(f"{key} (~{size_chars // 4}tok)")
+                # Any other props not in section_order
+                for key in props.keys():
+                    if key in section_order or key == 'overview' or not props.get(key):
+                        continue
+                    if key in ('name', 'domain', 'purpose'):
+                        continue
+                    val = props[key]
+                    size_chars = len(str(val))
+                    sections_present.append(f"{key} (~{size_chars // 4}tok)")
+                if sections_present:
+                    context_lines.append(f"Sections available: {', '.join(sections_present)}")
+                context_lines.append(
+                    f"Fetch full: entity_read(entity_id=\"{dc['entity_id']}\")"
+                )
+                context_lines.append("")
+            else:
+                # Full dossier (small enough) — original behaviour
+                context_lines.append(f"[DOMAIN CONCEPT DOSSIER — {name}]")
+                if breadcrumb != name:
+                    context_lines.append(f"Hierarchy: {breadcrumb}")
 
-            usage_modes = props.get('usage_modes', [])
-            if usage_modes:
-                context_lines.append("Usage Modes:")
-                for mode in usage_modes:
-                    context_lines.append(f"  - {mode}")
+                overview = props.get('overview', '')
+                if overview:
+                    context_lines.append(f"Overview: {overview}")
 
-            gotchas = props.get('gotchas', [])
-            if gotchas:
-                context_lines.append("Gotchas:")
-                for i, g in enumerate(gotchas, 1):
-                    context_lines.append(f"  {i}. {g}")
+                usage_modes = props.get('usage_modes', [])
+                if usage_modes:
+                    context_lines.append("Usage Modes:")
+                    for mode in usage_modes:
+                        context_lines.append(f"  - {mode}")
 
-            recipes = props.get('recipes', [])
-            if recipes:
-                context_lines.append("Recipes:")
-                for recipe in recipes:
-                    if isinstance(recipe, dict):
-                        context_lines.append(f"  [{recipe.get('name', 'recipe')}]")
-                        context_lines.append(f"  {recipe.get('content', '')}")
-                    else:
-                        context_lines.append(f"  - {recipe}")
+                gotchas = props.get('gotchas', [])
+                if gotchas:
+                    context_lines.append("Gotchas:")
+                    for i, g in enumerate(gotchas, 1):
+                        context_lines.append(f"  {i}. {g}")
 
-            auth = props.get('auth', '')
-            if auth:
-                context_lines.append(f"Auth: {auth}")
+                recipes = props.get('recipes', [])
+                if recipes:
+                    context_lines.append("Recipes:")
+                    for recipe in recipes:
+                        if isinstance(recipe, dict):
+                            context_lines.append(f"  [{recipe.get('name', 'recipe')}]")
+                            context_lines.append(f"  {recipe.get('content', '')}")
+                        else:
+                            context_lines.append(f"  - {recipe}")
 
-            env_notes = props.get('environment_notes', '')
-            if env_notes:
-                context_lines.append(f"Environment: {env_notes}")
+                auth = props.get('auth', '')
+                if auth:
+                    context_lines.append(f"Auth: {auth}")
 
-            verified = props.get('verified', {})
-            if verified:
-                context_lines.append(f"Verified: {verified.get('date', '?')} on {verified.get('environment', '?')}")
+                env_notes = props.get('environment_notes', '')
+                if env_notes:
+                    context_lines.append(f"Environment: {env_notes}")
 
-            context_lines.append("")
+                verified = props.get('verified', {})
+                if verified:
+                    context_lines.append(f"Verified: {verified.get('date', '?')} on {verified.get('environment', '?')}")
+
+                context_lines.append("")
 
             # Update access stats
             try:
