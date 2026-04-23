@@ -163,6 +163,25 @@ def save_task_map_fields(project_name: str, updates: dict):
             logger.error(f"Delegation tracker: failed to save task map: {e2}")
 
 
+def _log_shadow_delegate_event(event: dict) -> None:
+    """Phase 4b shadow-mode: append a structured event to delegation_shadow.jsonl.
+
+    Used for 7-day observation of how often the 3-file threshold is crossed
+    and in what contexts. Pure append; never raises; disabled via env var.
+    """
+    if os.environ.get('CLAUDE_DISABLE_DELEGATE_SHADOW') == '1':
+        return
+    try:
+        log_dir = Path.home() / ".claude" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "delegation_shadow.jsonl"
+        event['ts'] = time.strftime('%Y-%m-%dT%H:%M:%S')
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(event) + '\n')
+    except Exception as e:
+        logger.warning(f"Phase 4b shadow log failed (fail-open): {e}")
+
+
 def check_and_issue_delegation_advisory(
     tool_name: str,
     tool_input: dict,
@@ -217,6 +236,18 @@ def check_and_issue_delegation_advisory(
     save_task_map_fields(project_name, {
         '_files_edited': files_edited,
         '_delegation_advised': True,
+    })
+
+    # Phase 4b shadow log: structured event for 7-day observation.
+    # Captures the crossing event so we can measure compliance before deciding
+    # to upgrade from advisory-only to warn/block mode.
+    _log_shadow_delegate_event({
+        'event': 'delegation_threshold_crossed',
+        'project': project_name,
+        'file_count': file_count,
+        'files': files_edited,
+        'trigger_tool': tool_name,
+        'trigger_file': normalised_path,
     })
 
     advisory = (
