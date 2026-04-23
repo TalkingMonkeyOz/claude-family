@@ -4063,7 +4063,7 @@ def deploy_project(
                     OR (scope = 'project' AND (scope_ref = %s OR scope_ref = %s::text))
                   )
                   AND scope NOT IN ('command', 'agent')
-            """, (project_type, project_name, project_id))
+            """, (project_type, project, project_id))
             skills = cur.fetchall()
 
             # Filter out global skills (they live in ~/.claude/skills/, deploying causes duplicates)
@@ -4134,7 +4134,7 @@ def deploy_project(
                   AND COALESCE(is_active, true) = true
                 ORDER BY (source_ref = %s) DESC, updated_at DESC NULLS LAST
                 LIMIT 1
-            """, (str(project_id) if project_id else '', project_name, str(project_id) if project_id else ''))
+            """, (str(project_id) if project_id else '', project, str(project_id) if project_id else ''))
             profile_row = cur.fetchone()
 
             if profile_row and profile_row['behavior_text']:
