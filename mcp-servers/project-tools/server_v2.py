@@ -4095,10 +4095,14 @@ def deploy_project(
             """)
             if cur.fetchone()['exists']:
                 cur.execute("""
-                    SELECT instruction_name, content
+                    SELECT name, content
                     FROM claude.instructions
-                    WHERE project_id = %s::uuid OR project_id IS NULL
-                """, (project_id,))
+                    WHERE COALESCE(is_active, true) = true
+                      AND (
+                        scope = 'global'
+                        OR (scope = 'project' AND scope_ref = %s)
+                      )
+                """, (str(project_id) if project_id else '',))
                 instructions = cur.fetchall()
 
                 if instructions:
@@ -4106,7 +4110,7 @@ def deploy_project(
                     instructions_dir.mkdir(parents=True, exist_ok=True)
 
                     for instr in instructions:
-                        instr_file = instructions_dir / f"{instr['instruction_name']}.instructions.md"
+                        instr_file = instructions_dir / f"{instr['name']}.instructions.md"
                         with open(instr_file, 'w', encoding='utf-8') as f:
                             f.write(instr['content'])
 
