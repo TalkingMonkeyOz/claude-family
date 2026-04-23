@@ -1953,12 +1953,31 @@ async def tool_remember(
         r'^(checking|checked)\s+(status|progress)',
     ]
 
+    # Never-not-add-knowledge: if content is too short for MID/LONG,
+    # auto-route to session_facts instead of rejecting.
     if len(content) < 80:
-        return {
-            "success": False,
-            "reason": f"Content too short ({len(content)} chars, minimum 80). "
-                      "Use store_session_fact() for brief session-scoped notes.",
-        }
+        fact_key = content.split('\n')[0][:50].strip()
+        fact_key = re.sub(r'[^a-zA-Z0-9_\-\s]', '', fact_key).strip().replace(' ', '_')[:30]
+        if not fact_key:
+            fact_key = f"memory_{datetime.now().strftime('%H%M%S')}"
+        result = await tool_store_session_fact(
+            fact_key=fact_key,
+            fact_value=content,
+            fact_type="note",
+            is_sensitive=False,
+            project_name=project_name,
+        )
+        if result.get("success"):
+            return {
+                "success": True,
+                "memory_id": result.get("fact_id"),
+                "tier": "short",
+                "action": "auto_routed_short",
+                "auto_route_reason": f"Content {len(content)} chars < 80 min for MID/LONG; stored as session_fact instead.",
+                "relations_created": 0,
+                "message": f"Auto-routed to session fact: {fact_key}",
+            }
+        return result
 
     content_lower = content.lower().strip()
     for pattern in JUNK_PATTERNS:
