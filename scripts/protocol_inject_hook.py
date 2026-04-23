@@ -66,6 +66,105 @@ def _check_pending_messages(project_name: str) -> str:
     return ""
 
 
+def _decompose_prompt(user_prompt: str) -> str:
+    """Detect multi-item prompts and surface the structure BEFORE Claude reads.
+
+    Structural scaffolding for the DECOMPOSE protocol rule — Claude sees a
+    pre-parsed list of items at the top of the context, making it hard to
+    latch onto the first request and forget the rest.
+
+    Heuristics (kept simple and fail-open):
+    - Questions: segments ending with '?'
+    - Directives: segments after conjunctions ('and', 'also', 'plus', 'then'),
+      or sentence starts with imperative verbs (list below).
+    - Secondary-ask bridges: 'don't forget', 'and also', 'can you also',
+      'while you're at it', 'btw', 'by the way', 'another thing'.
+
+    Emits a hint only if 2+ distinct items are detected. Otherwise silent.
+    Returns empty string on any exception.
+    """
+    if not user_prompt or len(user_prompt.strip()) < 20:
+        return ""
+    if user_prompt.strip().startswith('/'):
+        return ""
+    # Skip if looks like a code paste (many newlines, no natural language)
+    if user_prompt.count('\n') > 30 and user_prompt.count(' ') < 50:
+        return ""
+
+    try:
+        import re
+
+        text = user_prompt.strip()
+        text_lower = text.lower()
+        items: list[tuple[int, str]] = []  # (position, excerpt)
+
+        imperatives = {
+            'add', 'also', 'and', 'audit', 'build', 'can', 'change', 'check',
+            'commit', 'could', 'create', 'delete', 'deploy', 'describe',
+            'explain', 'find', 'fix', 'generate', 'implement', 'install',
+            'investigate', 'list', 'make', 'please', 'push', 'refactor',
+            'remove', 'rename', 'review', 'run', 'search', 'ship', 'show',
+            'summarize', 'test', 'update', 'verify', 'write', 'would',
+            "let's",
+        }
+
+        # 1. Split on sentence terminators (., ?, !) while keeping the terminator
+        sentence_parts = re.split(r'(?<=[\.\?\!])\s+', text)
+        for part in sentence_parts:
+            p = part.strip()
+            if not p or len(p) < 8:
+                continue
+            # Question?
+            if p.endswith('?'):
+                items.append((text.find(p), p[:120]))
+                continue
+            # Imperative sentence
+            first_word = p.split(None, 1)[0].lower().rstrip(',:;')
+            if first_word in imperatives:
+                items.append((text.find(p), p[:120]))
+
+        # 2. Explicit "also" bridges — catch piggyback asks inside a sentence
+        bridge_patterns = [
+            r"(?i)(?:and\s+also|also(?:,|\s+can\s+you|\s+update|\s+add|\s+run|\s+fix)|"
+            r"don'?t\s+forget|btw|by\s+the\s+way|another\s+thing|"
+            r"oh\s+and|plus\s+can\s+you|while\s+you'?re\s+at\s+it|one\s+more\s+thing)"
+        ]
+        for pat in bridge_patterns:
+            for m in re.finditer(pat, text):
+                start = m.start()
+                snippet = text[start:start + 140].strip()
+                items.append((start, snippet[:120]))
+
+        # Dedupe — collapse items that start inside the span of an earlier item.
+        # If a bridge match is within the first item's text, drop the dupe.
+        items.sort(key=lambda x: x[0])
+        deduped: list[str] = []
+        covered_until = -1
+        for pos, excerpt in items:
+            if pos < covered_until:
+                continue
+            deduped.append(excerpt)
+            covered_until = pos + len(excerpt)
+
+        if len(deduped) < 2:
+            return ""
+
+        lines = [f"PROMPT STRUCTURE (auto-decomposed — {len(deduped)} items detected):"]
+        for i, excerpt in enumerate(deduped[:8], 1):
+            # Collapse internal whitespace
+            clean = re.sub(r'\s+', ' ', excerpt).strip()
+            lines.append(f"  {i}. {clean}")
+        if len(deduped) > 8:
+            lines.append(f"  ... +{len(deduped) - 8} more")
+        lines.append(
+            "  ACTION: Create a task for each item above BEFORE starting work. "
+            "Don't latch onto the first item and forget the rest."
+        )
+        return "\n".join(lines)
+    except Exception:
+        return ""  # Fail-open — never block the hook
+
+
 def _query_knowledge(user_prompt: str, project_name: str) -> str:
     """Search knowledge table for gotchas, patterns, and facts relevant to the prompt.
 
@@ -208,6 +307,7 @@ def main():
     user_prompt = hook_input.get('prompt', '')
     dossier_context = ""
     knowledge_context = ""
+    decomposition_hint = ""
     if user_prompt:
         with ThreadPoolExecutor(max_workers=2) as executor:
             dossier_future = executor.submit(_query_domain_concepts, user_prompt, project_name)
@@ -220,9 +320,21 @@ def main():
                 knowledge_context = knowledge_future.result(timeout=5.0)
             except (FuturesTimeout, Exception):
                 knowledge_context = ""
+        # Decomposer is pure-Python and very fast — run in main thread, fail-open.
+        # Disable via env var if it's ever noisy: CLAUDE_DISABLE_DECOMPOSER=1.
+        if os.environ.get("CLAUDE_DISABLE_DECOMPOSER") != "1":
+            decomposition_hint = _decompose_prompt(user_prompt)
 
-    # 5. Combine
-    parts = [p for p in [protocol, session_context, message_alert, knowledge_context, dossier_context] if p]
+    # 5. Combine — decomposition hint goes near the top (after protocol) so it's
+    # the first thing Claude sees about the incoming prompt's shape.
+    parts = [p for p in [
+        protocol,
+        decomposition_hint,
+        session_context,
+        message_alert,
+        knowledge_context,
+        dossier_context,
+    ] if p]
     combined = "\n\n".join(parts)
 
     # 6. Return in Claude Code hook format
