@@ -1118,6 +1118,27 @@ def _estimate_tokens_fast(text: str) -> int:
     return max(1, len(text or "") // 4)
 
 
+# Memory tier truncation threshold (chars). Above this, body is truncated with
+# `content_truncated` flag + full length info so Claude knows to re-query for detail.
+MEMORY_TRUNCATE_THRESHOLD = 1500
+MEMORY_TRUNCATE_TO = 800
+
+
+def _truncate_memory_content(content: str) -> Tuple[str, bool, int]:
+    """Truncate memory content with visibility.
+
+    Returns (content, truncated, full_length). If content <= threshold, returns
+    unchanged. Above threshold, returns first N chars + '…' + flag.
+    """
+    if not content:
+        return "", False, 0
+    full_len = len(content)
+    if full_len <= MEMORY_TRUNCATE_THRESHOLD:
+        return content, False, full_len
+    trimmed = content[:MEMORY_TRUNCATE_TO].rstrip() + "…"
+    return trimmed, True, full_len
+
+
 def _build_toc(content: str, record_id: str, include_summary: bool = True) -> Dict:
     """Parse markdown content and build TOC envelope.
 
@@ -1969,11 +1990,14 @@ async def tool_recall_memories(
             recency = max(0, 1.0 - days / 90.0)
             score = sim * 0.4 + recency * 0.3 + access_freq * 0.2 + conf * 0.1
 
-            content = row['description'] or row['title']
+            full_content = row['description'] or row['title']
+            # Phase 2e: truncate oversized memory bodies with visibility
+            content, truncated, full_len = _truncate_memory_content(full_content)
+
             tokens = _estimate_tokens(f"{row['title']}: {content}")
             if mid_tokens_used + tokens > mid_budget and mid_tokens_used > 0:
                 break
-            memories.append({
+            entry = {
                 "tier": "mid",
                 "title": row['title'],
                 "content": content,
@@ -1982,7 +2006,15 @@ async def tool_recall_memories(
                 "score": round(score, 4),
                 "similarity": round(sim, 4),
                 "confidence": row['confidence_level'],
-            })
+            }
+            if truncated:
+                entry["content_truncated"] = True
+                entry["full_body_length"] = full_len
+                entry["fetch_full"] = (
+                    f'memory_manage(action="list", limit=1) filtered to knowledge_id '
+                    f'{row["knowledge_id"]} — or re-query with more specific terms'
+                )
+            memories.append(entry)
             mid_tokens_used += tokens
 
         # --- LONG TIER: knowledge WHERE tier='long' + 1-hop graph walk ---
@@ -2013,11 +2045,12 @@ async def tool_recall_memories(
             recency = max(0, 1.0 - days / 180.0)
             score = sim * 0.4 + recency * 0.2 + access_freq * 0.2 + conf * 0.2
 
-            content = row['description'] or row['title']
+            full_content = row['description'] or row['title']
+            content, truncated, full_len = _truncate_memory_content(full_content)
             tokens = _estimate_tokens(f"{row['title']}: {content}")
             if long_tokens_used + tokens > long_budget and long_tokens_used > 0:
                 break
-            memories.append({
+            entry = {
                 "tier": "long",
                 "title": row['title'],
                 "content": content,
@@ -2026,7 +2059,15 @@ async def tool_recall_memories(
                 "score": round(score, 4),
                 "similarity": round(sim, 4),
                 "confidence": row['confidence_level'],
-            })
+            }
+            if truncated:
+                entry["content_truncated"] = True
+                entry["full_body_length"] = full_len
+                entry["fetch_full"] = (
+                    f'memory_manage(action="list", limit=1) filtered to knowledge_id '
+                    f'{row["knowledge_id"]} — or re-query with more specific terms'
+                )
+            memories.append(entry)
             long_seed_ids.append(row['knowledge_id'])
             long_tokens_used += tokens
 
@@ -2052,11 +2093,12 @@ async def tool_recall_memories(
             for row in cur.fetchall():
                 if row['knowledge_id'] in seen_ids:
                     continue
-                content = row['description'] or row['title']
+                full_content = row['description'] or row['title']
+                content, truncated, full_len = _truncate_memory_content(full_content)
                 tokens = _estimate_tokens(f"{row['title']}: {content}")
                 if long_tokens_used + tokens > long_budget:
                     break
-                memories.append({
+                entry = {
                     "tier": "long",
                     "title": row['title'],
                     "content": content,
@@ -2065,7 +2107,11 @@ async def tool_recall_memories(
                     "score": 0.3,  # graph-discovered entries get lower score
                     "relation": row['relation_type'],
                     "confidence": row['confidence_level'],
-                })
+                }
+                if truncated:
+                    entry["content_truncated"] = True
+                    entry["full_body_length"] = full_len
+                memories.append(entry)
                 long_tokens_used += tokens
 
         # --- ARTICLE TIER: knowledge_articles sections (F198) ---

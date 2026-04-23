@@ -9400,6 +9400,49 @@ def recall_entities(
 
 
 @mcp.tool()
+def _entity_section_id(entity_id: str, prop_key: str) -> str:
+    """Deterministic section_id for entity property addressing."""
+    import hashlib
+    h = hashlib.sha1(f"{entity_id}|{prop_key}".encode()).hexdigest()[:12]
+    return f"sec-{h}"
+
+
+def _build_entity_toc(entity_id: str, properties: dict) -> dict:
+    """Build a TOC over an entity's top-level property keys.
+
+    Returns {toc: [{section_id, key, token_count, summary?}], sections_by_id: {id: key}}.
+    Identity/metadata keys (name, domain, purpose) are excluded from the TOC
+    since they're typically in the header/overview.
+    """
+    SKIP_KEYS = {'name', 'domain', 'purpose', 'overview'}
+    toc = []
+    sections_by_id = {}
+    for key, val in (properties or {}).items():
+        if key in SKIP_KEYS or not val:
+            continue
+        sid = _entity_section_id(entity_id, key)
+        raw = val if isinstance(val, str) else str(val)
+        token_count = max(1, len(raw) // 4)
+        entry = {
+            "section_id": sid,
+            "key": key,
+            "token_count": token_count,
+        }
+        # Summary: first line/item if list, or first 100 chars if string
+        if isinstance(val, list) and val:
+            first = val[0]
+            if isinstance(first, dict):
+                entry["summary"] = str(first.get('name') or first.get('title') or '')[:100]
+            else:
+                entry["summary"] = str(first)[:100]
+        elif isinstance(val, str):
+            first_line = val.strip().split('\n', 1)[0]
+            entry["summary"] = first_line[:100]
+        toc.append(entry)
+        sections_by_id[sid] = key
+    return {"toc": toc, "sections_by_id": sections_by_id}
+
+
 def explore_entities(
     tags: list = None,
     entity_type: str = "",
@@ -9407,6 +9450,8 @@ def explore_entities(
     project: str = "",
     page: int = 1,
     page_size: int = 30,
+    detail: str = "",
+    section_id: str = "",
 ) -> dict:
     """Browse the entity catalog with progressive disclosure (inventory → list → detail).
 
@@ -9429,6 +9474,11 @@ def explore_entities(
         project: Project name filter (optional).
         page: Page number for Stage 2 browse (default 1).
         page_size: Entities per page in Stage 2 (default 30, max 50).
+        detail: Stage 3 only. '' default (full properties); 'toc' returns TOC envelope
+                with top-level property keys + size hints; 'full' force full content.
+                Auto-TOC triggers if properties total >1500 chars with no detail arg.
+        section_id: Stage 3 only. When provided, returns just that property's value
+                    (from the TOC in a prior call). Skips full property dump.
     """
     conn = get_db_connection()
     cur = None
@@ -9567,9 +9617,72 @@ def explore_entities(
                 rt = r["relationship_type"]
                 rel_summary[rt] = rel_summary.get(rt, 0) + 1
 
+            # Phase 2d: section_id fetch — return just that property
+            if section_id:
+                toc_info = _build_entity_toc(entity_id, props)
+                key = toc_info['sections_by_id'].get(section_id)
+                if key is None:
+                    return {
+                        "success": False,
+                        "stage": "detail",
+                        "error": f"section_id '{section_id}' not found on entity {entity_id}",
+                        "toc": toc_info['toc'],
+                    }
+                return {
+                    "success": True,
+                    "stage": "section",
+                    "entity_id": entity_id,
+                    "display_name": entity_data.get('display_name'),
+                    "type_name": entity_data.get('type_name'),
+                    "section_id": section_id,
+                    "key": key,
+                    "content": props.get(key),
+                    "token_count": max(1, len(str(props.get(key))) // 4),
+                }
+
+            # Phase 2d: TOC mode — explicit or auto (large entities)
+            prop_total_size = sum(len(str(v)) for v in props.values() if v)
+            ENTITY_TOC_THRESHOLD = 1500
+            use_toc = (
+                detail == "toc"
+                or (detail == "" and prop_total_size > ENTITY_TOC_THRESHOLD)
+            )
+            if use_toc and detail != "full":
+                toc_info = _build_entity_toc(entity_id, props)
+                header = {
+                    "entity_id": entity_data.get('entity_id'),
+                    "display_name": entity_data.get('display_name'),
+                    "type_name": entity_data.get('type_name'),
+                    "tags": entity_data.get('tags'),
+                    "confidence": entity_data.get('confidence'),
+                    "access_count": entity_data.get('access_count'),
+                }
+                # Keep identity/overview in the TOC response (small, high value)
+                for key in ('name', 'domain', 'purpose', 'overview'):
+                    if props.get(key):
+                        header[key] = props[key]
+                return {
+                    "success": True,
+                    "stage": "detail",
+                    "detail_level": "toc",
+                    "entity": header,
+                    "toc": toc_info['toc'],
+                    "section_count": len(toc_info['toc']),
+                    "total_tokens": prop_total_size // 4,
+                    "relationships": explicit_rels,
+                    "implicit_connections": implicit_rels,
+                    "connection_summary": rel_summary,
+                    "fetch_section": (
+                        f'entity_read(entity_id="{entity_id}", '
+                        f'section_id="<section_id from toc>")'
+                    ),
+                    "fetch_full": f'entity_read(entity_id="{entity_id}", detail="full")',
+                }
+
             return {
                 "success": True,
                 "stage": "detail",
+                "detail_level": "full",
                 "entity": entity_data,
                 "relationships": explicit_rels,
                 "implicit_connections": implicit_rels,
@@ -11212,7 +11325,8 @@ def entity_read(
     entity_id: str = "",
     tags: list | None = None,
     project: str = "",
-    detail: Literal["summary", "full"] = "summary",
+    detail: Literal["summary", "full", "toc"] = "summary",
+    section_id: str = "",
     limit: int = 10,
     page: int = 1,
     page_size: int = 30,
@@ -11229,18 +11343,30 @@ def entity_read(
         entity_id: Specific entity UUID for detail view.
         tags: Filter by tags.
         project: Project filter.
-        detail: 'summary' (compact) or 'full' (all properties).
+        detail: For search: 'summary' (compact) or 'full' (all properties).
+                For detail view (entity_id): '' default (auto-TOC if >1500 chars of properties),
+                'toc' force TOC envelope, 'full' force full properties.
+        section_id: For detail view (entity_id): when provided, returns only that
+                    property's value (from the TOC in a prior call).
         limit: Max search results.
         page: Page number for browsing.
         page_size: Entities per page.
         min_similarity: Minimum vector similarity threshold.
     """
     if entity_id and not query:
-        return explore_entities(entity_id=entity_id, project=project)
+        # Detail view: pass detail + section_id through.
+        # 'summary' default only makes sense for search; for detail view map to '' (auto).
+        detail_for_explore = detail if detail in ('toc', 'full') else ''
+        return explore_entities(
+            entity_id=entity_id, project=project,
+            detail=detail_for_explore, section_id=section_id,
+        )
     elif query:
+        # Search path — recall_entities only understands summary/full
+        search_detail = detail if detail in ('summary', 'full') else 'summary'
         return recall_entities(
             query=query, entity_type=entity_type, project=project, tags=tags,
-            limit=limit, min_similarity=min_similarity, detail=detail, entity_id=entity_id,
+            limit=limit, min_similarity=min_similarity, detail=search_detail, entity_id=entity_id,
         )
     elif entity_type or tags:
         return explore_entities(
@@ -11346,6 +11472,71 @@ def article_read(
         )
     else:
         return {"success": False, "error": "Provide query for search or article_id to read"}
+
+
+# --- Universal TOC-first retrieval (Phase 2c) ---
+
+@mcp.tool()
+def read(
+    resource_type: Literal["workfile", "entity", "article"],
+    id: str = "",
+    title: str = "",
+    component: str = "",
+    project: str = "",
+    detail: Literal["", "toc", "full"] = "",
+    section_id: str = "",
+) -> dict:
+    """Unified TOC-first read across workfiles, entities, and articles.
+
+    Single entry point for section-addressable retrieval. Returns a TOC envelope
+    by default for large records; fetch a single section via section_id, or force
+    full body via detail='full'.
+
+    Use when: You know which record you want (you have an id/title/component) and
+    want progressive disclosure. For semantic search use recall_memories,
+    recall_entities, or recall_articles.
+
+    Returns: {success, resource_type, id, detail_level, title|display_name,
+              toc?, content?, section_id?, fetch_section?, fetch_full?}.
+
+    Args:
+        resource_type: 'workfile' (filing cabinet), 'entity' (reference library),
+                       or 'article' (knowledge articles).
+        id: UUID for entities/articles. For workfiles, use component+title instead.
+        title: Workfile title (required with resource_type='workfile').
+        component: Workfile component/drawer (required with resource_type='workfile').
+        project: Project name (workfiles only; defaults to current).
+        detail: '' default (auto-TOC for large records); 'toc' force TOC envelope;
+                'full' force full body.
+        section_id: Fetch exactly this section (from a prior TOC call).
+    """
+    if resource_type == "workfile":
+        if not component or not title:
+            return {
+                "success": False,
+                "error": "resource_type='workfile' requires both component and title",
+            }
+        return unstash(
+            component=component, title=title, project=project,
+            detail=detail, section_id=section_id,
+        )
+    elif resource_type == "entity":
+        if not id:
+            return {"success": False, "error": "resource_type='entity' requires id"}
+        return entity_read(
+            entity_id=id, project=project,
+            detail=detail or "summary", section_id=section_id,
+        )
+    elif resource_type == "article":
+        if not id:
+            return {"success": False, "error": "resource_type='article' requires id"}
+        # Article read supports article_id + optional section_id natively
+        return read_article(article_id=id, section_id=section_id)
+    else:
+        return {
+            "success": False,
+            "error": f"unknown resource_type '{resource_type}' — use 'workfile', 'entity', or 'article'",
+        }
 
 
 # --- Messaging (8 old → 2 new) ---
