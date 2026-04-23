@@ -11,7 +11,6 @@ hooks:
     - matcher: mcp__postgres__execute_sql
       command: "python -c \"import sys; print('{}')\" "
       description: "Placeholder for SQL validation hook"
-paths: "**/*.sql|**/migrations/**"
 ---
 
 # Database Operations Skill

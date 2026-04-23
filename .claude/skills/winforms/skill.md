@@ -8,7 +8,6 @@ allowed-tools:
   - Write
   - Edit
   - Bash
-paths: "**/*.cs"
 ---
 
 # WinForms Development Skill

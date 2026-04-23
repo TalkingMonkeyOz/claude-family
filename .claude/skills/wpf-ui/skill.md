@@ -14,7 +14,6 @@ sources:
   - 'https://wpfui.lepo.co/documentation/'
   - 'https://github.com/lepoco/wpfui'
   - 'WPF UI Gallery App (src/Wpf.Ui.Gallery)'
-paths: "**/*.{xaml,cs}"
 ---
 
 # WPF UI - Modern Fluent Design for WPF
