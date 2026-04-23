@@ -7902,6 +7902,8 @@ def unstash(
     component: str,
     title: str = "",
     project: str = "",
+    detail: Literal["", "toc", "full"] = "",
+    section_id: str = "",
 ) -> dict:
     """Retrieve workfile(s). If title given, single file. If omitted, all active in component.
 
@@ -7914,12 +7916,18 @@ def unstash(
         component: Drawer name to retrieve from.
         title: Specific file title. If empty, returns all files in component.
         project: Project name. Defaults to current directory.
+        detail: '' default (full content, but auto-TOC if content >200 lines with >=2 H2s);
+                'toc' force TOC envelope; 'full' always return full body.
+        section_id: When provided with title, returns only that section's body.
+                    Section IDs come from the TOC in a prior call.
     """
     from server import tool_unstash
     return _run_async(tool_unstash(
         component=component,
         title=title or None,
         project=project,
+        detail=detail,
+        section_id=section_id,
     ))
 
 
@@ -11122,6 +11130,8 @@ def workfile_read(
     project: str = "",
     is_active: bool = True,
     limit: int = 5,
+    detail: Literal["", "toc", "full"] = "",
+    section_id: str = "",
 ) -> dict:
     """Read, search, or list workfiles from the filing cabinet.
 
@@ -11135,11 +11145,18 @@ def workfile_read(
         project: Project name. Defaults to current directory.
         is_active: Filter by active status (default True).
         limit: Max results for search.
+        detail: '' default (full content; auto-TOC if content >200 lines with >=2 H2s);
+                'toc' force TOC envelope; 'full' always return full body.
+        section_id: When provided with title, returns only that section's body.
+                    Section IDs come from the TOC in a prior call.
     """
     if query:
         return search_workfiles(query=query, project=project, component=component, limit=limit)
     elif component:
-        return unstash(component=component, title=title, project=project)
+        return unstash(
+            component=component, title=title, project=project,
+            detail=detail, section_id=section_id,
+        )
     else:
         return list_workfiles(project=project, component=component, is_active=is_active)
 

@@ -40,7 +40,7 @@ import asyncio
 import json
 import sys
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 import re
@@ -1102,6 +1102,94 @@ async def tool_recall_knowledge(
 # Workfile Tools (Project-Scoped Component Working Context)
 # ============================================================================
 
+def _section_id(record_id: str, slug: str) -> str:
+    """Deterministic section_id for non-persisted section addressing (workfiles, entities).
+
+    Same (record_id, slug) always produces same id. Enables TOC + fetch-section patterns
+    without requiring a section table for every record type.
+    """
+    import hashlib
+    h = hashlib.sha1(f"{record_id}|{slug}".encode()).hexdigest()[:12]
+    return f"sec-{h}"
+
+
+def _estimate_tokens_fast(text: str) -> int:
+    """Rough token estimate: ~4 chars per token."""
+    return max(1, len(text or "") // 4)
+
+
+def _build_toc(content: str, record_id: str, include_summary: bool = True) -> Dict:
+    """Parse markdown content and build TOC envelope.
+
+    Returns {toc: [{section_id, title, slug, token_count, summary?}],
+             sections_by_id: {section_id: body},
+             section_count: int,
+             total_tokens: int}.
+    """
+    parts = _split_on_h2(content, target_lines=400)
+    toc = []
+    sections_by_id = {}
+    total_tokens = 0
+    for slug, body in parts:
+        sid = _section_id(record_id, slug)
+        # Recover title from body's first H2 line, else use slug
+        title = slug.replace('-', ' ').title()
+        first_line = body.split('\n', 1)[0].strip() if body else ''
+        if first_line.startswith('##'):
+            title = first_line.lstrip('#').strip()
+        tokens = _estimate_tokens_fast(body)
+        entry = {
+            "section_id": sid,
+            "title": title,
+            "slug": slug,
+            "token_count": tokens,
+        }
+        if include_summary:
+            # Summary = first non-header non-empty line
+            summary = ''
+            for ln in body.split('\n'):
+                stripped = ln.strip()
+                if stripped and not stripped.startswith('#'):
+                    summary = stripped[:200]
+                    break
+            if summary:
+                entry["summary"] = summary
+        toc.append(entry)
+        sections_by_id[sid] = body
+        total_tokens += tokens
+    return {
+        "toc": toc,
+        "sections_by_id": sections_by_id,
+        "section_count": len(toc),
+        "total_tokens": total_tokens,
+    }
+
+
+# Records above this line count auto-qualify for TOC mode when detail is not specified.
+TOC_AUTO_THRESHOLD_LINES = 200
+
+
+def _should_use_toc(content: str, detail: str) -> bool:
+    """Decide whether to return TOC envelope vs full body.
+
+    - detail='toc' → always TOC
+    - detail='full' → never TOC
+    - detail='' (default) → TOC if content has >=2 H2 headers AND exceeds threshold
+    """
+    if detail == "toc":
+        return True
+    if detail == "full":
+        return False
+    if not content:
+        return False
+    lines = content.count('\n') + 1
+    if lines < TOC_AUTO_THRESHOLD_LINES:
+        return False
+    import re as _re
+    h2_count = len(_re.findall(r'(?m)^##\s', content))
+    return h2_count >= 2
+
+
 def _split_on_h2(content: str, target_lines: int = 400) -> List[Tuple[str, str]]:
     """Split markdown content into (section_title, section_body) pairs on H2 headers.
 
@@ -1350,8 +1438,17 @@ async def tool_unstash(
     component: str,
     title: Optional[str] = None,
     project: str = "",
+    detail: str = "",
+    section_id: str = "",
 ) -> Dict:
-    """Retrieve workfile(s). If title given, single file. If omitted, all active in component."""
+    """Retrieve workfile(s). If title given, single file. If omitted, all active in component.
+
+    detail:
+      '' (default) — full content (backward compat)
+      'toc'        — force TOC envelope (section list + summaries, no bodies)
+      'full'       — force full content (bypass auto-TOC for large records)
+    section_id: when provided, returns only that section's body (requires title).
+    """
     project = project or os.path.basename(os.getcwd())
 
     project_id = get_project_id(project)
@@ -1384,16 +1481,58 @@ async def tool_unstash(
         conn.commit()
         cur.close()
 
-        files = [{
-            "title": r['title'],
-            "content": r['content'],
-            "workfile_type": r['workfile_type'],
-            "tags": r['tags'],
-            "feature_code": r['feature_code'],
-            "is_pinned": r['is_pinned'],
-            "updated_at": str(r['updated_at']),
-            "access_count": r['access_count'],
-        } for r in rows]
+        files = []
+        for r in rows:
+            content = r['content'] or ''
+            record_id = r['workfile_id']
+            base = {
+                "workfile_id": record_id,
+                "title": r['title'],
+                "workfile_type": r['workfile_type'],
+                "tags": r['tags'],
+                "feature_code": r['feature_code'],
+                "is_pinned": r['is_pinned'],
+                "updated_at": str(r['updated_at']),
+                "access_count": r['access_count'],
+                "token_count": _estimate_tokens_fast(content),
+            }
+
+            # Section-id fetch: single file, specific section
+            if section_id and title and r['title'] == title:
+                toc_data = _build_toc(content, record_id, include_summary=False)
+                section_body = toc_data['sections_by_id'].get(section_id)
+                if section_body is None:
+                    base["error"] = f"section_id '{section_id}' not found"
+                    base["toc"] = toc_data['toc']
+                    base["detail_level"] = "toc"
+                else:
+                    base["content"] = section_body
+                    base["section_id"] = section_id
+                    base["detail_level"] = "section"
+                    base["toc"] = toc_data['toc']
+                files.append(base)
+                continue
+
+            # Auto-TOC decision
+            if _should_use_toc(content, detail):
+                toc_data = _build_toc(content, record_id)
+                base["toc"] = toc_data['toc']
+                base["section_count"] = toc_data['section_count']
+                base["total_tokens"] = toc_data['total_tokens']
+                base["detail_level"] = "toc"
+                base["fetch_section"] = (
+                    f'workfile_read(component="{component}", title="{r["title"]}", '
+                    f'section_id="<section_id from toc>")'
+                )
+                base["fetch_full"] = (
+                    f'workfile_read(component="{component}", title="{r["title"]}", '
+                    f'detail="full")'
+                )
+            else:
+                base["content"] = content
+                base["detail_level"] = "full"
+
+            files.append(base)
 
         return {
             "success": True,
