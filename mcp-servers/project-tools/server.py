@@ -1102,6 +1102,43 @@ async def tool_recall_knowledge(
 # Workfile Tools (Project-Scoped Component Working Context)
 # ============================================================================
 
+def _split_on_h2(content: str, target_lines: int = 400) -> List[Tuple[str, str]]:
+    """Split markdown content into (section_title, section_body) pairs on H2 headers.
+
+    Returns list of (slug, body) tuples. If no H2 headers present or fewer than 2,
+    falls back to size-based splits with generic part-N slugs.
+    """
+    import re as _re
+    lines = content.split('\n')
+    h2_indices = [i for i, ln in enumerate(lines) if _re.match(r'^##\s', ln)]
+
+    if len(h2_indices) >= 2:
+        # Preamble is everything before the first H2 (becomes "intro" if non-empty)
+        parts = []
+        if h2_indices[0] > 0:
+            preamble = '\n'.join(lines[:h2_indices[0]]).strip()
+            if preamble:
+                parts.append(("intro", preamble))
+        # Each H2 starts a new section
+        for idx, start in enumerate(h2_indices):
+            end = h2_indices[idx + 1] if idx + 1 < len(h2_indices) else len(lines)
+            section_lines = lines[start:end]
+            header = section_lines[0].lstrip('#').strip()
+            slug = _re.sub(r'[^a-zA-Z0-9\s-]', '', header).strip().lower()
+            slug = _re.sub(r'\s+', '-', slug)[:50] or f"section-{idx + 1}"
+            body = '\n'.join(section_lines).strip()
+            parts.append((slug, body))
+        return parts
+
+    # Fallback: size-based split at target_lines boundaries
+    parts = []
+    for idx in range(0, len(lines), target_lines):
+        chunk = '\n'.join(lines[idx:idx + target_lines]).strip()
+        if chunk:
+            parts.append((f"part-{len(parts) + 1}", chunk))
+    return parts
+
+
 async def tool_stash(
     component: str,
     title: str,
@@ -1112,8 +1149,15 @@ async def tool_stash(
     feature_code: Optional[str] = None,
     is_pinned: bool = False,
     mode: str = "replace",
+    auto_chunk: bool = False,
 ) -> Dict:
-    """Store/update a workfile. UPSERT on (project, component, title)."""
+    """Store/update a workfile. UPSERT on (project, component, title).
+
+    If auto_chunk=True AND content exceeds 500 lines, the file is automatically
+    split on H2 headers (or size-based if none): parent becomes an index with
+    links to sub-workfiles named '{title}-{slug}'. Default False preserves
+    existing behavior.
+    """
     project = project or os.path.basename(os.getcwd())
 
     # Validate workfile_type
@@ -1127,7 +1171,84 @@ async def tool_stash(
 
     session_id = _resolve_session_id(project)
 
-    # Generate embedding
+    # Auto-chunk path: split into linked records BEFORE writing the main file.
+    line_count_in = content.count('\n') + 1
+    auto_chunk_info = None
+    if auto_chunk and line_count_in > 500 and mode in ('replace', 'append'):
+        # For append mode, fetch and concatenate first so chunking sees full content
+        if mode == 'append':
+            _conn = get_db_connection()
+            try:
+                _cur = _conn.cursor()
+                _cur.execute("""
+                    SELECT content FROM claude.project_workfiles
+                    WHERE project_id = %s::uuid AND component = %s AND title = %s AND is_active = TRUE
+                """, (project_id, component, title))
+                _existing = _cur.fetchone()
+                if _existing:
+                    content = _existing['content'] + "\n---\n" + content
+                    line_count_in = content.count('\n') + 1
+                _cur.close()
+            finally:
+                _conn.close()
+            mode = 'replace'  # subsequent write is full rewrite of the index
+
+        parts = _split_on_h2(content, target_lines=400)
+        if len(parts) >= 2:
+            sub_titles = []
+            for slug, body in parts:
+                sub_title = f"{title}-{slug}"
+                sub_line_count = body.count('\n') + 1
+                # Recursive inline write for each part (no auto_chunk on sub-writes)
+                sub_embed = generate_embedding(f"{component} {sub_title} {body[:500]}")
+                _conn2 = get_db_connection()
+                try:
+                    _cur2 = _conn2.cursor()
+                    _cur2.execute("""
+                        INSERT INTO claude.project_workfiles
+                            (project_id, component, title, content, workfile_type, tags,
+                             feature_code, is_pinned, linked_sessions, embedding, updated_at)
+                        VALUES (%s::uuid, %s, %s, %s, %s, %s, %s, %s, ARRAY[%s]::uuid[], %s::vector, NOW())
+                        ON CONFLICT (project_id, component, title) DO UPDATE SET
+                            content = EXCLUDED.content,
+                            workfile_type = EXCLUDED.workfile_type,
+                            tags = COALESCE(EXCLUDED.tags, project_workfiles.tags),
+                            embedding = EXCLUDED.embedding,
+                            updated_at = NOW()
+                    """, (project_id, component, sub_title, body, workfile_type, tags,
+                          feature_code, False, session_id, sub_embed))
+                    _conn2.commit()
+                    _cur2.close()
+                finally:
+                    _conn2.close()
+                sub_titles.append({"title": sub_title, "lines": sub_line_count})
+
+            # Build index content for the parent
+            index_lines = [f"# {title} (INDEX)", ""]
+            index_lines.append(
+                f"*This workfile was auto-chunked from {line_count_in} lines into "
+                f"{len(parts)} linked sub-workfiles per the chunking rule (300-500 lines).*"
+            )
+            index_lines.append("")
+            index_lines.append("## Parts")
+            index_lines.append("")
+            for st in sub_titles:
+                index_lines.append(
+                    f"- [{component}/{st['title']}](workfile://{project}/{component}/{st['title']}) "
+                    f"({st['lines']} lines)"
+                )
+            index_lines.append("")
+            index_lines.append(
+                "Fetch any part with `workfile_read(component, title)` where title is from the list above."
+            )
+            content = '\n'.join(index_lines)
+            auto_chunk_info = {
+                "split_into": sub_titles,
+                "parent_kept_as_index": True,
+                "original_line_count": line_count_in,
+            }
+
+    # Generate embedding (after potential index rewrite)
     embed_text = f"{component} {title} {content[:500]}"
     embedding = generate_embedding(embed_text)
 
@@ -1188,6 +1309,10 @@ async def tool_stash(
             "title": title,
             "line_count": line_count,
         }
+        if auto_chunk_info:
+            result["auto_chunked"] = True
+            result["split_info"] = auto_chunk_info
+            result["action"] = "auto_chunked"
         if line_count > 500:
             # Detect natural split points (H2 headers) for the caller.
             h2_lines = [

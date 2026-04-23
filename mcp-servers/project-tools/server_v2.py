@@ -7860,6 +7860,7 @@ def stash(
     feature_code: str | None = None,
     is_pinned: bool = False,
     mode: str = "replace",
+    auto_chunk: bool = False,
 ) -> dict:
     """Store/update a workfile. UPSERT on (project, component, title).
 
@@ -7869,8 +7870,9 @@ def stash(
     Use when: Saving component-scoped working context that should bridge
     sessions. Unlike session_facts (session-scoped) or knowledge (permanent),
     workfiles are project+component scoped with transient lifecycle.
-    Returns: {success, workfile_id, action: "created"|"updated"|"appended",
-              component, title}.
+    Returns: {success, workfile_id, action, component, title, line_count}.
+    If auto_chunk=True and content >500 lines, additionally returns
+    {auto_chunked: true, split_info: {split_into: [{title, lines}], ...}}.
 
     Args:
         component: Drawer name (e.g., "parallel-runner", "auth-flow").
@@ -7882,12 +7884,16 @@ def stash(
         feature_code: Optional link to a feature (e.g., "F12").
         is_pinned: If True, auto-surfaces at session start and in precompact.
         mode: "replace" (default) overwrites content, "append" concatenates with separator.
+        auto_chunk: If True and content >500 lines, auto-split on H2 headers
+            (or size-based if none). Parent becomes an index with links to
+            sub-workfiles named '{title}-{slug}'. Default False (no behavior change).
     """
     from server import tool_stash
     return _run_async(tool_stash(
         component=component, title=title, content=content,
         project=project, workfile_type=workfile_type, tags=tags,
         feature_code=feature_code, is_pinned=is_pinned, mode=mode,
+        auto_chunk=auto_chunk,
     ))
 
 
@@ -11073,11 +11079,14 @@ def workfile_store(
     feature_code: str | None = None,
     is_pinned: bool = False,
     mode: Literal["replace", "append", "archive", "delete"] = "replace",
+    auto_chunk: bool = False,
 ) -> dict:
     """Store, archive, or delete workfiles in the filing cabinet.
 
     Use when: Saving component working notes, archiving stale files, or deleting wrong content.
-    Returns: {success, workfile_id, action}.
+    Returns: {success, workfile_id, action, line_count}. If content >500 lines,
+    adds chunking_required + suggested_split_points; set auto_chunk=True to
+    have the tool perform the split automatically into linked sub-workfiles.
 
     Args:
         component: Drawer name (e.g., 'auth-flow', 'parallel-runner').
@@ -11089,6 +11098,9 @@ def workfile_store(
         feature_code: Optional link to a feature (e.g., 'F12').
         is_pinned: If True, auto-surfaces at session start.
         mode: replace (overwrite), append (add to end), archive (soft-delete), delete (hard-delete).
+        auto_chunk: If True and content >500 lines, auto-split on H2 headers
+            (or size-based if none). Parent becomes an index; sub-workfiles are
+            named '{title}-{slug}'. Default False.
     """
     if mode == "archive":
         return archive_workfile(component=component, title=title, project=project)
@@ -11098,7 +11110,7 @@ def workfile_store(
         return stash(
             component=component, title=title, content=content, project=project,
             workfile_type=workfile_type, tags=tags, feature_code=feature_code,
-            is_pinned=is_pinned, mode=mode,
+            is_pinned=is_pinned, mode=mode, auto_chunk=auto_chunk,
         )
 
 
