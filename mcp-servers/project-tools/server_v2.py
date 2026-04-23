@@ -4126,8 +4126,15 @@ def deploy_project(
             cur.execute("""
                 SELECT config->'behavior' as behavior_text
                 FROM claude.profiles
-                WHERE project_id = %s::uuid
-            """, (project_id,))
+                WHERE source_type = 'project'
+                  AND (
+                    source_ref = %s
+                    OR name = %s
+                  )
+                  AND COALESCE(is_active, true) = true
+                ORDER BY (source_ref = %s) DESC, updated_at DESC NULLS LAST
+                LIMIT 1
+            """, (str(project_id) if project_id else '', project_name, str(project_id) if project_id else ''))
             profile_row = cur.fetchone()
 
             if profile_row and profile_row['behavior_text']:
