@@ -1,16 +1,20 @@
 #!/usr/bin/env python3
 """
-Knowledge Consolidation — Merge session memories into domain_concept dossiers.
+Knowledge Consolidation — Link session memories to domain_concept hubs.
 
-Implements BPMN model `knowledge_consolidation`:
+Implements BPMN model `knowledge_consolidation` (v2, 2026-04-24):
   1. Load all active domain_concepts with embeddings
   2. Find mid/long tier memories not yet consolidated (last 30 days)
   3. Match memories to concepts via cosine similarity (>= 0.65)
-  4. Compare content to avoid duplicates
-  5. Append new gotchas/recipes to concept properties
-  6. Mark memories as consolidated
-  7. Re-embed updated concepts
-  8. Log to audit_log
+  4. Link memory to concept via consolidated_into column (NO property append)
+  5. Log to audit_log
+
+v2 change (2026-04-24): previous version APPENDED memory content to
+concept properties.gotchas arrays, creating 10K-token blobs per hub
+that duplicated content living in claude.knowledge. v2 links without
+duplicating — memory stays in claude.knowledge with per-memory
+embedding, hub retrieval surfaces linked memories via the
+consolidated_into column.
 
 Usage:
     python knowledge_consolidation.py              # Run consolidation
@@ -18,7 +22,7 @@ Usage:
     python knowledge_consolidation.py --threshold 0.60  # Custom similarity threshold
 
 Author: Claude Family
-Date: 2026-04-10
+Date: 2026-04-10 (v2: 2026-04-24)
 """
 
 import argparse
@@ -164,119 +168,51 @@ def match_memories_to_concepts(memories, concepts, threshold):
     return matches
 
 
-def is_duplicate_gotcha(new_text, existing_gotchas):
-    """Check if a gotcha is already captured (simple substring check)."""
-    new_lower = new_text.lower()
-    for existing in existing_gotchas:
-        existing_lower = existing.lower()
-        # If >60% of words overlap, consider it a duplicate
-        new_words = set(new_lower.split())
-        existing_words = set(existing_lower.split())
-        if not new_words:
-            return True
-        overlap = len(new_words & existing_words) / len(new_words)
-        if overlap > 0.6:
-            return True
-    return False
+def link_and_mark(conn, matches, dry_run=False):
+    """Link matched memories to their concepts via consolidated_into (v2: no property append).
 
-
-def extract_new_knowledge(matches):
-    """Extract new gotchas from matched memories, avoiding duplicates."""
-    results = {}
+    v2 change (2026-04-24): previously appended memory content to
+    entity.properties.gotchas which caused the 10K-token hub bloat. We
+    now leave memory content in claude.knowledge (where per-memory
+    embeddings preserve semantic-search precision) and only set the
+    consolidated_into column — the hub-surfacing behaviour is driven
+    by that column at read time.
+    """
+    cur = conn.cursor()
+    linked_count = 0
 
     for cid, data in matches.items():
         concept = data['concept']
-        props = concept['properties'] or {}
-        existing_gotchas = props.get('gotchas', [])
-        # Some concepts store gotchas as a single string; normalize to list
-        if isinstance(existing_gotchas, str):
-            existing_gotchas = [existing_gotchas] if existing_gotchas else []
-        elif not isinstance(existing_gotchas, list):
-            existing_gotchas = []
+        memory_ids = [str(m['knowledge_id']) for m in data['memories']]
 
-        new_gotchas = []
-        for mem in data['memories']:
-            desc = mem.get('description', '') or mem.get('title', '')
-            if not desc or len(desc) < 20:
-                continue
-            if not is_duplicate_gotcha(desc, existing_gotchas + new_gotchas):
-                new_gotchas.append(desc)
-
-        if new_gotchas:
-            results[cid] = {
-                'concept': concept,
-                'new_gotchas': new_gotchas,
-                'memory_ids': [str(m['knowledge_id']) for m in data['memories']]
-            }
-
-    total_new = sum(len(r['new_gotchas']) for r in results.values())
-    logger.info(f"Extracted {total_new} new gotchas for {len(results)} concepts")
-    return results
-
-
-def merge_and_mark(conn, results, dry_run=False):
-    """Merge new gotchas into concepts and mark memories as consolidated."""
-    cur = conn.cursor()
-    merged_count = 0
-
-    for cid, data in results.items():
-        concept = data['concept']
-        new_gotchas = data['new_gotchas']
-        memory_ids = data['memory_ids']
-
-        logger.info(f"  {concept['display_name']}: +{len(new_gotchas)} gotchas from {len(memory_ids)} memories")
-        for g in new_gotchas:
-            logger.info(f"    + {g[:100]}...")
+        logger.info(f"  {concept['display_name']}: linking {len(memory_ids)} memories")
 
         if dry_run:
             continue
 
-        # Append gotchas to properties
-        cur.execute("""
-            UPDATE claude.entities
-            SET properties = jsonb_set(
-                COALESCE(properties, '{}'::jsonb),
-                '{gotchas}',
-                COALESCE(properties->'gotchas', '[]'::jsonb) || %s::jsonb
-            ),
-            updated_at = NOW()
-            WHERE entity_id = %s
-        """, (json.dumps(new_gotchas), cid))
-
-        # Mark memories as consolidated
+        # Link memories to concept (the load-bearing operation)
         for mid in memory_ids:
             cur.execute("""
                 UPDATE claude.knowledge
                 SET consolidated_into = %s
                 WHERE knowledge_id = %s
+                  AND consolidated_into IS NULL
             """, (cid, mid))
 
-        # Re-embed the updated concept
-        cur.execute("SELECT properties FROM claude.entities WHERE entity_id = %s", (cid,))
-        row = cur.fetchone()
-        updated_props = row[0] if not isinstance(row, dict) else row['properties']
-        embed_text = f"{concept['display_name']}: {json.dumps(updated_props, default=str)[:2000]}"
-        new_embedding = generate_embedding(embed_text)
-        if new_embedding:
-            cur.execute("""
-                UPDATE claude.entities SET embedding = %s::vector
-                WHERE entity_id = %s
-            """, (str(new_embedding), cid))
-
-        # Audit log — use event_type + metadata (audit_log schema: no 'action'/'details' cols)
+        # Audit log — link only, no properties mutation
         cur.execute("""
             INSERT INTO claude.audit_log (entity_type, entity_id, event_type, metadata, created_at)
-            VALUES ('entity', %s, 'knowledge_consolidated', %s::jsonb, NOW())
+            VALUES ('entity', %s, 'memories_linked_to_concept', %s::jsonb, NOW())
         """, (cid, json.dumps({
-            'memories_merged': len(memory_ids),
-            'new_gotchas': len(new_gotchas),
-            'concept_name': concept['display_name']
+            'memories_linked': len(memory_ids),
+            'concept_name': concept['display_name'],
+            'bpmn_version': 'knowledge_consolidation_v2',
         })))
 
         conn.commit()
-        merged_count += len(new_gotchas)
+        linked_count += len(memory_ids)
 
-    return merged_count
+    return linked_count
 
 
 def consolidate_session(conn, session_id=None, threshold=SIMILARITY_THRESHOLD):
@@ -334,13 +270,9 @@ def consolidate_session(conn, session_id=None, threshold=SIMILARITY_THRESHOLD):
         if not matches:
             return {"consolidated": 0, "concepts_updated": 0, "message": "No memories matched concepts"}
 
-        results = extract_new_knowledge(matches)
-        if not results:
-            return {"consolidated": 0, "concepts_updated": 0, "message": "All matched memories already captured"}
-
-        merged = merge_and_mark(conn, results)
-        logger.info(f"Session consolidation: merged {merged} gotchas into {len(results)} concepts")
-        return {"consolidated": merged, "concepts_updated": len(results)}
+        linked = link_and_mark(conn, matches)
+        logger.info(f"Session consolidation: linked {linked} memories to {len(matches)} concepts")
+        return {"consolidated": linked, "concepts_updated": len(matches)}
 
     except Exception as e:
         logger.error(f"Session consolidation failed: {e}", exc_info=True)
@@ -375,14 +307,9 @@ def main():
             logger.info("No memories matched above threshold")
             return 0
 
-        results = extract_new_knowledge(matches)
-        if not results:
-            logger.info("All matched memories already captured in concepts")
-            return 0
-
-        merged = merge_and_mark(conn, results, dry_run=args.dry_run)
-        action = "Would merge" if args.dry_run else "Merged"
-        logger.info(f"{action} {merged} new gotchas into domain_concepts")
+        linked = link_and_mark(conn, matches, dry_run=args.dry_run)
+        action = "Would link" if args.dry_run else "Linked"
+        logger.info(f"{action} {linked} memories to {len(matches)} domain_concepts (v2: link, no append)")
         return 0
 
     except Exception as e:

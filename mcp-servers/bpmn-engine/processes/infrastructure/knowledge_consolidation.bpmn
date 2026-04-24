@@ -5,19 +5,25 @@
                   targetNamespace="http://claude-family/bpmn/knowledge-consolidation">
 
   <!--
-    Knowledge Consolidation: Memories to Domain Concepts
+    Knowledge Consolidation: Memories to Domain Concepts (v2 — LINK, don't DUPLICATE)
 
-    Background job that scans memories (mid/long tier) and merges new
-    gotchas, recipes, and learnings into matching domain_concepts.
-    This closes the loop: sessions produce fragments via remember(),
-    this job synthesizes them back into the reference dossier.
+    REDESIGN (2026-04-24): Previous version APPENDED memory content into
+    domain_concept properties.gotchas arrays, causing 10K-token blobs per
+    hub entity. That was wrong: it duplicated content that already lived
+    in claude.knowledge rows, lost per-memory embedding precision, and
+    violated the chunking rule (300-500 lines per record).
+
+    v2 corrects: memories STAY in claude.knowledge. Consolidation LINKS
+    a memory to its matched domain_concept via the consolidated_into
+    column. The concept becomes a navigation hub; retrieval of the
+    concept surfaces linked memories without duplicating them.
 
     Actor legend:
       [HOOK]   = scriptTask (Python logic)
       [DB]     = scriptTask (direct database query)
   -->
 
-  <bpmn:process id="knowledge_consolidation" name="Knowledge Consolidation: Memories to Domain Concepts" isExecutable="true">
+  <bpmn:process id="knowledge_consolidation" name="Knowledge Consolidation: Link Memories to Domain Concepts" isExecutable="true">
 
     <bpmn:startEvent id="start_consolidation" name="Consolidation Triggered">
       <bpmn:documentation>Triggered by: (1) background job on schedule, (2) session_end hook,
@@ -53,38 +59,20 @@ Group: {concept_id: [memory_ids]}</bpmn:documentation>
 
     <bpmn:endEvent id="end_no_matches" name="No Matches Above Threshold" />
 
-    <bpmn:scriptTask id="task_extract_new_knowledge" name="[HOOK] Compare memory content against concept properties" scriptFormat="python">
-      <bpmn:documentation>For each (concept, memories) pair:
-- Parse memory descriptions for gotcha patterns
-- Compare against existing concept gotchas to avoid duplicates
-- Identify new recipes, environment notes
-Output: {concept_id: {new_gotchas: [], new_recipes: []}}</bpmn:documentation>
-      <bpmn:script>new_knowledge_extracted = True</bpmn:script>
-    </bpmn:scriptTask>
-
-    <bpmn:exclusiveGateway id="gw_has_new_knowledge" name="Any new knowledge extracted?" default="flow_has_new" />
-
-    <bpmn:endEvent id="end_all_duplicate" name="All Memories Already Captured" />
-
-    <bpmn:scriptTask id="task_merge_into_concept" name="[DB] Append new gotchas/recipes to domain_concept properties" scriptFormat="python">
-      <bpmn:documentation>UPDATE claude.entities SET properties = jsonb_set(...)
-Also re-generate summary from updated properties.</bpmn:documentation>
-      <bpmn:script>merged_into_concept = True</bpmn:script>
-    </bpmn:scriptTask>
-
-    <bpmn:scriptTask id="task_mark_consolidated" name="[DB] Mark source memories as consolidated" scriptFormat="python">
+    <bpmn:scriptTask id="task_link_memories_to_concept" name="[DB] Link memories to concept via consolidated_into (NO property append)" scriptFormat="python">
       <bpmn:documentation>UPDATE claude.knowledge SET consolidated_into = concept_entity_id
-WHERE knowledge_id IN (matched_memory_ids). Memory NOT deleted.</bpmn:documentation>
-      <bpmn:script>memories_marked = True</bpmn:script>
-    </bpmn:scriptTask>
+WHERE knowledge_id IN (matched_memory_ids).
 
-    <bpmn:scriptTask id="task_reembed" name="[HOOK] Re-generate Voyage AI embedding for updated concept" scriptFormat="python">
-      <bpmn:documentation>Updated concept has new gotchas/recipes — re-embed so pgvector searches find new content.</bpmn:documentation>
-      <bpmn:script>concept_reembedded = True</bpmn:script>
+Memory is NOT deleted. Memory description is NOT copied into entity properties.
+The concept now has linked memories retrievable via:
+  SELECT * FROM claude.knowledge WHERE consolidated_into = concept_id
+This preserves per-memory embeddings for precise semantic search.</bpmn:documentation>
+      <bpmn:script>memories_linked = True</bpmn:script>
     </bpmn:scriptTask>
 
     <bpmn:scriptTask id="task_log_consolidation" name="[DB] Log consolidation to audit_log" scriptFormat="python">
-      <bpmn:documentation>INSERT INTO claude.audit_log (entity_type, entity_id, action, details)</bpmn:documentation>
+      <bpmn:documentation>INSERT INTO claude.audit_log (entity_type, entity_id, event_type, metadata)
+metadata: {linked_memory_count, concept_name}</bpmn:documentation>
       <bpmn:script>consolidation_logged = True</bpmn:script>
     </bpmn:scriptTask>
 
@@ -102,15 +90,8 @@ WHERE knowledge_id IN (matched_memory_ids). Memory NOT deleted.</bpmn:documentat
     <bpmn:sequenceFlow id="flow_no_matches" sourceRef="gw_has_matches" targetRef="end_no_matches">
       <bpmn:conditionExpression>len(matches) == 0</bpmn:conditionExpression>
     </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="flow_has_matches" sourceRef="gw_has_matches" targetRef="task_extract_new_knowledge" />
-    <bpmn:sequenceFlow id="flow_extract_to_check" sourceRef="task_extract_new_knowledge" targetRef="gw_has_new_knowledge" />
-    <bpmn:sequenceFlow id="flow_all_duplicate" sourceRef="gw_has_new_knowledge" targetRef="end_all_duplicate">
-      <bpmn:conditionExpression>len(new_knowledge) == 0</bpmn:conditionExpression>
-    </bpmn:sequenceFlow>
-    <bpmn:sequenceFlow id="flow_has_new" sourceRef="gw_has_new_knowledge" targetRef="task_merge_into_concept" />
-    <bpmn:sequenceFlow id="flow_merge_to_mark" sourceRef="task_merge_into_concept" targetRef="task_mark_consolidated" />
-    <bpmn:sequenceFlow id="flow_mark_to_reembed" sourceRef="task_mark_consolidated" targetRef="task_reembed" />
-    <bpmn:sequenceFlow id="flow_reembed_to_log" sourceRef="task_reembed" targetRef="task_log_consolidation" />
+    <bpmn:sequenceFlow id="flow_has_matches" sourceRef="gw_has_matches" targetRef="task_link_memories_to_concept" />
+    <bpmn:sequenceFlow id="flow_link_to_log" sourceRef="task_link_memories_to_concept" targetRef="task_log_consolidation" />
     <bpmn:sequenceFlow id="flow_log_to_end" sourceRef="task_log_consolidation" targetRef="end_consolidated" />
 
   </bpmn:process>
