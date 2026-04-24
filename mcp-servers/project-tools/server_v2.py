@@ -4294,8 +4294,38 @@ def regenerate_settings(
 
         base_config = template_row['content'] or {}
 
-        # Merge: workspace overrides base
-        merged_config = {**base_config, **startup_config}
+        # FB320 fix: deep-merge so workspace.hooks.PreToolUse appends to
+        # template.hooks.PreToolUse instead of replacing the entire hooks
+        # object. Arrays concatenate (with dedup by JSON equality); dicts
+        # recursively merge; scalars are overridden.
+        def _deep_merge(base: dict, override: dict) -> dict:
+            from copy import deepcopy
+            result = deepcopy(base) if isinstance(base, dict) else base
+            if not isinstance(override, dict):
+                return override
+            for k, v in override.items():
+                if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+                    result[k] = _deep_merge(result[k], v)
+                elif k in result and isinstance(result[k], list) and isinstance(v, list):
+                    existing_json = {
+                        json.dumps(item, sort_keys=True)
+                        for item in result[k] if isinstance(item, dict)
+                    }
+                    for item in v:
+                        item_json = (
+                            json.dumps(item, sort_keys=True)
+                            if isinstance(item, dict) else None
+                        )
+                        if item_json and item_json in existing_json:
+                            continue
+                        result[k].append(item)
+                        if item_json:
+                            existing_json.add(item_json)
+                else:
+                    result[k] = v
+            return result
+
+        merged_config = _deep_merge(base_config, startup_config)
 
         # Write to .claude/settings.local.json
         settings_path = project_path / ".claude" / "settings.local.json"
