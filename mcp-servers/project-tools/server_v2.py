@@ -1927,6 +1927,7 @@ class WorkflowEngine:
 # ============================================================================
 
 @mcp.tool()
+@deprecated_alias("work_status(item_code=..., action='advance', new_status=...)")
 def advance_status(
     item_type: Literal["feedback", "features", "build_tasks"],
     item_id: str,
@@ -1973,6 +1974,7 @@ def advance_status(
 
 
 @mcp.tool()
+@deprecated_alias("work_status(item_code='BT...', action='start')")
 def start_work(
     task_code: str,
 ) -> dict:
@@ -2884,6 +2886,7 @@ def extract_conversation(
 # ============================================================================
 
 @mcp.tool()
+@deprecated_alias("book_store(book_title=..., ...)")
 def store_book(
     title: str,
     author: str = "",
@@ -2940,6 +2943,7 @@ def store_book(
 
 
 @mcp.tool()
+@deprecated_alias("book_store(book_title=..., concept=..., ...)")
 def store_book_reference(
     book_title: str,
     concept: str,
@@ -3029,6 +3033,7 @@ def store_book_reference(
 
 
 @mcp.tool()
+@deprecated_alias("book_read(query=...)")
 def recall_book_reference(
     query: str,
     book_title: str = "",
@@ -4718,6 +4723,66 @@ from server import (  # noqa: E402
 # They maintain the exact same interface so existing callers don't break.
 
 import asyncio
+import functools
+
+# FB330 — Deprecation envelope for legacy tool aliases.
+# Each legacy tool injects `_deprecation` into its dict response pointing
+# callers at the new consolidated name. Callers can self-migrate; once
+# 14 days of mcp_usage shows zero hits on a name, M1 can delete it safely.
+_DEPRECATED_ALIASES: dict[str, str] = {
+    "stash": "workfile_store(component=..., title=..., content=...)",
+    "unstash": "workfile_read(component=..., title=...)",
+    "catalog": "entity_store(entity_type=..., properties=...)",
+    "recall_entities": "entity_read(query=...)",
+    "create_feedback": "work_create(type='feedback', feedback_type=..., ...)",
+    "resolve_feedback": "work_status(item_code='FB...', action='resolve')",
+    "promote_feedback": "work_status(item_code='FB...', action='promote')",
+    "add_build_task": "work_create(type='task', feature_code=..., ...)",
+    "advance_status": "work_status(item_code=..., action='advance', new_status=...)",
+    "start_work": "work_status(item_code='BT...', action='start')",
+    "complete_work": "work_status(item_code='BT...', action='complete')",
+    "check_inbox": "inbox(view='pending')",
+    "list_session_facts": "session_facts()",
+    "store_book": "book_store(book_title=..., ...)",
+    "store_book_reference": "book_store(book_title=..., concept=..., ...)",
+    "recall_book_reference": "book_read(query=...)",
+    "search_workfiles": "workfile_read(query=...)",
+    "search_bpmn_processes": "bpmn_search(query=...)",
+    "recall_articles": "article_read(query=...)",
+    "recall_memories": None,   # active tool — kept as-is
+}
+
+
+def deprecated_alias(renamed_to: str):
+    """Wrap a legacy MCP tool so its dict response carries a `_deprecation` hint.
+
+    The wrapped function still returns its normal result; the decorator only
+    adds `{"_deprecation": {...}}` when the result is a dict. Non-dict results
+    (unusual) pass through untouched.
+
+    Registers the alias in _DEPRECATED_ALIASES on import so telemetry can
+    count usage — feeds FB330 migration analytics.
+    """
+    def decorator(func):
+        alias_name = func.__name__
+        _DEPRECATED_ALIASES.setdefault(alias_name, renamed_to)
+
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            result = func(*args, **kwargs)
+            if isinstance(result, dict):
+                result["_deprecation"] = {
+                    "deprecated": alias_name,
+                    "renamed_to": renamed_to,
+                    "notice": (
+                        f"'{alias_name}' is a legacy alias and will be removed. "
+                        f"Please migrate callers to: {renamed_to}. (FB330)"
+                    ),
+                }
+            return result
+        return wrapper
+    return decorator
+
 
 def _run_async(coro):
     """Run an async function synchronously."""
@@ -4755,6 +4820,7 @@ def get_incomplete_todos(
 
 
 @mcp.tool()
+@deprecated_alias("work_create(type='feedback', feedback_type=..., ...)")
 def create_feedback(
     project: str,
     feedback_type: Literal["bug", "design", "idea", "question", "change", "improvement"],
@@ -4808,6 +4874,7 @@ def create_feature(
 
 
 @mcp.tool()
+@deprecated_alias("work_create(type='task', feature_code=..., ...)")
 def add_build_task(
     feature_id: str,
     task_name: str,
@@ -5418,6 +5485,7 @@ def recall_session_fact(
 
 
 @mcp.tool()
+@deprecated_alias("session_facts()")
 def list_session_facts(
     project_name: str = "",
     include_sensitive: bool = False,
@@ -5929,6 +5997,7 @@ def search_bpmn_processes(
 # ============================================================================
 
 @mcp.tool()
+@deprecated_alias("work_status(item_code='FB...', action='promote')")
 def promote_feedback(
     feedback_id: str,
     feature_name: str = "",
@@ -7122,6 +7191,7 @@ def list_recipients() -> dict:
 
 
 @mcp.tool()
+@deprecated_alias("inbox(view='pending')")
 def check_inbox(
     project_name: str = "",
     session_id: str = "",
@@ -7929,6 +7999,7 @@ def _defer_message(message_id: str, reason: str) -> dict:
 
 
 @mcp.tool()
+@deprecated_alias("workfile_store(component=..., title=..., content=...)")
 def stash(
     component: str,
     title: str,
@@ -7977,6 +8048,7 @@ def stash(
 
 
 @mcp.tool()
+@deprecated_alias("workfile_read(component=..., title=...)")
 def unstash(
     component: str,
     title: str = "",
@@ -8241,6 +8313,7 @@ def _compute_entity_summary(properties: dict, summary_template: str | None = Non
 
 
 @mcp.tool()
+@deprecated_alias("entity_store(entity_type=..., properties=...)")
 def catalog(
     entity_type: str,
     properties: dict,
@@ -9271,6 +9344,7 @@ def get_linked_resources(
 
 
 @mcp.tool()
+@deprecated_alias("entity_read(query=...)")
 def recall_entities(
     query: str,
     entity_type: str = "",
