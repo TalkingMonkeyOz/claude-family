@@ -6,6 +6,9 @@ source: 'Claude Family (DB: instructions)'
 
 # Coding Ethos (Universal)
 
+## Prime Directive
+**Value is system quality, not tokens or money.** Pick the option that produces the better system. Tokens and money are constraints; system quality (clarity, precision, correctness, resilience) is the goal. When tempted by "easier / quicker / cheaper", check that you are not trading system quality for effort saved.
+
 ## Before Writing Code
 1. **SEARCH first** — run `workspaceSymbol` (LSP) to check if function/variable already exists
 2. **READ the file** — run `documentSymbol` (LSP) to understand file structure before editing

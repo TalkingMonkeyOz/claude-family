@@ -14,6 +14,16 @@ tags:
 
 These principles exist because AI-assisted coding tends toward "point solutions" — each prompt acts in isolation, creating fragmented code that works but doesn't compose. These rules prevent that.
 
+## Prime Directive — Value Is System Quality
+
+**Every decision is judged by whether it makes the system work better.** Not by tokens saved. Not by money saved. Not by time-to-finish. Not by effort-to-avoid.
+
+When faced with a choice between "quick" and "right", pick right unless the user has explicitly scoped the work to quick. When faced with "archive stale content to move faster" vs "split and preserve properly", preserve properly. When faced with "bypass the hook with OVERRIDE" vs "fix the root cause", fix the root cause.
+
+Tokens and money are *constraints*, not *goals*. Value is what the system does for its users after this change — clarity for future readers, precision for future retrieval, correctness under edge cases, resilience under failure. Optimise for that, and the other constraints come out right on average.
+
+The anti-pattern to watch for in yourself: "this is easier / quicker / cheaper, so it must be better." It usually is not. If a choice saves effort *and* produces a better system, good. If it saves effort but produces a worse system, it is not the right choice — even if the user said "crack on".
+
 ## The Four Pillars
 
 Every line of code must be **Readable**, **Extendable**, **Maintainable**, and **Testable**:
@@ -86,7 +96,12 @@ This helps both humans and future AI sessions understand intent.
 
 ---
 
-**Version**: 1.1
+**Version**: 1.2
 **Created**: 2026-03-19
-**Updated**: 2026-03-22
+**Updated**: 2026-04-24
 **Location**: knowledge-vault/30-Patterns/coding-ethos.md
+
+**Changelog**:
+- v1.2 (2026-04-24): Added Prime Directive — value is system quality, not tokens or money.
+- v1.1 (2026-03-22): Detail examples.
+- v1.0 (2026-03-19): 4 Pillars + 12 Rules.
