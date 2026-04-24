@@ -23,11 +23,14 @@ def _import_decorator():
     # Bootstrap minimal stub so decorator can be defined (it uses functools only)
     import functools as _ft
     mod.functools = _ft
-    # Read lines 4715-4800 (decorator + _DEPRECATED_ALIASES dict)
+    # Extract just the decorator + _DEPRECATED_ALIASES dict (bounded so we
+    # don't drag in module globals like _ChannelState that need threading).
     with open(os.path.join(SERVER_DIR, 'server_v2.py'), encoding='utf-8') as f:
         src = f.read()
     start = src.find('_DEPRECATED_ALIASES: dict')
-    end = src.find('def _run_async(coro):')
+    # End marker: the Channel Messaging header that immediately follows the
+    # decorator block. Stable anchor that doesn't drift as the file grows.
+    end = src.find('# Channel Messaging', start)
     assert start > 0 and end > start, 'cannot locate decorator block'
     block = src[start:end]
     # Execute the block in a fresh namespace with functools available
