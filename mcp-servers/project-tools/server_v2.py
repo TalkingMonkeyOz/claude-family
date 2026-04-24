@@ -4675,6 +4675,9 @@ from server import (  # noqa: E402
     tool_merge_memories,
     tool_archive_workfile,
     tool_delete_workfile,
+    tool_create_reminder,
+    tool_list_reminders,
+    tool_snooze_reminder,
 )
 
 
@@ -12062,6 +12065,87 @@ def system_info(
         return list_recipients()
     else:
         return {"success": False, "error": f"Unknown view: {view}"}
+
+
+# ============================================================================
+# Scheduled Reminders (cross-session calendar)
+# ============================================================================
+
+@mcp.tool()
+def create_reminder(
+    due_at: str,
+    body: str,
+    rationale: str = "",
+    project_name: str = "",
+    linked_todo_id: str = "",
+    linked_workfile_component: str = "",
+    linked_workfile_title: str = "",
+    linked_feature_code: str = "",
+) -> dict:
+    """Create a scheduled reminder that surfaces at session start on/after due_at.
+
+    Use when: you need to remember to check something in N days (observation
+    deadlines, gate reviews, "come back to this"). Leave project_name empty
+    for global reminders that surface in any project.
+    Returns: {success, reminder_id, short_code (RM42), due_at, project_name}.
+
+    Args:
+        due_at: ISO 8601 timestamp (e.g., "2026-05-01T09:00:00+10:00") or date.
+        body: The reminder text (what Claude should be reminded of).
+        rationale: Why this reminder exists — often critical for judgement.
+        project_name: Scope to one project. Empty = global (all projects).
+        linked_todo_id: UUID of a related todo (optional).
+        linked_workfile_component: Component name of related workfile (optional).
+        linked_workfile_title: Title of related workfile (optional).
+        linked_feature_code: Feature code like F92 (optional).
+    """
+    return _run_async(tool_create_reminder(
+        due_at, body, rationale, project_name,
+        linked_todo_id, linked_workfile_component,
+        linked_workfile_title, linked_feature_code,
+    ))
+
+
+@mcp.tool()
+def list_reminders(
+    project_name: str = "",
+    include_surfaced: bool = False,
+    include_future: bool = True,
+    due_within_days: int = 0,
+) -> dict:
+    """List scheduled reminders with filters.
+
+    Use when: auditing what's queued, snooze/cancel review, or showing upcoming deadlines.
+    Returns: {success, count, reminders: [{short_code, due_at, body, rationale, linked_*, ...}]}.
+
+    Args:
+        project_name: Filter to one project (also includes global). Empty = all.
+        include_surfaced: Include already-surfaced reminders. Default False.
+        include_future: Include future-dated reminders. Default True.
+        due_within_days: Only show reminders due within N days. 0 = no limit.
+    """
+    return _run_async(tool_list_reminders(
+        project_name, include_surfaced, include_future, due_within_days,
+    ))
+
+
+@mcp.tool()
+def snooze_reminder(
+    reminder_ref: str,
+    new_due_at: str,
+    reason: str = "",
+) -> dict:
+    """Reschedule a reminder. Resets surfaced_at so it fires again at new_due_at.
+
+    Use when: a reminder came up but you're not ready; push it forward with context.
+    Returns: {success, reminder_id, short_code, new_due_at}.
+
+    Args:
+        reminder_ref: Short code (RM42) or UUID.
+        new_due_at: New ISO 8601 timestamp.
+        reason: Why snoozed — appended to rationale for audit trail.
+    """
+    return _run_async(tool_snooze_reminder(reminder_ref, new_due_at, reason))
 
 
 # ============================================================================

@@ -4056,6 +4056,184 @@ async def tool_assemble_context(
 
 
 # ============================================================================
+# Scheduled Reminders — cross-session calendar for observation deadlines
+# ============================================================================
+
+async def tool_create_reminder(
+    due_at: str,
+    body: str,
+    rationale: str = "",
+    project_name: str = "",
+    linked_todo_id: str = "",
+    linked_workfile_component: str = "",
+    linked_workfile_title: str = "",
+    linked_feature_code: str = "",
+    session_id: str = "",
+) -> Dict:
+    """Create a scheduled reminder that surfaces at session start on/after due_at."""
+    if not due_at or not body:
+        return {"error": "due_at and body are required"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO claude.scheduled_reminders (
+                project_name, due_at, body, rationale,
+                linked_todo_id, linked_workfile_component,
+                linked_workfile_title, linked_feature_code,
+                created_by_session_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING reminder_id::text, short_code, due_at
+        """, (
+            project_name or None,
+            due_at,
+            body,
+            rationale or None,
+            linked_todo_id or None,
+            linked_workfile_component or None,
+            linked_workfile_title or None,
+            linked_feature_code or None,
+            session_id or None,
+        ))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+        return {
+            "success": True,
+            "reminder_id": row['reminder_id'],
+            "short_code": row['short_code'],
+            "due_at": str(row['due_at']),
+            "project_name": project_name or "(global)",
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"create_reminder failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_list_reminders(
+    project_name: str = "",
+    include_surfaced: bool = False,
+    include_future: bool = True,
+    due_within_days: int = 0,
+) -> Dict:
+    """List reminders matching filters."""
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        where = []
+        params: list = []
+
+        if project_name:
+            where.append("(project_name = %s OR project_name IS NULL)")
+            params.append(project_name)
+
+        if not include_surfaced:
+            where.append("surfaced_at IS NULL")
+
+        if due_within_days > 0:
+            where.append("due_at <= NOW() + make_interval(days => %s)")
+            params.append(due_within_days)
+        elif not include_future:
+            where.append("due_at <= NOW()")
+
+        where_clause = " AND ".join(where) if where else "TRUE"
+
+        cur.execute(f"""
+            SELECT reminder_id::text, short_code, project_name, due_at, body,
+                   rationale, linked_todo_id::text, linked_workfile_component,
+                   linked_workfile_title, linked_feature_code, surfaced_at,
+                   snoozed_until, created_at
+            FROM claude.scheduled_reminders
+            WHERE {where_clause}
+            ORDER BY due_at ASC
+            LIMIT 100
+        """, params)
+        rows = cur.fetchall()
+        cur.close()
+
+        reminders = [{
+            "reminder_id": r['reminder_id'],
+            "short_code": r['short_code'],
+            "project_name": r['project_name'] or "(global)",
+            "due_at": str(r['due_at']),
+            "body": r['body'],
+            "rationale": r['rationale'],
+            "linked_todo_id": r['linked_todo_id'],
+            "linked_workfile": (
+                f"{r['linked_workfile_component']}/{r['linked_workfile_title']}"
+                if r['linked_workfile_component'] else None
+            ),
+            "linked_feature_code": r['linked_feature_code'],
+            "surfaced_at": str(r['surfaced_at']) if r['surfaced_at'] else None,
+            "snoozed_until": str(r['snoozed_until']) if r['snoozed_until'] else None,
+        } for r in rows]
+
+        return {
+            "success": True,
+            "count": len(reminders),
+            "reminders": reminders,
+        }
+    except Exception as e:
+        return {"error": f"list_reminders failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+async def tool_snooze_reminder(
+    reminder_ref: str,
+    new_due_at: str,
+    reason: str = "",
+) -> Dict:
+    """Reschedule a reminder. reminder_ref accepts short_code (RM5) or UUID."""
+    if not reminder_ref or not new_due_at:
+        return {"error": "reminder_ref and new_due_at are required"}
+
+    conn = get_db_connection()
+    try:
+        cur = conn.cursor()
+        if reminder_ref.upper().startswith('RM'):
+            cur.execute("""
+                UPDATE claude.scheduled_reminders
+                SET due_at = %s, snoozed_until = %s, surfaced_at = NULL,
+                    rationale = COALESCE(rationale,'') ||
+                                CASE WHEN %s <> '' THEN E'\n[snoozed: ' || %s || ']' ELSE '' END
+                WHERE short_code = %s
+                RETURNING reminder_id::text, short_code, due_at
+            """, (new_due_at, new_due_at, reason, reason, reminder_ref.upper()))
+        else:
+            cur.execute("""
+                UPDATE claude.scheduled_reminders
+                SET due_at = %s, snoozed_until = %s, surfaced_at = NULL,
+                    rationale = COALESCE(rationale,'') ||
+                                CASE WHEN %s <> '' THEN E'\n[snoozed: ' || %s || ']' ELSE '' END
+                WHERE reminder_id = %s::uuid
+                RETURNING reminder_id::text, short_code, due_at
+            """, (new_due_at, new_due_at, reason, reason, reminder_ref))
+
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+        if not row:
+            return {"error": f"Reminder '{reminder_ref}' not found"}
+
+        return {
+            "success": True,
+            "reminder_id": row['reminder_id'],
+            "short_code": row['short_code'],
+            "new_due_at": str(row['due_at']),
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"error": f"snooze_reminder failed: {str(e)}"}
+    finally:
+        conn.close()
+
+
+# ============================================================================
 # MCP Tool Definitions
 # ============================================================================
 

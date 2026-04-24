@@ -1176,6 +1176,75 @@ def main():
     except Exception as e:
         logger.warning(f"Session context cache generation failed (non-fatal): {e}")
 
+    # =========================================================================
+    # Due reminders (scheduled_reminders) — surface and mark as surfaced.
+    # Global (project_name IS NULL) + this project's reminders whose due_at has
+    # passed AND snoozed_until is not in the future AND not yet surfaced.
+    # =========================================================================
+    reminder_lines: list = []
+    try:
+        reminder_conn = get_db_connection()
+        if reminder_conn:
+            rcur = reminder_conn.cursor()
+            rcur.execute("""
+                SELECT reminder_id::text, short_code, due_at, body, rationale,
+                       linked_todo_id::text, linked_workfile_component,
+                       linked_workfile_title, linked_feature_code
+                FROM claude.scheduled_reminders
+                WHERE (project_name IS NULL OR project_name = %s)
+                  AND surfaced_at IS NULL
+                  AND due_at <= NOW()
+                  AND (snoozed_until IS NULL OR snoozed_until <= NOW())
+                ORDER BY due_at ASC
+                LIMIT 10
+            """, (project_name,))
+            due_rows = rcur.fetchall()
+
+            if due_rows:
+                reminder_lines.append("")
+                reminder_lines.append("⏰ DUE REMINDERS (fire once, acknowledged on display):")
+                surfaced_ids = []
+                for r in due_rows:
+                    code = r['short_code']
+                    body = r['body']
+                    rationale = r['rationale']
+                    link_bits = []
+                    if r['linked_todo_id']:
+                        link_bits.append(f"todo={r['linked_todo_id'][:8]}")
+                    if r['linked_feature_code']:
+                        link_bits.append(f"feature={r['linked_feature_code']}")
+                    if r['linked_workfile_component']:
+                        wf = r['linked_workfile_component']
+                        if r['linked_workfile_title']:
+                            wf += f"/{r['linked_workfile_title']}"
+                        link_bits.append(f"workfile={wf}")
+                    link_str = f" [{', '.join(link_bits)}]" if link_bits else ""
+
+                    reminder_lines.append(f"  {code}: {body}{link_str}")
+                    if rationale:
+                        reminder_lines.append(f"    why: {rationale}")
+                    surfaced_ids.append(r['reminder_id'])
+
+                reminder_lines.append(
+                    "  Action: use snooze_reminder(code, new_due_at, reason) to push forward, "
+                    "or just act now."
+                )
+
+                rcur.execute(
+                    "UPDATE claude.scheduled_reminders SET surfaced_at = NOW() "
+                    "WHERE reminder_id = ANY(%s::uuid[])",
+                    (surfaced_ids,),
+                )
+                reminder_conn.commit()
+
+            rcur.close()
+            reminder_conn.close()
+    except Exception as e:
+        logger.warning(f"Reminder surfacing failed (non-fatal): {e}")
+
+    if reminder_lines:
+        context_lines.extend(reminder_lines)
+
     result["additionalContext"] = "\n".join(context_lines)
     result["systemMessage"] = f"Claude Family session started for {project_name}. Session logged to database.{handoff_summary}"
 
