@@ -239,12 +239,11 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
         if not results:
             return ""
 
-        lines = ["RELEVANT KNOWLEDGE (from past sessions):"]
+        # B0 context-bloat trim 2026-04-24: title-only index, preview dropped.
+        # Claude loads full content via recall_memories(query) on demand.
+        lines = ["RELEVANT KNOWLEDGE (load via recall_memories):"]
         for title, desc, ktype, confidence, tier in results:
-            desc_preview = (desc or '')[:200]
-            if len(desc or '') > 200:
-                desc_preview += "..."
-            lines.append(f"  [{ktype}] {title}: {desc_preview}")
+            lines.append(f"  [{ktype}] {title}")
 
         return "\n".join(lines)
     except Exception:

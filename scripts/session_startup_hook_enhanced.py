@@ -1087,25 +1087,31 @@ def main():
                     status = f['status'] if isinstance(f, dict) else f[2]
                     cache_parts.append(f"  {code} {name} ({status})")
 
-            # Pinned workfiles — include CONTENT (truncated) so Claude has domain context
+            # Pinned workfiles — title-only pointers (B0 context-bloat trim 2026-04-24).
+            # Claude loads full content on demand via workfile_read(component, title).
             cache_cur.execute("""
-                SELECT pw.component, pw.title, LEFT(pw.content, 800) as content_preview
+                SELECT pw.component, pw.title,
+                       LEFT(pw.content, 120) as content_headline
                 FROM claude.project_workfiles pw
                 JOIN claude.projects p ON pw.project_id = p.project_id
                 WHERE p.project_name = %s AND pw.is_pinned = true AND pw.is_active = true
                 ORDER BY pw.access_count DESC
-                LIMIT 3
+                LIMIT 5
             """, (project_name,))
             workfiles = cache_cur.fetchall()
             if workfiles:
-                cache_parts.append("PINNED WORKFILES:")
+                cache_parts.append("PINNED WORKFILES (use workfile_read to load full content):")
                 for w in workfiles:
                     comp = w['component'] if isinstance(w, dict) else w[0]
                     title = w['title'] if isinstance(w, dict) else w[1]
-                    content = w['content_preview'] if isinstance(w, dict) else w[2]
-                    cache_parts.append(f"  {comp}/{title}")
-                    if content:
-                        cache_parts.append(f"  ---\n{content}\n  ---")
+                    headline = w['content_headline'] if isinstance(w, dict) else w[2]
+                    # One-line headline only — strip newlines, collapse whitespace
+                    if headline:
+                        import re as _re
+                        headline_clean = _re.sub(r'\s+', ' ', headline).strip()[:100]
+                        cache_parts.append(f"  {comp}/{title} — {headline_clean}")
+                    else:
+                        cache_parts.append(f"  {comp}/{title}")
 
             # Top knowledge gotchas — proactive injection of high-confidence entries
             cache_cur.execute("""
@@ -1143,10 +1149,10 @@ def main():
                     cache_parts.append(f"  [{ftype}] {key}")
                 cache_parts.append("  Use recall_session_fact(key) to retrieve values.")
 
-            # Architecture articles — surface top-level articles so Claude knows they exist
-            # Shows all published architecture articles (cross-project by design)
+            # Architecture articles — title-only index (B0 context-bloat trim 2026-04-24).
+            # Claude loads abstract + body via article_read(query) on demand.
             cache_cur.execute("""
-                SELECT title, LEFT(abstract, 150) as abstract_preview
+                SELECT title
                 FROM claude.knowledge_articles
                 WHERE status = 'published'
                   AND article_type = 'architecture'
@@ -1155,12 +1161,9 @@ def main():
             """)
             articles = cache_cur.fetchall()
             if articles:
-                cache_parts.append("ARCHITECTURE ARTICLES (use article_read for details):")
-                for a in articles:
-                    title = a['title'] if isinstance(a, dict) else a[0]
-                    abstract_preview = a['abstract_preview'] if isinstance(a, dict) else a[1]
-                    cache_parts.append(f"  - {title}: {abstract_preview}")
-                cache_parts.append("  Use article_read(query) to search, article_read(article_id) to read full content.")
+                titles = [a['title'] if isinstance(a, dict) else a[0] for a in articles]
+                cache_parts.append("ARCHITECTURE ARTICLES: " + " | ".join(titles))
+                cache_parts.append("  Use article_read(query) to load any of the above.")
 
             cache_conn.close()
 
