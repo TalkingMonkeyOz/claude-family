@@ -68,6 +68,79 @@ DB_AVAILABLE, PSYCOPG_VERSION = detect_psycopg()[:2]
 DB_AVAILABLE = DB_AVAILABLE is not None
 
 
+# FB331: path-scoping helper. Prevents false-positive blocks on fixtures
+# outside any registered workspace (reported by project-hal during F245 setup).
+_WORKSPACE_ROOTS_CACHE: Optional[List[str]] = None
+
+
+def _load_workspace_roots() -> List[str]:
+    """Load all registered workspace roots from claude.workspaces once per invocation.
+
+    Returns lower-case forward-slash normalized paths. Fail-safe: on DB error,
+    returns empty list (causing path-scoped blocks to pass through — preferring
+    false-negative over false-positive, per FB331).
+    """
+    global _WORKSPACE_ROOTS_CACHE
+    if _WORKSPACE_ROOTS_CACHE is not None:
+        return _WORKSPACE_ROOTS_CACHE
+    try:
+        conn = get_db_connection()
+        if conn is None:
+            _WORKSPACE_ROOTS_CACHE = []
+            return _WORKSPACE_ROOTS_CACHE
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT workspace_path FROM claude.workspaces "
+                "WHERE is_active = TRUE AND workspace_path IS NOT NULL"
+            )
+            rows = cur.fetchall()
+            roots: List[str] = []
+            for r in rows:
+                wp = r[0] if not isinstance(r, dict) else r.get('workspace_path', '')
+                if wp:
+                    roots.append(wp.replace('\\', '/').rstrip('/').lower())
+            _WORKSPACE_ROOTS_CACHE = roots
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"FB331: workspace-root lookup failed (fail-open): {e}")
+        _WORKSPACE_ROOTS_CACHE = []
+    return _WORKSPACE_ROOTS_CACHE
+
+
+def _is_inside_workspace(file_path: str) -> bool:
+    """True if file_path sits inside any registered workspace root."""
+    if not file_path:
+        return False
+    normalized = file_path.replace('\\', '/').lower()
+    roots = _load_workspace_roots()
+    for root in roots:
+        if normalized == root or normalized.startswith(root + '/'):
+            return True
+    return False
+
+
+def _is_deployed_output_target(file_path: str) -> bool:
+    """True if file_path is a DB-deployed artefact that must not be hand-edited.
+
+    Combined rule: the file is either INSIDE a known workspace root, OR the
+    path already traverses a `.claude/` directory (which is always a deployed
+    output area regardless of workspace registration).
+
+    Returns False for fixture/reference files outside any workspace (FB331).
+    """
+    if not file_path:
+        return False
+    normalized = file_path.replace('\\', '/').lower()
+    if '/.claude/' in normalized:
+        return True
+    return _is_inside_workspace(file_path)
+
+
 def get_matching_standards(file_path: str, conn) -> List[Dict]:
     """Get all coding standards that apply to this file path."""
     try:
@@ -356,9 +429,11 @@ def main():
             allow_operation()
 
         # GOVERNANCE: Block edits to DB-generated files
+        # FB331 fix: only enforce when target is inside a registered workspace
+        # or a .claude/ subtree. Fixtures outside any deployed project pass.
         generated_files = {'.mcp.json', 'settings.local.json'}
         file_basename = os.path.basename(file_path.replace('\\', '/'))
-        if file_basename in generated_files:
+        if file_basename in generated_files and _is_deployed_output_target(file_path):
             logger.warning(f"BLOCKED: Attempt to edit DB-generated file: {file_path}")
             block_with_reason(
                 f"BLOCKED: '{file_basename}' is generated from database and must not be edited directly. "
@@ -370,7 +445,9 @@ def main():
             )
 
         # GOVERNANCE: Block direct CLAUDE.md edits — must use config_manage() MCP tool
-        if file_basename == 'CLAUDE.md' or file_basename == 'claude.md':
+        # FB331 fix: only enforce when CLAUDE.md lives inside a registered workspace
+        # or .claude/ subtree. Reference/fixture CLAUDE.md files elsewhere pass.
+        if (file_basename == 'CLAUDE.md' or file_basename == 'claude.md') and _is_deployed_output_target(file_path):
             logger.warning(f"BLOCKED: Direct edit to CLAUDE.md: {file_path}")
             block_with_reason(
                 f"BLOCKED: CLAUDE.md is version-tracked in the database. Do not edit directly.\n"
