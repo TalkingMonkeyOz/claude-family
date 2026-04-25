@@ -36,17 +36,20 @@ def run_check() -> dict:
         k_rows = cur.fetchone()["n"]
         cur.execute("SELECT COUNT(*)::int AS n FROM claude.entities")
         e_rows = cur.fetchone()["n"]
+        cur.execute("SELECT COUNT(*)::int AS n FROM claude.knowledge_articles")
+        a_rows = cur.fetchone()["n"]
         cur.execute("SELECT COUNT(*)::int AS n FROM claude.article_sections")
         s_rows = cur.fetchone()["n"]
 
-        parity_ok = view_rows == (k_rows + e_rows + s_rows)
+        # Stage 2 (2026-04-25): view now includes knowledge_articles parents.
+        parity_ok = view_rows == (k_rows + e_rows + a_rows + s_rows)
 
         cur.execute(
             """INSERT INTO claude.kg_nodes_parity_log
-                  (view_rows, knowledge_rows, entities_rows, article_sections_rows, parity_ok, notes)
-               VALUES (%s, %s, %s, %s, %s, %s)
+                  (view_rows, knowledge_rows, entities_rows, articles_rows, article_sections_rows, parity_ok, notes)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
                RETURNING check_id, checked_at, parity_ok""",
-            (view_rows, k_rows, e_rows, s_rows, parity_ok,
+            (view_rows, k_rows, e_rows, a_rows, s_rows, parity_ok,
              f"auto {datetime.now(timezone.utc).isoformat()}"),
         )
         result = dict(cur.fetchone())
@@ -69,7 +72,7 @@ def run_check() -> dict:
             "check_id": result["check_id"],
             "checked_at": result["checked_at"].isoformat(),
             "view_rows": view_rows,
-            "source_sum": k_rows + e_rows + s_rows,
+            "source_sum": k_rows + e_rows + a_rows + s_rows,
             "parity_ok": parity_ok,
             "streak": result["streak"],
             "stage2_ready": result["streak"] >= 7 and parity_ok,

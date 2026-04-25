@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/kg-dual-write"
+    id="Definitions_KGDW">
+  <!--
+    PROCESS: KG DUAL-WRITE PIPELINE (P5 Stage 2)
+    Mirrors every write to claude.{knowledge, entities, knowledge_articles, article_sections}
+    into the unified claude.kg_nodes table via PostgreSQL triggers.
+    Triggers ship DISABLED; activation = ALTER TABLE … ENABLE TRIGGER per source.
+    Trigger mechanism is INTENTIONALLY TEMPORARY (P5 only) — Project Metis is
+    designing the long-term replacement. See task #822.
+    Related: kg_nodes_view (Stage 1), kg_nodes_diff_check.py (Stage 3 prep),
+    storage_routing (user-facing classification).
+  -->
+  <bpmn:process id="kg_dual_write" name="KG Dual-Write Pipeline (Stage 2)" isExecutable="true">
+    <!--
+      Input data (per row event):
+        - source_table: knowledge | entities | knowledge_articles | article_sections
+        - source_id:    UUID of the row
+        - op:           INSERT | UPDATE | DELETE
+        - new_row:      row payload (NULL for DELETE)
+        - old_row:      row payload (NULL for INSERT)
+      Output data:
+        - sync_success: bool — whether kg_nodes mirror operation succeeded
+        - failure_reason: text — populated when sync_success=false
+    -->
+
+    <bpmn:startEvent id="start" name="Legacy Table Write Event">
+      <bpmn:outgoing>f_start_to_gw_enabled</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Gating: trigger enabled per source table? Postgres trigger state is the flag. -->
+    <bpmn:exclusiveGateway id="gw_enabled" name="Trigger Enabled?" default="f_disabled_skip">
+      <bpmn:incoming>f_start_to_gw_enabled</bpmn:incoming>
+      <bpmn:outgoing>f_enabled_route</bpmn:outgoing>
+      <bpmn:outgoing>f_disabled_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skipped" name="Skipped (Trigger Disabled)">
+      <bpmn:incoming>f_disabled_skip</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Route by source table to the appropriate trigger function -->
+    <bpmn:exclusiveGateway id="gw_source" name="Source Table?">
+      <bpmn:incoming>f_enabled_route</bpmn:incoming>
+      <bpmn:outgoing>f_route_knowledge</bpmn:outgoing>
+      <bpmn:outgoing>f_route_entities</bpmn:outgoing>
+      <bpmn:outgoing>f_route_articles</bpmn:outgoing>
+      <bpmn:outgoing>f_route_sections</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="sync_knowledge" name="[PG TRIGGER] kg_sync_knowledge()" scriptFormat="sql">
+      <bpmn:incoming>f_route_knowledge</bpmn:incoming>
+      <bpmn:outgoing>f_knowledge_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- AFTER INSERT/UPDATE/DELETE on claude.knowledge.
+-- INSERT/UPDATE: upsert into kg_nodes with node_type='memory'.
+-- DELETE: remove from kg_nodes WHERE source_table='knowledge' AND source_id=OLD.knowledge_id.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_entities" name="[PG TRIGGER] kg_sync_entities()" scriptFormat="sql">
+      <bpmn:incoming>f_route_entities</bpmn:incoming>
+      <bpmn:outgoing>f_entities_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- AFTER INSERT/UPDATE/DELETE on claude.entities.
+-- node_type='entity'. Maps display_name -> title, summary -> body, is_archived -> status.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_articles" name="[PG TRIGGER] kg_sync_articles()" scriptFormat="sql">
+      <bpmn:incoming>f_route_articles</bpmn:incoming>
+      <bpmn:outgoing>f_articles_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- AFTER INSERT/UPDATE/DELETE on claude.knowledge_articles.
+-- node_type='article'. Maps abstract -> body, article_type -> kind.
+-- Added Stage 2 (2026-04-25) to close Stage 1 omission.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_article_sections" name="[PG TRIGGER] kg_sync_article_sections()" scriptFormat="sql">
+      <bpmn:incoming>f_route_sections</bpmn:incoming>
+      <bpmn:outgoing>f_sections_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- AFTER INSERT/UPDATE/DELETE on claude.article_sections.
+-- node_type='article_section'. status hardcoded 'active'.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_validate" name="Sync Result Merge">
+      <bpmn:incoming>f_knowledge_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_entities_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_articles_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_sections_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_validate_to_gw_success</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:exclusiveGateway id="gw_success" name="Sync Succeeded?" default="f_sync_failed">
+      <bpmn:incoming>f_validate_to_gw_success</bpmn:incoming>
+      <bpmn:outgoing>f_sync_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_sync_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_synced" name="Mirrored to kg_nodes">
+      <bpmn:incoming>f_sync_ok</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="capture_failure" name="[CAPTURE] failure_capture pipeline">
+      <bpmn:incoming>f_sync_failed</bpmn:incoming>
+      <bpmn:outgoing>f_failure_to_end</bpmn:outgoing>
+      <bpmn:script>
+-- On trigger function exception: legacy write succeeds (trigger fires AFTER and exception
+-- bubbles up — postgres rolls back the whole tx). For Stage 2 we accept this strict coupling;
+-- Stage 4 read-flip planning will revisit (e.g. async fan-out via NOTIFY).
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_failed" name="Sync Failed (Tx Rolled Back)">
+      <bpmn:incoming>f_failure_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_gw_enabled" sourceRef="start"            targetRef="gw_enabled"/>
+    <bpmn:sequenceFlow id="f_enabled_route"       sourceRef="gw_enabled"       targetRef="gw_source">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">trigger_enabled == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_disabled_skip"       sourceRef="gw_enabled"       targetRef="end_skipped"/>
+    <bpmn:sequenceFlow id="f_route_knowledge"     sourceRef="gw_source"        targetRef="sync_knowledge">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "knowledge"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_entities"      sourceRef="gw_source"        targetRef="sync_entities">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "entities"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_articles"      sourceRef="gw_source"        targetRef="sync_articles">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "knowledge_articles"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_sections"      sourceRef="gw_source"        targetRef="sync_article_sections">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "article_sections"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_knowledge_to_merge"  sourceRef="sync_knowledge"        targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_entities_to_merge"   sourceRef="sync_entities"         targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_articles_to_merge"   sourceRef="sync_articles"         targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_sections_to_merge"   sourceRef="sync_article_sections" targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_validate_to_gw_success" sourceRef="gw_validate"        targetRef="gw_success"/>
+    <bpmn:sequenceFlow id="f_sync_ok"             sourceRef="gw_success"            targetRef="end_synced">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">sync_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_sync_failed"         sourceRef="gw_success"            targetRef="capture_failure"/>
+    <bpmn:sequenceFlow id="f_failure_to_end"      sourceRef="capture_failure"       targetRef="end_failed"/>
+  </bpmn:process>
+</bpmn:definitions>
