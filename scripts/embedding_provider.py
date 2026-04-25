@@ -170,11 +170,18 @@ def _ensure_service_running() -> None:
     try:
         kwargs = {}
         if sys.platform == 'win32':
-            kwargs['creationflags'] = 0x08000000 | 0x00000008  # CREATE_NO_WINDOW | DETACHED_PROCESS
+            # CREATE_NO_WINDOW alone — DETACHED_PROCESS is mutually exclusive and
+            # combining them surfaces a visible console on Windows (FB334).
+            kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
         else:
             kwargs['start_new_session'] = True
 
-        python_exe = sys.executable.replace('pythonw.exe', 'python.exe')
+        # Prefer pythonw.exe so the child has no console at all; fall back to python.exe.
+        python_exe = sys.executable
+        if sys.platform == 'win32' and python_exe.endswith('python.exe'):
+            pythonw = python_exe[:-len('python.exe')] + 'pythonw.exe'
+            if os.path.exists(pythonw):
+                python_exe = pythonw
         subprocess.Popen(
             [python_exe, service_script],
             stdout=subprocess.DEVNULL,
