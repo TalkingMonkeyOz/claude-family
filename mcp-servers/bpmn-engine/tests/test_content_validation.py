@@ -13,8 +13,9 @@ Test scenarios:
   4. Validation fails, no fix suggestion → deny (block)
   5. Validation fails, can suggest fix → ask (middleware correction)
   6. Context rules loaded → context injected + validation passes
-  7. Governed file → deny (use tool instead)
+  7. Governed file inside deployed target → deny (use tool instead)
   8. Governed file + bypass → allow (emergency override)
+  9. Pattern matches but outside deployed target → allow (FB331)
 """
 
 import os
@@ -37,7 +38,8 @@ PROCESS_ID = "content_validation"
 # Default data for all gateway variables (prevents NameError on non-taken paths)
 _DEFAULT_DATA = {
     "has_file_path": True,
-    "is_governed": False,
+    "pattern_match": False,
+    "inside_deployed_target": True,
     "bypass_governance": False,
     "correct_tool": "",
     "db_available": True,
@@ -198,17 +200,19 @@ class TestContextInjectedAndValidated:
 
 
 class TestGovernedFileDenied:
-    """Governed file (CLAUDE.md, settings.local.json) → deny with tool suggestion."""
+    """Governed file (CLAUDE.md, settings.local.json) inside deployed target → deny."""
 
     def test_governed_file_blocked(self):
         wf = load_workflow({
-            "is_governed": True,
+            "pattern_match": True,
+            "inside_deployed_target": True,
             "correct_tool": "update_claude_md()",
         })
 
         assert wf.is_completed()
         names = completed_spec_names(wf)
         assert "check_governed_file" in names
+        assert "check_deployed_target" in names
         assert "deny_governed" in names
         assert "end_governed_denied" in names
         # Should NOT reach DB or validation
@@ -222,7 +226,8 @@ class TestGovernedFileBypass:
 
     def test_governed_with_bypass_continues(self):
         wf = load_workflow({
-            "is_governed": True,
+            "pattern_match": True,
+            "inside_deployed_target": True,
             "bypass_governance": True,
             "correct_tool": "update_claude_md()",
             "has_matching_standards": False,
@@ -231,6 +236,7 @@ class TestGovernedFileBypass:
         assert wf.is_completed()
         names = completed_spec_names(wf)
         assert "check_governed_file" in names
+        assert "check_deployed_target" in names
         # Should continue past governance to normal pipeline
         assert "connect_db" in names
         assert "deny_governed" not in names
@@ -242,13 +248,39 @@ class TestNonGovernedFilePassesThrough:
 
     def test_normal_file_not_affected(self):
         wf = load_workflow({
-            "is_governed": False,
+            "pattern_match": False,
             "has_matching_standards": False,
         })
 
         assert wf.is_completed()
         names = completed_spec_names(wf)
         assert "check_governed_file" in names
+        # Did not need to evaluate the path-scoping decision
+        assert "check_deployed_target" not in names
         assert "deny_governed" not in names
+        assert "connect_db" in names
+        assert "allow_no_standards" in names
+
+
+class TestPatternMatchOutsideDeployedTarget:
+    """FB331: pattern matches but file is outside any registered workspace and not in /.claude/.
+    Path-scoping must skip governance and let the operation proceed (e.g. fixture CLAUDE.md).
+    """
+
+    def test_outside_target_passes_through(self):
+        wf = load_workflow({
+            "pattern_match": True,
+            "inside_deployed_target": False,
+            "correct_tool": "update_claude_md()",
+            "has_matching_standards": False,
+        })
+
+        assert wf.is_completed()
+        names = completed_spec_names(wf)
+        assert "check_governed_file" in names
+        assert "check_deployed_target" in names
+        # Outside-target → governance skipped, normal pipeline runs
+        assert "deny_governed" not in names
+        assert "end_governed_denied" not in names
         assert "connect_db" in names
         assert "allow_no_standards" in names
