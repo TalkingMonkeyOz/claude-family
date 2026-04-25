@@ -1087,11 +1087,14 @@ def main():
                     status = f['status'] if isinstance(f, dict) else f[2]
                     cache_parts.append(f"  {code} {name} ({status})")
 
-            # Pinned workfiles — title-only pointers (B0 context-bloat trim 2026-04-24).
-            # Claude loads full content on demand via workfile_read(component, title).
+            # Pinned workfiles — top-1 gets a real body, rest get headline only.
+            # 2026-04-26: widen FB335 partial restore. B0 cut everything to ~100-char
+            # headlines and the most-pinned workfile (e.g. v3-plan/refined-execution-plan)
+            # lost actionable detail. Top-1 now gets 400-char body so the most-accessed
+            # workfile arrives ready-to-use.
             cache_cur.execute("""
                 SELECT pw.component, pw.title,
-                       LEFT(pw.content, 120) as content_headline
+                       LEFT(pw.content, 400) as content_body
                 FROM claude.project_workfiles pw
                 JOIN claude.projects p ON pw.project_id = p.project_id
                 WHERE p.project_name = %s AND pw.is_pinned = true AND pw.is_active = true
@@ -1100,16 +1103,18 @@ def main():
             """, (project_name,))
             workfiles = cache_cur.fetchall()
             if workfiles:
-                cache_parts.append("PINNED WORKFILES (use workfile_read to load full content):")
-                for w in workfiles:
+                cache_parts.append("PINNED WORKFILES (top-1 has body; rest: workfile_read to load full):")
+                import re as _re
+                for i, w in enumerate(workfiles):
                     comp = w['component'] if isinstance(w, dict) else w[0]
                     title = w['title'] if isinstance(w, dict) else w[1]
-                    headline = w['content_headline'] if isinstance(w, dict) else w[2]
-                    # One-line headline only — strip newlines, collapse whitespace
-                    if headline:
-                        import re as _re
-                        headline_clean = _re.sub(r'\s+', ' ', headline).strip()[:100]
-                        cache_parts.append(f"  {comp}/{title} — {headline_clean}")
+                    body = w['content_body'] if isinstance(w, dict) else w[2]
+                    if body:
+                        body_clean = _re.sub(r'\s+', ' ', body).strip()
+                        if i == 0:
+                            cache_parts.append(f"  {comp}/{title} — {body_clean[:380]}{'…' if len(body) >= 400 else ''}")
+                        else:
+                            cache_parts.append(f"  {comp}/{title} — {body_clean[:100]} …")
                     else:
                         cache_parts.append(f"  {comp}/{title}")
 
@@ -1162,10 +1167,12 @@ def main():
                     cache_parts.append(f"  [{ftype}] {key}")
                 cache_parts.append("  Use recall_session_fact(key) to retrieve values.")
 
-            # Architecture articles — title-only index (B0 context-bloat trim 2026-04-24).
-            # Claude loads abstract + body via article_read(query) on demand.
+            # Architecture articles — top-2 get 200-char abstract preview, rest title.
+            # 2026-04-26: widen FB335 partial restore. B0 cut articles to title-only,
+            # so canonical narrative knowledge (e.g. Knowledge System article) never
+            # surfaced the v2 / vault-sunset framing without an explicit article_read.
             cache_cur.execute("""
-                SELECT title
+                SELECT title, LEFT(abstract, 220) as abstract_preview, LENGTH(abstract) as full_len
                 FROM claude.knowledge_articles
                 WHERE status = 'published'
                   AND article_type = 'architecture'
@@ -1174,8 +1181,18 @@ def main():
             """)
             articles = cache_cur.fetchall()
             if articles:
-                titles = [a['title'] if isinstance(a, dict) else a[0] for a in articles]
-                cache_parts.append("ARCHITECTURE ARTICLES: " + " | ".join(titles))
+                cache_parts.append("ARCHITECTURE ARTICLES (top-2 abstract; rest: article_read for full):")
+                import re as _re_a
+                for i, a in enumerate(articles):
+                    title = a['title'] if isinstance(a, dict) else a[0]
+                    abstract = a['abstract_preview'] if isinstance(a, dict) else a[1]
+                    full_len = a['full_len'] if isinstance(a, dict) else a[2]
+                    if i < 2 and abstract:
+                        ab = _re_a.sub(r'\s+', ' ', abstract).strip()
+                        ellipsis = "…" if full_len and full_len > 220 else ""
+                        cache_parts.append(f"  {title}: {ab}{ellipsis}")
+                    else:
+                        cache_parts.append(f"  {title} …")
                 cache_parts.append("  Use article_read(query) to load any of the above.")
 
             cache_conn.close()

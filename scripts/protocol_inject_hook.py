@@ -239,21 +239,28 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
         if not results:
             return ""
 
-        # 2026-04-25: partial restore of B0 trim (commit cbbf21e). The pure
-        # title-only injection caused regression — titles felt familiar so
-        # Claude pattern-matched without recalling. Compromise:
-        #   - Top-1 result: title + 280-char body preview (the most-likely-relevant gotcha
-        #     gets enough body that Claude can ACT on it without an extra recall hop)
-        #   - Rest: title-only with explicit recall hint (preserves the index, saves tokens,
-        #     and the ellipsis makes "go fetch" obvious)
-        # Net cost ~3K tokens vs original 13K (saving 75%) but restores actionable surfacing.
-        lines = ["RELEVANT KNOWLEDGE (top-1 has preview; others: recall_memories(\"...\") for body):"]
+        # 2026-04-26: widen FB335 partial restore. B0 (cbbf21e) cut everything to
+        # title-only and broke breadcrumbs (decisions/architecture stayed invisible).
+        # FB335 (e9b0584) gave top-1 a body. Still too narrow — the v2 architecture
+        # decision sat at rank 7 with confidence 65 and never surfaced.
+        # New rule:
+        #   - Top-3 always get body (250 chars each) — covers most relevant hits
+        #   - Anything ranked 4+ that is type 'decision' OR confidence >= 85 ALSO
+        #     gets body — pulls high-signal architectural memories out of the tail
+        #   - Pure title + recall hint for the residual long tail
+        # Net cost ~5K tokens vs B0's 0 — still 60% saving vs original 13K bloat.
+        lines = ["RELEVANT KNOWLEDGE (top-3 + high-confidence/decisions get body; rest: recall_memories(\"...\") for full):"]
         for i, (title, desc, ktype, confidence, tier) in enumerate(results):
-            if i == 0 and desc:
-                preview = desc[:280].replace('\n', ' ').strip()
-                if len(desc) > 280:
+            give_body = bool(desc) and (
+                i < 3
+                or ktype == 'decision'
+                or (confidence is not None and confidence >= 85)
+            )
+            if give_body:
+                preview = desc[:250].replace('\n', ' ').strip()
+                if len(desc) > 250:
                     preview += "…"
-                lines.append(f"  [{ktype}] {title}: {preview}")
+                lines.append(f"  [{ktype}|c{confidence}] {title}: {preview}")
             else:
                 lines.append(f"  [{ktype}] {title} …")
 
