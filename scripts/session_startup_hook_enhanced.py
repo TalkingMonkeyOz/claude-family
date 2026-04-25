@@ -1114,8 +1114,13 @@ def main():
                         cache_parts.append(f"  {comp}/{title}")
 
             # Top knowledge gotchas — proactive injection of high-confidence entries
+            # 2026-04-25: partial restore of B0 trim. Top-3 gotchas now ship with a
+            # 220-char body so Claude can ACT on them without an extra recall hop.
+            # Remainder stay title-only with explicit recall hint. The pure title-only
+            # version (cbbf21e) caused regression — titles felt familiar, Claude pattern-
+            # matched without recalling, and lost the gotcha content entirely.
             cache_cur.execute("""
-                SELECT title, LEFT(description, 200) as desc_preview
+                SELECT title, LEFT(description, 220) as desc_preview, LENGTH(description) as full_len
                 FROM claude.knowledge
                 WHERE (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)
                   AND knowledge_type = 'gotcha'
@@ -1126,10 +1131,18 @@ def main():
             """, (project_name,))
             gotchas = cache_cur.fetchall()
             if gotchas:
-                cache_parts.append("KEY GOTCHAS (auto-loaded from knowledge):")
-                for g in gotchas:
+                cache_parts.append("KEY GOTCHAS (top-3 with body; rest: recall_memories(\"gotcha title\") for full):")
+                import re as _re_g
+                for i, g in enumerate(gotchas):
                     title = g['title'] if isinstance(g, dict) else g[0]
-                    cache_parts.append(f"  - {title}")
+                    desc = g['desc_preview'] if isinstance(g, dict) else g[1]
+                    full_len = g['full_len'] if isinstance(g, dict) else g[2]
+                    if i < 3 and desc:
+                        body = _re_g.sub(r'\s+', ' ', desc).strip()
+                        ellipsis = "…" if full_len and full_len > 220 else ""
+                        cache_parts.append(f"  - {title}: {body}{ellipsis}")
+                    else:
+                        cache_parts.append(f"  - {title} …")
 
             # Session facts from recent sessions (credentials masked)
             cache_cur.execute("""

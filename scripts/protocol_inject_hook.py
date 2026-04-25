@@ -239,11 +239,23 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
         if not results:
             return ""
 
-        # B0 context-bloat trim 2026-04-24: title-only index, preview dropped.
-        # Claude loads full content via recall_memories(query) on demand.
-        lines = ["RELEVANT KNOWLEDGE (load via recall_memories):"]
-        for title, desc, ktype, confidence, tier in results:
-            lines.append(f"  [{ktype}] {title}")
+        # 2026-04-25: partial restore of B0 trim (commit cbbf21e). The pure
+        # title-only injection caused regression — titles felt familiar so
+        # Claude pattern-matched without recalling. Compromise:
+        #   - Top-1 result: title + 280-char body preview (the most-likely-relevant gotcha
+        #     gets enough body that Claude can ACT on it without an extra recall hop)
+        #   - Rest: title-only with explicit recall hint (preserves the index, saves tokens,
+        #     and the ellipsis makes "go fetch" obvious)
+        # Net cost ~3K tokens vs original 13K (saving 75%) but restores actionable surfacing.
+        lines = ["RELEVANT KNOWLEDGE (top-1 has preview; others: recall_memories(\"...\") for body):"]
+        for i, (title, desc, ktype, confidence, tier) in enumerate(results):
+            if i == 0 and desc:
+                preview = desc[:280].replace('\n', ' ').strip()
+                if len(desc) > 280:
+                    preview += "…"
+                lines.append(f"  [{ktype}] {title}: {preview}")
+            else:
+                lines.append(f"  [{ktype}] {title} …")
 
         return "\n".join(lines)
     except Exception:
