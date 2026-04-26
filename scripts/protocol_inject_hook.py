@@ -270,6 +270,73 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
         return ""
 
 
+def _query_recent_changes(project_name: str) -> str:
+    """Surface decisions/patterns/learnings/gotchas remembered in the last 7 days.
+
+    FB342 — change-log injection. Closes the loop with change_capture_process:
+    every system change gets remember()'d before commit (Rule 7), this surfaces
+    those memories back so Claude sees "what changed lately" without manually
+    calling recall_memories(). Pure SQL (~20ms), no Voyage AI.
+
+    Disabled via CLAUDE_DISABLE_CHANGE_LOG=1.
+    """
+    if os.environ.get("CLAUDE_DISABLE_CHANGE_LOG") == "1":
+        return ""
+    if not DB_URI:
+        return ""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DB_URI, connect_timeout=2)
+        cur = conn.cursor()
+        # Type-priority then confidence then recency. 6 rows, ~300 token budget.
+        # Filter by applies_to_projects so global memories also surface.
+        cur.execute("""
+            SELECT title,
+                   COALESCE(summary, LEFT(description, 180)) AS preview,
+                   knowledge_type,
+                   confidence_level,
+                   created_at::date AS dt
+            FROM claude.knowledge
+            WHERE status = 'active'
+              AND knowledge_type IN ('decision','pattern','gotcha','learned')
+              AND created_at > NOW() - INTERVAL '7 days'
+              AND (
+                  applies_to_projects IS NULL
+                  OR cardinality(applies_to_projects) = 0
+                  OR %s = ANY(applies_to_projects)
+              )
+            ORDER BY
+                CASE knowledge_type
+                    WHEN 'decision' THEN 1
+                    WHEN 'learned'  THEN 2
+                    WHEN 'pattern'  THEN 3
+                    WHEN 'gotcha'   THEN 4
+                    ELSE 5
+                END,
+                confidence_level DESC NULLS LAST,
+                created_at DESC
+            LIMIT 6
+        """, (project_name,))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        if not rows:
+            return ""
+
+        lines = ["RECENT CHANGES (last 7 days — decisions/patterns/learnings/gotchas remembered):"]
+        for title, preview, ktype, confidence, dt in rows:
+            preview = (preview or "").replace('\n', ' ').strip()
+            if len(preview) > 160:
+                preview = preview[:160] + "…"
+            tag = f"{ktype}|c{confidence}" if confidence else ktype
+            lines.append(f"  [{dt}|{tag}] {title}: {preview}")
+        lines.append("  Use recall_memories(\"...\") to load any of these in full.")
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
 def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
     """Search entity catalog for domain_concept dossiers matching the prompt.
 
@@ -322,36 +389,51 @@ def main():
     # 3. Pending messages — lightweight DB check
     message_alert = _check_pending_messages(project_name)
 
-    # 4. Knowledge + domain concept queries — run in parallel with timeout
+    # 4. Knowledge + domain concept + recent-changes queries — parallel w/ timeout
     user_prompt = hook_input.get('prompt', '')
     dossier_context = ""
     knowledge_context = ""
+    recent_changes_context = ""
     decomposition_hint = ""
-    if user_prompt:
-        with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # Recent changes runs even on empty prompts (it's project-wide, not query-specific)
+        recent_changes_future = executor.submit(_query_recent_changes, project_name)
+        if user_prompt:
             dossier_future = executor.submit(_query_domain_concepts, user_prompt, project_name)
             knowledge_future = executor.submit(_query_knowledge, user_prompt, project_name)
+        else:
+            dossier_future = None
+            knowledge_future = None
+        try:
+            recent_changes_context = recent_changes_future.result(timeout=5.0)
+        except (FuturesTimeout, Exception):
+            recent_changes_context = ""
+        if dossier_future:
             try:
                 dossier_context = dossier_future.result(timeout=5.0)
             except (FuturesTimeout, Exception):
                 dossier_context = ""
+        if knowledge_future:
             try:
                 knowledge_context = knowledge_future.result(timeout=5.0)
             except (FuturesTimeout, Exception):
                 knowledge_context = ""
-        # Decomposer is pure-Python and very fast — run in main thread, fail-open.
-        # Disable via env var if it's ever noisy: CLAUDE_DISABLE_DECOMPOSER=1.
-        if os.environ.get("CLAUDE_DISABLE_DECOMPOSER") != "1":
-            decomposition_hint = _decompose_prompt(user_prompt)
+    # Decomposer is pure-Python and very fast — run in main thread, fail-open.
+    # Disable via env var if it's ever noisy: CLAUDE_DISABLE_DECOMPOSER=1.
+    if user_prompt and os.environ.get("CLAUDE_DISABLE_DECOMPOSER") != "1":
+        decomposition_hint = _decompose_prompt(user_prompt)
 
     # 5. Combine — decomposition hint goes near the top (after protocol) so it's
     # the first thing Claude sees about the incoming prompt's shape.
+    # Recent changes lives between knowledge_context and dossier_context — same
+    # tier as RELEVANT KNOWLEDGE, just time-windowed instead of keyword-matched.
     parts = [p for p in [
         protocol,
         decomposition_hint,
         session_context,
         message_alert,
         knowledge_context,
+        recent_changes_context,
         dossier_context,
     ] if p]
     combined = "\n\n".join(parts)

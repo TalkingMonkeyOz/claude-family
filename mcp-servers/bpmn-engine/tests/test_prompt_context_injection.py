@@ -19,8 +19,8 @@ Process overview:
     -> write_session_cache -> end_cache_ready
 
   FLOW 2 (Per-Prompt Injection — fast path, file reads only, no Voyage AI):
-    read_core_protocol -> read_session_cache -> combine_context
-    -> return_json -> end_context_injected
+    read_core_protocol -> read_session_cache -> query_recent_changes
+    -> combine_context -> return_json -> end_context_injected
 
   FLOW 3 (On-Demand RAG — Claude calls MCP, uses Voyage AI + pgvector):
     call_mcp_tools -> voyage_embedding -> pgvector_search
@@ -143,6 +143,7 @@ class TestFlow1SessionStart:
         # Flow 2 tasks must NOT have run
         assert "read_core_protocol" not in names
         assert "read_session_cache" not in names
+        assert "query_recent_changes" not in names
         assert "combine_context" not in names
         assert "return_json" not in names
 
@@ -201,6 +202,7 @@ class TestFlow2PerPromptInjection:
         # Flow 2 tasks must have run
         assert "read_core_protocol" in names
         assert "read_session_cache" in names
+        assert "query_recent_changes" in names
         assert "combine_context" in names
         assert "return_json" in names
         assert "end_context_injected" in names
@@ -259,6 +261,7 @@ class TestFlow2PerPromptInjection:
 
         assert workflow.data.get("core_protocol_read") is True
         assert workflow.data.get("session_cache_read") is True
+        assert workflow.data.get("recent_changes_queried") is True
         assert workflow.data.get("context_combined") is True
         assert workflow.data.get("json_returned") is True
 
@@ -307,6 +310,7 @@ class TestFlow3OnDemandRag:
         # Flow 2 tasks must NOT have run
         assert "read_core_protocol" not in names
         assert "read_session_cache" not in names
+        assert "query_recent_changes" not in names
         assert "combine_context" not in names
         assert "return_json" not in names
 

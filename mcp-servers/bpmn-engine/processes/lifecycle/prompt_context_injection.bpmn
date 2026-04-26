@@ -121,7 +121,7 @@ or database access required.</bpmn:documentation>
 
     <bpmn:scriptTask id="read_session_cache" name="[HOOK] Read session_context_cache.txt if Exists (file read, &lt;1ms)" scriptFormat="python">
       <bpmn:incoming>flow_protocol_to_cache</bpmn:incoming>
-      <bpmn:outgoing>flow_cache_to_combine</bpmn:outgoing>
+      <bpmn:outgoing>flow_cache_to_recent_changes</bpmn:outgoing>
       <bpmn:script>session_cache_read = True</bpmn:script>
       <bpmn:documentation>Reads the session_context_cache.txt written by Flow 1 at session start.
 If the file does not exist (e.g., session start hook failed or first prompt
@@ -129,13 +129,31 @@ arrived before cache was written), gracefully returns empty string.
 File read is &lt;1ms — no Voyage AI, no DB.</bpmn:documentation>
     </bpmn:scriptTask>
 
+    <bpmn:scriptTask id="query_recent_changes" name="[HOOK] Query Recent Decisions/Changes from KG (last 7d, ~20ms)" scriptFormat="python">
+      <bpmn:incoming>flow_cache_to_recent_changes</bpmn:incoming>
+      <bpmn:outgoing>flow_recent_changes_to_combine</bpmn:outgoing>
+      <bpmn:script>recent_changes_queried = True</bpmn:script>
+      <bpmn:documentation>FB342 — change-log injection surface. Closes the loop with the change_capture_process
+(Rule 7 memory-update discipline): every system change gets remember()'d before commit,
+this hook surfaces those memories back into the next session's context so Claude sees
+"what's changed in the last 7 days" without having to recall_memories() manually.
+
+Query: claude.knowledge WHERE knowledge_type IN ('decision','pattern','gotcha','learned')
+AND created_at &gt; NOW() - INTERVAL '7 days', ranked by type-priority then confidence then
+recency, top 6 by token budget (~300 tokens). Pure SQL, no Voyage AI. Fail-open.
+
+Runs in parallel with other DB queries (knowledge keyword match, domain concepts) inside
+the per-prompt ThreadPoolExecutor. ~20ms typical. Disabled via CLAUDE_DISABLE_CHANGE_LOG=1.</bpmn:documentation>
+    </bpmn:scriptTask>
+
     <bpmn:scriptTask id="combine_context" name="[HOOK] Combine into additionalContext JSON" scriptFormat="python">
-      <bpmn:incoming>flow_cache_to_combine</bpmn:incoming>
+      <bpmn:incoming>flow_recent_changes_to_combine</bpmn:incoming>
       <bpmn:outgoing>flow_combine_to_return</bpmn:outgoing>
       <bpmn:script>context_combined = True</bpmn:script>
-      <bpmn:documentation>Merges core protocol text and session context cache into the additionalContext
-JSON structure expected by Claude Code's hook response format. The combined
-payload is typically 500-2000 tokens depending on project complexity.</bpmn:documentation>
+      <bpmn:documentation>Merges core protocol text, session context cache, and recent-changes block into
+the additionalContext JSON structure expected by Claude Code's hook response format.
+The combined payload is typically 500-2300 tokens depending on project complexity
+and how many decisions/patterns landed in the last 7 days.</bpmn:documentation>
     </bpmn:scriptTask>
 
     <bpmn:scriptTask id="return_json" name="[HOOK] Return JSON to Claude Code" scriptFormat="python">
@@ -222,7 +240,8 @@ Claude incorporates these into its response generation.</bpmn:documentation>
 
     <!-- Flow 2: Per-Prompt Injection -->
     <bpmn:sequenceFlow id="flow_protocol_to_cache" sourceRef="read_core_protocol" targetRef="read_session_cache"/>
-    <bpmn:sequenceFlow id="flow_cache_to_combine" sourceRef="read_session_cache" targetRef="combine_context"/>
+    <bpmn:sequenceFlow id="flow_cache_to_recent_changes" sourceRef="read_session_cache" targetRef="query_recent_changes"/>
+    <bpmn:sequenceFlow id="flow_recent_changes_to_combine" sourceRef="query_recent_changes" targetRef="combine_context"/>
     <bpmn:sequenceFlow id="flow_combine_to_return" sourceRef="combine_context" targetRef="return_json"/>
     <bpmn:sequenceFlow id="flow_return_to_end" sourceRef="return_json" targetRef="end_context_injected"/>
 
@@ -287,16 +306,20 @@ Claude incorporates these into its response generation.</bpmn:documentation>
         <dc:Bounds x="640" y="300" width="140" height="80"/>
       </bpmndi:BPMNShape>
 
-      <bpmndi:BPMNShape id="shape_combine_context" bpmnElement="combine_context">
+      <bpmndi:BPMNShape id="shape_query_recent_changes" bpmnElement="query_recent_changes">
         <dc:Bounds x="830" y="300" width="140" height="80"/>
       </bpmndi:BPMNShape>
 
-      <bpmndi:BPMNShape id="shape_return_json" bpmnElement="return_json">
+      <bpmndi:BPMNShape id="shape_combine_context" bpmnElement="combine_context">
         <dc:Bounds x="1020" y="300" width="140" height="80"/>
       </bpmndi:BPMNShape>
 
+      <bpmndi:BPMNShape id="shape_return_json" bpmnElement="return_json">
+        <dc:Bounds x="1210" y="300" width="140" height="80"/>
+      </bpmndi:BPMNShape>
+
       <bpmndi:BPMNShape id="shape_end_context_injected" bpmnElement="end_context_injected">
-        <dc:Bounds x="1210" y="318" width="36" height="36"/>
+        <dc:Bounds x="1400" y="318" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
       <!-- ============================================================ -->
@@ -384,19 +407,24 @@ Claude incorporates these into its response generation.</bpmn:documentation>
         <di:waypoint x="640" y="340"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_cache_to_combine" bpmnElement="flow_cache_to_combine">
+      <bpmndi:BPMNEdge id="edge_flow_cache_to_recent_changes" bpmnElement="flow_cache_to_recent_changes">
         <di:waypoint x="780" y="340"/>
         <di:waypoint x="830" y="340"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_combine_to_return" bpmnElement="flow_combine_to_return">
+      <bpmndi:BPMNEdge id="edge_flow_recent_changes_to_combine" bpmnElement="flow_recent_changes_to_combine">
         <di:waypoint x="970" y="340"/>
         <di:waypoint x="1020" y="340"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_return_to_end" bpmnElement="flow_return_to_end">
+      <bpmndi:BPMNEdge id="edge_flow_combine_to_return" bpmnElement="flow_combine_to_return">
         <di:waypoint x="1160" y="340"/>
-        <di:waypoint x="1210" y="336"/>
+        <di:waypoint x="1210" y="340"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_return_to_end" bpmnElement="flow_return_to_end">
+        <di:waypoint x="1350" y="340"/>
+        <di:waypoint x="1400" y="336"/>
       </bpmndi:BPMNEdge>
 
       <!-- Flow 3 edges -->
