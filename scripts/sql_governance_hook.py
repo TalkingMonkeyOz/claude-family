@@ -149,6 +149,26 @@ TOOL_GOVERNED_TABLES = {
 }
 
 
+# FB341: read-side telemetry for bypass detection. ALL projects.
+# Reads against these tables almost always have a better MCP tool — when a
+# raw SELECT shows up, log it so we can measure how often the discovery
+# surface fails. We DO NOT block (reads can be legitimately ad-hoc), but
+# logging gives us the FB341 signal to drive tool design.
+READ_NUDGE_TABLES = {
+    'features': "Try work_board(view='board') / get_ready_tasks() / get_work_context() before raw SELECT.",
+    'build_tasks': "Try work_board(view='board') / get_ready_tasks() before raw SELECT.",
+    'feedback': "Try work_board(view='board') for open items; work_status() for state changes.",
+    'knowledge': "Try recall_memories(query=...) — it covers all 4 atomic stores via kg_nodes_view.",
+    'entities': "Try entity_read(query=..., entity_type=...) before raw SELECT.",
+    'workfiles': "Try workfile_read(component=...) / search_workfiles(query=...).",
+    'project_workfiles': "Try workfile_read(component=...) / search_workfiles(query=...).",
+    'session_facts': "Try session_facts(fact_key=...) / recall_session_fact(key=...).",
+}
+
+# Identify SELECT statements (read-only).
+SELECT_RE = re.compile(r'^\s*(WITH\s+.*?\s+)?SELECT\b', re.IGNORECASE | re.DOTALL)
+
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 try:
@@ -321,6 +341,24 @@ def main():
                 )
                 log_governance_event("blocked", project, governed_hits, "", sql)
                 deny_with_guidance(deny_text)
+
+        # FB341: read-side bypass telemetry. SELECT-only against tables with a
+        # better MCP tool — log to enforcement_log so we can measure failure
+        # of the discovery surface. Never blocks, never denies.
+        if not is_write and SELECT_RE.match(sql):
+            nudge_hits = table_refs & set(READ_NUDGE_TABLES.keys())
+            if nudge_hits:
+                hint_parts = []
+                for t in sorted(nudge_hits):
+                    hint_parts.append(f"claude.{t}: {READ_NUDGE_TABLES[t]}")
+                hint = " | ".join(hint_parts)
+                # Override comment also suppresses the nudge log (deliberate raw SQL).
+                if not re.search(r'--\s*OVERRIDE:', sql, re.IGNORECASE):
+                    log_governance_event("read_nudge", project, nudge_hits, hint, sql)
+                    logger.info(
+                        f"SQL governance read_nudge: project '{project}' SELECT on "
+                        f"{', '.join(f'claude.{t}' for t in nudge_hits)} — {hint}"
+                    )
 
         # All checks passed
         logger.info(f"SQL governance: project '{project}' - allowed (tables: {table_refs or 'none detected'})")

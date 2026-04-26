@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/change-capture-process"
+    id="Definitions_ChangeCaptureProcess">
+
+  <!--
+    Change Capture Process: Memory-Update Discipline (Rule 7)
+
+    Sister model to knowledge_construction_process. Models how Claude must
+    record system changes in memory BEFORE commit, replacing the vault paper
+    trail (vault sunset 2026-04-09).
+
+    Trigger: Edit/Write to system-change files (hooks, rules, schemas,
+             BPMN models, MCP server code, deployed configs).
+
+    Rule (storage-rules v8 Rule 7):
+      Every system change → remember() with what changed and why,
+      referencing FB# / F# / BT# / commit SHA, BEFORE commit.
+
+    Variables:
+      - is_system_change_file (bool) — file matches system-change scope
+      - change_memory_recorded (bool) — remember() called for this change
+      - commit_attempt (bool) — user is about to commit
+      - has_traceability (bool) — memory cites FB/F/BT or commit context
+
+    Test: a different Claude tomorrow doing recall_memories('what changed')
+    should find this entry and understand the change. If no, you didn't
+    remember enough.
+
+    Implementation: enforced by PostToolUse hook on Edit/Write +
+    pre-commit hook checking recent claude.knowledge writes against
+    git diff scope.
+  -->
+
+  <bpmn:process id="change_capture_process" name="Change Capture: Memory-Update Discipline" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="Edit/Write Tool Used">
+      <bpmn:outgoing>f_start_to_classify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:userTask id="classify_file" name="[CLAUDE] Classify File: System-Change Scope?">
+      <bpmn:incoming>f_start_to_classify</bpmn:incoming>
+      <bpmn:outgoing>f_classify_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="scope_gw" name="Is System-Change File?" default="f_not_system">
+      <bpmn:incoming>f_classify_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_is_system</bpmn:outgoing>
+      <bpmn:outgoing>f_not_system</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skipped" name="Skipped: Not System-Change">
+      <bpmn:incoming>f_not_system</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:userTask id="record_change_memory" name="[CLAUDE] remember() the change">
+      <bpmn:incoming>f_is_system</bpmn:incoming>
+      <bpmn:outgoing>f_record_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="recorded_gw" name="Memory Written?" default="f_not_recorded">
+      <bpmn:incoming>f_record_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_recorded</bpmn:outgoing>
+      <bpmn:outgoing>f_not_recorded</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_no_memory" name="BLOCKED: Change Not Remembered">
+      <bpmn:incoming>f_not_recorded</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:userTask id="check_traceability" name="[CLAUDE] Cite FB/F/BT/commit context">
+      <bpmn:incoming>f_recorded</bpmn:incoming>
+      <bpmn:outgoing>f_trace_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="trace_gw" name="Traceability Present?" default="f_no_trace">
+      <bpmn:incoming>f_trace_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_traced</bpmn:outgoing>
+      <bpmn:outgoing>f_no_trace</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_no_trace" name="BLOCKED: No Traceability">
+      <bpmn:incoming>f_no_trace</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:exclusiveGateway id="commit_gw" name="Commit Attempt?" default="f_no_commit">
+      <bpmn:incoming>f_traced</bpmn:incoming>
+      <bpmn:outgoing>f_commit</bpmn:outgoing>
+      <bpmn:outgoing>f_no_commit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_in_progress" name="Memory Recorded; No Commit Yet">
+      <bpmn:incoming>f_no_commit</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_committed" name="Change Captured + Committed">
+      <bpmn:incoming>f_commit</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_classify" sourceRef="start" targetRef="classify_file"/>
+    <bpmn:sequenceFlow id="f_classify_to_gw" sourceRef="classify_file" targetRef="scope_gw"/>
+    <bpmn:sequenceFlow id="f_is_system" sourceRef="scope_gw" targetRef="record_change_memory">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">is_system_change_file == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_system" sourceRef="scope_gw" targetRef="end_skipped"/>
+    <bpmn:sequenceFlow id="f_record_to_gw" sourceRef="record_change_memory" targetRef="recorded_gw"/>
+    <bpmn:sequenceFlow id="f_recorded" sourceRef="recorded_gw" targetRef="check_traceability">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">change_memory_recorded == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_recorded" sourceRef="recorded_gw" targetRef="end_blocked_no_memory"/>
+    <bpmn:sequenceFlow id="f_trace_to_gw" sourceRef="check_traceability" targetRef="trace_gw"/>
+    <bpmn:sequenceFlow id="f_traced" sourceRef="trace_gw" targetRef="commit_gw">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">has_traceability == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_trace" sourceRef="trace_gw" targetRef="end_blocked_no_trace"/>
+    <bpmn:sequenceFlow id="f_commit" sourceRef="commit_gw" targetRef="end_committed">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">commit_attempt == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_commit" sourceRef="commit_gw" targetRef="end_in_progress"/>
+
+  </bpmn:process>
+</bpmn:definitions>
