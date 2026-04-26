@@ -1124,8 +1124,11 @@ def main():
             # Remainder stay title-only with explicit recall hint. The pure title-only
             # version (cbbf21e) caused regression — titles felt familiar, Claude pattern-
             # matched without recalling, and lost the gotcha content entirely.
+            # FB338: prefer summary column when populated, fall back to description prefix.
             cache_cur.execute("""
-                SELECT title, LEFT(description, 220) as desc_preview, LENGTH(description) as full_len
+                SELECT title,
+                       COALESCE(summary, LEFT(description, 220)) as desc_preview,
+                       LENGTH(description) as full_len
                 FROM claude.knowledge
                 WHERE (%s = ANY(applies_to_projects) OR applies_to_projects IS NULL)
                   AND knowledge_type = 'gotcha'

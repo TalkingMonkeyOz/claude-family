@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    targetNamespace="http://claude-family/bpmn/knowledge-construction-process"
+    id="Definitions_KnowledgeConstructionProcess">
+
+  <!--
+    Knowledge Construction Process: Definition of Done at Write Time
+
+    Models the discipline Claude must follow when writing knowledge into the
+    Knowledge Graph (knowledge / entities / articles / workfiles). Every
+    construction must satisfy the 5 construction rules + 2 safeguards from
+    storage-rules v8 BEFORE the work counts as "done":
+
+      Rule 1 Shape parity        — column drift across atomic stores is forbidden
+      Rule 2 Hierarchy required  — every record gets parent_id+path or 'global'
+      Rule 3 MOC fulfilment      — prose-promised children become tracked tasks
+      Rule 4 Specific edge types — relates_to is bucket of last resort
+      Rule 5 Change → memory     — system changes recorded in memory pre-commit
+      Rule 6 Non-destructive     — additive only, idempotent, preserve overrides
+      Rule 7 Tool-discovery      — "do I have a tool? do I know how to use it?"
+
+    Variables (set by user/script tasks; checked by gateways):
+      - tool_discovered  (bool)  — Rule 7 satisfied
+      - target_store     (str)   — knowledge|entity|article|workfile|moc
+      - parent_assigned  (bool)  — parent_id set OR explicit path='global'
+      - summary_populated (bool) — summary ≤200 chars present (atomic stores only)
+      - edge_specific    (bool)  — chose typed edge, not generic relates_to
+      - is_moc           (bool)  — article with index section promising children
+      - moc_children_tracked (bool) — every promised child has article OR build_task
+      - shape_parity_ok  (bool)  — atomic store matches sibling stores
+      - is_system_change (bool)  — touches hooks/rules/schemas/BPMN/MCP code
+      - change_remembered (bool) — remember() called for the change
+      - destructive      (bool)  — DROP/RENAME/NOT-NULL-without-default present
+
+    Implementation: enforced by hooks #872 (MOC), #873 (shape parity),
+    `sql_governance_hook.py` (already deployed for Rule 6 partially), and
+    runtime validation in remember() / entity_store() / article_write().
+
+    Trigger: any tool call that writes to atomic stores.
+  -->
+
+  <bpmn:process id="knowledge_construction_process" name="Knowledge Construction: Definition of Done at Write Time" isExecutable="true">
+
+    <bpmn:startEvent id="start" name="Knowledge Write Requested">
+      <bpmn:outgoing>f_start_to_tool</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Rule 7: Tool-discovery reflex -->
+    <bpmn:userTask id="check_tool_discovery" name="[CLAUDE] Tool-Discovery Reflex (Q1+Q2)">
+      <bpmn:incoming>f_start_to_tool</bpmn:incoming>
+      <bpmn:outgoing>f_tool_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="tool_discovered_gw" name="Tool Identified + Usage Known?" default="f_tool_unknown">
+      <bpmn:incoming>f_tool_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_tool_known</bpmn:outgoing>
+      <bpmn:outgoing>f_tool_unknown</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="file_discovery_gap" name="[CLAUDE] File Discoverability Gap (FB341-class)">
+      <bpmn:incoming>f_tool_unknown</bpmn:incoming>
+      <bpmn:outgoing>f_gap_to_target</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Rule 6: Non-destructive check (early gate, applies before any write) -->
+    <bpmn:userTask id="determine_target_store" name="[CLAUDE] Determine Target Atomic Store">
+      <bpmn:incoming>f_tool_known</bpmn:incoming>
+      <bpmn:incoming>f_gap_to_target</bpmn:incoming>
+      <bpmn:outgoing>f_target_to_destruct</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="destructive_gw" name="Change is Destructive?" default="f_additive">
+      <bpmn:incoming>f_target_to_destruct</bpmn:incoming>
+      <bpmn:outgoing>f_destructive</bpmn:outgoing>
+      <bpmn:outgoing>f_additive</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_destructive" name="BLOCKED: Destructive Change">
+      <bpmn:incoming>f_destructive</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Rule 2: Hierarchy required -->
+    <bpmn:userTask id="assign_parent" name="[CLAUDE] Assign parent_id+path OR mark 'global'">
+      <bpmn:incoming>f_additive</bpmn:incoming>
+      <bpmn:outgoing>f_parent_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="parent_gw" name="Parent Assigned?" default="f_no_parent">
+      <bpmn:incoming>f_parent_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_parent_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_no_parent</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_no_parent" name="BLOCKED: Hierarchy Missing">
+      <bpmn:incoming>f_no_parent</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Rule 1: Summary populated (atomic stores only) -->
+    <bpmn:userTask id="populate_summary" name="[CLAUDE] Populate summary (≤200 chars)">
+      <bpmn:incoming>f_parent_ok</bpmn:incoming>
+      <bpmn:outgoing>f_summary_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="summary_gw" name="Summary Populated?" default="f_no_summary">
+      <bpmn:incoming>f_summary_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_summary_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_no_summary</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_no_summary" name="BLOCKED: Summary Missing">
+      <bpmn:incoming>f_no_summary</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Rule 4: Specific edge types -->
+    <bpmn:userTask id="choose_edge_type" name="[CLAUDE] Choose specific edge type (not relates_to)">
+      <bpmn:incoming>f_summary_ok</bpmn:incoming>
+      <bpmn:outgoing>f_edge_to_moc_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <!-- Rule 3: MOC promise-fulfilment (only for articles with index section) -->
+    <bpmn:exclusiveGateway id="is_moc_gw" name="Is MOC (Article with Index)?" default="f_not_moc">
+      <bpmn:incoming>f_edge_to_moc_gw</bpmn:incoming>
+      <bpmn:outgoing>f_is_moc</bpmn:outgoing>
+      <bpmn:outgoing>f_not_moc</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="register_moc_children" name="[CLAUDE] Register Children: existing or build_task">
+      <bpmn:incoming>f_is_moc</bpmn:incoming>
+      <bpmn:outgoing>f_moc_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="moc_children_gw" name="All Children Tracked?" default="f_moc_unfulfilled">
+      <bpmn:incoming>f_moc_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_moc_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_moc_unfulfilled</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_moc" name="BLOCKED: MOC Promise Unfulfilled">
+      <bpmn:incoming>f_moc_unfulfilled</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:exclusiveGateway id="moc_merge" name="Past MOC Check">
+      <bpmn:incoming>f_moc_ok</bpmn:incoming>
+      <bpmn:incoming>f_not_moc</bpmn:incoming>
+      <bpmn:outgoing>f_merge_to_parity</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- Rule 1 (continued): Shape parity check across atomic stores -->
+    <bpmn:userTask id="verify_shape_parity" name="[CLAUDE] Verify shape parity across atomic stores">
+      <bpmn:incoming>f_merge_to_parity</bpmn:incoming>
+      <bpmn:outgoing>f_parity_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="parity_gw" name="Shape Parity Holds?" default="f_parity_drift">
+      <bpmn:incoming>f_parity_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_parity_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_parity_drift</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_parity" name="BLOCKED: Shape Drift Detected">
+      <bpmn:incoming>f_parity_drift</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Rule 5: Change → memory (for system changes) -->
+    <bpmn:exclusiveGateway id="is_system_change_gw" name="Is System Change?" default="f_not_system">
+      <bpmn:incoming>f_parity_ok</bpmn:incoming>
+      <bpmn:outgoing>f_is_system</bpmn:outgoing>
+      <bpmn:outgoing>f_not_system</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:userTask id="record_change_memory" name="[CLAUDE] remember() the change before commit">
+      <bpmn:incoming>f_is_system</bpmn:incoming>
+      <bpmn:outgoing>f_change_to_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="change_recorded_gw" name="Change Memory Written?" default="f_change_missing">
+      <bpmn:incoming>f_change_to_gw</bpmn:incoming>
+      <bpmn:outgoing>f_change_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_change_missing</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked_change" name="BLOCKED: System Change Not Remembered">
+      <bpmn:incoming>f_change_missing</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:exclusiveGateway id="final_merge" name="All Rules Satisfied">
+      <bpmn:incoming>f_change_ok</bpmn:incoming>
+      <bpmn:incoming>f_not_system</bpmn:incoming>
+      <bpmn:outgoing>f_final_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_done" name="Knowledge Construction Complete">
+      <bpmn:incoming>f_final_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_tool" sourceRef="start" targetRef="check_tool_discovery"/>
+    <bpmn:sequenceFlow id="f_tool_to_gw" sourceRef="check_tool_discovery" targetRef="tool_discovered_gw"/>
+    <bpmn:sequenceFlow id="f_tool_known" sourceRef="tool_discovered_gw" targetRef="determine_target_store">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">tool_discovered == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_tool_unknown" sourceRef="tool_discovered_gw" targetRef="file_discovery_gap"/>
+    <bpmn:sequenceFlow id="f_gap_to_target" sourceRef="file_discovery_gap" targetRef="determine_target_store"/>
+    <bpmn:sequenceFlow id="f_target_to_destruct" sourceRef="determine_target_store" targetRef="destructive_gw"/>
+    <bpmn:sequenceFlow id="f_destructive" sourceRef="destructive_gw" targetRef="end_blocked_destructive">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">destructive == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_additive" sourceRef="destructive_gw" targetRef="assign_parent"/>
+    <bpmn:sequenceFlow id="f_parent_to_gw" sourceRef="assign_parent" targetRef="parent_gw"/>
+    <bpmn:sequenceFlow id="f_parent_ok" sourceRef="parent_gw" targetRef="populate_summary">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">parent_assigned == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_parent" sourceRef="parent_gw" targetRef="end_blocked_no_parent"/>
+    <bpmn:sequenceFlow id="f_summary_to_gw" sourceRef="populate_summary" targetRef="summary_gw"/>
+    <bpmn:sequenceFlow id="f_summary_ok" sourceRef="summary_gw" targetRef="choose_edge_type">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">summary_populated == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_summary" sourceRef="summary_gw" targetRef="end_blocked_no_summary"/>
+    <bpmn:sequenceFlow id="f_edge_to_moc_gw" sourceRef="choose_edge_type" targetRef="is_moc_gw"/>
+    <bpmn:sequenceFlow id="f_is_moc" sourceRef="is_moc_gw" targetRef="register_moc_children">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">is_moc == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_moc" sourceRef="is_moc_gw" targetRef="moc_merge"/>
+    <bpmn:sequenceFlow id="f_moc_to_gw" sourceRef="register_moc_children" targetRef="moc_children_gw"/>
+    <bpmn:sequenceFlow id="f_moc_ok" sourceRef="moc_children_gw" targetRef="moc_merge">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">moc_children_tracked == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_moc_unfulfilled" sourceRef="moc_children_gw" targetRef="end_blocked_moc"/>
+    <bpmn:sequenceFlow id="f_merge_to_parity" sourceRef="moc_merge" targetRef="verify_shape_parity"/>
+    <bpmn:sequenceFlow id="f_parity_to_gw" sourceRef="verify_shape_parity" targetRef="parity_gw"/>
+    <bpmn:sequenceFlow id="f_parity_ok" sourceRef="parity_gw" targetRef="is_system_change_gw">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">shape_parity_ok == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_parity_drift" sourceRef="parity_gw" targetRef="end_blocked_parity"/>
+    <bpmn:sequenceFlow id="f_is_system" sourceRef="is_system_change_gw" targetRef="record_change_memory">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">is_system_change == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_system" sourceRef="is_system_change_gw" targetRef="final_merge"/>
+    <bpmn:sequenceFlow id="f_change_to_gw" sourceRef="record_change_memory" targetRef="change_recorded_gw"/>
+    <bpmn:sequenceFlow id="f_change_ok" sourceRef="change_recorded_gw" targetRef="final_merge">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">change_remembered == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_change_missing" sourceRef="change_recorded_gw" targetRef="end_blocked_change"/>
+    <bpmn:sequenceFlow id="f_final_to_end" sourceRef="final_merge" targetRef="end_done"/>
+
+  </bpmn:process>
+</bpmn:definitions>

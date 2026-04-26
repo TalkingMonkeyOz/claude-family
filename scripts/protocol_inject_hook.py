@@ -209,8 +209,9 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
 
         conn = psycopg2.connect(DB_URI, connect_timeout=2)
         cur = conn.cursor()
+        # FB338: select summary column too — prefer it when populated.
         cur.execute(f"""
-            SELECT title, description, knowledge_type, confidence_level,
+            SELECT title, summary, description, knowledge_type, confidence_level,
                    COALESCE(tier, 'mid') as tier
             FROM claude.knowledge
             WHERE COALESCE(tier, 'mid') != 'archived'
@@ -239,27 +240,27 @@ def _query_knowledge(user_prompt: str, project_name: str) -> str:
         if not results:
             return ""
 
-        # 2026-04-26: widen FB335 partial restore. B0 (cbbf21e) cut everything to
-        # title-only and broke breadcrumbs (decisions/architecture stayed invisible).
-        # FB335 (e9b0584) gave top-1 a body. Still too narrow — the v2 architecture
-        # decision sat at rank 7 with confidence 65 and never surfaced.
-        # New rule:
-        #   - Top-3 always get body (250 chars each) — covers most relevant hits
+        # 2026-04-26: FB338 — prefer summary (purpose-built ≤200 char) when populated;
+        # fall back to LEFT(description, 250). Plus FB339 widening:
+        #   - Top-3 always get body — covers most relevant hits
         #   - Anything ranked 4+ that is type 'decision' OR confidence >= 85 ALSO
         #     gets body — pulls high-signal architectural memories out of the tail
         #   - Pure title + recall hint for the residual long tail
-        # Net cost ~5K tokens vs B0's 0 — still 60% saving vs original 13K bloat.
         lines = ["RELEVANT KNOWLEDGE (top-3 + high-confidence/decisions get body; rest: recall_memories(\"...\") for full):"]
-        for i, (title, desc, ktype, confidence, tier) in enumerate(results):
-            give_body = bool(desc) and (
+        for i, (title, summary, desc, ktype, confidence, tier) in enumerate(results):
+            body_source = summary if summary else desc
+            give_body = bool(body_source) and (
                 i < 3
                 or ktype == 'decision'
                 or (confidence is not None and confidence >= 85)
             )
             if give_body:
-                preview = desc[:250].replace('\n', ' ').strip()
-                if len(desc) > 250:
-                    preview += "…"
+                if summary:
+                    preview = summary.replace('\n', ' ').strip()
+                else:
+                    preview = desc[:250].replace('\n', ' ').strip()
+                    if len(desc) > 250:
+                        preview += "…"
                 lines.append(f"  [{ktype}|c{confidence}] {title}: {preview}")
             else:
                 lines.append(f"  [{ktype}] {title} …")
