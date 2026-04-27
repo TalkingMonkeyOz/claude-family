@@ -3791,51 +3791,72 @@ def update_claude_md(
 
 @mcp.tool()
 def profile_read(
-    name: str,
+    name: str = "",
     scope: Literal["global", "project"] = "project",
     include_versions: bool = False,
+    include_inactive: bool = False,
+    profile_id: str = "",
 ) -> dict:
-    """Read a profile from claude.profiles by name + scope (FB393).
+    """Read a profile from claude.profiles (FB393, FB394).
 
     Wraps direct SQL access for the profiles/profile_versions tables — use this
-    instead of mcp__postgres__execute_sql so global CLAUDE.md inspection goes
+    instead of mcp__postgres__execute_sql so all profile inspection goes
     through governed tooling.
 
-    For scope='global', filters source_type='global' AND is_active=true (so the
-    orphan inactive profile from FB391 is never returned). For scope='project',
-    filters by name with source_type != 'global' AND is_active=true.
+    Lookup paths:
+    - profile_id: direct UUID lookup (bypasses scope/active filters — for
+      inspecting orphan/archived profiles by ID)
+    - name + scope: standard lookup. include_inactive=True drops the
+      is_active=true filter so soft-deleted profiles can be inspected.
+
+    For scope='global' + active-only, filters source_type='global' so the
+    orphan inactive profile from FB391 is never returned by accident.
 
     Use when: inspecting profile body before edit, comparing file vs DB,
-    listing version history.
+    listing version history, or auditing tombstoned/orphan profiles.
     Returns: {success, profile_id, name, scope, source_type, current_version,
               is_active, config, behavior_lines, behavior_chars, updated_at,
-              versions?: [{version_id, version, created_at, notes, behavior_chars}]}.
+              versions?: [...]}.
 
     Args:
-        name: Profile name ('global' for ~/.claude/CLAUDE.md, project_name otherwise).
-        scope: 'global' or 'project'.
+        name: Profile name (e.g. 'global', or project_name). Required unless profile_id is provided.
+        scope: 'global' or 'project'. Ignored when profile_id is provided.
         include_versions: If True, include up to 50 most recent profile_versions rows.
+        include_inactive: If True, omit the is_active=true filter (FB394).
+        profile_id: Direct UUID lookup. When provided, name + scope are ignored.
     """
+    if not name and not profile_id:
+        return {"success": False, "error": "Either name or profile_id is required"}
+
     conn = get_db_connection()
     cur = None
     try:
         cur = conn.cursor()
-        if scope == "global":
+        if profile_id:
             cur.execute("""
                 SELECT profile_id, name, source_type, current_version, is_active,
                        config, updated_at, created_at, created_by
                 FROM claude.profiles
-                WHERE source_type = 'global' AND is_active = true AND name = %s
+                WHERE profile_id = %s::uuid
+                LIMIT 1
+            """, (profile_id,))
+        elif scope == "global":
+            active_clause = "" if include_inactive else " AND is_active = true"
+            cur.execute(f"""
+                SELECT profile_id, name, source_type, current_version, is_active,
+                       config, updated_at, created_at, created_by
+                FROM claude.profiles
+                WHERE source_type = 'global' AND name = %s{active_clause}
                 LIMIT 1
             """, (name,))
         else:
-            cur.execute("""
+            active_clause = "" if include_inactive else " AND is_active = true"
+            cur.execute(f"""
                 SELECT profile_id, name, source_type, current_version, is_active,
                        config, updated_at, created_at, created_by
                 FROM claude.profiles
                 WHERE name = %s
-                  AND (source_type IS DISTINCT FROM 'global')
-                  AND is_active = true
+                  AND (source_type IS DISTINCT FROM 'global'){active_clause}
                 LIMIT 1
             """, (name,))
         row = cur.fetchone()
@@ -3893,11 +3914,12 @@ def profile_read(
 
 @mcp.tool()
 def profile_update(
-    name: str,
-    behavior: str,
+    name: str = "",
+    behavior: str = "",
     scope: Literal["global", "project"] = "project",
     notes: str = "",
     deploy: bool = True,
+    profile_id: str = "",
 ) -> dict:
     """Update a profile's full behavior (CLAUDE.md content) — config_update.bpmn implementation.
 
@@ -3906,40 +3928,64 @@ def profile_update(
     (missing version-snapshot on profile.config edits) and FB393 (no MCP wrapper
     for profiles). Replaces direct SQL writes against the profiles table.
 
+    Targeting:
+    - profile_id (FB394): direct UUID — bypasses active-by-name filter so
+      orphan/archived profiles can be tombstoned without raw SQL OVERRIDE.
+    - name + scope: standard lookup, restricted to is_active=true rows.
+
     For scope='global', edits the active 'global' source_type profile and
     deploys to ~/.claude/CLAUDE.md. For scope='project', edits the project's
     profile by name and deploys to <project_path>/CLAUDE.md.
 
-    For section-level edits use update_claude_md(project, section, content);
-    this tool replaces the FULL behavior body.
-
     Use when: rewriting global ~/.claude/CLAUDE.md or a project CLAUDE.md from
-    a fully-prepared body (e.g., a v6 redraft staged in a workfile).
+    a fully-prepared body, or tombstoning an inactive profile by ID.
     Returns: {success, profile_id, name, scope, new_version, behavior_lines,
               behavior_chars, file_path, deployed, version_snapshotted}.
 
     Args:
-        name: Profile name ('global' for ~/.claude/CLAUDE.md, project_name otherwise).
+        name: Profile name. Required unless profile_id is provided.
         behavior: New CLAUDE.md content (full body).
-        scope: 'global' or 'project'.
+        scope: 'global' or 'project'. Ignored when profile_id is provided.
         notes: Optional notes for the version snapshot row.
         deploy: If True (default), write the new content to filesystem after DB commit.
+                When updating an inactive profile via profile_id, deploy is forced
+                to False (no filesystem write for archived rows).
+        profile_id: Direct UUID lookup (FB394). Set this to target inactive rows.
     """
     if not behavior or not behavior.strip():
         return {"success": False, "error": "behavior content is empty"}
+    if not name and not profile_id:
+        return {"success": False, "error": "Either name or profile_id is required"}
 
     conn = get_db_connection()
     cur = None
     try:
         cur = conn.cursor()
 
-        # 1. Validate: profile exists + is_active
-        if scope == "global":
+        # 1. Validate: profile exists. If profile_id supplied, target it directly
+        # (allows inactive ops). Otherwise look up by name + scope, active-only.
+        targeting_inactive = False
+        resolved_name = name
+        resolved_scope = scope
+        if profile_id:
+            cur.execute("""
+                SELECT profile_id, name, source_type, is_active FROM claude.profiles
+                WHERE profile_id = %s::uuid
+                LIMIT 1
+            """, (profile_id,))
+            row = cur.fetchone()
+            if row:
+                if not row['is_active']:
+                    targeting_inactive = True
+                resolved_name = row['name']
+                resolved_scope = "global" if row['source_type'] == 'global' else "project"
+        elif scope == "global":
             cur.execute("""
                 SELECT profile_id FROM claude.profiles
                 WHERE source_type = 'global' AND name = %s AND is_active = true
                 LIMIT 1
             """, (name,))
+            row = cur.fetchone()
         else:
             cur.execute("""
                 SELECT profile_id FROM claude.profiles
@@ -3948,11 +3994,16 @@ def profile_update(
                   AND is_active = true
                 LIMIT 1
             """, (name,))
-        row = cur.fetchone()
+            row = cur.fetchone()
         if not row:
-            return {"success": False,
-                    "error": f"Active profile '{name}' (scope={scope}) not found"}
+            target = f"profile_id={profile_id}" if profile_id else f"name='{name}' (scope={scope})"
+            return {"success": False, "error": f"Profile {target} not found"}
         profile_id = row['profile_id']
+
+        # Force deploy=False for inactive profiles — never overwrite the
+        # active filesystem CLAUDE.md from a tombstoned/archived row.
+        if targeting_inactive:
+            deploy = False
 
         # 2. Update content + bump current_version
         cur.execute("""
