@@ -55,7 +55,10 @@ def run_check() -> dict:
         result = dict(cur.fetchone())
         conn.commit()
 
-        # Compute green streak from most-recent backwards
+        # Compute green streak from most-recent backwards.
+        # NULL-safe: any non-TRUE row (FALSE or NULL) breaks the streak.
+        # NULLs occurred pre-Stage-2-view fix when articles_rows/article_sections_rows
+        # were not populated; treating them as breaks prevents premature stage2_ready.
         cur.execute(
             """WITH recent AS (
                 SELECT parity_ok,
@@ -63,7 +66,7 @@ def run_check() -> dict:
                 FROM claude.kg_nodes_parity_log
               )
               SELECT COALESCE(MIN(rn) - 1, (SELECT COUNT(*) FROM claude.kg_nodes_parity_log))::int AS streak
-              FROM recent WHERE NOT parity_ok"""
+              FROM recent WHERE parity_ok IS DISTINCT FROM TRUE"""
         )
         streak_row = cur.fetchone()
         result["streak"] = streak_row["streak"] if streak_row else 0
