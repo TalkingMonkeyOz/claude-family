@@ -4059,6 +4059,334 @@ def profile_update(
 
 
 @mcp.tool()
+def skill_read(
+    name: str,
+    scope: Literal["global", "project"] = "global",
+    scope_ref: str = "",
+) -> dict:
+    """Read a skill from claude.skills by name + scope (FB393).
+
+    Wraps direct SQL access for the skills table — use this instead of
+    mcp__postgres__execute_sql for routine reads.
+
+    Use when: inspecting a skill's content/metadata before edit.
+    Returns: {success, skill_id, name, scope, scope_ref, description,
+              file_pattern, content, version, is_active, updated_at}.
+
+    Args:
+        name: Skill name (e.g., 'structured-autonomy').
+        scope: 'global' or 'project'.
+        scope_ref: Project name when scope='project' (ignored for 'global').
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if scope == "global":
+            cur.execute("""
+                SELECT skill_id, name, scope, scope_ref, description, file_pattern,
+                       content, version, is_active, updated_at
+                FROM claude.skills
+                WHERE scope = 'global' AND name = %s AND is_active = true
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT skill_id, name, scope, scope_ref, description, file_pattern,
+                       content, version, is_active, updated_at
+                FROM claude.skills
+                WHERE scope = 'project' AND name = %s AND scope_ref = %s
+                  AND is_active = true
+                LIMIT 1
+            """, (name, scope_ref))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Skill '{name}' (scope={scope}{', ref=' + scope_ref if scope_ref else ''}) not found or not active"}
+
+        return {
+            "success": True,
+            "skill_id": str(row['skill_id']),
+            "name": row['name'],
+            "scope": row['scope'],
+            "scope_ref": row['scope_ref'],
+            "description": row['description'],
+            "file_pattern": row['file_pattern'],
+            "content": row['content'],
+            "version": row['version'],
+            "is_active": row['is_active'],
+            "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"skill_read failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def skill_update(
+    name: str,
+    content: str,
+    scope: Literal["global", "project"] = "global",
+    scope_ref: str = "",
+    description: str = "",
+    file_pattern: str = "",
+) -> dict:
+    """Update a skill's content + metadata, bump version, audit (FB393).
+
+    Implements config_update.bpmn for claude.skills. No separate version table —
+    increments the version int on the row. Use deploy_project() afterward to
+    write the SKILL.md file out (this tool only updates the DB row of record).
+
+    Use when: editing an existing skill body (e.g., adding a section to
+    structured-autonomy, fixing a typo in a global skill).
+    Returns: {success, skill_id, name, scope, scope_ref, new_version,
+              content_chars, content_lines}.
+
+    Args:
+        name: Skill name.
+        content: Full new SKILL.md body (frontmatter + markdown).
+        scope: 'global' or 'project'.
+        scope_ref: Project name for scope='project'.
+        description: Optional new description (one-line summary).
+        file_pattern: Optional applyTo glob (e.g., '**/*.ts,**/*.tsx').
+    """
+    if not content or not content.strip():
+        return {"success": False, "error": "content is empty"}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if scope == "global":
+            cur.execute("""
+                SELECT skill_id, version FROM claude.skills
+                WHERE scope = 'global' AND name = %s AND is_active = true
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT skill_id, version FROM claude.skills
+                WHERE scope = 'project' AND name = %s AND scope_ref = %s
+                  AND is_active = true
+                LIMIT 1
+            """, (name, scope_ref))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Active skill '{name}' (scope={scope}{', ref=' + scope_ref if scope_ref else ''}) not found"}
+        skill_id = row['skill_id']
+
+        sets = ["content = %s", "version = version + 1", "updated_at = NOW()"]
+        params: list = [content]
+        if description:
+            sets.append("description = %s")
+            params.append(description)
+        if file_pattern:
+            sets.append("file_pattern = %s")
+            params.append(file_pattern)
+        params.append(skill_id)
+
+        cur.execute(
+            f"UPDATE claude.skills SET {', '.join(sets)} WHERE skill_id = %s::uuid RETURNING version",
+            tuple(params),
+        )
+        new_version = cur.fetchone()['version']
+
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, entity_code, to_status, changed_by, change_source, metadata)
+            VALUES ('skills', %s::uuid, %s, 'updated', %s, 'skill_update', %s::jsonb)
+        """, (
+            skill_id,
+            f"skill:{name}:{scope}",
+            os.environ.get('CLAUDE_SESSION_ID'),
+            json.dumps({"scope": scope, "scope_ref": scope_ref, "version": new_version,
+                        "content_chars": len(content)}),
+        ))
+
+        conn.commit()
+        return {
+            "success": True,
+            "skill_id": str(skill_id),
+            "name": name,
+            "scope": scope,
+            "scope_ref": scope_ref or None,
+            "new_version": new_version,
+            "content_chars": len(content),
+            "content_lines": content.count('\n') + 1,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"skill_update failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def rule_read(
+    name: str,
+    scope: Literal["global", "project"] = "project",
+    scope_ref: str = "",
+) -> dict:
+    """Read a rule from claude.rules by name + scope (FB393).
+
+    Use when: inspecting a rule's content/metadata before edit.
+    Returns: {success, rule_id, name, rule_type, scope, scope_ref, content,
+              version, is_active, updated_at}.
+
+    Args:
+        name: Rule name (e.g., 'storage-rules').
+        scope: 'global' or 'project'.
+        scope_ref: Project name when scope='project'.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if scope == "global":
+            cur.execute("""
+                SELECT rule_id, name, rule_type, scope, scope_ref, content,
+                       version, is_active, updated_at
+                FROM claude.rules
+                WHERE scope = 'global' AND name = %s AND is_active = true
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT rule_id, name, rule_type, scope, scope_ref, content,
+                       version, is_active, updated_at
+                FROM claude.rules
+                WHERE scope = 'project' AND name = %s AND scope_ref = %s
+                  AND is_active = true
+                LIMIT 1
+            """, (name, scope_ref))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Rule '{name}' (scope={scope}{', ref=' + scope_ref if scope_ref else ''}) not found or not active"}
+
+        return {
+            "success": True,
+            "rule_id": str(row['rule_id']),
+            "name": row['name'],
+            "rule_type": row['rule_type'],
+            "scope": row['scope'],
+            "scope_ref": row['scope_ref'],
+            "content": row['content'],
+            "version": row['version'],
+            "is_active": row['is_active'],
+            "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None,
+        }
+    except Exception as e:
+        return {"success": False, "error": f"rule_read failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def rule_update(
+    name: str,
+    content: str,
+    scope: Literal["global", "project"] = "project",
+    scope_ref: str = "",
+    rule_type: str = "",
+) -> dict:
+    """Update a rule's content + metadata, bump version, audit (FB393).
+
+    Implements config_update.bpmn for claude.rules. Use deploy_project()
+    afterward to write the .claude/rules/<name>.md file out.
+
+    Use when: editing an existing rule body (e.g., updating storage-rules
+    after a knowledge-architecture decision).
+    Returns: {success, rule_id, name, scope, scope_ref, new_version,
+              content_chars, content_lines}.
+
+    Args:
+        name: Rule name.
+        content: Full new rule body (markdown).
+        scope: 'global' or 'project'.
+        scope_ref: Project name for scope='project'.
+        rule_type: Optional new rule_type override.
+    """
+    if not content or not content.strip():
+        return {"success": False, "error": "content is empty"}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if scope == "global":
+            cur.execute("""
+                SELECT rule_id, version FROM claude.rules
+                WHERE scope = 'global' AND name = %s AND is_active = true
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT rule_id, version FROM claude.rules
+                WHERE scope = 'project' AND name = %s AND scope_ref = %s
+                  AND is_active = true
+                LIMIT 1
+            """, (name, scope_ref))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Active rule '{name}' (scope={scope}{', ref=' + scope_ref if scope_ref else ''}) not found"}
+        rule_id = row['rule_id']
+
+        sets = ["content = %s", "version = version + 1", "updated_at = NOW()"]
+        params: list = [content]
+        if rule_type:
+            sets.append("rule_type = %s")
+            params.append(rule_type)
+        params.append(rule_id)
+
+        cur.execute(
+            f"UPDATE claude.rules SET {', '.join(sets)} WHERE rule_id = %s::uuid RETURNING version",
+            tuple(params),
+        )
+        new_version = cur.fetchone()['version']
+
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, entity_code, to_status, changed_by, change_source, metadata)
+            VALUES ('rules', %s::uuid, %s, 'updated', %s, 'rule_update', %s::jsonb)
+        """, (
+            rule_id,
+            f"rule:{name}:{scope}",
+            os.environ.get('CLAUDE_SESSION_ID'),
+            json.dumps({"scope": scope, "scope_ref": scope_ref, "version": new_version,
+                        "content_chars": len(content)}),
+        ))
+
+        conn.commit()
+        return {
+            "success": True,
+            "rule_id": str(rule_id),
+            "name": name,
+            "scope": scope,
+            "scope_ref": scope_ref or None,
+            "new_version": new_version,
+            "content_chars": len(content),
+            "content_lines": content.count('\n') + 1,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"rule_update failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
 def deploy_claude_md(
     project: str,
 ) -> dict:
