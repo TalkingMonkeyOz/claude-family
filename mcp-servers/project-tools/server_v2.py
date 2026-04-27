@@ -3790,6 +3790,275 @@ def update_claude_md(
 
 
 @mcp.tool()
+def profile_read(
+    name: str,
+    scope: Literal["global", "project"] = "project",
+    include_versions: bool = False,
+) -> dict:
+    """Read a profile from claude.profiles by name + scope (FB393).
+
+    Wraps direct SQL access for the profiles/profile_versions tables — use this
+    instead of mcp__postgres__execute_sql so global CLAUDE.md inspection goes
+    through governed tooling.
+
+    For scope='global', filters source_type='global' AND is_active=true (so the
+    orphan inactive profile from FB391 is never returned). For scope='project',
+    filters by name with source_type != 'global' AND is_active=true.
+
+    Use when: inspecting profile body before edit, comparing file vs DB,
+    listing version history.
+    Returns: {success, profile_id, name, scope, source_type, current_version,
+              is_active, config, behavior_lines, behavior_chars, updated_at,
+              versions?: [{version_id, version, created_at, notes, behavior_chars}]}.
+
+    Args:
+        name: Profile name ('global' for ~/.claude/CLAUDE.md, project_name otherwise).
+        scope: 'global' or 'project'.
+        include_versions: If True, include up to 50 most recent profile_versions rows.
+    """
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        if scope == "global":
+            cur.execute("""
+                SELECT profile_id, name, source_type, current_version, is_active,
+                       config, updated_at, created_at, created_by
+                FROM claude.profiles
+                WHERE source_type = 'global' AND is_active = true AND name = %s
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT profile_id, name, source_type, current_version, is_active,
+                       config, updated_at, created_at, created_by
+                FROM claude.profiles
+                WHERE name = %s
+                  AND (source_type IS DISTINCT FROM 'global')
+                  AND is_active = true
+                LIMIT 1
+            """, (name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Profile '{name}' (scope={scope}) not found or not active"}
+
+        config = row['config'] or {}
+        behavior = ''
+        if isinstance(config, dict):
+            behavior = config.get('behavior') or ''
+
+        result = {
+            "success": True,
+            "profile_id": str(row['profile_id']),
+            "name": row['name'],
+            "scope": scope,
+            "source_type": row['source_type'],
+            "current_version": row['current_version'],
+            "is_active": row['is_active'],
+            "config": config,
+            "behavior_lines": (behavior.count('\n') + 1) if behavior else 0,
+            "behavior_chars": len(behavior),
+            "updated_at": row['updated_at'].isoformat() if row['updated_at'] else None,
+        }
+
+        if include_versions:
+            cur.execute("""
+                SELECT version_id, version, created_at, notes,
+                       LENGTH(config->>'behavior') AS behavior_chars
+                FROM claude.profile_versions
+                WHERE profile_id = %s::uuid
+                ORDER BY version DESC
+                LIMIT 50
+            """, (row['profile_id'],))
+            result['versions'] = [
+                {
+                    "version_id": str(v['version_id']),
+                    "version": v['version'],
+                    "created_at": v['created_at'].isoformat() if v['created_at'] else None,
+                    "notes": v['notes'],
+                    "behavior_chars": v['behavior_chars'],
+                }
+                for v in cur.fetchall()
+            ]
+
+        return result
+    except Exception as e:
+        return {"success": False, "error": f"profile_read failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def profile_update(
+    name: str,
+    behavior: str,
+    scope: Literal["global", "project"] = "project",
+    notes: str = "",
+    deploy: bool = True,
+) -> dict:
+    """Update a profile's full behavior (CLAUDE.md content) — config_update.bpmn implementation.
+
+    Implements the modeled flow Validate -> Snapshot -> Update -> Deploy -> Audit
+    for the claude.profiles + claude.profile_versions tables. Resolves FB390
+    (missing version-snapshot on profile.config edits) and FB393 (no MCP wrapper
+    for profiles). Replaces direct SQL writes against the profiles table.
+
+    For scope='global', edits the active 'global' source_type profile and
+    deploys to ~/.claude/CLAUDE.md. For scope='project', edits the project's
+    profile by name and deploys to <project_path>/CLAUDE.md.
+
+    For section-level edits use update_claude_md(project, section, content);
+    this tool replaces the FULL behavior body.
+
+    Use when: rewriting global ~/.claude/CLAUDE.md or a project CLAUDE.md from
+    a fully-prepared body (e.g., a v6 redraft staged in a workfile).
+    Returns: {success, profile_id, name, scope, new_version, behavior_lines,
+              behavior_chars, file_path, deployed, version_snapshotted}.
+
+    Args:
+        name: Profile name ('global' for ~/.claude/CLAUDE.md, project_name otherwise).
+        behavior: New CLAUDE.md content (full body).
+        scope: 'global' or 'project'.
+        notes: Optional notes for the version snapshot row.
+        deploy: If True (default), write the new content to filesystem after DB commit.
+    """
+    if not behavior or not behavior.strip():
+        return {"success": False, "error": "behavior content is empty"}
+
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+
+        # 1. Validate: profile exists + is_active
+        if scope == "global":
+            cur.execute("""
+                SELECT profile_id FROM claude.profiles
+                WHERE source_type = 'global' AND name = %s AND is_active = true
+                LIMIT 1
+            """, (name,))
+        else:
+            cur.execute("""
+                SELECT profile_id FROM claude.profiles
+                WHERE name = %s
+                  AND (source_type IS DISTINCT FROM 'global')
+                  AND is_active = true
+                LIMIT 1
+            """, (name,))
+        row = cur.fetchone()
+        if not row:
+            return {"success": False,
+                    "error": f"Active profile '{name}' (scope={scope}) not found"}
+        profile_id = row['profile_id']
+
+        # 2. Update content + bump current_version
+        cur.execute("""
+            UPDATE claude.profiles
+            SET config = jsonb_set(
+                    COALESCE(config, '{}'::jsonb),
+                    '{behavior}',
+                    to_jsonb(%s::text)
+                ),
+                updated_at = NOW(),
+                current_version = current_version + 1
+            WHERE profile_id = %s::uuid
+            RETURNING current_version
+        """, (behavior, profile_id))
+        new_version = cur.fetchone()['current_version']
+
+        # 3. Snapshot to profile_versions (FB390 fix)
+        version_notes = notes or (
+            f"profile_update: {scope} '{name}' rewrite "
+            f"({len(behavior)} chars, {behavior.count(chr(10)) + 1} lines)"
+        )
+        cur.execute("""
+            INSERT INTO claude.profile_versions
+            (version_id, profile_id, version, config, created_at, notes)
+            VALUES (
+                gen_random_uuid(),
+                %s::uuid,
+                %s,
+                (SELECT config FROM claude.profiles WHERE profile_id = %s::uuid),
+                NOW(),
+                %s
+            )
+        """, (profile_id, new_version, profile_id, version_notes))
+
+        # 4. Audit log
+        cur.execute("""
+            INSERT INTO claude.audit_log
+            (entity_type, entity_id, entity_code, to_status, changed_by, change_source, metadata)
+            VALUES (
+                'profiles',
+                %s::uuid,
+                %s,
+                'updated',
+                %s,
+                'profile_update',
+                %s::jsonb
+            )
+        """, (
+            profile_id,
+            f"profile:{name}:{scope}",
+            os.environ.get('CLAUDE_SESSION_ID'),
+            json.dumps({
+                "scope": scope,
+                "version": new_version,
+                "behavior_chars": len(behavior),
+            })
+        ))
+
+        conn.commit()
+
+        # 5. Deploy to filesystem (after successful DB commit)
+        deployed = False
+        file_path = None
+        if deploy:
+            try:
+                if scope == "global":
+                    file_path = str(Path.home() / ".claude" / "CLAUDE.md")
+                else:
+                    cur.execute("""
+                        SELECT project_path FROM claude.workspaces
+                        WHERE project_name = %s
+                    """, (name,))
+                    pp = cur.fetchone()
+                    if pp:
+                        file_path = str(Path(pp['project_path']) / "CLAUDE.md")
+
+                if file_path:
+                    Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.write(behavior)
+                    deployed = True
+            except Exception as e:
+                logger.warning(f"profile_update deploy failed for {name} ({scope}): {e}")
+
+        return {
+            "success": True,
+            "profile_id": str(profile_id),
+            "name": name,
+            "scope": scope,
+            "new_version": new_version,
+            "behavior_lines": behavior.count('\n') + 1,
+            "behavior_chars": len(behavior),
+            "file_path": file_path,
+            "deployed": deployed,
+            "version_snapshotted": True,
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"profile_update failed: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
 def deploy_claude_md(
     project: str,
 ) -> dict:

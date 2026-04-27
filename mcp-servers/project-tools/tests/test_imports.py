@@ -36,6 +36,8 @@ def test_core_tools_registered():
         "start_session",
         "end_session",
         "get_work_context",
+        "profile_read",
+        "profile_update",
     ]
     missing = [name for name in required if not hasattr(mod, name)]
     assert not missing, f"Missing consolidated tools: {missing}"
