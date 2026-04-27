@@ -91,13 +91,13 @@ def _load_workspace_roots() -> List[str]:
         try:
             cur = conn.cursor()
             cur.execute(
-                "SELECT workspace_path FROM claude.workspaces "
-                "WHERE is_active = TRUE AND workspace_path IS NOT NULL"
+                "SELECT project_path FROM claude.workspaces "
+                "WHERE is_active = TRUE AND project_path IS NOT NULL"
             )
             rows = cur.fetchall()
             roots: List[str] = []
             for r in rows:
-                wp = r[0] if not isinstance(r, dict) else r.get('workspace_path', '')
+                wp = r[0] if not isinstance(r, dict) else r.get('project_path', '')
                 if wp:
                     roots.append(wp.replace('\\', '/').rstrip('/').lower())
             _WORKSPACE_ROOTS_CACHE = roots

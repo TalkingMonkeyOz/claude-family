@@ -10647,7 +10647,7 @@ def index_codebase(project: str = "", project_path: str = "", force_full: bool =
         proj_name = project or os.path.basename(os.getcwd())
         if not project_path:
             cur.execute(
-                "SELECT config->>'workspace_path' as path FROM claude.workspaces WHERE project_name = %s AND is_active = true",
+                "SELECT project_path as path FROM claude.workspaces WHERE project_name = %s AND is_active = true",
                 (proj_name,)
             )
             row = cur.fetchone()
@@ -11001,9 +11001,9 @@ def _resolve_ckg_file_path(cur, project_id: str, project_name: str, file_path: s
     if os.path.isabs(normalized):
         return normalized
 
-    # Try resolving against workspace_path
+    # Try resolving against project_path (schema column; was 'workspace_path' typo)
     cur.execute(
-        "SELECT config->>'workspace_path' as path FROM claude.workspaces "
+        "SELECT project_path as path FROM claude.workspaces "
         "WHERE project_name = %s AND is_active = true",
         (project_name,)
     )
