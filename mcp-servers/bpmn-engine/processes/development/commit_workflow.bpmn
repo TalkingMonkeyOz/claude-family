@@ -74,14 +74,25 @@
     <!-- Script Task: Create Commit [CLAUDE] - git commit -->
     <bpmn:scriptTask id="create_commit" name="Create Commit" scriptFormat="python">
       <bpmn:incoming>flow_commit_message_to_create</bpmn:incoming>
-      <bpmn:outgoing>flow_create_to_push_gateway</bpmn:outgoing>
+      <bpmn:outgoing>flow_create_to_resolve</bpmn:outgoing>
       <bpmn:script>commit_created = True</bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Script Task: Auto-resolve Feedback [HOOK] - FB397 -->
+    <!-- After commit creation, post-commit hook scrapes the commit message -->
+    <!-- for [FB#] tokens and calls work_status(action="resolve") for each. -->
+    <!-- The script body simulates the no-op pass-through; the real hook is -->
+    <!-- scripts/commit_fb_resolve_hook.py wired into hooks-base PostToolUse. -->
+    <bpmn:scriptTask id="auto_resolve_feedback" name="[HOOK] Auto-resolve [FB#] References" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_resolve</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_push_gateway</bpmn:outgoing>
+      <bpmn:script>auto_resolve_ran = True</bpmn:script>
     </bpmn:scriptTask>
 
     <!-- Exclusive Gateway: Push? -->
     <!-- default=flow_no_push so no-push is the fallback path -->
     <bpmn:exclusiveGateway id="push_gateway" name="Push?" default="flow_no_push">
-      <bpmn:incoming>flow_create_to_push_gateway</bpmn:incoming>
+      <bpmn:incoming>flow_resolve_to_push_gateway</bpmn:incoming>
       <bpmn:outgoing>flow_push_yes</bpmn:outgoing>
       <bpmn:outgoing>flow_no_push</bpmn:outgoing>
     </bpmn:exclusiveGateway>
@@ -127,7 +138,8 @@
     <bpmn:sequenceFlow id="flow_address_feedback_to_review" sourceRef="address_review_feedback" targetRef="code_review"/>
 
     <bpmn:sequenceFlow id="flow_commit_message_to_create" sourceRef="write_commit_message" targetRef="create_commit"/>
-    <bpmn:sequenceFlow id="flow_create_to_push_gateway" sourceRef="create_commit" targetRef="push_gateway"/>
+    <bpmn:sequenceFlow id="flow_create_to_resolve" sourceRef="create_commit" targetRef="auto_resolve_feedback"/>
+    <bpmn:sequenceFlow id="flow_resolve_to_push_gateway" sourceRef="auto_resolve_feedback" targetRef="push_gateway"/>
 
     <bpmn:sequenceFlow id="flow_push_yes" sourceRef="push_gateway" targetRef="push_to_remote">
       <bpmn:conditionExpression>push_to_remote == True</bpmn:conditionExpression>
@@ -186,21 +198,25 @@
         <dc:Bounds x="1030" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
+      <bpmndi:BPMNShape id="shape_auto_resolve_feedback" bpmnElement="auto_resolve_feedback">
+        <dc:Bounds x="1190" y="180" width="120" height="80"/>
+      </bpmndi:BPMNShape>
+
       <bpmndi:BPMNShape id="shape_push_gateway" bpmnElement="push_gateway" isMarkerVisible="true">
-        <dc:Bounds x="1190" y="193" width="50" height="50"/>
+        <dc:Bounds x="1370" y="193" width="50" height="50"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_push_to_remote" bpmnElement="push_to_remote">
-        <dc:Bounds x="1300" y="180" width="100" height="80"/>
+        <dc:Bounds x="1480" y="180" width="100" height="80"/>
       </bpmndi:BPMNShape>
 
       <bpmndi:BPMNShape id="shape_end_committed_pushed" bpmnElement="end_committed_pushed">
-        <dc:Bounds x="1460" y="200" width="36" height="36"/>
+        <dc:Bounds x="1640" y="200" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
       <!-- end_committed_local (below push_gateway, no-push path) -->
       <bpmndi:BPMNShape id="shape_end_committed_local" bpmnElement="end_committed_local">
-        <dc:Bounds x="1197" y="340" width="36" height="36"/>
+        <dc:Bounds x="1377" y="340" width="36" height="36"/>
       </bpmndi:BPMNShape>
 
       <!-- Edges: main happy path -->
@@ -269,26 +285,31 @@
         <di:waypoint x="1030" y="220"/>
       </bpmndi:BPMNEdge>
 
-      <bpmndi:BPMNEdge id="edge_flow_create_to_push_gateway" bpmnElement="flow_create_to_push_gateway">
+      <bpmndi:BPMNEdge id="edge_flow_create_to_resolve" bpmnElement="flow_create_to_resolve">
         <di:waypoint x="1130" y="220"/>
-        <di:waypoint x="1190" y="218"/>
+        <di:waypoint x="1190" y="220"/>
+      </bpmndi:BPMNEdge>
+
+      <bpmndi:BPMNEdge id="edge_flow_resolve_to_push_gateway" bpmnElement="flow_resolve_to_push_gateway">
+        <di:waypoint x="1310" y="220"/>
+        <di:waypoint x="1370" y="218"/>
       </bpmndi:BPMNEdge>
 
       <!-- push_gateway: push branch (right) -->
       <bpmndi:BPMNEdge id="edge_flow_push_yes" bpmnElement="flow_push_yes">
-        <di:waypoint x="1240" y="218"/>
-        <di:waypoint x="1300" y="220"/>
+        <di:waypoint x="1420" y="218"/>
+        <di:waypoint x="1480" y="220"/>
       </bpmndi:BPMNEdge>
 
       <!-- push_gateway: no-push branch (down to end) -->
       <bpmndi:BPMNEdge id="edge_flow_no_push" bpmnElement="flow_no_push">
-        <di:waypoint x="1215" y="243"/>
-        <di:waypoint x="1215" y="358"/>
+        <di:waypoint x="1395" y="243"/>
+        <di:waypoint x="1395" y="358"/>
       </bpmndi:BPMNEdge>
 
       <bpmndi:BPMNEdge id="edge_flow_push_to_end" bpmnElement="flow_push_to_end">
-        <di:waypoint x="1400" y="220"/>
-        <di:waypoint x="1460" y="218"/>
+        <di:waypoint x="1580" y="220"/>
+        <di:waypoint x="1640" y="218"/>
       </bpmndi:BPMNEdge>
 
     </bpmndi:BPMNPlane>

@@ -140,6 +140,7 @@ class TestHappyPath:
         assert "code_review" in names, "code_review script must have run"
         assert "write_commit_message" in names, "write_commit_message must have been completed"
         assert "create_commit" in names, "create_commit script must have run"
+        assert "auto_resolve_feedback" in names, "auto_resolve_feedback (FB397) must run after create_commit"
         assert "end_committed_local" in names, "end_committed_local must be reached (no push)"
 
         assert "fix_issues" not in names, "fix_issues must NOT run when checks pass first time"
@@ -149,6 +150,9 @@ class TestHappyPath:
 
         assert workflow.data.get("commit_created") is True, (
             "create_commit should have set commit_created=True"
+        )
+        assert workflow.data.get("auto_resolve_ran") is True, (
+            "auto_resolve_feedback should have set auto_resolve_ran=True (FB397)"
         )
 
 
@@ -328,6 +332,7 @@ class TestPushToRemote:
         assert "code_review" in names, "code_review script must have run"
         assert "write_commit_message" in names, "write_commit_message must have been completed"
         assert "create_commit" in names, "create_commit script must have run"
+        assert "auto_resolve_feedback" in names, "auto_resolve_feedback (FB397) must run before push"
         assert "push_to_remote" in names, "push_to_remote script must have run"
         assert "end_committed_pushed" in names, "end_committed_pushed must be reached"
 
@@ -338,6 +343,85 @@ class TestPushToRemote:
         assert workflow.data.get("commit_created") is True, (
             "create_commit should have set commit_created=True"
         )
+        assert workflow.data.get("auto_resolve_ran") is True, (
+            "auto_resolve_feedback should have set auto_resolve_ran=True (FB397)"
+        )
         assert workflow.data.get("pushed") is True, (
             "push_to_remote script should have set pushed=True"
+        )
+
+
+# ---------------------------------------------------------------------------
+# FB397: Auto-resolve [FB#] References — model-level coverage
+# ---------------------------------------------------------------------------
+# These tests assert the auto_resolve_feedback step is present on every path
+# from create_commit. The FB#-parsing semantics live in the hook
+# (scripts/commit_fb_resolve_hook.py) and are tested separately.
+
+
+class TestAutoResolveFeedbackPresence:
+    """
+    The auto_resolve_feedback scriptTask MUST appear between create_commit and
+    push_gateway on every path that reaches a commit. This guards against
+    regressions where someone re-wires create_commit straight to push_gateway
+    and silently drops the FB# auto-resolve step.
+    """
+
+    def test_auto_resolve_runs_on_no_push_path(self):
+        workflow = load_workflow()
+        complete_user_task(workflow, "stage_changes", {})
+        complete_user_task(
+            workflow,
+            "run_pre_commit_checks",
+            {"checks_passed": True, "review": "approved", "push_to_remote": False},
+        )
+        complete_user_task(workflow, "write_commit_message", {})
+
+        names = completed_spec_names(workflow)
+        assert "create_commit" in names
+        assert "auto_resolve_feedback" in names
+        # Ordering: auto_resolve_feedback must come after create_commit
+        assert names.index("auto_resolve_feedback") > names.index("create_commit"), (
+            "auto_resolve_feedback must run AFTER create_commit, not before"
+        )
+        assert workflow.data.get("auto_resolve_ran") is True
+
+    def test_auto_resolve_runs_on_push_path(self):
+        workflow = load_workflow()
+        complete_user_task(workflow, "stage_changes", {})
+        complete_user_task(
+            workflow,
+            "run_pre_commit_checks",
+            {"checks_passed": True, "review": "approved"},
+        )
+        complete_user_task(workflow, "write_commit_message", {"push_to_remote": True})
+
+        names = completed_spec_names(workflow)
+        assert "create_commit" in names
+        assert "auto_resolve_feedback" in names
+        assert "push_to_remote" in names
+        # Ordering: auto_resolve_feedback must come AFTER create_commit and BEFORE push_to_remote
+        assert names.index("auto_resolve_feedback") > names.index("create_commit")
+        assert names.index("auto_resolve_feedback") < names.index("push_to_remote"), (
+            "auto_resolve_feedback must run BEFORE push, so resolution happens "
+            "even on commits that are never pushed"
+        )
+        assert workflow.data.get("auto_resolve_ran") is True
+
+    def test_auto_resolve_skipped_when_workflow_terminates_early(self):
+        """
+        If checks fail forever (workflow doesn't reach create_commit), the
+        auto_resolve_feedback step must NOT run. Sanity check that we haven't
+        accidentally moved it onto a pre-commit branch.
+        """
+        workflow = load_workflow()
+        complete_user_task(workflow, "stage_changes", {})
+        complete_user_task(workflow, "run_pre_commit_checks", {"checks_passed": False})
+
+        # Workflow is now stalled at fix_issues; auto_resolve_feedback must not
+        # appear in completed task names.
+        names = completed_spec_names(workflow)
+        assert "create_commit" not in names, "create_commit must NOT run when checks fail"
+        assert "auto_resolve_feedback" not in names, (
+            "auto_resolve_feedback must NOT run on the pre-commit failure path"
         )
