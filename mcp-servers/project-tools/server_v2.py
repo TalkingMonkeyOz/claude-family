@@ -2844,6 +2844,11 @@ def create_linked_task(
                          f"Use advance_status to update it instead of creating a new one."
             }
 
+        # FB398 Path A: file-existence pre-check. If any path in files_affected
+        # already exists on disk AND git log mentions a BT/FB/F short_code, the
+        # task may be a duplicate of already-shipped work. Read-only — never blocks.
+        duplicate_warning = _check_files_affected_drift(files_affected)
+
         # Get next step_order
         cur.execute("""
             SELECT COALESCE(MAX(step_order), 0) + 1 as next_order
@@ -2875,7 +2880,7 @@ def create_linked_task(
         new_task = cur.fetchone()
         conn.commit()
 
-        return {
+        result = {
             "success": True,
             "task_code": f"BT{new_task['short_code']}",
             "task_id": new_task['task_id'],
@@ -2887,6 +2892,9 @@ def create_linked_task(
             "blocked_by": blocked_by,
             "status": "todo",
         }
+        if duplicate_warning:
+            result["duplicate_warning"] = duplicate_warning
+        return result
 
     except Exception as e:
         try:
@@ -2896,6 +2904,66 @@ def create_linked_task(
         return {"success": False, "error": str(e)}
     finally:
         conn.close()
+
+
+def _check_files_affected_drift(files_affected: list[str] | None) -> dict | None:
+    """FB398 Path A: warn if files_affected paths already exist with git history.
+
+    Read-only check. Returns None if no overlap, otherwise a dict describing
+    which paths already exist and which short_codes appear in their commits.
+    """
+    if not files_affected:
+        return None
+    try:
+        import os
+        import re
+        import subprocess
+        from pathlib import Path
+
+        # Project root: this file is mcp-servers/project-tools/server_v2.py,
+        # so ../../.. is the repo root.
+        root = Path(__file__).resolve().parent.parent.parent
+        token_re = re.compile(r"\b(BT|FB|F)(\d+)\b")
+
+        existing = []
+        commit_codes: set[str] = set()
+        for rel in files_affected:
+            # Reject paths that escape the repo (defence in depth)
+            if rel.startswith("/") or ".." in Path(rel).parts:
+                continue
+            p = (root / rel).resolve()
+            try:
+                p.relative_to(root)
+            except ValueError:
+                continue
+            if not p.exists():
+                continue
+            existing.append(rel)
+            try:
+                res = subprocess.run(
+                    ["git", "log", "--all", "--pretty=%h %s", "--", rel],
+                    cwd=str(root), capture_output=True, text=True, timeout=10,
+                )
+                if res.returncode == 0:
+                    for line in res.stdout.splitlines()[:5]:
+                        for prefix, num in token_re.findall(line):
+                            commit_codes.add(f"{prefix}{num}")
+            except Exception:
+                pass
+
+        if not existing or not commit_codes:
+            return None
+        return {
+            "existing_paths": existing,
+            "referenced_short_codes": sorted(commit_codes),
+            "hint": (
+                "These files already exist on disk and have git history mentioning "
+                "the listed short_codes. Verify the work isn't already shipped under "
+                "a different BT before implementing — see FB398."
+            ),
+        }
+    except Exception:
+        return None
 
 
 # ============================================================================

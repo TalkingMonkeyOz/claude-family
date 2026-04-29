@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/task-drift-detection"
+    id="Definitions_TDD">
+
+  <bpmn:process id="task_drift_detection" name="Task Drift Detection: TaskCreate Pre-Check + Daily Sweep" isExecutable="true">
+
+    <!--
+      FB398: build_tasks left at status='todo' for already-shipped work cause future
+      sessions to mistakenly pick them up as fresh implementation. Three duplicates
+      observed in one session (BT692/BT693/BT387). Two complementary detection paths:
+
+      Path A (preventive, runtime): work_create() pre-check
+        - When type='task' and files_affected non-empty, glob each path.
+        - If file exists AND git log is non-empty, return a duplicate_warning
+          field listing the matched paths and the most recent commit.
+        - Read-only — never blocks creation.
+
+      Path B (sweep, scheduled): scripts/task_drift_sweep.py
+        - Daily cron 0 7 * * *.
+        - Scan claude.build_tasks WHERE status IN ('todo','in_progress') AND files_affected IS NOT NULL.
+        - For each: all paths exist on disk + git log mentions BT### or sibling
+          short_codes from same feature → file 'design' priority='medium' feedback
+          titled "BT### may be duplicate" with title-prefix dedupe.
+
+      Implementation: scripts/task_drift_sweep.py (Path B), mcp-servers/project-tools/server_v2.py (Path A).
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start_create" name="work_create(type='task') Called">
+      <bpmn:outgoing>flow_create_to_glob</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:startEvent id="start_cron" name="Daily Cron Trigger (0 7 * * *)">
+      <bpmn:outgoing>flow_cron_to_scan</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PATH A: TASKCREATE PRE-CHECK                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="glob_files_affected" name="[TOOL] Glob files_affected paths" scriptFormat="python">
+      <bpmn:incoming>flow_create_to_glob</bpmn:incoming>
+      <bpmn:outgoing>flow_glob_to_git</bpmn:outgoing>
+      <bpmn:script>
+# For each path in files_affected: os.path.exists(project_root / path)
+# Sets: existing_paths = [paths that exist]
+existing_paths = existing_paths if existing_paths is not None else []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="git_log_existing" name="[TOOL] git log on existing paths" scriptFormat="python">
+      <bpmn:incoming>flow_glob_to_git</bpmn:incoming>
+      <bpmn:outgoing>flow_git_to_warn_gw</bpmn:outgoing>
+      <bpmn:script>
+# subprocess git log --oneline -- path for each existing_path
+# Sets: tracked_paths = [(path, latest_commit_sha, latest_commit_msg)]
+tracked_paths = tracked_paths if tracked_paths is not None else []
+has_tracked_overlap = len(tracked_paths) > 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="warn_gw" name="Tracked Overlap?" default="flow_no_warn">
+      <bpmn:incoming>flow_git_to_warn_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_emit_warning</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_warn</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="emit_duplicate_warning" name="[TOOL] Add duplicate_warning to response" scriptFormat="python">
+      <bpmn:incoming>flow_emit_warning</bpmn:incoming>
+      <bpmn:outgoing>flow_warn_to_create_merge</bpmn:outgoing>
+      <bpmn:script>
+# response['duplicate_warning'] = {paths: [...], latest_commits: [...],
+#   hint: 'These files already exist and have git history. Check if BT was already shipped under a different short_code.'}
+warning_emitted = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="create_merge" name="TaskCreate Complete">
+      <bpmn:incoming>flow_no_warn</bpmn:incoming>
+      <bpmn:incoming>flow_warn_to_create_merge</bpmn:incoming>
+      <bpmn:outgoing>flow_create_to_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_create" name="Task Created (with optional warning)">
+      <bpmn:incoming>flow_create_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- PATH B: DAILY SWEEP                                                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="scan_open_tasks" name="[DB] Scan open build_tasks with files_affected" scriptFormat="python">
+      <bpmn:incoming>flow_cron_to_scan</bpmn:incoming>
+      <bpmn:outgoing>flow_scan_to_loop</bpmn:outgoing>
+      <bpmn:script>
+# SELECT short_code, feature_id, files_affected FROM claude.build_tasks
+# WHERE status IN ('todo','in_progress') AND files_affected IS NOT NULL
+candidates = candidates if candidates is not None else []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="loop_gw" name="More Candidates?" default="flow_loop_done">
+      <bpmn:incoming>flow_scan_to_loop</bpmn:incoming>
+      <bpmn:incoming>flow_back_to_loop</bpmn:incoming>
+      <bpmn:outgoing>flow_next_candidate</bpmn:outgoing>
+      <bpmn:outgoing>flow_loop_done</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="check_paths_exist" name="[TOOL] All files exist on disk?" scriptFormat="python">
+      <bpmn:incoming>flow_next_candidate</bpmn:incoming>
+      <bpmn:outgoing>flow_paths_to_git</bpmn:outgoing>
+      <bpmn:script>
+all_paths_exist = all_paths_exist if all_paths_exist is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_git_mentions" name="[TOOL] git log mentions short_code or sibling?" scriptFormat="python">
+      <bpmn:incoming>flow_paths_to_git</bpmn:incoming>
+      <bpmn:outgoing>flow_git_to_drift_gw</bpmn:outgoing>
+      <bpmn:script>
+# git log --all --oneline -- path | grep -E 'BT(this|sibling1|sibling2|...)'
+git_mentions_match = git_mentions_match if git_mentions_match is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="drift_gw" name="Likely Duplicate?" default="flow_not_drift">
+      <bpmn:incoming>flow_git_to_drift_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_drift</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_drift</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="check_dedupe" name="[DB] Existing open feedback for this BT?" scriptFormat="python">
+      <bpmn:incoming>flow_is_drift</bpmn:incoming>
+      <bpmn:outgoing>flow_dedupe_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT 1 FROM claude.feedback WHERE title ILIKE 'BT### may be duplicate%' AND status NOT IN ('resolved','wont_fix','duplicate')
+already_filed = already_filed if already_filed is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="dedupe_gw" name="Already Filed?" default="flow_dedupe_file">
+      <bpmn:incoming>flow_dedupe_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_dedupe_skip</bpmn:outgoing>
+      <bpmn:outgoing>flow_dedupe_file</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="file_drift_feedback" name="[DB] File design/medium feedback" scriptFormat="python">
+      <bpmn:incoming>flow_dedupe_file</bpmn:incoming>
+      <bpmn:outgoing>flow_filed_to_back</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.feedback (feedback_type='design', priority='medium', status='new',
+#   title='BT### may be duplicate — files exist + git references work',
+#   description='paths: ..., commits: ...')
+filed = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="candidate_merge" name="Candidate Done">
+      <bpmn:incoming>flow_not_drift</bpmn:incoming>
+      <bpmn:incoming>flow_dedupe_skip</bpmn:incoming>
+      <bpmn:incoming>flow_filed_to_back</bpmn:incoming>
+      <bpmn:outgoing>flow_back_to_loop</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_sweep" name="Sweep Complete (summary logged)">
+      <bpmn:incoming>flow_loop_done</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Path A: TaskCreate -->
+    <bpmn:sequenceFlow id="flow_create_to_glob" sourceRef="start_create" targetRef="glob_files_affected"/>
+    <bpmn:sequenceFlow id="flow_glob_to_git" sourceRef="glob_files_affected" targetRef="git_log_existing"/>
+    <bpmn:sequenceFlow id="flow_git_to_warn_gw" sourceRef="git_log_existing" targetRef="warn_gw"/>
+    <bpmn:sequenceFlow id="flow_emit_warning" sourceRef="warn_gw" targetRef="emit_duplicate_warning">
+      <bpmn:conditionExpression>has_tracked_overlap == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_warn" sourceRef="warn_gw" targetRef="create_merge"/>
+    <bpmn:sequenceFlow id="flow_warn_to_create_merge" sourceRef="emit_duplicate_warning" targetRef="create_merge"/>
+    <bpmn:sequenceFlow id="flow_create_to_end" sourceRef="create_merge" targetRef="end_create"/>
+
+    <!-- Path B: Daily Sweep -->
+    <bpmn:sequenceFlow id="flow_cron_to_scan" sourceRef="start_cron" targetRef="scan_open_tasks"/>
+    <bpmn:sequenceFlow id="flow_scan_to_loop" sourceRef="scan_open_tasks" targetRef="loop_gw"/>
+    <bpmn:sequenceFlow id="flow_next_candidate" sourceRef="loop_gw" targetRef="check_paths_exist">
+      <bpmn:conditionExpression>has_more_candidates == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_loop_done" sourceRef="loop_gw" targetRef="end_sweep"/>
+    <bpmn:sequenceFlow id="flow_paths_to_git" sourceRef="check_paths_exist" targetRef="check_git_mentions"/>
+    <bpmn:sequenceFlow id="flow_git_to_drift_gw" sourceRef="check_git_mentions" targetRef="drift_gw"/>
+    <bpmn:sequenceFlow id="flow_is_drift" sourceRef="drift_gw" targetRef="check_dedupe">
+      <bpmn:conditionExpression>all_paths_exist == True and git_mentions_match == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_drift" sourceRef="drift_gw" targetRef="candidate_merge"/>
+    <bpmn:sequenceFlow id="flow_dedupe_to_gw" sourceRef="check_dedupe" targetRef="dedupe_gw"/>
+    <bpmn:sequenceFlow id="flow_dedupe_skip" sourceRef="dedupe_gw" targetRef="candidate_merge">
+      <bpmn:conditionExpression>already_filed == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_dedupe_file" sourceRef="dedupe_gw" targetRef="file_drift_feedback"/>
+    <bpmn:sequenceFlow id="flow_filed_to_back" sourceRef="file_drift_feedback" targetRef="candidate_merge"/>
+    <bpmn:sequenceFlow id="flow_back_to_loop" sourceRef="candidate_merge" targetRef="loop_gw"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="task_drift_detection">
+      <bpmndi:BPMNShape id="s_start_create" bpmnElement="start_create">
+        <dc:Bounds x="50" y="100" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="s_start_cron" bpmnElement="start_cron">
+        <dc:Bounds x="50" y="300" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
