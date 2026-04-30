@@ -1211,6 +1211,79 @@ def _should_use_toc(content: str, detail: str) -> bool:
     return h2_count >= 2
 
 
+def _sync_workfile_sections(conn, workfile_id: str, content: str) -> int:
+    """FB408: Re-build claude.workfile_sections rows for a given workfile.
+
+    Body-weighted retrieval. Splits content on `^## ` headers (same parser as
+    _build_toc / _split_on_h2 — see server.py:1214). Idempotent: deletes prior
+    rows for this workfile and inserts fresh ones, so re-running on unchanged
+    content produces the same final state.
+
+    Skipped quietly if content has fewer than 2 H2 headers (single-section
+    workfiles add no body-weighted signal beyond the existing title-level
+    embedding on project_workfiles.embedding).
+
+    Returns: number of section rows written. Caller must commit.
+    """
+    if not content or not workfile_id:
+        return 0
+    parts = _split_on_h2(content, target_lines=400)
+    # _split_on_h2 falls back to part-1/part-2 etc. when <2 H2s; only persist
+    # when there's a genuine multi-section structure.
+    import re as _re
+    h2_count = len(_re.findall(r'(?m)^##\s', content))
+    if h2_count < 2 or len(parts) < 2:
+        # Still nuke any stale section rows if a previous version had headers.
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM claude.workfile_sections WHERE workfile_id = %s::uuid",
+            (workfile_id,),
+        )
+        cur.close()
+        return 0
+
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM claude.workfile_sections WHERE workfile_id = %s::uuid",
+            (workfile_id,),
+        )
+        # Try to capture which embedding model produced these rows so future
+        # backfills/migrations can reason about staleness.
+        try:
+            from embedding_provider import get_provider_info
+            _pinfo = get_provider_info()
+            embed_model = f"{_pinfo.get('provider', '')}:{_pinfo.get('model', '')}"
+        except Exception:
+            embed_model = None
+
+        rows_written = 0
+        for idx, (slug, body) in enumerate(parts):
+            # Section title: prefer the first H2 line in the body, else slug.
+            title = slug.replace('-', ' ').strip()
+            first_line = body.split('\n', 1)[0].strip() if body else ''
+            if first_line.startswith('##'):
+                title = first_line.lstrip('#').strip()
+
+            # FB408 fix: embed the BODY (not title-prefixed). That's the whole
+            # point of section embeddings — body-weighted recall.
+            section_embedding = generate_embedding(body[:2000]) if body else None
+
+            cur.execute(
+                """
+                INSERT INTO claude.workfile_sections
+                    (workfile_id, section_order, section_slug, section_title,
+                     section_body, embedding, embedding_model, updated_at)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s::vector, %s, NOW())
+                """,
+                (workfile_id, idx, slug, title, body, section_embedding, embed_model),
+            )
+            rows_written += 1
+        return rows_written
+    finally:
+        cur.close()
+
+
 def _split_on_h2(content: str, target_lines: int = 400) -> List[Tuple[str, str]]:
     """Split markdown content into (section_title, section_body) pairs on H2 headers.
 
@@ -1259,6 +1332,7 @@ async def tool_stash(
     is_pinned: bool = False,
     mode: str = "replace",
     auto_chunk: bool = False,
+    related_to: Optional[List[str]] = None,
 ) -> Dict:
     """Store/update a workfile. UPSERT on (project, component, title).
 
@@ -1266,6 +1340,11 @@ async def tool_stash(
     split on H2 headers (or size-based if none): parent becomes an index with
     links to sub-workfiles named '{title}-{slug}'. Default False preserves
     existing behavior.
+
+    related_to: FB410 — optional list of workfile_id UUIDs to link this workfile
+        to (e.g. when two workfiles are different views of the same task).
+        Persisted to project_workfiles.related_to UUID[]. Surfaced by
+        tool_unstash as `related_workfiles: [{workfile_id, component, title}]`.
     """
     project = project or os.path.basename(os.getcwd())
 
@@ -1375,13 +1454,20 @@ async def tool_stash(
             if existing:
                 content = existing['content'] + "\n---\n" + content
 
-        # UPSERT
+        # UPSERT — FB410: related_to persisted on insert and on update (when
+        # caller passes a non-None list). When caller passes None we preserve
+        # any existing related_to via COALESCE so partial updates don't clobber.
+        related_to_cast = (
+            [str(r) for r in related_to] if related_to is not None else None
+        )
         cur.execute("""
             INSERT INTO claude.project_workfiles
                 (project_id, component, title, content, workfile_type, tags,
-                 feature_code, is_pinned, linked_sessions, embedding, updated_at)
+                 feature_code, is_pinned, linked_sessions, embedding,
+                 related_to, updated_at)
             VALUES (%s::uuid, %s, %s, %s, %s, %s,
-                    %s, %s, ARRAY[%s]::uuid[], %s::vector, NOW())
+                    %s, %s, ARRAY[%s]::uuid[], %s::vector,
+                    %s::uuid[], NOW())
             ON CONFLICT (project_id, component, title)
             DO UPDATE SET
                 content = EXCLUDED.content,
@@ -1394,16 +1480,32 @@ async def tool_stash(
                     FROM unnest(project_workfiles.linked_sessions || EXCLUDED.linked_sessions) s
                 ),
                 embedding = EXCLUDED.embedding,
+                related_to = COALESCE(EXCLUDED.related_to, project_workfiles.related_to),
                 updated_at = NOW()
             RETURNING workfile_id::text, (xmax = 0) AS is_insert
         """, (
             project_id, component, title, content, workfile_type, tags,
-            feature_code, is_pinned, session_id, embedding
+            feature_code, is_pinned, session_id, embedding,
+            related_to_cast,
         ))
 
         row = cur.fetchone()
         conn.commit()
         cur.close()
+
+        # FB408: sync section embeddings (body-weighted, sibling to article_sections).
+        # Best-effort: any failure is logged but does not block the main write.
+        if row and row.get('workfile_id'):
+            try:
+                _sync_workfile_sections(conn, row['workfile_id'], content)
+                conn.commit()
+            except Exception as _sec_exc:
+                conn.rollback()
+                print(
+                    f"[server] _sync_workfile_sections failed for "
+                    f"workfile_id={row['workfile_id']}: {_sec_exc}",
+                    file=sys.stderr,
+                )
 
         is_insert = row['is_insert'] if row else True
         action = "created" if is_insert else ("appended" if mode == "append" else "updated")
@@ -1486,7 +1588,8 @@ async def tool_unstash(
                 SET last_accessed_at = NOW(), access_count = access_count + 1
                 WHERE project_id = %s::uuid AND component = %s AND title = %s AND is_active = TRUE
                 RETURNING workfile_id::text, title, content, workfile_type,
-                          tags, feature_code, is_pinned, updated_at, access_count
+                          tags, feature_code, is_pinned, updated_at, access_count,
+                          related_to
             """, (project_id, component, title))
         else:
             # Get all active files in component, update access stats
@@ -1495,11 +1598,35 @@ async def tool_unstash(
                 SET last_accessed_at = NOW(), access_count = access_count + 1
                 WHERE project_id = %s::uuid AND component = %s AND is_active = TRUE
                 RETURNING workfile_id::text, title, content, workfile_type,
-                          tags, feature_code, is_pinned, updated_at, access_count
+                          tags, feature_code, is_pinned, updated_at, access_count,
+                          related_to
             """, (project_id, component))
 
         rows = cur.fetchall()
         conn.commit()
+
+        # FB410: collect distinct related_to UUIDs across all returned rows so
+        # we can resolve them in a single round-trip.
+        all_related_ids = set()
+        for r in rows:
+            rt = r.get('related_to') if isinstance(r, dict) else None
+            if rt:
+                for rid in rt:
+                    if rid:
+                        all_related_ids.add(str(rid))
+        related_lookup = {}
+        if all_related_ids:
+            cur.execute("""
+                SELECT workfile_id::text AS workfile_id, component, title
+                FROM claude.project_workfiles
+                WHERE workfile_id = ANY(%s::uuid[])
+            """, (list(all_related_ids),))
+            for rr in cur.fetchall():
+                related_lookup[rr['workfile_id']] = {
+                    "workfile_id": rr['workfile_id'],
+                    "component": rr['component'],
+                    "title": rr['title'],
+                }
         cur.close()
 
         files = []
@@ -1517,6 +1644,14 @@ async def tool_unstash(
                 "access_count": r['access_count'],
                 "token_count": _estimate_tokens_fast(content),
             }
+
+            # FB410: surface related workfiles in the envelope
+            rt = r.get('related_to') if isinstance(r, dict) else None
+            if rt:
+                base["related_workfiles"] = [
+                    related_lookup[str(rid)] for rid in rt
+                    if rid and str(rid) in related_lookup
+                ]
 
             # Section-id fetch: single file, specific section
             if section_id and title and r['title'] == title:
@@ -1649,7 +1784,14 @@ async def tool_search_workfiles(
     component: Optional[str] = None,
     limit: int = 5,
 ) -> Dict:
-    """Semantic search via Voyage AI embeddings + optional component filter."""
+    """Semantic search via embeddings + optional component filter.
+
+    FB408: queries BOTH project_workfiles.embedding (title-weighted) AND
+    claude.workfile_sections.embedding (body-weighted). Each hit reports
+    match_source='workfile' or 'section' so callers can see why it surfaced;
+    section hits include section_id + section_title for follow-on
+    `workfile_read(component=, title=, section_id=)` calls.
+    """
     project = project or os.path.basename(os.getcwd())
 
     project_id = get_project_id(project)
@@ -1664,6 +1806,7 @@ async def tool_search_workfiles(
     try:
         cur = conn.cursor()
 
+        # --- Title/full-doc embedding hits (existing behaviour) -------------
         if component:
             cur.execute("""
                 SELECT workfile_id::text, component, title,
@@ -1688,25 +1831,102 @@ async def tool_search_workfiles(
                 ORDER BY embedding <=> %s::vector
                 LIMIT %s
             """, (query_embedding, project_id, query_embedding, limit))
+        wf_rows = cur.fetchall()
 
-        rows = cur.fetchall()
+        # --- FB408: Section embedding hits (body-weighted) ------------------
+        # JOIN to project_workfiles so we can filter by project (and component
+        # when provided) and surface the parent component/title in results.
+        if component:
+            cur.execute("""
+                SELECT s.section_id::text AS section_id,
+                       s.workfile_id::text AS workfile_id,
+                       s.section_title,
+                       s.section_slug,
+                       LEFT(s.section_body, 200) AS preview,
+                       w.component, w.title, w.workfile_type, w.tags, w.is_pinned,
+                       1 - (s.embedding <=> %s::vector) AS similarity
+                FROM claude.workfile_sections s
+                JOIN claude.project_workfiles w ON w.workfile_id = s.workfile_id
+                WHERE w.project_id = %s::uuid AND w.component = %s
+                  AND w.is_active = TRUE AND s.embedding IS NOT NULL
+                ORDER BY s.embedding <=> %s::vector
+                LIMIT %s
+            """, (query_embedding, project_id, component, query_embedding, limit))
+        else:
+            cur.execute("""
+                SELECT s.section_id::text AS section_id,
+                       s.workfile_id::text AS workfile_id,
+                       s.section_title,
+                       s.section_slug,
+                       LEFT(s.section_body, 200) AS preview,
+                       w.component, w.title, w.workfile_type, w.tags, w.is_pinned,
+                       1 - (s.embedding <=> %s::vector) AS similarity
+                FROM claude.workfile_sections s
+                JOIN claude.project_workfiles w ON w.workfile_id = s.workfile_id
+                WHERE w.project_id = %s::uuid
+                  AND w.is_active = TRUE AND s.embedding IS NOT NULL
+                ORDER BY s.embedding <=> %s::vector
+                LIMIT %s
+            """, (query_embedding, project_id, query_embedding, limit))
+        sec_rows = cur.fetchall()
         cur.close()
 
-        results = [{
-            "component": r['component'],
-            "title": r['title'],
-            "preview": r['preview'],
-            "workfile_type": r['workfile_type'],
-            "tags": r['tags'],
-            "is_pinned": r['is_pinned'],
-            "similarity": round(float(r['similarity']), 4),
-        } for r in rows]
+        results = []
+        for r in wf_rows:
+            results.append({
+                "match_source": "workfile",
+                "component": r['component'],
+                "title": r['title'],
+                "preview": r['preview'],
+                "workfile_type": r['workfile_type'],
+                "tags": r['tags'],
+                "is_pinned": r['is_pinned'],
+                "similarity": round(float(r['similarity']), 4),
+            })
+        for r in sec_rows:
+            results.append({
+                "match_source": "section",
+                "component": r['component'],
+                "title": r['title'],
+                "section_id": r['section_id'],
+                "section_title": r['section_title'],
+                "section_slug": r['section_slug'],
+                "preview": r['preview'],
+                "workfile_type": r['workfile_type'],
+                "tags": r['tags'],
+                "is_pinned": r['is_pinned'],
+                "similarity": round(float(r['similarity']), 4),
+            })
+
+        # Sort merged hits by similarity, dedup so the same workfile doesn't
+        # consume multiple slots when both title and section hit; prefer the
+        # higher-similarity row, but keep section info when section hits.
+        results.sort(key=lambda x: x['similarity'], reverse=True)
+        seen = set()
+        deduped = []
+        for r in results:
+            key = (r['component'], r['title'], r.get('section_id'))
+            # Collapse duplicates: if the same (component,title) already in the
+            # list AND the existing entry has higher similarity, drop this one;
+            # else keep it. Section hits and workfile hits are kept distinct
+            # (different keys via section_id presence).
+            wf_key = (r['component'], r['title'], None)
+            if r['match_source'] == 'section' and wf_key in seen:
+                # Existing workfile-level hit was stronger or equal.
+                # Allow section to be added only when caller can use the
+                # section_id — which they always can — so keep it.
+                pass
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(r)
+        deduped = deduped[:limit * 2]  # roughly twice the original cap (workfile + section)
 
         return {
             "success": True,
             "query": query,
-            "result_count": len(results),
-            "results": results,
+            "result_count": len(deduped),
+            "results": deduped,
         }
 
     except Exception as e:

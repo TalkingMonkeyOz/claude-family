@@ -227,6 +227,13 @@ def _extract_python(
 
     def _process_node(node, parent_class_id: Optional[str] = None, scope: str = "module"):
         for child in node.children:
+            if child.type == "decorated_definition":
+                # @decorator wraps function_definition / class_definition.
+                # Recurse into the wrapper so the inner def/class is processed;
+                # _decorators(child.parent) on the inner node will then find the
+                # enclosing decorated_definition and capture the decorator names.
+                _process_node(child, parent_class_id=parent_class_id, scope=scope)
+                continue
             if child.type == "class_definition":
                 name_node = _child_by_type(child, "identifier")
                 if not name_node:
@@ -614,6 +621,10 @@ def _extract_typescript(
                         body = _child_by_type(value_node, "statement_block")
                         if body:
                             _collect_calls_ts(body, sym_id, refs, source_bytes)
+                    # Object literals assigned to const (e.g., const adapter = { fetch(){}, save(){} })
+                    # Recurse into the object so nested method_definition nodes are extracted.
+                    elif value_node.type in ("object", "object_pattern"):
+                        _process_node(value_node, parent_class_id=parent_class_id, scope=scope)
                     # Call expressions assigned to const (e.g., const router = createRouter(...))
                     elif value_node.type == "call_expression":
                         exported = _is_exported(child)
@@ -666,17 +677,104 @@ def _extract_typescript(
         if node.type == "call_expression":
             func = node.child_by_field_name("function")
             if func:
-                name = _node_text(func, source_bytes).split("(")[0].split(".")[-1]
+                # FB403 — capture receiver expression for object-method dispatch
+                # (e.g., userStore.fetch() — record "userStore.fetch", not just "fetch").
+                # Cross-module dispatch resolution can then split on '.' and try to
+                # resolve the receiver to a class. If the call is bare (foo()),
+                # there's no '.' and we record the function name directly.
+                # John's "no truncation" principle: capture full receiver text up to
+                # the last '(' so multi-segment receivers (a.b.c.method) survive.
+                full = _node_text(func, source_bytes).split("(")[0]
+                # Strip generic type params like foo<T>
+                if "<" in full:
+                    full = full.split("<")[0]
                 refs.append(_new_ref(
                     from_symbol_id=from_sym_id,
                     to_symbol_id=None,
-                    to_symbol_name=name,
+                    to_symbol_name=full,
                     ref_type="calls",
                 ))
         for child in node.children:
             _collect_calls_ts(child, from_sym_id, refs, source_bytes)
 
+    # ---- FB405: barrel re-export detection -----------------------------
+    # Pattern A: `export * from './foo'` — appears in tree-sitter as
+    #            export_statement with an export_clause OR a string source.
+    # Pattern B: `export { foo, bar } from './foo'` — export_statement with
+    #            an export_clause containing export_specifier nodes plus a
+    #            string source.
+    # We capture each as a ref with ref_type='re_exports'. Storage trick:
+    # refs need a real from_symbol_id (FK), so when we encounter the first
+    # re-export in a file we lazily emit a synthetic module-level symbol
+    # named after the file and anchor every re_export ref to it. This
+    # uses ONLY the existing schema (FB405 spec: no new columns).
+    barrel_module_id: Optional[str] = None
+
+    def _ensure_barrel_module(line_no: int) -> str:
+        nonlocal barrel_module_id
+        if barrel_module_id is not None:
+            return barrel_module_id
+        sym_id = str(uuid.uuid4())
+        # File basename without extension as symbol name
+        bare = file_path.replace("\\", "/").rsplit("/", 1)[-1]
+        bare = bare.rsplit(".", 1)[0] or bare
+        symbols.append(_new_symbol(
+            symbol_id=sym_id,
+            project_id=project_id,
+            name=bare,
+            kind="module",
+            file_path=file_path,
+            line_number=max(line_no, 1),
+            end_line=max(line_no, 1),
+            scope="module",
+            visibility="public",
+            signature=f"// barrel module {bare}",
+            parent_symbol_id=None,
+            file_hash=file_hash,
+            language=language,
+        ))
+        barrel_module_id = sym_id
+        return sym_id
+
+    def _collect_re_exports(node) -> None:
+        # Walk top-level children for export_statement nodes whose source is
+        # a string literal (the `from './x'` part).
+        for child in node.children:
+            if child.type != "export_statement":
+                continue
+            # Find the `from "./x"` source string
+            src = _child_by_type(child, "string")
+            if not src:
+                continue
+            module_path = _node_text(src, source_bytes).strip("\"'")
+            # Determine star vs named
+            # `export * from "./x"` — has a `*` token but no export_clause
+            has_star = any(c.type == "*" or _node_text(c, source_bytes) == "*"
+                           for c in child.children)
+            export_clause = _child_by_type(child, "export_clause")
+            from_id = _ensure_barrel_module(child.start_point[0] + 1)
+            if has_star and not export_clause:
+                refs.append(_new_ref(
+                    from_symbol_id=from_id,
+                    to_symbol_id=None,
+                    to_symbol_name=f"{module_path}:*",
+                    ref_type="re_exports",
+                ))
+            elif export_clause:
+                for spec in export_clause.children:
+                    if spec.type != "export_specifier":
+                        continue
+                    name_node = _child_by_type(spec, "identifier")
+                    spec_name = _node_text(name_node, source_bytes) if name_node else "?"
+                    refs.append(_new_ref(
+                        from_symbol_id=from_id,
+                        to_symbol_id=None,
+                        to_symbol_name=f"{module_path}:{spec_name}",
+                        ref_type="re_exports",
+                    ))
+
     _process_node(tree.root_node)
+    _collect_re_exports(tree.root_node)
     return symbols, refs
 
 
@@ -1240,24 +1338,89 @@ def resolve_cross_file_refs(conn, project_id: str) -> int:
     Attempt to fill in to_symbol_id for unresolved references by matching
     to_symbol_name against known symbol names in the same project.
 
-    Returns the number of refs updated.
+    FB402 — Cross-language collision fix: only match candidates whose
+    language matches the language of the source symbol. Without this
+    scoping, a JS function `now()` resolves to a Python `now()` and
+    `code_context.callees` becomes nonsense.
+
+    FB403 — Object-method dispatch fix: call collectors now record the
+    full receiver expression (e.g., `userStore.fetch`) when present.
+    Resolution strategy:
+        1. Exact match on full name (e.g., method named `userStore.fetch`).
+        2. If `to_symbol_name` contains '.', split on the last '.' and
+           match the trailing segment as a method/function name. Same
+           language-scope rule applies. This is best-effort — true
+           receiver-type tracking is a follow-up FB.
+        3. Bare names match on `name` directly (existing behaviour).
+
+    All three passes are idempotent: each only updates rows where
+    to_symbol_id IS NULL, so re-runs converge.
+
+    Returns the count of refs updated across all passes.
     """
+    total = 0
     with conn.cursor() as cur:
+        # Pass 0 — repair pass for cross-language refs left by an older
+        # resolver build (FB402). NULL out any 'calls' resolution where
+        # the source and target languages disagree so Pass 1 can re-resolve
+        # them with the language-scoped query. Idempotent: a clean DB
+        # leaves zero rows to update.
+        cur.execute(
+            """
+            UPDATE claude.code_references cr
+            SET to_symbol_id = NULL
+            FROM claude.code_symbols fs, claude.code_symbols ts
+            WHERE cr.from_symbol_id = fs.symbol_id
+              AND cr.to_symbol_id = ts.symbol_id
+              AND fs.language IS DISTINCT FROM ts.language
+              AND fs.project_id = %s
+              AND cr.ref_type = 'calls'
+            """,
+            (project_id,),
+        )
+
+        # Pass 1 — exact name match, language-scoped (FB402).
         cur.execute(
             """
             UPDATE claude.code_references cr
             SET to_symbol_id = cs.symbol_id
-            FROM claude.code_symbols cs
+            FROM claude.code_symbols cs, claude.code_symbols fs
             WHERE cr.to_symbol_id IS NULL
+              AND cr.from_symbol_id = fs.symbol_id
               AND cr.to_symbol_name = cs.name
               AND cs.project_id = %s
-              AND cr.from_symbol_id IN (
-                  SELECT symbol_id FROM claude.code_symbols WHERE project_id = %s
-              )
+              AND fs.project_id = %s
+              AND cs.language = fs.language
+              AND cr.ref_type IN ('calls', 'extends', 'implements')
             """,
             (project_id, project_id),
         )
-        return cur.rowcount
+        total += cur.rowcount
+
+        # Pass 2 — receiver-method dispatch (FB403). When the captured
+        # to_symbol_name contains '.', split on the LAST '.' and try the
+        # trailing token as a method/function name (still language-scoped).
+        # Example: 'userStore.fetch' → match symbol named 'fetch'.
+        # We only run this for unresolved refs to avoid clobbering Pass 1.
+        cur.execute(
+            """
+            UPDATE claude.code_references cr
+            SET to_symbol_id = cs.symbol_id
+            FROM claude.code_symbols cs, claude.code_symbols fs
+            WHERE cr.to_symbol_id IS NULL
+              AND cr.from_symbol_id = fs.symbol_id
+              AND position('.' in cr.to_symbol_name) > 0
+              AND cs.name = substring(cr.to_symbol_name from '[^.]+$')
+              AND cs.project_id = %s
+              AND fs.project_id = %s
+              AND cs.language = fs.language
+              AND cr.ref_type = 'calls'
+            """,
+            (project_id, project_id),
+        )
+        total += cur.rowcount
+
+        return total
 
 
 def cleanup_stale_symbols(conn, project_id: str, live_paths: set[str]) -> int:

@@ -48,6 +48,11 @@ REINDEX_DEBOUNCE_SECS = 2.0   # Wait this long after last request before running
 PID_DIR = Path.home() / ".claude"
 LOG_DIR = Path.home() / ".claude" / "logs"
 
+# Prime-step offsets used to scan for a free port when the hashed port is taken.
+# Coprime with 100 so we visit distinct slots; bounded scan keeps us inside the
+# 9800-9899 range when wrapped via modulo. (FB220 — collision avoidance.)
+PORT_SCAN_OFFSETS = (0, 7, 13, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71)
+
 # Symbol extraction patterns (same as code_collision_hook.py)
 SYMBOL_PATTERNS = [
     (re.compile(r'^\s*(?:async\s+)?def\s+(\w+)\s*\(', re.MULTILINE), 'function'),
@@ -73,11 +78,45 @@ SKIP_NAMES = {
 # Port resolution
 # ---------------------------------------------------------------------------
 def resolve_port(project_name: str) -> int:
-    """Deterministic port from project name. Range: 9800-9899.
-    Uses hashlib (not hash()) for cross-process determinism.
+    """Deterministic preferred port from project name. Range: 9800-9899.
+
+    Used as a *first guess* for both daemon spawn and client lookup.
+    The daemon may end up on a different port if the hashed slot is taken
+    (~21% collision probability with 7+ projects); the actual port is then
+    persisted to the PID file via write_pid_file(). Clients should call
+    read_port_file() before falling back to this function. Uses hashlib (not
+    hash()) for cross-process determinism. (FB220.)
     """
     digest = int(hashlib.md5(project_name.encode()).hexdigest(), 16)
     return PORT_RANGE_START + (digest % PORT_RANGE_SIZE)
+
+
+def _is_port_free(port: int) -> bool:
+    """Return True if 127.0.0.1:port can be bound right now."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(('127.0.0.1', port))
+    except OSError:
+        return False
+    finally:
+        s.close()
+    return True
+
+
+def find_available_port(project_name: str) -> int:
+    """Find a free port for this daemon, preferring the hashed slot.
+
+    Scans the hash + prime-step offsets, wrapping inside [9800, 9899]. If every
+    offset is taken (extreme contention) returns the hashed port and lets bind
+    fail upstream — better to fail loudly than silently use a stranger's port.
+    """
+    base = resolve_port(project_name)
+    for offset in PORT_SCAN_OFFSETS:
+        candidate = PORT_RANGE_START + ((base - PORT_RANGE_START + offset) % PORT_RANGE_SIZE)
+        if _is_port_free(candidate):
+            return candidate
+    return base
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +457,12 @@ class CKGHandler(BaseHTTPRequestHandler):
 class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     """Thread-per-request HTTP server."""
     daemon_threads = True
+    # FB220: refuse port-stealing on Windows. Default HTTPServer enables
+    # SO_REUSEADDR which lets a second daemon "succeed" binding the same port,
+    # then the kernel routes connections to the first listener — making port
+    # collisions silent. We want the second bind to fail loudly so the scan
+    # can pick a different port.
+    allow_reuse_address = False
 
 
 class CKGServer(ThreadingHTTPServer):
@@ -473,28 +518,100 @@ class CKGServer(ThreadingHTTPServer):
             self._idle_timer.cancel()
         self.db.close()
         # Remove PID file
-        pid_file = PID_DIR / f"ckg-daemon-{self.project_name}.pid"
-        pid_file.unlink(missing_ok=True)
+        try:
+            _pid_file_path(self.project_name).unlink(missing_ok=True)
+        except OSError:
+            pass
         logger.info("Cleanup complete")
 
 
 # ---------------------------------------------------------------------------
-# PID management
+# PID + port management (FB220)
+#
+# PID-file format is a tiny key=value document so it can carry the actual
+# bound port alongside the PID. Backwards compatible with the legacy
+# "<pid>" single-line format — read_pid_file() handles both shapes.
+#
+# Example contents:
+#     pid=12345
+#     port=9883
 # ---------------------------------------------------------------------------
-def write_pid_file(project_name: str) -> Path:
-    pid_file = PID_DIR / f"ckg-daemon-{project_name}.pid"
-    pid_file.write_text(str(os.getpid()))
+def _pid_file_path(project_name: str) -> Path:
+    return PID_DIR / f"ckg-daemon-{project_name}.pid"
+
+
+def _parse_pid_file(text: str) -> dict:
+    """Parse PID-file text. Accepts both legacy ('<pid>') and kv ('pid=…\\nport=…') forms."""
+    out: dict = {}
+    text = (text or "").strip()
+    if not text:
+        return out
+    if "=" not in text:
+        # Legacy format — just a bare PID.
+        try:
+            out["pid"] = int(text)
+        except ValueError:
+            pass
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip().lower()
+        value = value.strip()
+        if not value:
+            continue
+        if key in ("pid", "port"):
+            try:
+                out[key] = int(value)
+            except ValueError:
+                continue
+        else:
+            out[key] = value
+    return out
+
+
+def write_pid_file(project_name: str, port: int) -> Path:
+    """Write PID + actual bound port atomically."""
+    pid_file = _pid_file_path(project_name)
+    payload = f"pid={os.getpid()}\nport={port}\n"
+    tmp = pid_file.with_suffix(pid_file.suffix + ".tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, pid_file)
     return pid_file
 
 
 def read_pid_file(project_name: str) -> Optional[int]:
-    pid_file = PID_DIR / f"ckg-daemon-{project_name}.pid"
-    if pid_file.exists():
-        try:
-            return int(pid_file.read_text().strip())
-        except (ValueError, OSError):
-            pass
-    return None
+    """Return the PID written by the daemon, or None. Tolerates legacy + new formats."""
+    pid_file = _pid_file_path(project_name)
+    if not pid_file.exists():
+        return None
+    try:
+        info = _parse_pid_file(pid_file.read_text())
+    except OSError:
+        return None
+    pid = info.get("pid")
+    return int(pid) if pid is not None else None
+
+
+def read_port_file(project_name: str) -> Optional[int]:
+    """Return the actual bound port from the PID file, or None if absent.
+
+    Clients (collision hook, reindex hook, session startup health check) MUST
+    prefer this over resolve_port() so they find the daemon even when port
+    collision pushed it off its hash slot. Falls back to None on legacy files
+    that only carry a PID — caller should then use resolve_port().
+    """
+    pid_file = _pid_file_path(project_name)
+    if not pid_file.exists():
+        return None
+    try:
+        info = _parse_pid_file(pid_file.read_text())
+    except OSError:
+        return None
+    port = info.get("port")
+    return int(port) if port is not None else None
 
 
 def is_process_running(pid: int) -> bool:
@@ -527,7 +644,6 @@ def main():
 
     project_name = sys.argv[1]
     project_path = sys.argv[2]
-    port = resolve_port(project_name)
 
     # Set up logging
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -541,18 +657,55 @@ def main():
     )
     logger = logging.getLogger(f'ckg-daemon-{project_name}')
 
-    # Check if already running
+    # Check if already running (FB220 — prefer existing daemon's port)
     existing_pid = read_pid_file(project_name)
     if existing_pid and is_process_running(existing_pid):
-        logger.info(f"Daemon already running (PID {existing_pid}), exiting")
+        existing_port = read_port_file(project_name)
+        logger.info(
+            f"Daemon already running (PID {existing_pid}, port {existing_port}), exiting"
+        )
         sys.exit(0)
 
-    # Write PID
-    write_pid_file(project_name)
+    # Pick a free port — bind-first scan to avoid TOCTOU races. We try the
+    # hashed slot, then prime-step offsets, and stop at the first port that
+    # actually binds. (FB220 — earlier scan-then-bind raced on Windows where
+    # SO_REUSEADDR=True silently allowed both daemons to bind 9883.)
+    hashed = resolve_port(project_name)
+    server = None
+    last_err: Optional[OSError] = None
+    for offset in PORT_SCAN_OFFSETS:
+        candidate = PORT_RANGE_START + ((hashed - PORT_RANGE_START + offset) % PORT_RANGE_SIZE)
+        try:
+            server = CKGServer(project_name, project_path, candidate)
+            port = candidate
+            break
+        except OSError as e:
+            last_err = e
+            if e.errno == 10048 or 'Address already in use' in str(e):
+                logger.info(f"Port {candidate} in use, trying next offset")
+                continue
+            raise
 
-    # Create and start server
+    if server is None:
+        # Every candidate was busy — almost certainly an existing daemon for
+        # this project that isn't holding our PID file. Fail loudly.
+        logger.error(
+            f"All scanned ports busy for {project_name} (last error: {last_err}). "
+            f"If a stale daemon is running, kill it and retry."
+        )
+        sys.exit(1)
+
+    if port != hashed:
+        logger.info(
+            f"Port collision: hashed {hashed} was taken, bound on {port} "
+            f"instead (persisted to PID file for clients)"
+        )
+
+    # Write PID + actual bound port AFTER successful bind so the file always
+    # reflects reality (avoids stale port=X pointing at a failed bind).
+    write_pid_file(project_name, port)
+
     try:
-        server = CKGServer(project_name, project_path, port)
         logger.info(
             f"CKG daemon started: project={project_name} port={port} "
             f"symbols={server.symbol_count} pid={os.getpid()}"
@@ -569,16 +722,11 @@ def main():
 
         server.serve_forever()
 
-    except OSError as e:
-        if e.errno == 10048 or 'Address already in use' in str(e):
-            logger.warning(f"Port {port} in use — daemon likely already running")
-            sys.exit(0)
-        raise
     except Exception as e:
         logger.error(f"Daemon failed: {e}")
         raise
     finally:
-        if 'server' in locals():
+        if server is not None:
             server.cleanup()
 
 

@@ -185,6 +185,26 @@ errors.append({'file': current_file, 'error': parse_error})
     <bpmn:scriptTask id="extract_symbols" name="[TOOL] Extract Symbols" scriptFormat="python">
       <bpmn:incoming>flow_parse_ok</bpmn:incoming>
       <bpmn:outgoing>flow_extract_refs</bpmn:outgoing>
+      <bpmn:documentation>
+Walks the tree-sitter AST to extract symbol definitions. The walker
+must descend through grammar wrapper nodes that themselves carry no
+symbol name, otherwise their inner definitions become invisible to
+the index. Two wrappers handled here (FB406, FB404):
+
+  - decorated_definition (Python): wraps `@decorator\ndef foo():` or
+    `@decorator\nclass Foo:`. The inner function_definition /
+    class_definition is processed normally and its decorator metadata
+    is captured by inspecting the parent decorated_definition node.
+
+  - lexical_declaration with object / object_pattern value
+    (TypeScript / JavaScript): wraps
+    `const adapter = { method1(){}, method2(){} }`. The walker
+    recurses into the object literal so nested method_definition
+    nodes are extracted as methods of file-level scope.
+
+This is a behaviour clarification of the existing extract step, not a
+flow change — the surrounding pipeline is unchanged.
+      </bpmn:documentation>
       <bpmn:script>
 # Walk AST to extract:
 #   - Functions/methods (name, params, return type, line, scope)
@@ -193,6 +213,9 @@ errors.append({'file': current_file, 'error': parse_error})
 #   - Constants/exports
 #   - Decorators/attributes
 # Build parent-child relationships (method belongs to class)
+# Wrapper nodes traversed (must recurse, no symbol name of their own):
+#   - decorated_definition (Python @decorator def/class) — FB406
+#   - lexical_declaration with object value (TS const = {m(){}}) — FB404
 # Output: symbols (list of dicts)
 symbols = extract_from_ast(ast_tree, language, current_file)
 symbols_found += len(symbols)
@@ -202,14 +225,47 @@ symbols_found += len(symbols)
     <bpmn:scriptTask id="extract_references" name="[TOOL] Extract References" scriptFormat="python">
       <bpmn:incoming>flow_extract_refs</bpmn:incoming>
       <bpmn:outgoing>flow_refs_store</bpmn:outgoing>
+      <bpmn:documentation>
+Extracts cross-references from the AST. Two behaviours added in
+Wave 3 (FB402, FB403, FB405) — flow unchanged, only collector
+behaviour is clarified:
+
+  - FB402 (cross-language scoping): when refs are resolved post-index
+    (name -> symbol_id), the resolution query joins on language
+    matching the source symbol's language. Without this, a JS
+    `now()` call resolved to a Python `now()` and broke callees /
+    dependency graph for cross-language projects (claude-family,
+    nimbus-mui). The fix lives in resolve_cross_file_refs (Phase 5),
+    not here, but the collector emits language-tagged refs already
+    via from_symbol's language column.
+
+  - FB403 (object-method dispatch): the TS/JS call collector now
+    captures the full receiver expression for `obj.method()` calls
+    (recording 'userStore.fetch' rather than just 'fetch'). The
+    Phase 5 resolver does a second pass that splits on the last '.'
+    and matches the trailing token as a method/function name when
+    the full string didn't resolve. Best-effort — true receiver-type
+    tracking is a follow-up FB. Without this, callers were empty for
+    methods called from React components via instance dispatch.
+
+  - FB405 (barrel re-exports): TS files that are pure re-export
+    barrels (`export * from './x'; export { foo } from './y'`)
+    previously yielded zero symbols, indistinguishable from indexer
+    failure. The collector now emits a synthetic file-level symbol
+    of kind='module' and attaches one ref per re-export with
+    ref_type='re_exports' and to_symbol_name='&lt;path&gt;:&lt;name|*&gt;'.
+    No new schema columns — uses existing code_references table.
+      </bpmn:documentation>
       <bpmn:script>
 # Walk AST to extract cross-references:
-#   - Function calls (caller -> callee)
+#   - Function calls (caller -> callee, full receiver expr captured — FB403)
 #   - Imports (file -> imported module/symbol)
 #   - Class inheritance (child -> parent)
 #   - Type references
+#   - Barrel re-exports (FB405) — synthetic module symbol holds re_exports refs
 # Output: references (list of {from_symbol, to_symbol, ref_type})
-# Note: to_symbol may be unresolved (name only) - resolved in store phase
+# Note: to_symbol may be unresolved (name only) — resolved in Phase 5
+#       with language scoping (FB402) and receiver-dispatch fallback (FB403)
 references = extract_references_from_ast(ast_tree, language, current_file)
 refs_found += len(references)
       </bpmn:script>
@@ -271,11 +327,29 @@ indexed_count += 1
     <bpmn:scriptTask id="resolve_cross_refs" name="[DB] Resolve Cross-File References" scriptFormat="python">
       <bpmn:incoming>flow_done</bpmn:incoming>
       <bpmn:outgoing>flow_resolve_cleanup</bpmn:outgoing>
+      <bpmn:documentation>
+Two-pass resolution (Wave 3 — FB402, FB403):
+
+  Pass 1 — Exact name match, LANGUAGE-SCOPED. Joins to_symbol_name to
+  code_symbols.name where cs.language = fs.language. Without this scope
+  a JS `now()` call resolved to a Python `now()` and broke cross-language
+  projects (FB402).
+
+  Pass 2 — Receiver-method dispatch (FB403). For unresolved refs whose
+  to_symbol_name contains '.', split on the last '.' and try the
+  trailing segment as a method/function name (still language-scoped,
+  ref_type='calls' only). Best-effort; true receiver-type tracking is
+  a follow-up FB.
+
+Both passes guard with `to_symbol_id IS NULL` — idempotent on re-run.
+      </bpmn:documentation>
       <bpmn:script>
 # After all files indexed, resolve unresolved references:
-# Match unresolved to_symbol names against all known symbols in project
-# INSERT newly resolved references into claude.code_references
-# Log still-unresolved references (external deps, stdlib)
+# Pass 1: language-scoped exact name match (FB402)
+# Pass 2: receiver-method dispatch when name contains '.' (FB403)
+# Both: WHERE to_symbol_id IS NULL → idempotent
+# INSERT/UPDATE newly resolved references into claude.code_references
+# Log still-unresolved references (external deps, stdlib, ambiguous)
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -301,9 +375,21 @@ indexed_count += 1
     <bpmn:scriptTask id="summarize" name="[TOOL] Summarize Results" scriptFormat="python">
       <bpmn:incoming>flow_cleanup_summarize</bpmn:incoming>
       <bpmn:outgoing>flow_summarize_end</bpmn:outgoing>
+      <bpmn:documentation>
+FB401 — index_codebase(dry_run=True) defaults to an aggregate summary
+(files_to_index, files_skipped, files_changed, top_changes_by_dir)
+plus a verbose_hint pointing to dry_run=True, verbose=True for the
+existing per-file detail. NEVER truncate — the verbose path is always
+reachable. Caller is never forced to scroll a 63KB dump just to see
+that 207 files would change.
+      </bpmn:documentation>
       <bpmn:script>
 # Return: {project, mode, files_discovered, indexed, skipped, errors,
 #          symbols_total, refs_total, stale_removed, duration_ms}
+# Dry-run aggregate (FB401, default):
+#   {files_to_index, files_skipped, files_changed,
+#    top_changes_by_dir, verbose_hint}
+# Dry-run verbose (FB401, verbose=True): existing file_details list
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -556,11 +642,56 @@ indexed_count += 1
     <bpmn:scriptTask id="module_map" name="[DB] get_module_map(file_path)" scriptFormat="python">
       <bpmn:incoming>flow_module_map</bpmn:incoming>
       <bpmn:outgoing>flow_module_map_end</bpmn:outgoing>
+      <bpmn:documentation>
+Wave 3 changes (FB401, FB405) — same response shape on the happy path,
+plus two new branches for output-size and barrel-file support. NEVER
+truncate; the caller can always reach every symbol via a section_id.
+
+  FB401 — TOC vs section_id branching (chunk + breadcrumb pattern,
+  same as workfile_read(detail='toc'), entity_read(detail='toc'),
+  read_article(article_id, section_id)):
+
+    Default — get_module_map(project='X')
+      → TOC envelope: {scope:'project', files:[
+            {file_path, language, symbol_count, section_id}, ...
+        ], fetch_section: '...'}
+      ~265 files * ~150 bytes = ~40KB instead of 166KB dump.
+
+    Drill in — get_module_map(project='X', section_id='&lt;file-uuid&gt;')
+      → existing per-file response with full symbols list.
+
+    File map — get_module_map(file_path='X.py')
+      Default returns symbols if symbol_count &lt;= 30; otherwise TOC of
+      classes/top-level symbols, each with section_id for drill-down.
+
+    Drill in — get_module_map(file_path='X.py', section_id='&lt;class-uuid&gt;')
+      → that class with full method list.
+
+  FB405 — Barrel-file response: when a file has 0 user-facing symbols
+  AND there is a synthetic kind='module' symbol with re_exports refs,
+  return {kind:'barrel', symbols:[], re_exports:[
+      {path:'./x', star:true},
+      {path:'./y', names:['foo','bar']}
+  ]}.
+  Caller can now distinguish a re-export barrel from indexer failure.
+
+  Schema: no new columns. section_id == symbol_id (UUID) for file-level
+  drill-down; for project-scope it's a derived stable hash of file_path
+  so it's stable across re-indexing. Idempotent. No truncation.
+      </bpmn:documentation>
       <bpmn:script>
-# If file_path given: list all symbols in that file with hierarchy
-# If no file_path: return project overview (files with symbol counts, top-level symbols)
-# SELECT * FROM claude.code_symbols WHERE project_id = ? AND file_path = ?
-# ORDER BY line ASC
+# Project scope (no file_path):
+#   Default → TOC envelope of files with section_id per file
+#   With section_id → resolve to file_path and return per-file response
+# File scope (file_path given):
+#   Default → full per-file response if symbol_count &lt;= 30
+#            else TOC of top-level symbols
+#   With section_id → drill into that symbol (e.g., class methods)
+# Barrel branch: 0 non-module symbols + module symbol with re_exports
+#   → {kind:'barrel', re_exports:[...]}
+# SELECT name, kind, line_number, signature, parent_symbol_id, symbol_id
+# FROM claude.code_symbols WHERE project_id = ? AND file_path = ?
+# Plus refs query for re_exports when applicable
       </bpmn:script>
     </bpmn:scriptTask>
 

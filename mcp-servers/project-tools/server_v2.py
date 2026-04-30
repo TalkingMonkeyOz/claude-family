@@ -22,6 +22,7 @@ import os
 import sys
 import re
 import glob
+import uuid
 import asyncio
 import threading
 from typing import Any, Literal, Optional
@@ -7908,6 +7909,225 @@ def list_recipients() -> dict:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Inbox: workfile-sibling enrichment (FB409)
+#
+# When an inbound message references a workfile by id (full UUID in body or
+# metadata.workfile_id), pull a small bag of "sibling" workfiles so the
+# triage step can see the surrounding context. Sibling = same session, same
+# day, or >=2 shared tags. Returns metadata only (no body) — the triage
+# follow-up is a workfile_read() call.
+# ---------------------------------------------------------------------------
+_WORKFILE_UUID_RE = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
+_WORKFILE_SHORT_RE = re.compile(r"\b[0-9a-f]{8}\b", re.IGNORECASE)
+_WORKFILE_SIBLINGS_LIMIT = 5
+
+
+def _extract_workfile_ids(body: str, metadata: Optional[dict]) -> list[str]:
+    """Pull workfile UUIDs out of a message body + metadata.
+
+    Accepts full UUIDs first; falls back to 8-char prefixes if no full UUID
+    is present (matches the user-facing shorthand like ``e89e39d5``). Filter
+    to those that resolve to a real workfile happens downstream — no need
+    to validate here.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    # 1. metadata.workfile_id (or .workfile_ids list)
+    if metadata:
+        wid = metadata.get("workfile_id") if isinstance(metadata, dict) else None
+        if wid and isinstance(wid, str):
+            key = wid.lower()
+            if key not in seen:
+                seen.add(key)
+                found.append(wid)
+        wids = metadata.get("workfile_ids") if isinstance(metadata, dict) else None
+        if isinstance(wids, list):
+            for w in wids:
+                if isinstance(w, str):
+                    key = w.lower()
+                    if key not in seen:
+                        seen.add(key)
+                        found.append(w)
+
+    # 2. full UUIDs in body
+    if body:
+        for m in _WORKFILE_UUID_RE.finditer(body):
+            key = m.group(0).lower()
+            if key not in seen:
+                seen.add(key)
+                found.append(m.group(0))
+
+        # 3. short-form (8-hex) only when no full UUIDs were found — keeps
+        # this from spuriously matching commit SHAs in a message body that
+        # already cites a real workfile UUID.
+        if not any(_WORKFILE_UUID_RE.search(f) for f in found):
+            for m in _WORKFILE_SHORT_RE.finditer(body):
+                key = m.group(0).lower()
+                if key not in seen:
+                    seen.add(key)
+                    found.append(m.group(0))
+
+    return found
+
+
+def _find_workfile_siblings(
+    cur, workfile_id_or_prefix: str, limit: int = _WORKFILE_SIBLINGS_LIMIT,
+) -> list[dict]:
+    """Return up to `limit` sibling workfiles for the referenced id.
+
+    Sibling rules (OR-combined):
+      (a) shares an entry in `linked_sessions` with the referenced workfile
+      (b) created on the same calendar date
+      (c) tag overlap >= 2 (intersection of `tags` arrays)
+
+    Returns metadata only — workfile_id, component, title, created_at,
+    matched_on. Body intentionally omitted (caller follows up with
+    workfile_read). Excludes the referenced workfile itself.
+    """
+    # Resolve the reference. Accept full UUID exact match OR 8-char prefix.
+    is_full_uuid = bool(_WORKFILE_UUID_RE.fullmatch(workfile_id_or_prefix))
+    if is_full_uuid:
+        cur.execute(
+            """
+            SELECT workfile_id, project_id, linked_sessions, tags, created_at::date AS created_date
+            FROM claude.project_workfiles
+            WHERE workfile_id = %s::uuid
+              AND is_active = TRUE
+            """,
+            (workfile_id_or_prefix,),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT workfile_id, project_id, linked_sessions, tags, created_at::date AS created_date
+            FROM claude.project_workfiles
+            WHERE workfile_id::text LIKE %s
+              AND is_active = TRUE
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (workfile_id_or_prefix.lower() + "%",),
+        )
+    ref = cur.fetchone()
+    if not ref:
+        return []
+    ref_dict = dict(ref) if not isinstance(ref, dict) else ref
+    ref_id = ref_dict["workfile_id"]
+    ref_sessions = [s for s in (ref_dict.get("linked_sessions") or []) if s is not None]
+    ref_tags = [t for t in (ref_dict.get("tags") or []) if t]
+    ref_date = ref_dict.get("created_date")
+
+    # Sibling query — single round-trip with all three OR branches. Each
+    # branch tagged with a `matched_on` discriminator so the caller can
+    # explain why a sibling surfaced.
+    # NOTE: tag overlap implemented via array_length(... & ...) >= 2 using
+    # the array intersection trick (both arrays contain the same elements).
+    cur.execute(
+        """
+        WITH ref AS (
+          SELECT %s::uuid AS ref_id,
+                 %s::uuid[] AS ref_sessions,
+                 %s::text[] AS ref_tags,
+                 %s::date AS ref_date
+        )
+        SELECT
+          w.workfile_id::text AS workfile_id,
+          w.component,
+          w.title,
+          w.created_at,
+          w.is_pinned,
+          (CASE
+             WHEN w.linked_sessions && ref.ref_sessions THEN 'same_session'
+             WHEN w.created_at::date = ref.ref_date THEN 'same_date'
+             WHEN COALESCE(array_length(
+                    ARRAY(SELECT UNNEST(w.tags) INTERSECT SELECT UNNEST(ref.ref_tags)),
+                    1), 0) >= 2 THEN 'tag_overlap'
+             ELSE 'unknown'
+           END) AS matched_on
+        FROM claude.project_workfiles w, ref
+        WHERE w.workfile_id <> ref.ref_id
+          AND w.is_active = TRUE
+          AND (
+            (ref.ref_sessions IS NOT NULL
+              AND array_length(ref.ref_sessions, 1) > 0
+              AND w.linked_sessions && ref.ref_sessions)
+            OR (ref.ref_date IS NOT NULL AND w.created_at::date = ref.ref_date)
+            OR (ref.ref_tags IS NOT NULL
+              AND array_length(ref.ref_tags, 1) >= 2
+              AND COALESCE(array_length(
+                    ARRAY(SELECT UNNEST(w.tags) INTERSECT SELECT UNNEST(ref.ref_tags)),
+                    1), 0) >= 2)
+          )
+        ORDER BY
+          CASE
+            WHEN w.linked_sessions && ref.ref_sessions THEN 1
+            WHEN COALESCE(array_length(
+                  ARRAY(SELECT UNNEST(w.tags) INTERSECT SELECT UNNEST(ref.ref_tags)),
+                  1), 0) >= 2 THEN 2
+            ELSE 3
+          END,
+          w.is_pinned DESC,
+          w.created_at DESC
+        LIMIT %s
+        """,
+        (ref_id, ref_sessions, ref_tags, ref_date, limit),
+    )
+    rows = cur.fetchall()
+    siblings: list[dict] = []
+    for r in rows:
+        rd = dict(r) if not isinstance(r, dict) else r
+        if rd.get("created_at"):
+            try:
+                rd["created_at"] = rd["created_at"].isoformat()
+            except AttributeError:
+                pass
+        siblings.append({
+            "workfile_id": rd["workfile_id"],
+            "component": rd.get("component"),
+            "title": rd.get("title"),
+            "created_at": rd.get("created_at"),
+            "is_pinned": rd.get("is_pinned", False),
+            "matched_on": rd.get("matched_on"),
+        })
+    return siblings
+
+
+def _attach_related_workfiles(cur, messages: list[dict]) -> None:
+    """Mutate each message dict to include `related_workfiles` (up to 5).
+
+    No-op for messages without a workfile reference. Best-effort — DB errors
+    on a single message don't break the batch.
+    """
+    for msg in messages:
+        try:
+            ids = _extract_workfile_ids(msg.get("body") or "", msg.get("metadata"))
+            if not ids:
+                continue
+            siblings: list[dict] = []
+            seen_workfile_ids: set[str] = set()
+            for wid in ids:
+                if len(siblings) >= _WORKFILE_SIBLINGS_LIMIT:
+                    break
+                remaining = _WORKFILE_SIBLINGS_LIMIT - len(siblings)
+                for sib in _find_workfile_siblings(cur, wid, limit=remaining):
+                    if sib["workfile_id"] in seen_workfile_ids:
+                        continue
+                    seen_workfile_ids.add(sib["workfile_id"])
+                    siblings.append(sib)
+                    if len(siblings) >= _WORKFILE_SIBLINGS_LIMIT:
+                        break
+            if siblings:
+                msg["related_workfiles"] = siblings
+        except Exception:
+            # Per-message enrichment must not break the inbox envelope.
+            continue
+
+
 @mcp.tool()
 @deprecated_alias("inbox(view='pending')")
 def check_inbox(
@@ -7992,7 +8212,6 @@ def check_inbox(
 
         cur.execute(query, params)
         messages = cur.fetchall()
-        cur.close()
 
         result_messages = []
         for msg in messages:
@@ -8000,6 +8219,17 @@ def check_inbox(
             if msg_dict.get('created_at'):
                 msg_dict['created_at'] = msg_dict['created_at'].isoformat()
             result_messages.append(msg_dict)
+
+        # FB409: enrich each message with up to 5 sibling workfiles when the
+        # body or metadata references a workfile id. Sibling join is by
+        # linked_sessions overlap OR same created date OR tag overlap >= 2.
+        # Reuses the same cursor; failures per-message are swallowed.
+        try:
+            _attach_related_workfiles(cur, result_messages)
+        except Exception:
+            pass
+
+        cur.close()
 
         return {"count": len(result_messages), "messages": result_messages}
     except Exception as e:
@@ -8729,6 +8959,7 @@ def stash(
     is_pinned: bool = False,
     mode: str = "replace",
     auto_chunk: bool = False,
+    related_to: list[str] | None = None,
 ) -> dict:
     """Store/update a workfile. UPSERT on (project, component, title).
 
@@ -8755,13 +8986,17 @@ def stash(
         auto_chunk: If True and content >500 lines, auto-split on H2 headers
             (or size-based if none). Parent becomes an index with links to
             sub-workfiles named '{title}-{slug}'. Default False (no behavior change).
+        related_to: FB410 — optional list of workfile_id UUIDs to link this
+            workfile to (for "see also" between two views of the same task).
+            Surfaced by workfile_read as related_workfiles: [{workfile_id,
+            component, title}].
     """
     from server import tool_stash
     return _run_async(tool_stash(
         component=component, title=title, content=content,
         project=project, workfile_type=workfile_type, tags=tags,
         feature_code=feature_code, is_pinned=is_pinned, mode=mode,
-        auto_chunk=auto_chunk,
+        auto_chunk=auto_chunk, related_to=related_to,
     ))
 
 
@@ -10684,7 +10919,13 @@ def explore_entities(
 
 
 @mcp.tool()
-def index_codebase(project: str = "", project_path: str = "", force_full: bool = False, dry_run: bool = False) -> dict:
+def index_codebase(
+    project: str = "",
+    project_path: str = "",
+    force_full: bool = False,
+    dry_run: bool = False,
+    verbose: bool = False,
+) -> dict:
     """Index a project's codebase into the Code Knowledge Graph.
 
     Parses source files using tree-sitter, extracts symbols (functions, classes,
@@ -10693,15 +10934,26 @@ def index_codebase(project: str = "", project_path: str = "", force_full: bool =
 
     Use when: Setting up code intelligence for a project, or after major code changes.
     First run does full index; subsequent runs are incremental (only changed files).
-    Returns: {files_scanned, files_indexed, symbols_extracted, refs_extracted,
-              refs_resolved, symbols_embedded, stale_deleted}.
+
+    FB401 — dry_run output envelope. By default dry_run returns an aggregate
+    summary (files_to_index, files_skipped, files_changed, top_changes_by_dir)
+    plus a verbose_hint. Pass verbose=True for the existing per-file detail.
+    NEVER truncates — verbose=True is always reachable. The previous default
+    returned a 63KB list that forced caller-side bucketing scripts.
+
+    Returns (live mode): {files_scanned, files_indexed, symbols_extracted,
+              refs_extracted, refs_resolved, symbols_embedded, stale_deleted}.
+    Returns (dry_run, default): {files_to_index, files_skipped, files_changed,
+              top_changes_by_dir, verbose_hint}.
+    Returns (dry_run, verbose=True): existing per-file shape with file_details.
 
     Args:
         project: Project name. Defaults to current directory.
         project_path: Path to project root. Auto-detected from workspaces if empty.
         force_full: Force full re-index (ignore file hashes).
-        dry_run: Report what would happen without writing to DB. Returns per-file
-                 diagnostics: skip reason, parse results, error details.
+        dry_run: Report what would happen without writing to DB.
+        verbose: With dry_run=True, returns the full per-file detail list
+                 instead of the aggregate envelope (FB401).
     """
     import sys
     scripts_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'scripts')
@@ -10726,6 +10978,46 @@ def index_codebase(project: str = "", project_path: str = "", force_full: bool =
         conn.close()
 
         result = index_project(proj_name, project_path, force_full=force_full, dry_run=dry_run)
+
+        # FB401 — dry_run aggregate envelope (default). Verbose mode keeps
+        # the existing per-file file_details list. NEVER truncate; verbose
+        # is always reachable. John's "no truncation" principle.
+        if dry_run and not verbose:
+            file_details = result.get("file_details", [])
+            top_changes_by_dir: dict[str, int] = {}
+            for d in file_details:
+                if d.get("status") != "would_index":
+                    continue
+                fp = d.get("file", "")
+                # Take first path component after project root for grouping.
+                rel = fp
+                try:
+                    rel = os.path.relpath(fp, project_path)
+                except Exception:
+                    pass
+                rel_norm = rel.replace("\\", "/")
+                top_dir = rel_norm.split("/", 1)[0] if "/" in rel_norm else rel_norm
+                top_changes_by_dir[top_dir] = top_changes_by_dir.get(top_dir, 0) + 1
+            # Sort and keep highest 20 to keep the envelope predictable in size.
+            top_sorted = dict(sorted(top_changes_by_dir.items(), key=lambda kv: -kv[1])[:20])
+            files_to_index = result.get("files_indexed", 0)  # in dry_run this is "would index"
+            return {
+                "success": True,
+                "dry_run": True,
+                "project": proj_name,
+                "files_scanned": result.get("files_scanned", 0),
+                "files_to_index": files_to_index,
+                "files_skipped": result.get("files_skipped", 0),
+                "files_errored": result.get("files_errored", 0),
+                "files_changed": files_to_index,  # alias for spec
+                "symbols_extracted": result.get("symbols_extracted", 0),
+                "refs_extracted": result.get("refs_extracted", 0),
+                "top_changes_by_dir": top_sorted,
+                "verbose_hint": (
+                    "index_codebase(dry_run=True, verbose=True) for per-file detail"
+                ),
+            }
+
         return {"success": True, **result}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -11101,21 +11393,57 @@ def _resolve_ckg_file_path(cur, project_id: str, project_name: str, file_path: s
     return normalized
 
 
+# FB401 — Output envelope thresholds. Pure constants; no truncation —
+# everything past the threshold becomes a section_id-addressable subset
+# the caller can drill into. John's "no truncation" principle: every
+# symbol must remain reachable via section_id navigation.
+_MODULE_MAP_FILE_SYMBOL_THRESHOLD = 30  # symbols per file before TOC
+# Project-scope file-path → stable section_id derivation. We derive a
+# UUID5 from a fixed namespace + file_path so re-indexing yields the
+# same section_id for the same file, and so section_ids are unique
+# without adding schema columns (FB401 spec: no new columns).
+_MODULE_MAP_NS = uuid.UUID("00000000-0000-0000-0000-000000000401")
+
+
+def _file_section_id(file_path: str) -> str:
+    """Stable section_id for a file path within get_module_map project scope."""
+    return str(uuid.uuid5(_MODULE_MAP_NS, file_path))
+
+
 @mcp.tool()
-def get_module_map(project: str = "", file_path: str = "") -> dict:
-    """Get a structural map of symbols in a file or project.
+def get_module_map(project: str = "", file_path: str = "", section_id: str = "") -> dict:
+    """Get a structural map of symbols — TOC by default, drill in via section_id.
 
-    With file_path: lists all symbols in that file with parent-child hierarchy.
-    Without file_path: returns project overview (files with symbol counts).
+    FB401 — chunk + breadcrumb pattern, same shape as workfile_read(detail='toc'),
+    entity_read(detail='toc'), read_article(article_id, section_id). NEVER
+    truncates. Every symbol stays reachable via section_id navigation.
 
-    Use when: Understanding code structure, reviewing a module, or getting
-    a project-level overview of the codebase.
-    Returns: {success, scope, symbols: [{name, kind, line_number, signature, children}]}
-    or {success, scope, files: [{file_path, language, symbol_count, symbols}]}.
+    Default behaviours:
+      get_module_map(project='X')
+        → TOC envelope listing files with section_ids (~40KB for 265 files
+          vs the previous 166KB full dump).
+      get_module_map(project='X', section_id='<file-uuid>')
+        → drills into the file (existing per-file response).
+      get_module_map(file_path='Y.py')
+        → full per-file response when file has <= 30 symbols, else a TOC
+          of top-level symbols with section_id per top-level item.
+      get_module_map(file_path='Y.py', section_id='<class-uuid>')
+        → drills into that class (its methods).
+
+    FB405 — barrel response: when a TS file has 0 user-facing symbols
+    and synthetic kind='module' symbol with re_exports refs, returns
+    {kind:'barrel', symbols:[], re_exports:[...]}.
+
+    Use when: Understanding code structure, reviewing a module, getting
+    a project-level overview, or distinguishing barrel modules from
+    indexer failure.
 
     Args:
         project: Project name. Defaults to current directory.
-        file_path: Specific file to map. If empty, returns project overview.
+        file_path: Specific file to map. If empty, returns project TOC.
+        section_id: Drill into a specific section. UUID for project-scope
+            files (derived from file_path) or symbol_id for file-scope
+            top-level symbols.
     """
     conn = get_db_connection()
     try:
@@ -11126,6 +11454,31 @@ def get_module_map(project: str = "", file_path: str = "") -> dict:
         if not row:
             return {"success": False, "error": f"Project '{proj_name}' not found or not indexed"}
         project_id = row['project_id']
+
+        # ---- Project-scope drill-in via section_id ----
+        # FB401 — caller passed a section_id without a file_path: resolve
+        # it back to the file_path and continue as a file-scope query.
+        # The file-scope code below interprets section_id as a symbol_id,
+        # so we clear section_id once we've matched it to a file.
+        if section_id and not file_path:
+            matched_file = None
+            cur.execute("""
+                SELECT DISTINCT file_path FROM claude.code_symbols
+                WHERE project_id = %s
+            """, (project_id,))
+            for r in cur.fetchall():
+                if _file_section_id(r['file_path']) == section_id:
+                    matched_file = r['file_path']
+                    break
+            if not matched_file:
+                return {
+                    "success": False,
+                    "error": f"section_id '{section_id}' did not match any file in project '{proj_name}'",
+                }
+            file_path = matched_file
+            # Reset — section_id has done its job (file resolution); below,
+            # section_id refers to symbol_id within a file.
+            section_id = ""
 
         if file_path:
             resolved_path = _resolve_ckg_file_path(cur, project_id, proj_name, file_path)
@@ -11138,38 +11491,144 @@ def get_module_map(project: str = "", file_path: str = "") -> dict:
             """, (project_id, resolved_path))
             symbols = cur.fetchall()
 
-            by_id = {s['symbol_id']: {**s, 'children': []} for s in symbols}
+            # FB405 — barrel detection. A barrel file has only the synthetic
+            # kind='module' symbol (emitted by the indexer when it sees
+            # re-export statements) and no user-facing symbols. In that
+            # case fetch the re_exports refs and return kind='barrel'.
+            non_module_syms = [s for s in symbols if s['kind'] != 'module']
+            module_syms = [s for s in symbols if s['kind'] == 'module']
+            if not non_module_syms and module_syms:
+                module_id = module_syms[0]['symbol_id']
+                cur.execute("""
+                    SELECT to_symbol_name FROM claude.code_references
+                    WHERE from_symbol_id = %s::uuid AND ref_type = 're_exports'
+                """, (module_id,))
+                rex_rows = cur.fetchall()
+                # Group: {path: {'star': bool, 'names': [...]}}
+                grouped: dict[str, dict] = {}
+                for r in rex_rows:
+                    raw = r['to_symbol_name'] or ""
+                    # Format from indexer: '<path>:<name|*>'
+                    if ":" not in raw:
+                        continue
+                    path, name = raw.rsplit(":", 1)
+                    bucket = grouped.setdefault(path, {"star": False, "names": []})
+                    if name == "*":
+                        bucket["star"] = True
+                    else:
+                        if name not in bucket["names"]:
+                            bucket["names"].append(name)
+                re_exports = []
+                for p, b in grouped.items():
+                    entry = {"path": p}
+                    if b["star"]:
+                        entry["star"] = True
+                    if b["names"]:
+                        entry["names"] = b["names"]
+                    re_exports.append(entry)
+                return {
+                    "success": True,
+                    "scope": "file",
+                    "file_path": file_path,
+                    "kind": "barrel",
+                    "symbol_count": 0,
+                    "symbols": [],
+                    "re_exports": re_exports,
+                }
+
+            # Build hierarchy from non-module symbols only.
+            by_id = {s['symbol_id']: {**s, 'children': []} for s in non_module_syms}
             roots = []
-            for s in symbols:
+            for s in non_module_syms:
                 if s['parent_symbol_id'] and s['parent_symbol_id'] in by_id:
                     by_id[s['parent_symbol_id']]['children'].append(by_id[s['symbol_id']])
                 else:
                     roots.append(by_id[s['symbol_id']])
 
+            # FB401 — file-scope TOC vs full response branching. When a
+            # specific section_id is requested, drill into that subtree.
+            # When the file is small (<=30 symbols) return the existing
+            # full hierarchy. When large, return a top-level TOC.
+            if section_id:
+                target = by_id.get(section_id)
+                if not target:
+                    return {
+                        "success": False,
+                        "error": f"section_id '{section_id}' did not match any symbol in {file_path}",
+                    }
+                return {
+                    "success": True,
+                    "scope": "file",
+                    "file_path": file_path,
+                    "section_id": section_id,
+                    "symbol_count": len(non_module_syms),
+                    "symbols": [target],
+                }
+
+            if len(non_module_syms) <= _MODULE_MAP_FILE_SYMBOL_THRESHOLD:
+                return {
+                    "success": True,
+                    "scope": "file",
+                    "file_path": file_path,
+                    "symbol_count": len(non_module_syms),
+                    "symbols": roots,
+                }
+
+            # Large file → TOC of top-level symbols. Each gets a section_id
+            # equal to its symbol_id; drilling in returns just that subtree.
+            toc = []
+            for r in roots:
+                toc.append({
+                    "name": r["name"],
+                    "kind": r["kind"],
+                    "line_number": r["line_number"],
+                    "signature": r["signature"],
+                    "child_count": len(r["children"]),
+                    "section_id": r["symbol_id"],
+                })
             return {
                 "success": True,
                 "scope": "file",
                 "file_path": file_path,
-                "symbol_count": len(symbols),
-                "symbols": roots,
+                "symbol_count": len(non_module_syms),
+                "symbols": toc,
+                "fetch_section": (
+                    f"get_module_map(project='{proj_name}', "
+                    f"file_path='{file_path}', section_id='<symbol_id>')"
+                ),
             }
         else:
+            # FB401 — project-scope default returns a TOC envelope. Files
+            # are listed with stable section_ids; symbol-name list is
+            # excluded from the default to keep the envelope small.
+            # Caller drills in via section_id to fetch full per-file data.
             cur.execute("""
-                SELECT file_path, language, count(*) as symbol_count,
-                       array_agg(kind || ' ' || name ORDER BY line_number) as symbol_list
+                SELECT file_path, language, count(*) as symbol_count
                 FROM claude.code_symbols
                 WHERE project_id = %s
                 GROUP BY file_path, language
                 ORDER BY file_path
             """, (project_id,))
-            files = cur.fetchall()
+            files_rows = cur.fetchall()
+            files_toc = [
+                {
+                    "file_path": f["file_path"],
+                    "language": f["language"],
+                    "symbol_count": f["symbol_count"],
+                    "section_id": _file_section_id(f["file_path"]),
+                }
+                for f in files_rows
+            ]
             return {
                 "success": True,
                 "scope": "project",
                 "project": proj_name,
-                "file_count": len(files),
-                "total_symbols": sum(f['symbol_count'] for f in files),
-                "files": files,
+                "files_count": len(files_toc),
+                "symbols_count": sum(f["symbol_count"] for f in files_toc),
+                "files": files_toc,
+                "fetch_section": (
+                    f"get_module_map(project='{proj_name}', section_id='<section_id>')"
+                ),
             }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -12072,6 +12531,7 @@ def workfile_store(
     is_pinned: bool = False,
     mode: Literal["replace", "append", "archive", "delete"] = "replace",
     auto_chunk: bool = False,
+    related_to: list[str] | None = None,
 ) -> dict:
     """Store, archive, or delete workfiles in the filing cabinet.
 
@@ -12093,6 +12553,9 @@ def workfile_store(
         auto_chunk: If True and content >500 lines, auto-split on H2 headers
             (or size-based if none). Parent becomes an index; sub-workfiles are
             named '{title}-{slug}'. Default False.
+        related_to: FB410 — optional list of workfile_id UUIDs to link this
+            workfile to (e.g. when two workfiles are different views of the same
+            task). Surfaced by workfile_read as related_workfiles.
     """
     if mode == "archive":
         return archive_workfile(component=component, title=title, project=project)
@@ -12103,6 +12566,7 @@ def workfile_store(
             component=component, title=title, content=content, project=project,
             workfile_type=workfile_type, tags=tags, feature_code=feature_code,
             is_pinned=is_pinned, mode=mode, auto_chunk=auto_chunk,
+            related_to=related_to,
         )
 
 

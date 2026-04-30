@@ -851,8 +851,28 @@ def main():
                         # Spawn CKG daemon if not already running (F160 perf fix)
                         daemon_script = Path(__file__).parent / "ckg_daemon.py"
                         if daemon_script.exists():
+                            # FB220: prefer the actual bound port recorded in
+                            # the PID file (daemon may have moved off the MD5
+                            # slot due to a port collision with a sibling
+                            # project). Fall back to MD5 hash for first-spawn.
                             import hashlib as _hl
-                            daemon_port = 9800 + (int(_hl.md5(project_name.encode()).hexdigest(), 16) % 100)
+                            daemon_port = None
+                            pid_file = Path.home() / ".claude" / f"ckg-daemon-{project_name}.pid"
+                            if pid_file.exists():
+                                try:
+                                    text = pid_file.read_text().strip()
+                                    if "=" in text:
+                                        for line in text.splitlines():
+                                            if line.startswith("port="):
+                                                try:
+                                                    daemon_port = int(line.split("=", 1)[1].strip())
+                                                except ValueError:
+                                                    pass
+                                                break
+                                except OSError:
+                                    pass
+                            if daemon_port is None:
+                                daemon_port = 9800 + (int(_hl.md5(project_name.encode()).hexdigest(), 16) % 100)
                             # Quick health check — is daemon already up?
                             import urllib.request as _ur
                             try:
@@ -865,7 +885,7 @@ def main():
                                     creationflags=0x00000008 if sys.platform == 'win32' else 0,
                                     start_new_session=True if sys.platform != 'win32' else False,
                                 )
-                                logger.info(f"CKG: spawned daemon for {project_name} on port {daemon_port}")
+                                logger.info(f"CKG: spawned daemon for {project_name} (preferred port {daemon_port})")
             except Exception as e:
                 logger.warning(f"CKG staleness check failed (non-fatal): {e}")
 
@@ -1087,36 +1107,36 @@ def main():
                     status = f['status'] if isinstance(f, dict) else f[2]
                     cache_parts.append(f"  {code} {name} ({status})")
 
-            # Pinned workfiles — top-1 gets a real body, rest get headline only.
-            # 2026-04-26: widen FB335 partial restore. B0 cut everything to ~100-char
-            # headlines and the most-pinned workfile (e.g. v3-plan/refined-execution-plan)
-            # lost actionable detail. Top-1 now gets 400-char body so the most-accessed
-            # workfile arrives ready-to-use.
+            # Pinned workfiles — FB407 split: top-3 with body preview (~380 chars each)
+            # AND a complete title-only list of any remaining pinned workfiles.
+            # Pinning is an explicit user signal of importance — surface must never
+            # silently drop pinned items off the bottom (prior top-5 with body cut off
+            # everything beyond rank 5). Mirror shape of KEY GOTCHAS auto-load below.
+            # Token budget: 3 * ~110 (body) + N * ~25 (title) — even 30 pinned ~ 1.5K.
             cache_cur.execute("""
                 SELECT pw.component, pw.title,
                        LEFT(pw.content, 400) as content_body
                 FROM claude.project_workfiles pw
                 JOIN claude.projects p ON pw.project_id = p.project_id
                 WHERE p.project_name = %s AND pw.is_pinned = true AND pw.is_active = true
-                ORDER BY pw.access_count DESC
-                LIMIT 5
+                ORDER BY pw.access_count DESC, pw.updated_at DESC
             """, (project_name,))
             workfiles = cache_cur.fetchall()
             if workfiles:
-                cache_parts.append("PINNED WORKFILES (top-1 has body; rest: workfile_read to load full):")
+                cache_parts.append("PINNED WORKFILES (top-3 with body; rest: workfile_read for full):")
                 import re as _re
                 for i, w in enumerate(workfiles):
                     comp = w['component'] if isinstance(w, dict) else w[0]
                     title = w['title'] if isinstance(w, dict) else w[1]
                     body = w['content_body'] if isinstance(w, dict) else w[2]
-                    if body:
+                    if i < 3 and body:
                         body_clean = _re.sub(r'\s+', ' ', body).strip()
-                        if i == 0:
-                            cache_parts.append(f"  {comp}/{title} — {body_clean[:380]}{'…' if len(body) >= 400 else ''}")
-                        else:
-                            cache_parts.append(f"  {comp}/{title} — {body_clean[:100]} …")
-                    else:
+                        cache_parts.append(f"  {comp}/{title} — {body_clean[:380]}{'…' if len(body) >= 400 else ''}")
+                    elif i < 3:
                         cache_parts.append(f"  {comp}/{title}")
+                    else:
+                        # All remaining pinned: title-only, never truncated off
+                        cache_parts.append(f"  - {comp}/{title}")
 
             # Top knowledge gotchas — proactive injection of high-confidence entries
             # 2026-04-25: partial restore of B0 trim. Top-3 gotchas now ship with a

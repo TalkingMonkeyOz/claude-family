@@ -16,14 +16,37 @@ import json
 import hashlib
 import urllib.request
 import urllib.error
+from pathlib import Path
 
 PORT_RANGE_START = 9800
 PORT_RANGE_SIZE = 100
+PID_DIR = Path.home() / ".claude"
 
 
 def resolve_port(project_name: str) -> int:
+    """Hashed fallback port (FB220 prefers PID-file port)."""
     digest = int(hashlib.md5(project_name.encode()).hexdigest(), 16)
     return PORT_RANGE_START + (digest % PORT_RANGE_SIZE)
+
+
+def read_port_from_pid_file(project_name: str):
+    """Read the daemon's actual bound port from its PID file. None if absent/legacy."""
+    pid_file = PID_DIR / f"ckg-daemon-{project_name}.pid"
+    if not pid_file.exists():
+        return None
+    try:
+        text = pid_file.read_text().strip()
+    except OSError:
+        return None
+    if "=" not in text:
+        return None
+    for line in text.splitlines():
+        if line.startswith("port="):
+            try:
+                return int(line.split("=", 1)[1].strip())
+            except ValueError:
+                return None
+    return None
 
 
 def main():
@@ -56,7 +79,9 @@ def main():
             return
 
         project_name = os.path.basename(os.getcwd())
-        port = resolve_port(project_name)
+        # FB220: prefer PID-file port (daemon may have moved off the hash slot
+        # if another project's name hashed to the same port).
+        port = read_port_from_pid_file(project_name) or resolve_port(project_name)
 
         url = f'http://127.0.0.1:{port}/reindex-file'
         data = json.dumps({'file_path': file_path}).encode('utf-8')
