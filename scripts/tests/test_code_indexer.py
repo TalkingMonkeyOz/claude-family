@@ -331,3 +331,301 @@ class TestTypeScriptObjectMethodDispatch:
         calls = [r for r in refs if r["ref_type"] == "calls"]
         names = {r["to_symbol_name"] for r in calls}
         assert "foo" in names
+
+
+# ---------------------------------------------------------------------------
+# Drift events (claude.drift_events, target_kind='symbol')
+# ---------------------------------------------------------------------------
+#
+# Live DB tests — exercise the full index_project flow against a temp
+# fixture project and a temp directory of files. Skipped when DATABASE_URI
+# is unset or psycopg isn't installed so a parser-only test run still
+# passes.
+#
+# These tests use a fresh project per test so the drift_events the
+# indexer writes can be queried without touching production data.
+
+
+def _have_postgres() -> bool:
+    """Probe for a working DB connection. Uses config.get_db_connection
+    so it picks up DATABASE_URI / POSTGRES_PASSWORD via the same path
+    the indexer uses."""
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:
+        try:
+            import psycopg2  # noqa: F401
+        except ImportError:
+            return False
+    try:
+        from config import get_db_connection  # noqa: WPS433
+        conn = get_db_connection(strict=False)
+        if conn is None:
+            return False
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+_REQUIRES_DB = pytest.mark.skipif(
+    not _have_postgres(),
+    reason="postgres unavailable — skipping live drift tests",
+)
+
+
+@pytest.fixture
+def drift_fixture_project(tmp_path):
+    """
+    Create an isolated project and source directory for drift tests.
+
+    Yields (project_name, project_id, project_dir). On teardown, deletes
+    drift_events, code_references, code_symbols, code_file_hashes, and
+    the project row.
+    """
+    if not _have_postgres():
+        pytest.skip("DB unavailable")
+    # Lazy import — keeps the module importable when DB isn't.
+    from config import get_db_connection  # noqa: WPS433
+
+    project_name = f"drift_test_{uuid.uuid4().hex[:8]}"
+    project_id = str(uuid.uuid4())
+    project_dir = tmp_path / project_name
+    project_dir.mkdir()
+
+    conn = get_db_connection(strict=True)
+    try:
+        with conn.cursor() as cur:
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO claude.projects (project_id, project_name, status, created_at)
+                    VALUES (%s, %s, 'active', now())
+                    """,
+                    (project_id, project_name),
+                )
+            except Exception:
+                conn.rollback()
+                with conn.cursor() as cur2:
+                    cur2.execute(
+                        "INSERT INTO claude.projects (project_id, project_name) VALUES (%s, %s)",
+                        (project_id, project_name),
+                    )
+        conn.commit()
+    finally:
+        conn.close()
+
+    yield project_name, project_id, project_dir
+
+    # Teardown
+    conn = get_db_connection(strict=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM claude.drift_events WHERE target_project = %s",
+                (project_id,),
+            )
+            cur.execute(
+                """
+                DELETE FROM claude.code_references
+                WHERE from_symbol_id IN (
+                    SELECT symbol_id FROM claude.code_symbols WHERE project_id = %s
+                )
+                """,
+                (project_id,),
+            )
+            cur.execute(
+                "DELETE FROM claude.code_symbols WHERE project_id = %s",
+                (project_id,),
+            )
+            cur.execute(
+                "DELETE FROM claude.code_file_hashes WHERE project_id = %s",
+                (project_id,),
+            )
+            cur.execute(
+                "DELETE FROM claude.projects WHERE project_id = %s",
+                (project_id,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _count_drift_events(project_id: str, kind: str = None) -> int:
+    """Count drift_events rows for a project (optionally filtered by kind)."""
+    from config import get_db_connection  # noqa: WPS433
+    conn = get_db_connection(strict=True)
+    try:
+        with conn.cursor() as cur:
+            if kind:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM claude.drift_events
+                    WHERE target_kind = 'symbol'
+                      AND target_project = %s AND kind = %s
+                    """,
+                    (project_id, kind),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT COUNT(*) AS n FROM claude.drift_events
+                    WHERE target_kind = 'symbol' AND target_project = %s
+                    """,
+                    (project_id,),
+                )
+            row = cur.fetchone()
+            return int(row["n"])
+    finally:
+        conn.close()
+
+
+def _fetch_drift_events(project_id: str) -> list[dict]:
+    """Return all drift_events rows for a project (target_kind='symbol')."""
+    from config import get_db_connection  # noqa: WPS433
+    conn = get_db_connection(strict=True)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, target_id, kind, delta, detected_at
+                FROM claude.drift_events
+                WHERE target_kind = 'symbol' AND target_project = %s
+                ORDER BY detected_at
+                """,
+                (project_id,),
+            )
+            return list(cur.fetchall())
+    finally:
+        conn.close()
+
+
+@_REQUIRES_DB
+class TestDriftEventEmission:
+    """End-to-end drift detection in the indexer."""
+
+    def test_signature_change_emits_drift_event(self, drift_fixture_project):
+        # Given: a fixture project with a single Python file
+        project_name, project_id, project_dir = drift_fixture_project
+        f = project_dir / "module.py"
+        f.write_text("def foo(x):\n    return x\n", encoding="utf-8")
+
+        # First index: establishes the baseline. No drift expected
+        # (fresh symbols don't fire events).
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        baseline = _count_drift_events(project_id)
+        assert baseline == 0, (
+            f"fresh index should emit no drift events; got {baseline}"
+        )
+
+        # Edit the function signature
+        f.write_text("def foo(x, y):\n    return x + y\n", encoding="utf-8")
+
+        # Second index: should emit exactly one signature_change event
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        events = _fetch_drift_events(project_id)
+        sig_changes = [e for e in events if e["kind"] == "signature_change"]
+        assert len(sig_changes) == 1, (
+            f"expected 1 signature_change event for foo; got {len(sig_changes)} — "
+            f"all events: {[(e['kind'], e['delta']) for e in events]}"
+        )
+        delta = sig_changes[0]["delta"]
+        # delta is jsonb -> dict in psycopg's row factory
+        assert "old_signature" in delta and "new_signature" in delta
+        assert "x" in delta["old_signature"]
+        assert "y" in delta["new_signature"]
+        assert delta.get("name") == "foo"
+
+    def test_unchanged_symbol_emits_no_drift_event(self, drift_fixture_project):
+        project_name, project_id, project_dir = drift_fixture_project
+        f = project_dir / "stable.py"
+        f.write_text("def stable_fn(x):\n    return x * 2\n", encoding="utf-8")
+
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        # Re-index without changing the file. With incremental mode the
+        # file gets skipped on hash match — no drift either way. With
+        # force_full the file is re-parsed; signature unchanged ⇒ no event.
+        ci.index_project(project_name, str(project_dir), force_full=True)
+
+        events = _fetch_drift_events(project_id)
+        assert len(events) == 0, (
+            f"unchanged code should emit no drift events; got "
+            f"{[(e['kind'], e['delta']) for e in events]}"
+        )
+
+    def test_new_symbol_emits_no_drift_event(self, drift_fixture_project):
+        project_name, project_id, project_dir = drift_fixture_project
+        f = project_dir / "growing.py"
+        f.write_text("def existing(x):\n    return x\n", encoding="utf-8")
+
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        # Add a NEW function. The existing one is unchanged.
+        f.write_text(
+            "def existing(x):\n    return x\n"
+            "def added_later(y):\n    return y * 3\n",
+            encoding="utf-8",
+        )
+        ci.index_project(project_name, str(project_dir), force_full=False)
+
+        events = _fetch_drift_events(project_id)
+        assert len(events) == 0, (
+            f"adding a new symbol must not emit drift events for it; got "
+            f"{[(e['kind'], e['delta']) for e in events]}"
+        )
+
+    def test_stale_cleanup_emits_removed_drift_event(self, drift_fixture_project):
+        project_name, project_id, project_dir = drift_fixture_project
+        f = project_dir / "doomed.py"
+        f.write_text(
+            "def alpha(x):\n    return x\n"
+            "def beta(y):\n    return y\n",
+            encoding="utf-8",
+        )
+
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        baseline = _count_drift_events(project_id)
+        assert baseline == 0
+
+        # Delete the file from disk
+        f.unlink()
+
+        # Re-index — the file is no longer discovered, so cleanup_stale
+        # picks it up and emits a removed event for each of its symbols.
+        ci.index_project(project_name, str(project_dir), force_full=False)
+
+        events = _fetch_drift_events(project_id)
+        removed = [e for e in events if e["kind"] == "removed"]
+        assert len(removed) >= 2, (
+            f"expected at least 2 removed events (alpha + beta); got {len(removed)} — "
+            f"all events: {[(e['kind'], e['delta']) for e in events]}"
+        )
+        names = {e["delta"].get("name") for e in removed}
+        assert {"alpha", "beta"} <= names, (
+            f"removed events should cover alpha and beta; got names={names}"
+        )
+        # All removed deltas must carry the stale_cleanup reason marker
+        for e in removed:
+            assert e["delta"].get("reason") == "stale_cleanup"
+
+    def test_drift_emit_is_idempotent(self, drift_fixture_project):
+        # Re-running the indexer on the same change MUST NOT duplicate
+        # events. delta_hash + NOT EXISTS guard handles this.
+        project_name, project_id, project_dir = drift_fixture_project
+        f = project_dir / "idempotent.py"
+        f.write_text("def fn(a):\n    return a\n", encoding="utf-8")
+
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        # Change the signature
+        f.write_text("def fn(a, b):\n    return a + b\n", encoding="utf-8")
+        ci.index_project(project_name, str(project_dir), force_full=False)
+        first_count = _count_drift_events(project_id, kind="signature_change")
+        assert first_count == 1
+
+        # Re-index with --full so the file is re-parsed even though
+        # its hash matches. The drift event must NOT duplicate.
+        ci.index_project(project_name, str(project_dir), force_full=True)
+        second_count = _count_drift_events(project_id, kind="signature_change")
+        assert second_count == 1, (
+            f"drift event duplicated on re-run; first={first_count}, "
+            f"second={second_count}"
+        )

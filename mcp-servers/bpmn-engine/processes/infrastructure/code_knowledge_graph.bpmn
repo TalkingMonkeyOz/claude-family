@@ -224,7 +224,7 @@ symbols_found += len(symbols)
 
     <bpmn:scriptTask id="extract_references" name="[TOOL] Extract References" scriptFormat="python">
       <bpmn:incoming>flow_extract_refs</bpmn:incoming>
-      <bpmn:outgoing>flow_refs_store</bpmn:outgoing>
+      <bpmn:outgoing>flow_refs_drift</bpmn:outgoing>
       <bpmn:documentation>
 Extracts cross-references from the AST. Two behaviours added in
 Wave 3 (FB402, FB403, FB405) — flow unchanged, only collector
@@ -272,11 +272,71 @@ refs_found += len(references)
     </bpmn:scriptTask>
 
     <!-- ================================================================== -->
+    <!-- PHASE 3.5: DRIFT EVENT EMISSION (HAL migration 003)                 -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="emit_drift_events_changed" name="[DB] Compare-and-emit drift events for changed symbols" scriptFormat="python">
+      <bpmn:incoming>flow_refs_drift</bpmn:incoming>
+      <bpmn:outgoing>flow_drift_store</bpmn:outgoing>
+      <bpmn:documentation>
+HAL migration 003 introduced claude.drift_events. The indexer is the
+write path for symbol-kind events. This task runs AFTER parse +
+extract_references and BEFORE clear_file_symbols, so the existing
+symbol_ids (about to be deleted) are still valid as drift event
+target_ids.
+
+Behaviour (see code_indexer.emit_drift_for_changed_file):
+  - Match by (project_id, file_path, name, kind).
+  - Existing key with same name/kind in new set, signature differs
+    -> emit kind='signature_change' with delta {old_signature,
+       new_signature, name, kind_of_symbol, file_path}.
+  - Existing key absent from new set
+    -> emit kind='removed' with delta {reason='stale_cleanup',
+       old_signature, name, kind_of_symbol, file_path}. The matching
+       symbol row is deleted moments later in clear_file_symbols.
+  - New key absent from existing set: NO event (fresh symbol -> no
+    drift).
+  - 'renamed' is intentionally skipped — true rename detection
+    requires fuzzy matching across symbol_ids and is out of scope
+    for this pass. Renames currently surface as remove+add.
+
+Idempotency:
+  delta_hash = md5(delta::text) is a generated column. The INSERT
+  uses WHERE NOT EXISTS on (target_kind, target_id, delta_hash)
+  scoped to open events (reconciled_at IS NULL), so re-running on
+  the same change emits nothing new.
+
+target_project: always set to code_symbols.project_id. Symbol-kind
+events are project-scoped because the consuming project is known
+from the file path. (HAL's NULL target_project = all-projects
+convention applies to entity-kind events, not symbols.)
+
+Transaction model: same connection as the surrounding indexer
+flow — the per-file commit covers drift INSERTs + symbol DELETE +
+symbol INSERT atomically.
+      </bpmn:documentation>
+      <bpmn:script>
+# For each existing symbol matching (project_id, file_path):
+#   if (name, kind) in new_symbols and existing.signature != new.signature
+#     INSERT INTO claude.drift_events
+#       (target_kind='symbol', target_id=existing.symbol_id,
+#        target_project=project_id, kind='signature_change',
+#        delta={old_signature, new_signature, name, kind_of_symbol, file_path})
+#     WHERE NOT EXISTS (open event with same delta_hash)
+#   elif (name, kind) not in new_symbols:
+#     INSERT kind='removed' with delta {reason='stale_cleanup', ...}
+# No event for fresh symbols (in new but not existing).
+# stats['drift_signature_changes'] += signature_change_count
+# stats['drift_removed'] += removed_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
     <!-- PHASE 4: STORE IN DATABASE                                          -->
     <!-- ================================================================== -->
 
     <bpmn:scriptTask id="clear_file_symbols" name="[DB] Clear Old Symbols for File" scriptFormat="python">
-      <bpmn:incoming>flow_refs_store</bpmn:incoming>
+      <bpmn:incoming>flow_drift_store</bpmn:incoming>
       <bpmn:outgoing>flow_cleared_upsert</bpmn:outgoing>
       <bpmn:script>
 # DELETE existing symbols + references for this file (incremental replace)
@@ -359,12 +419,41 @@ Both passes guard with `to_symbol_id IS NULL` — idempotent on re-run.
 
     <bpmn:scriptTask id="cleanup_stale" name="[DB] Cleanup Stale Symbols" scriptFormat="python">
       <bpmn:incoming>flow_resolve_cleanup</bpmn:incoming>
-      <bpmn:outgoing>flow_cleanup_summarize</bpmn:outgoing>
+      <bpmn:outgoing>flow_cleanup_drift_removed</bpmn:outgoing>
       <bpmn:script>
 # In incremental mode: find symbols for files that no longer exist
 # DELETE FROM claude.code_references WHERE from_symbol_id IN stale OR to_symbol_id IN stale
 # DELETE FROM claude.code_symbols WHERE file_path NOT IN current file_list AND project_id = ?
 # Output: stale_removed_count
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="emit_drift_events_removed" name="[DB] Emit removed-kind drift events for stale symbols" scriptFormat="python">
+      <bpmn:incoming>flow_cleanup_drift_removed</bpmn:incoming>
+      <bpmn:outgoing>flow_drift_removed_summarize</bpmn:outgoing>
+      <bpmn:documentation>
+Companion to emit_drift_events_changed. When a file disappears from
+disk entirely (caught by cleanup_stale), every symbol it contained
+needs a kind='removed' drift event. The actual emit happens BEFORE
+the DELETE in claude.code_symbols (see code_indexer.cleanup_stale_symbols
+-> emit_drift_for_deleted_files), because the target_id must still
+resolve when the event row is inserted; the BPMN model places this
+task after cleanup_stale to document the conceptual data flow rather
+than the literal call order. Both INSERT and DELETE land in the same
+transaction the indexer holds for the cleanup phase.
+
+Idempotency: same delta_hash NOT EXISTS guard as the per-file path.
+Re-running indexer with the same stale state produces no new rows.
+      </bpmn:documentation>
+      <bpmn:script>
+# For each symbol in stale files (already enumerated by cleanup_stale):
+#   INSERT INTO claude.drift_events
+#     (target_kind='symbol', target_id=symbol_id,
+#      target_project=project_id, kind='removed',
+#      delta={reason='stale_cleanup', old_signature, name,
+#             kind_of_symbol, file_path})
+#   WHERE NOT EXISTS (open event with same delta_hash)
+# stats['drift_removed'] += stale_drift_emitted
       </bpmn:script>
     </bpmn:scriptTask>
 
@@ -424,7 +513,8 @@ that 207 files would change.
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_parse_fail" sourceRef="parse_gw" targetRef="log_parse_error" />
     <bpmn:sequenceFlow id="flow_extract_refs" sourceRef="extract_symbols" targetRef="extract_references" />
-    <bpmn:sequenceFlow id="flow_refs_store" sourceRef="extract_references" targetRef="clear_file_symbols" />
+    <bpmn:sequenceFlow id="flow_refs_drift" sourceRef="extract_references" targetRef="emit_drift_events_changed" />
+    <bpmn:sequenceFlow id="flow_drift_store" sourceRef="emit_drift_events_changed" targetRef="clear_file_symbols" />
     <bpmn:sequenceFlow id="flow_cleared_upsert" sourceRef="clear_file_symbols" targetRef="upsert_symbols" />
     <bpmn:sequenceFlow id="flow_upsert_embed" sourceRef="upsert_symbols" targetRef="generate_embeddings" />
     <bpmn:sequenceFlow id="flow_embed_advance" sourceRef="generate_embeddings" targetRef="advance_gw" />
@@ -435,7 +525,8 @@ that 207 files would change.
     </bpmn:sequenceFlow>
     <bpmn:sequenceFlow id="flow_done" sourceRef="advance_gw" targetRef="resolve_cross_refs" />
     <bpmn:sequenceFlow id="flow_resolve_cleanup" sourceRef="resolve_cross_refs" targetRef="cleanup_stale" />
-    <bpmn:sequenceFlow id="flow_cleanup_summarize" sourceRef="cleanup_stale" targetRef="summarize" />
+    <bpmn:sequenceFlow id="flow_cleanup_drift_removed" sourceRef="cleanup_stale" targetRef="emit_drift_events_removed" />
+    <bpmn:sequenceFlow id="flow_drift_removed_summarize" sourceRef="emit_drift_events_removed" targetRef="summarize" />
     <bpmn:sequenceFlow id="flow_summarize_end" sourceRef="summarize" targetRef="end_indexed" />
 
   </bpmn:process>

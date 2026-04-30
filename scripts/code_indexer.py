@@ -1278,6 +1278,238 @@ def delete_symbols_for_files(conn, file_paths: list[str]) -> int:
     return total
 
 
+# ---------------------------------------------------------------------------
+# Drift event emission (claude.drift_events, target_kind='symbol')
+# ---------------------------------------------------------------------------
+#
+# HAL's migration 003 added claude.drift_events. The indexer is the
+# write path for symbol-kind events: we emit when an indexed symbol's
+# signature changes and when a symbol is removed (file deletion or
+# stale cleanup). 'renamed' is intentionally skipped — true rename
+# detection requires fuzzy matching across symbol_ids which is out of
+# scope for this pass; renames currently surface as a removed+added
+# pair, which is acceptable for downstream consumers.
+#
+# Idempotency: delta_hash = md5(delta::text) is a generated column.
+# We guard each INSERT with a NOT EXISTS check on
+# (target_kind, target_id, delta_hash) restricted to open events
+# (reconciled_at IS NULL), so re-running the indexer on unchanged code
+# emits no new rows. Re-running on the SAME change also emits no new
+# row because the same delta hashes the same way.
+#
+# Transaction model: every insert here uses the caller's connection
+# (`conn`); we never open our own. The indexer commits per-file in
+# index_project, so drift events land atomically with the symbol
+# UPSERT/DELETE for that file.
+
+
+def _insert_drift_event(
+    conn,
+    *,
+    target_id: str,
+    target_project: str,
+    kind: str,
+    delta: dict,
+) -> bool:
+    """
+    Insert a single drift event for a code symbol, idempotently.
+
+    Args:
+        target_id: code_symbols.symbol_id (uuid as str).
+        target_project: code_symbols.project_id (uuid as str). Always set
+            for symbol-kind events — symbols are project-scoped because
+            the consuming project is known from the file path. Leaving
+            this NULL is HAL's convention for entity-kind events that
+            apply across all projects.
+        kind: 'signature_change' | 'removed' | 'shape_change' | 'renamed'.
+        delta: jsonb payload describing the change.
+
+    Returns:
+        True if a row was inserted, False if it was a duplicate of an
+        existing open event with the same delta_hash.
+    """
+    import json
+    delta_json = json.dumps(delta, default=str)
+    with conn.cursor() as cur:
+        # We can't reference the generated column delta_hash in a VALUES
+        # WHERE NOT EXISTS predicate against itself, so we hash the
+        # incoming delta the same way Postgres does (md5 of the JSON
+        # text representation it would produce). Postgres's jsonb cast
+        # to text canonicalises whitespace/key-order, so we round-trip
+        # via to_jsonb()::text to match the stored hash exactly.
+        cur.execute(
+            """
+            INSERT INTO claude.drift_events
+                (target_kind, target_id, target_project, kind, delta)
+            SELECT 'symbol', %s::uuid, %s::uuid, %s, %s::jsonb
+            WHERE NOT EXISTS (
+                SELECT 1 FROM claude.drift_events
+                WHERE target_kind = 'symbol'
+                  AND target_id = %s::uuid
+                  AND delta_hash = md5(%s::jsonb::text)
+                  AND reconciled_at IS NULL
+            )
+            RETURNING id
+            """,
+            (
+                target_id, target_project, kind, delta_json,
+                target_id, delta_json,
+            ),
+        )
+        row = cur.fetchone()
+        return row is not None
+
+
+def emit_drift_for_changed_file(
+    conn,
+    project_id: str,
+    file_path: str,
+    new_symbols: list[dict],
+) -> dict:
+    """
+    Compare existing symbols for a file against the freshly extracted
+    set and emit drift events. Returns counts per kind.
+
+    Behaviour:
+      - Match key: (name, kind). Same name+kind in both sets is the same
+        logical symbol (regardless of symbol_id, which is regenerated
+        each parse).
+      - signature_change: same key in both, signature differs.
+      - removed: existing key absent from new set. The 'removed' event
+        is anchored on the EXISTING symbol_id (which is about to be
+        deleted) so downstream consumers can correlate via target_id
+        even after the row is gone.
+      - New symbols (in new set, not in existing set): no event.
+      - 'renamed' is explicitly skipped — see module docstring above.
+
+    Called BEFORE delete_symbols_for_files / insert_symbols for the
+    re-index of `file_path`, so the existing-symbol target_id is still
+    valid at INSERT time. We commit nothing here; the caller controls
+    the transaction.
+    """
+    counts = {"signature_change": 0, "removed": 0}
+    if not file_path:
+        return counts
+
+    # Fetch existing symbols for this file, scoped to the project.
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT symbol_id, name, kind, signature
+            FROM claude.code_symbols
+            WHERE project_id = %s AND file_path = %s
+            """,
+            (project_id, file_path),
+        )
+        existing_rows = cur.fetchall()
+
+    if not existing_rows:
+        # Fresh file — every symbol is new, no drift to emit.
+        return counts
+
+    # Build (name, kind) -> row map for existing
+    existing_map: dict[tuple[str, str], dict] = {}
+    for r in existing_rows:
+        existing_map[(r["name"], r["kind"])] = r
+
+    # Build the same map for incoming new symbols
+    new_map: dict[tuple[str, str], dict] = {}
+    for s in new_symbols:
+        # If multiple symbols share the same (name, kind) within a file
+        # (e.g. overloads, decorator stacks producing duplicate names),
+        # keep the FIRST one we see — drift detection on overloaded
+        # names is best-effort; the more specific identity tracking is
+        # a follow-up FB.
+        key = (s["name"], s["kind"])
+        if key not in new_map:
+            new_map[key] = s
+
+    for key, old in existing_map.items():
+        old_sig = old.get("signature") or ""
+        if key in new_map:
+            new_sig = new_map[key].get("signature") or ""
+            if old_sig != new_sig:
+                inserted = _insert_drift_event(
+                    conn,
+                    target_id=str(old["symbol_id"]),
+                    target_project=project_id,
+                    kind="signature_change",
+                    delta={
+                        "old_signature": old_sig,
+                        "new_signature": new_sig,
+                        "name": old["name"],
+                        "kind_of_symbol": old["kind"],
+                        "file_path": file_path,
+                    },
+                )
+                if inserted:
+                    counts["signature_change"] += 1
+        else:
+            # Absent from new set -> removed (will be deleted in next step)
+            inserted = _insert_drift_event(
+                conn,
+                target_id=str(old["symbol_id"]),
+                target_project=project_id,
+                kind="removed",
+                delta={
+                    "reason": "stale_cleanup",
+                    "old_signature": old_sig,
+                    "name": old["name"],
+                    "kind_of_symbol": old["kind"],
+                    "file_path": file_path,
+                },
+            )
+            if inserted:
+                counts["removed"] += 1
+
+    return counts
+
+
+def emit_drift_for_deleted_files(
+    conn,
+    project_id: str,
+    file_paths: list[str],
+) -> int:
+    """
+    Emit kind='removed' drift events for every symbol in the given
+    files BEFORE they are deleted. Used by cleanup_stale_symbols when
+    files have been removed from disk entirely.
+
+    Returns total events emitted.
+    """
+    if not file_paths:
+        return 0
+    total = 0
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT symbol_id, name, kind, signature, file_path
+            FROM claude.code_symbols
+            WHERE project_id = %s AND file_path = ANY(%s::text[])
+            """,
+            (project_id, file_paths),
+        )
+        rows = cur.fetchall()
+
+    for r in rows:
+        inserted = _insert_drift_event(
+            conn,
+            target_id=str(r["symbol_id"]),
+            target_project=project_id,
+            kind="removed",
+            delta={
+                "reason": "stale_cleanup",
+                "old_signature": r.get("signature") or "",
+                "name": r["name"],
+                "kind_of_symbol": r["kind"],
+                "file_path": r["file_path"],
+            },
+        )
+        if inserted:
+            total += 1
+    return total
+
+
 def insert_symbols(conn, symbols: list[dict]) -> None:
     """Batch-insert symbols into claude.code_symbols."""
     if not symbols:
@@ -1423,8 +1655,13 @@ def resolve_cross_file_refs(conn, project_id: str) -> int:
         return total
 
 
-def cleanup_stale_symbols(conn, project_id: str, live_paths: set[str]) -> int:
-    """Delete symbols whose file_path no longer exists on disk."""
+def cleanup_stale_symbols(conn, project_id: str, live_paths: set[str]) -> tuple[int, int]:
+    """
+    Delete symbols whose file_path no longer exists on disk and emit
+    kind='removed' drift events for each.
+
+    Returns (deleted_count, drift_events_emitted).
+    """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT DISTINCT file_path FROM claude.code_symbols WHERE project_id = %s",
@@ -1434,11 +1671,17 @@ def cleanup_stale_symbols(conn, project_id: str, live_paths: set[str]) -> int:
 
     stale = db_paths - live_paths
     if not stale:
-        return 0
+        return 0, 0
 
     logger.info("Removing stale symbols for %d deleted files", len(stale))
-    deleted = delete_symbols_for_files(conn, list(stale))
-    return deleted
+
+    # Emit drift events BEFORE deleting — symbol_ids must still exist
+    # for the FK chain to make sense to consumers querying the events.
+    stale_list = list(stale)
+    drift_emitted = emit_drift_for_deleted_files(conn, project_id, stale_list)
+
+    deleted = delete_symbols_for_files(conn, stale_list)
+    return deleted, drift_emitted
 
 
 # ---------------------------------------------------------------------------
@@ -1580,6 +1823,9 @@ def index_project(
             "refs_resolved": 0,
             "symbols_embedded": 0,
             "stale_deleted": 0,
+            # Drift events (claude.drift_events, target_kind='symbol')
+            "drift_signature_changes": 0,
+            "drift_removed": 0,
         }
 
         # Dry run collects per-file diagnostics
@@ -1623,9 +1869,11 @@ def index_project(
 
             logger.info("Indexing: %s", str_fp)
 
-            # Remove stale symbols for this file before re-inserting
-            delete_symbols_for_files(conn, [str_fp])
-
+            # Parse FIRST so the new symbol set is known before we
+            # touch the existing rows. This lets us compare old vs new
+            # and emit drift events before the stale rows are deleted
+            # (drift events anchor on the existing symbol_id, which
+            # disappears at delete time).
             try:
                 file_symbols, file_refs = parse_file(file_path, project_id, new_hash)
             except Exception as exc:
@@ -1634,6 +1882,19 @@ def index_project(
                 continue
 
             try:
+                # Emit drift events for signature changes / removed
+                # symbols, comparing existing rows against file_symbols.
+                # No-op for fresh files. Idempotent — duplicate open
+                # events with the same delta_hash are skipped.
+                drift_counts = emit_drift_for_changed_file(
+                    conn, project_id, str_fp, file_symbols
+                )
+                stats["drift_signature_changes"] += drift_counts["signature_change"]
+                stats["drift_removed"] += drift_counts["removed"]
+
+                # Remove stale symbols for this file before re-inserting
+                delete_symbols_for_files(conn, [str_fp])
+
                 insert_symbols(conn, file_symbols)
                 insert_refs(conn, file_refs)
                 # Record hash AFTER successful parse — even for 0-symbol files
@@ -1666,7 +1927,9 @@ def index_project(
         logger.info("Resolved %d cross-file references", resolved)
 
         # Stale cleanup (also clean hash table)
-        stale_deleted = cleanup_stale_symbols(conn, project_id, live_paths)
+        stale_deleted, stale_drift_emitted = cleanup_stale_symbols(
+            conn, project_id, live_paths
+        )
         # Also remove stale hashes for deleted files
         with conn.cursor() as cur:
             cur.execute(
@@ -1681,6 +1944,9 @@ def index_project(
         if stale_deleted:
             conn.commit()
         stats["stale_deleted"] = stale_deleted
+        # Drift events from cleanup_stale roll up into the same counter
+        # as per-file removals so callers see the total removed count.
+        stats["drift_removed"] += stale_drift_emitted
 
         # Embeddings (fail-open: errors are logged and skipped)
         try:
