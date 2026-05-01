@@ -189,19 +189,35 @@ def _load_model():
 _call_count = 0
 _call_lock = threading.Lock()
 
+# Dynamic batching via mixedbread-ai/batched (Apache-2.0).
+# Concurrent single-text /embed calls coalesce into one ONNX forward pass —
+# replaces the old _call_lock-around-model.embed serialization that caused
+# thread starvation and WinError 10053 under load (logged 2026-04-30).
+import batched  # noqa: E402
+
+
+@batched.dynamically(batch_size=16, timeout_ms=20, small_batch_threshold=2)
+def _batched_model_embed(texts: list) -> list:
+    """Single chokepoint that batched coalesces concurrent callers into.
+
+    Receives a list of N texts (gathered by the batched decorator from N
+    concurrent callers within timeout_ms), returns a list of N embeddings.
+    The decorator handles fan-out back to each waiting caller.
+    """
+    return list(_load_model().embed(texts))
+
 
 def embed_single(text: str) -> Optional[list]:
-    """Embed a single text string. Serialized via _call_lock."""
+    """Embed a single text string — coalesced with concurrent calls."""
     global _call_count
     if not text or not text.strip():
         return None
-    model = _load_model()
     start = time.time()
+    vec_arr = _batched_model_embed(text)
     with _call_lock:
-        embeddings = list(model.embed([text]))
         _call_count += 1
         count = _call_count
-    vec = embeddings[0].tolist()
+    vec = vec_arr.tolist() if hasattr(vec_arr, "tolist") else vec_arr
     elapsed = time.time() - start
     if elapsed > 2.0:
         logger.warning(f"Slow embed: {elapsed:.1f}s, {len(text)} chars (call #{count})")
@@ -211,17 +227,16 @@ def embed_single(text: str) -> Optional[list]:
 
 
 def embed_batch(texts: list) -> Optional[list]:
-    """Embed multiple texts. Serialized via _call_lock to prevent concurrent ONNX inference."""
+    """Embed multiple texts — also flows through the batched decorator."""
     global _call_count
     if not texts:
         return None
-    model = _load_model()
     start = time.time()
+    embeddings = _batched_model_embed(texts)
+    vecs = [e.tolist() if hasattr(e, "tolist") else e for e in embeddings]
     with _call_lock:
-        embeddings = list(model.embed(texts))
         _call_count += len(texts)
         count = _call_count
-    vecs = [e.tolist() for e in embeddings]
     elapsed = time.time() - start
     logger.info(f"Batch OK: {len(texts)} texts in {elapsed:.1f}s ({elapsed/len(texts):.3f}s/text, total #{count})")
     return vecs
