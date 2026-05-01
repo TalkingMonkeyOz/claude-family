@@ -74,8 +74,15 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 logger = logging.getLogger('embedding-service')
 logger.setLevel(logging.INFO)
 
-# File handler — main log
-_file_handler = logging.FileHandler(str(LOG_FILE), encoding='utf-8')
+# File handler — rotating log (matches hooks.log SOP from config.py)
+# 10MB × 10 backups ≈ 100MB ceiling, ~1 week of busy embedding history.
+from logging.handlers import RotatingFileHandler
+_file_handler = RotatingFileHandler(
+    str(LOG_FILE),
+    maxBytes=10 * 1024 * 1024,
+    backupCount=10,
+    encoding='utf-8',
+)
 _file_handler.setFormatter(logging.Formatter(
     '%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S'
 ))
