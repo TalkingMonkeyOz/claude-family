@@ -889,6 +889,29 @@ def main():
             except Exception as e:
                 logger.warning(f"CKG staleness check failed (non-fatal): {e}")
 
+            # === EMBEDDING SERVICE WARMUP (FB413) ===
+            # Fire-and-forget spawn if /health probe fails so the service is hot
+            # by the time recall_memories / remember / entity_read first call it.
+            try:
+                import subprocess as _ep_sp
+                import urllib.request as _ep_ur
+                _ep_url = os.environ.get('EMBEDDING_SERVICE_URL', 'http://127.0.0.1:9900')
+                try:
+                    _ep_ur.urlopen(f'{_ep_url}/health', timeout=0.5)
+                    logger.info("Embedding service already running")
+                except Exception:
+                    _ep_script = Path(__file__).parent / "embedding_service.py"
+                    if _ep_script.exists():
+                        _ep_sp.Popen(
+                            [sys.executable, str(_ep_script)],
+                            stdout=_ep_sp.DEVNULL, stderr=_ep_sp.DEVNULL,
+                            creationflags=0x08000008 if sys.platform == 'win32' else 0,  # CREATE_NO_WINDOW | DETACHED_PROCESS
+                            start_new_session=True if sys.platform != 'win32' else False,
+                        )
+                        logger.info("Embedding: spawned warmup (FB413)")
+            except Exception as e:
+                logger.warning(f"Embedding warmup spawn failed (non-fatal): {e}")
+
             # Read tasks back from DB → inject into context (task_lifecycle BPMN v4)
             pending_tasks = get_pending_tasks(project_name)
             completed_tasks = get_recently_completed_tasks(project_name)

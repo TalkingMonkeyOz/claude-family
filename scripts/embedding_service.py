@@ -47,7 +47,7 @@ from typing import Optional
 # Constants
 # ---------------------------------------------------------------------------
 DEFAULT_PORT = 9900
-IDLE_TIMEOUT_SECS = 60 * 60  # 60 minutes (longer than CKG — this serves everyone)
+IDLE_TIMEOUT_SECS = 60 * 60 * 8  # 8 hours — covers a full working day after first warmup
 MODEL_NAME = 'BAAI/bge-large-en-v1.5'
 MODEL_DIMS = 1024
 PID_DIR = Path.home() / ".claude"
