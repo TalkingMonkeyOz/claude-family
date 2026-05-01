@@ -20,14 +20,17 @@ Enable coordinated AI-assisted software development across multiple Claude insta
 
 ## Architecture Overview
 
+## Architecture Overview
+
 Infrastructure for the Claude Family ecosystem:
 - **Database**: PostgreSQL `ai_company_foundation`, schema `claude` (60+ tables)
 - **MCP Servers**: postgres, project-tools (~60 tools), sequential-thinking, bpmn-engine, channel-messaging
 - **Enforcement**: Hooks, database constraints, column_registry
 - **Knowledge**: DB-first (Memory, Filing Cabinet, Reference Library, Credential Vault) + vault embeddings for domain concept dossiers
-- **UI**: Mission Control Web (MCW) for visibility
+- **UI**: `claude-manager-mui` (Tauri+React+MUI desktop app at `C:\Projects\claude-manager-mui`) — replaced the retired Mission Control Web
 
 **Full details**: See `ARCHITECTURE.md`
+
 
 ## Project Structure
 
@@ -98,6 +101,7 @@ python scripts/embed_vault_documents.py --all-projects
 ## Work Tracking
 
 
+
 | I have... | Tool |
 |-----------|------|
 | A bug | `work_create(type="feedback", feedback_type="bug", name="...", description="...")` |
@@ -110,8 +114,12 @@ python scripts/embed_vault_documents.py --all-projects
 | CLAUDE.md section to update | `config_manage(action="update_section", project="...", section="...", content="...")` |
 | Narrative knowledge (research, investigations) | `article_write(title, abstract)` + `article_write(article_id, section_title, section_body)` |
 | Find articles | `article_read(query="...")` or `article_read(article_id="...")` |
+| **Remind future-me in N days (one-off)** | `create_reminder(due_at="2026-05-15T09:00+10:00", body="...", rationale="...")` — RM-coded, surfaces at SessionStart, **free, local** |
+| **Recurring system maintenance (cron)** | `INSERT claude.scheduled_jobs` — runner is `scripts/job_runner.py`, **free, local** |
+| **Cloud sandbox needed** (PR opens, isolated env) | `/schedule` skill — **BILLABLE**, only when local can't do it |
 
 **Data Gateway**: Before INSERT/UPDATE on constrained columns, check `claude.column_registry`.
+
 
 
 ## Project-Specific Rules

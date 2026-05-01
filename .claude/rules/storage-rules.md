@@ -1,6 +1,6 @@
 # Storage Rules
 
-> **Provenance**: DB-managed (`claude.rules` table, scope='global' + 'project'). Edit via `UPDATE claude.rules` then `config_manage(action="deploy_project")` — never edit the deployed `.md` directly. **Last updated 2026-04-26** to reflect Knowledge Architecture v2 (vault sunset, DB-first canonical).
+> **Provenance**: DB-managed (`claude.rules` table, scope='global' + 'project'). Edit via `UPDATE claude.rules` then `config_manage(action="deploy_project")` — never edit the deployed `.md` directly. **Last updated 2026-05-01** to reflect Knowledge Architecture v2 (vault sunset, DB-first canonical) + scheduling tier matrix.
 
 ## Canonical Position (Architecture v2, 2026-04-09)
 
@@ -161,3 +161,19 @@ You own your knowledge quality. Don't leave wrong, stale, or duplicate entries f
 - Reading `information_schema.columns` -> file FB345 (until `get_schema(table=…, mode='raw')` ships)
 
 If you MUST use raw SQL (telemetry, mcp_usage, scheduled_jobs — currently no MCP wrapper), add an `-- OVERRIDE: <reason>` comment so the gap is visible to FB343/FB344.
+
+## Scheduling Tier Matrix (MANDATORY, NEW 2026-05-01)
+
+**Three local-first scheduling tools, plus one cloud one. Pick the cheapest that does the job.**
+
+| I want... | Use | Cost | Where it runs |
+|---|---|---|---|
+| Remind me to check X in N days | `create_reminder(due_at, body, rationale)` → RM-code, surfaces at SessionStart | Free | Local DB |
+| Recurring system maintenance (cron) | `INSERT INTO claude.scheduled_jobs` (or via MCP wrapper if present) | Free | Local `scripts/job_runner.py` |
+| Run my code remotely / open a PR / isolated sandbox | `/schedule` skill (RemoteTrigger API) | **Billable** | Anthropic cloud |
+
+**Bypass to avoid** (added per task #1033, 2026-05-01):
+- Reaching for `/schedule` (cloud, billable) when `create_reminder` (local, free) handles "remind me later" — confirmed anti-pattern.
+- The remote agent **cannot** access your local filesystem, local PostgreSQL, or local services. If the work needs `~/.claude/logs/`, `claude.*` schema, or local processes, it MUST be `create_reminder` or a `scheduled_jobs` entry.
+
+**Decision**: before invoking `/schedule`, ask: *does this need to run in Anthropic's cloud (PR, isolated env) or could a local Claude session pick it up via SessionStart reminder?* If local can do it → `create_reminder`. If recurring → `scheduled_jobs`. Only use `/schedule` when cloud sandbox is genuinely required.
