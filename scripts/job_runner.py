@@ -126,8 +126,15 @@ def is_job_due(job: dict) -> bool:
     if job.get("trigger_type") == "windows_scheduler":
         return False
 
-    # Session start jobs should only run during sessions, not from the runner
+    # Session start jobs should only run during sessions, not from the runner.
+    # FB442: nothing currently claims them — log a WARNING so the silent dead
+    # branch surfaces. Fix is either trigger_type='cron' or wire up a hook.
     if job.get("trigger_type") == "session_start":
+        logger.warning(
+            f"Skipping active job '{job.get('job_name')}' — trigger_type='session_start' "
+            f"is a dead branch (no SessionStart hook claims it; runner only handles cron). "
+            f"Either change trigger_type to 'cron' or set is_active=false. (FB442)"
+        )
         return False
 
     schedule_info = parse_schedule(job.get("schedule", ""), job.get("trigger_type", ""))
@@ -336,10 +343,12 @@ def main():
                 WHERE job_name ILIKE %s AND is_active = true
             """, (f"%{args.force}%",))
         else:
+            # FB442: keep windows_scheduler filtered at SQL (intentional external mgmt),
+            # but let session_start through so is_job_due() can WARN on the dead-branch skip.
             cur.execute("""
                 SELECT * FROM claude.scheduled_jobs
                 WHERE is_active = true
-                  AND trigger_type NOT IN ('windows_scheduler', 'session_start')
+                  AND trigger_type NOT IN ('windows_scheduler')
             """)
         jobs = cur.fetchall()
 
