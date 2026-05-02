@@ -85,15 +85,40 @@ if (-not $taskExists) {
         -LogonType Interactive `
         -RunLevel Limited
 
-    # Register the task
-    Register-ScheduledTask `
-        -TaskName $taskName `
-        -Action $action `
-        -Trigger $trigger `
-        -Settings $settings `
-        -Principal $principal `
-        -Description "F224 Local Task Queue worker daemon — auto-start at logon. SessionStart watchdog respawns if dead." `
-        | Out-Null
+    # Register the task — surface errors instead of swallowing with | Out-Null (FB420)
+    try {
+        $registered = Register-ScheduledTask `
+            -TaskName $taskName `
+            -Action $action `
+            -Trigger $trigger `
+            -Settings $settings `
+            -Principal $principal `
+            -Description "F224 Local Task Queue worker daemon — auto-start at logon. SessionStart watchdog respawns if dead." `
+            -ErrorAction Stop
+    } catch {
+        Write-Host ""
+        Write-Host "    [FAIL] Register-ScheduledTask failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host ""
+        if ($_.Exception.Message -match 'Access is denied|denied') {
+            Write-Host "    Likely cause: this shell does not have rights to register a scheduled task." -ForegroundColor Yellow
+            Write-Host "    This commonly happens when the script is invoked from Claude Code's sandboxed pwsh." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "    Fix: re-run from an interactive PowerShell window opened by you, e.g.:" -ForegroundColor Yellow
+            Write-Host "      powershell -ExecutionPolicy Bypass -File `"$projectRoot\scripts\setup_task_worker_scheduler.ps1`"" -ForegroundColor Cyan
+        }
+        Write-Host ""
+        exit 1
+    }
+
+    # Verify post-condition: task must actually exist now
+    $verify = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if (-not $verify) {
+        Write-Host ""
+        Write-Host "    [FAIL] Register-ScheduledTask returned without error but task is not present." -ForegroundColor Red
+        Write-Host "    Run: Get-ScheduledTask -TaskName '$taskName'" -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
 
     Write-Host "    [OK] Created: $taskName"
     Write-Host "    [OK] Trigger: At user logon"
