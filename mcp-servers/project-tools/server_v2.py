@@ -9433,6 +9433,166 @@ def catalog(
 
 
 @mcp.tool()
+def register_identity(
+    identity_name: str,
+    role_description: str,
+    platform: str = "claude-code-console",
+    capabilities: dict | None = None,
+    status: str = "active",
+) -> dict:
+    """Register a new identity in claude.identities (FB429 — closes raw-SQL gap).
+
+    Use when: setting up a new project that needs its own identity row for
+    session filtering (e.g., a new autonomous-worker persona, a new
+    project-bound builder identity). Idempotent on (identity_name) — re-runs
+    return the existing row instead of inserting a duplicate.
+
+    Returns: {success, identity_id, identity_name, action: 'created'|'exists'}.
+
+    Args:
+        identity_name: Lowercase hyphenated handle (e.g., 'babs-pa', 'claude-foo'). Required.
+        role_description: Free-text persona description / specialty paragraph.
+        platform: Where this identity runs ('claude-code-console', 'claude-code',
+                  'desktop', 'claude-desktop', 'autonomous-worker', 'cli'). Default
+                  matches most builder identities.
+        capabilities: Optional jsonb dict for arbitrary capability metadata.
+        status: 'active' (default), 'archived', or 'inactive'.
+    """
+    if not identity_name or not identity_name.strip():
+        return {"success": False, "error": "identity_name is required."}
+    if not role_description or not role_description.strip():
+        return {"success": False, "error": "role_description is required."}
+
+    import json as _json
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT identity_id::text FROM claude.identities WHERE identity_name = %s", (identity_name,))
+        existing = cur.fetchone()
+        if existing:
+            return {
+                "success": True,
+                "identity_id": existing["identity_id"] if isinstance(existing, dict) else existing[0],
+                "identity_name": identity_name,
+                "action": "exists",
+            }
+        cur.execute(
+            """
+            INSERT INTO claude.identities
+              (identity_id, identity_name, platform, role_description, capabilities, status,
+               created_at, last_active_at)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s::jsonb, %s, now(), now())
+            RETURNING identity_id::text
+            """,
+            (identity_name, platform, role_description,
+             _json.dumps(capabilities or {}), status),
+        )
+        row = cur.fetchone()
+        new_id = row["identity_id"] if isinstance(row, dict) else row[0]
+        conn.commit()
+        return {
+            "success": True,
+            "identity_id": new_id,
+            "identity_name": identity_name,
+            "action": "created",
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to register identity: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
+def register_project(
+    project_name: str,
+    project_code: str = "",
+    description: str = "",
+    status: str = "active",
+    phase: str = "research",
+    priority: int = 3,
+    default_identity_id: str = "",
+    metadata: dict | None = None,
+) -> dict:
+    """Register a new project in claude.projects (FB429 — closes raw-SQL gap).
+
+    Use when: bootstrapping a new project. Idempotent on (project_name) —
+    re-runs return the existing row instead of inserting a duplicate. Does
+    NOT register a workspace row (that's a separate concern handled by the
+    UI / deployment flow). Pair with register_identity() first if you want
+    a default_identity_id linked.
+
+    Returns: {success, project_id, project_name, project_code, action: 'created'|'exists'}.
+
+    Args:
+        project_name: Display name (e.g., 'Babs PA', 'claude-family'). Required.
+        project_code: Short upper-case code for git refs (e.g., 'BABS', 'CF'). Recommended.
+        description: One-paragraph project description.
+        status: 'active' (default) — checked against project status validator.
+        phase: 'idea', 'research' (default), 'planning', 'implementation',
+               'maintenance', or 'archived'. Validated by claude.validate_project_status().
+        priority: 1=critical, 2=high, 3=normal (default), 4=low, 5=backlog.
+        default_identity_id: UUID of the identity (call register_identity first).
+        metadata: Optional jsonb dict for arbitrary project metadata.
+    """
+    if not project_name or not project_name.strip():
+        return {"success": False, "error": "project_name is required."}
+
+    import json as _json
+    conn = get_db_connection()
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT project_id::text, project_code FROM claude.projects WHERE project_name = %s", (project_name,))
+        existing = cur.fetchone()
+        if existing:
+            ex_id = existing["project_id"] if isinstance(existing, dict) else existing[0]
+            ex_code = existing["project_code"] if isinstance(existing, dict) else existing[1]
+            return {
+                "success": True,
+                "project_id": ex_id,
+                "project_name": project_name,
+                "project_code": ex_code,
+                "action": "exists",
+            }
+        cur.execute(
+            """
+            INSERT INTO claude.projects
+              (project_id, project_name, project_code, description, status, priority, phase,
+               default_identity_id, created_at, updated_at, metadata,
+               health_status, maturity_level, audit_required, is_archived)
+            VALUES (gen_random_uuid(), %s, NULLIF(%s, ''), %s, %s, %s, %s,
+                    NULLIF(%s, '')::uuid, now(), now(), %s::jsonb,
+                    'green', 'planning', false, false)
+            RETURNING project_id::text, project_code
+            """,
+            (project_name, project_code, description, status, priority, phase,
+             default_identity_id, _json.dumps(metadata or {})),
+        )
+        row = cur.fetchone()
+        new_id = row["project_id"] if isinstance(row, dict) else row[0]
+        new_code = row["project_code"] if isinstance(row, dict) else row[1]
+        conn.commit()
+        return {
+            "success": True,
+            "project_id": new_id,
+            "project_name": project_name,
+            "project_code": new_code,
+            "action": "created",
+        }
+    except Exception as e:
+        conn.rollback()
+        return {"success": False, "error": f"Failed to register project: {str(e)}"}
+    finally:
+        if cur:
+            cur.close()
+        conn.close()
+
+
+@mcp.tool()
 def update_entity(
     entity_id: str = "",
     entity_name: str = "",
