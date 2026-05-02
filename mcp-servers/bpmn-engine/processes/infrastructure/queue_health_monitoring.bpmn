@@ -1,0 +1,310 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/queue-health-monitoring"
+    id="Definitions_QueueHealthMonitoring">
+
+  <bpmn:process id="L2_queue_health_monitoring" name="Queue Health Monitoring: L1 In-Process, L2 Scheduled, L3 Liveness" isExecutable="true">
+
+    <!--
+      F224 - Queue Health Monitoring (3 levels).
+
+      The "monitor-the-monitor" topology: each level checks the level below.
+
+        L1 in-process - per-template circuit breaker + worker daemon watchdog.
+                       Lives in scripts/task_worker.py and the SessionStart hook.
+                       Cadence: live + per-session.
+        L2 scheduled  - claude.scheduled_jobs entry 'queue_health_check' runs
+                       every 15 minutes via job_runner.py. Queries 4 metrics
+                       and routes breaches via agent_finding_routing.
+        L3 liveness   - SessionStart hook checks L2's last_run_at; if stale
+                       (>30 min) the L2 monitor itself is considered dead.
+                       Surfaces a critical feedback. Task Scheduler hourly
+                       fallback re-arms job_runner.
+
+      L2 metrics (thresholds in scripts/cf_constants.py):
+        - backlog_overflow:  pending count > 100
+        - leaked_leases:     in_progress AND claimed_until < now() - 5min
+        - dead_letter_spike: > 5 dead_letter rows in last hour
+        - drain_stall:       last completed > 30 min AND backlog > 0
+
+      Trigger fan-in:
+        - SessionStart fires the L1 watchdog + L3 liveness check.
+        - cron_15min fires the L2 health check.
+
+      Single BPMN process accepts a `level` data input (L1|L2|L3) and
+      branches on it. This keeps the three monitoring tiers visibly
+      coupled (one model = one health system) per the design lock
+      "single value crosses multiple consumers".
+    -->
+
+    <!-- ================================================================ -->
+    <!-- START                                                             -->
+    <!-- ================================================================ -->
+    <bpmn:startEvent id="start" name="Health Check Triggered">
+      <bpmn:outgoing>flow_start_to_level_gw</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:exclusiveGateway id="level_gw" name="Which level?" default="flow_level_l2">
+      <bpmn:incoming>flow_start_to_level_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_level_l1</bpmn:outgoing>
+      <bpmn:outgoing>flow_level_l2</bpmn:outgoing>
+      <bpmn:outgoing>flow_level_l3</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ================================================================ -->
+    <!-- L1 - IN-PROCESS WATCHDOG (SessionStart, daemon liveness)          -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="l1_resolve_pid" name="[HOOK] L1: Read worker PID file" scriptFormat="python">
+      <bpmn:incoming>flow_level_l1</bpmn:incoming>
+      <bpmn:outgoing>flow_l1_pid_to_check</bpmn:outgoing>
+      <bpmn:script>
+# scripts/session_startup_hook_enhanced.py extension:
+#   pid_path = ~/.claude/run/task_worker.pid
+#   pid = read_pid_file(pid_path)  -- None if missing/stale
+pid = read_pid_file()
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="l1_check_alive" name="[HOOK] L1: ping daemon /health endpoint" scriptFormat="python">
+      <bpmn:incoming>flow_l1_pid_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_l1_check_to_alive_gw</bpmn:outgoing>
+      <bpmn:script>
+# GET http://localhost:{port}/health (0.5s timeout)
+# Reuses scripts/daemon_helper.py port-allocation pattern (md5 mod 100 + base).
+alive = ping_daemon(pid, port)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="l1_alive_gw" name="Daemon alive?" default="flow_l1_dead">
+      <bpmn:incoming>flow_l1_check_to_alive_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_l1_alive</bpmn:outgoing>
+      <bpmn:outgoing>flow_l1_dead</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="l1_respawn" name="[HOOK] L1: Respawn task_worker.py (detached)" scriptFormat="python">
+      <bpmn:incoming>flow_l1_dead</bpmn:incoming>
+      <bpmn:outgoing>flow_l1_respawn_to_end</bpmn:outgoing>
+      <bpmn:script>
+# subprocess.Popen([sys.executable, 'scripts/task_worker.py'],
+#                  creationflags=CREATE_NO_WINDOW (Win) / start_new_session=True (Unix))
+# Pattern reused from ckg_daemon_lifecycle SessionStart spawn.
+respawn_worker()
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_l1_alive" name="L1 OK (daemon healthy)">
+      <bpmn:incoming>flow_l1_alive</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_l1_respawned" name="L1 Respawned (daemon was dead)">
+      <bpmn:incoming>flow_l1_respawn_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- L2 - SCHEDULED HEALTH CHECK (15-min cron, 4 parallel metrics)     -->
+    <!-- ================================================================ -->
+    <bpmn:parallelGateway id="l2_split" name="L2: Parallel metric checks">
+      <bpmn:incoming>flow_level_l2</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_to_backlog</bpmn:outgoing>
+      <bpmn:outgoing>flow_l2_to_leaks</bpmn:outgoing>
+      <bpmn:outgoing>flow_l2_to_dlq</bpmn:outgoing>
+      <bpmn:outgoing>flow_l2_to_drain</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:scriptTask id="l2_check_backlog" name="[DB] L2: backlog_overflow (pending > 100)" scriptFormat="python">
+      <bpmn:incoming>flow_l2_to_backlog</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_backlog_to_join</bpmn:outgoing>
+      <bpmn:script>
+# SELECT count(*) FROM claude.task_queue WHERE status='pending';
+# Threshold from cf_constants.CF_QUEUE_BACKLOG_THRESHOLD (default 100).
+backlog_breach = (pending_count &gt; CF_QUEUE_BACKLOG_THRESHOLD)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="l2_check_leaks" name="[DB] L2: leaked_leases (in_progress AND claimed_until expired)" scriptFormat="python">
+      <bpmn:incoming>flow_l2_to_leaks</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_leaks_to_join</bpmn:outgoing>
+      <bpmn:script>
+# SELECT count(*) FROM claude.task_queue
+#  WHERE status='in_progress' AND claimed_until &lt; now() - interval '5 minutes';
+# Indicates worker died without releasing lease (reaper hasn't caught up).
+lease_leak_breach = (leaked_count &gt; 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="l2_check_dlq" name="[DB] L2: dead_letter_spike (>5 in last hour)" scriptFormat="python">
+      <bpmn:incoming>flow_l2_to_dlq</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_dlq_to_join</bpmn:outgoing>
+      <bpmn:script>
+# SELECT count(*) FROM claude.task_queue
+#  WHERE status='dead_letter' AND completed_at &gt; now() - interval '1 hour';
+dlq_spike_breach = (recent_dead_letters &gt; CF_DLQ_RATE_THRESHOLD)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="l2_check_drain" name="[DB] L2: drain_stall (last completed > 30 min AND backlog > 0)" scriptFormat="python">
+      <bpmn:incoming>flow_l2_to_drain</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_drain_to_join</bpmn:outgoing>
+      <bpmn:script>
+# SELECT max(completed_at) AS last_complete, count(*) FILTER (WHERE status='pending') AS backlog
+#   FROM claude.task_queue;
+# Breach if last_complete &lt; now()-30min AND backlog &gt; 0.
+drain_stall_breach = (last_complete_age_secs &gt; 1800 and backlog_count &gt; 0)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:parallelGateway id="l2_join" name="L2: All metrics complete">
+      <bpmn:incoming>flow_l2_backlog_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_l2_leaks_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_l2_dlq_to_join</bpmn:incoming>
+      <bpmn:incoming>flow_l2_drain_to_join</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_join_to_aggregate</bpmn:outgoing>
+    </bpmn:parallelGateway>
+
+    <bpmn:scriptTask id="l2_aggregate" name="[HOOK] L2: Aggregate breaches as findings list" scriptFormat="python">
+      <bpmn:incoming>flow_l2_join_to_aggregate</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_aggregate_to_breach_gw</bpmn:outgoing>
+      <bpmn:script>
+# Build a list of structured findings, severity per breach:
+#   backlog_overflow  -> 'high'
+#   leaked_leases     -> 'critical' (data correctness risk)
+#   dead_letter_spike -> 'high'
+#   drain_stall       -> 'critical' (worker not making progress)
+findings = build_breach_findings(metric_results)
+any_breach = len(findings) &gt; 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="l2_breach_gw" name="Any breach?" default="flow_l2_no_breach">
+      <bpmn:incoming>flow_l2_aggregate_to_breach_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_breach_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_l2_no_breach</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:callActivity id="l2_route_findings" name="L2: Route findings (severity -> message/feedback/both)" calledElement="agent_finding_routing">
+      <bpmn:incoming>flow_l2_breach_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_route_to_record</bpmn:outgoing>
+    </bpmn:callActivity>
+
+    <bpmn:scriptTask id="l2_record_run" name="[DB] L2: Record run in job_run_history (last_run_at)" scriptFormat="python">
+      <bpmn:incoming>flow_l2_route_to_record</bpmn:incoming>
+      <bpmn:incoming>flow_l2_no_breach</bpmn:incoming>
+      <bpmn:outgoing>flow_l2_record_to_end</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.scheduled_jobs SET last_run=now(), last_status='SUCCESS'
+#   WHERE name='queue_health_check';
+# This timestamp is what L3 reads to determine L2 liveness.
+record_health_run(findings_count=len(findings))
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_l2_complete" name="L2 Health Check Complete">
+      <bpmn:incoming>flow_l2_record_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- L3 - LIVENESS CHECK (monitor-the-monitor)                         -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="l3_load_last_run" name="[DB] L3: Read last_run_at for queue_health_check job" scriptFormat="python">
+      <bpmn:incoming>flow_level_l3</bpmn:incoming>
+      <bpmn:outgoing>flow_l3_load_to_age_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT last_run_at FROM claude.scheduled_jobs WHERE name='queue_health_check';
+last_run_at = fetch_last_health_run()
+age_secs = (now() - last_run_at).total_seconds() if last_run_at else float("inf")
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="l3_age_gw" name="L2 stale (age > 30 min)?" default="flow_l3_fresh">
+      <bpmn:incoming>flow_l3_load_to_age_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_l3_stale</bpmn:outgoing>
+      <bpmn:outgoing>flow_l3_fresh</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="l3_surface_dead_monitor" name="[DB] L3: work_create critical feedback (L2 monitor dead)" scriptFormat="python">
+      <bpmn:incoming>flow_l3_stale</bpmn:incoming>
+      <bpmn:outgoing>flow_l3_surface_to_rearm</bpmn:outgoing>
+      <bpmn:script>
+# work_create(type='feedback', feedback_type='bug', priority=1,
+#             title='queue_health_check job stale: L2 monitor not running',
+#             description=f'last_run_at={last_run_at}, age={age_secs}s')
+# Tier-3 surfacing per workfile lock.
+surface_dead_monitor(age_secs)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="l3_rearm_runner" name="[HOOK] L3: Force-run queue_health_check (re-arm)" scriptFormat="python">
+      <bpmn:incoming>flow_l3_surface_to_rearm</bpmn:incoming>
+      <bpmn:outgoing>flow_l3_rearm_to_end</bpmn:outgoing>
+      <bpmn:script>
+# subprocess.Popen([sys.executable, 'scripts/job_runner.py',
+#                   '--force', 'queue_health_check'])
+# Task Scheduler hourly fallback runs the same command independently.
+rearm_health_check()
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_l3_fresh" name="L3 OK (L2 alive)">
+      <bpmn:incoming>flow_l3_fresh</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_l3_rearmed" name="L3 Rearmed (L2 was stale)">
+      <bpmn:incoming>flow_l3_rearm_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Sequence Flows                                                    -->
+    <!-- ================================================================ -->
+    <bpmn:sequenceFlow id="flow_start_to_level_gw" sourceRef="start" targetRef="level_gw" />
+    <bpmn:sequenceFlow id="flow_level_l1" sourceRef="level_gw" targetRef="l1_resolve_pid">
+      <bpmn:conditionExpression>level == "L1"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_level_l2" sourceRef="level_gw" targetRef="l2_split">
+      <bpmn:conditionExpression>level == "L2"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_level_l3" sourceRef="level_gw" targetRef="l3_load_last_run">
+      <bpmn:conditionExpression>level == "L3"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <!-- L1 flows -->
+    <bpmn:sequenceFlow id="flow_l1_pid_to_check" sourceRef="l1_resolve_pid" targetRef="l1_check_alive" />
+    <bpmn:sequenceFlow id="flow_l1_check_to_alive_gw" sourceRef="l1_check_alive" targetRef="l1_alive_gw" />
+    <bpmn:sequenceFlow id="flow_l1_alive" sourceRef="l1_alive_gw" targetRef="end_l1_alive">
+      <bpmn:conditionExpression>daemon_alive == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_l1_dead" sourceRef="l1_alive_gw" targetRef="l1_respawn" />
+    <bpmn:sequenceFlow id="flow_l1_respawn_to_end" sourceRef="l1_respawn" targetRef="end_l1_respawned" />
+
+    <!-- L2 flows -->
+    <bpmn:sequenceFlow id="flow_l2_to_backlog" sourceRef="l2_split" targetRef="l2_check_backlog" />
+    <bpmn:sequenceFlow id="flow_l2_to_leaks" sourceRef="l2_split" targetRef="l2_check_leaks" />
+    <bpmn:sequenceFlow id="flow_l2_to_dlq" sourceRef="l2_split" targetRef="l2_check_dlq" />
+    <bpmn:sequenceFlow id="flow_l2_to_drain" sourceRef="l2_split" targetRef="l2_check_drain" />
+    <bpmn:sequenceFlow id="flow_l2_backlog_to_join" sourceRef="l2_check_backlog" targetRef="l2_join" />
+    <bpmn:sequenceFlow id="flow_l2_leaks_to_join" sourceRef="l2_check_leaks" targetRef="l2_join" />
+    <bpmn:sequenceFlow id="flow_l2_dlq_to_join" sourceRef="l2_check_dlq" targetRef="l2_join" />
+    <bpmn:sequenceFlow id="flow_l2_drain_to_join" sourceRef="l2_check_drain" targetRef="l2_join" />
+    <bpmn:sequenceFlow id="flow_l2_join_to_aggregate" sourceRef="l2_join" targetRef="l2_aggregate" />
+    <bpmn:sequenceFlow id="flow_l2_aggregate_to_breach_gw" sourceRef="l2_aggregate" targetRef="l2_breach_gw" />
+    <bpmn:sequenceFlow id="flow_l2_breach_yes" sourceRef="l2_breach_gw" targetRef="l2_route_findings">
+      <bpmn:conditionExpression>any_breach == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_l2_no_breach" sourceRef="l2_breach_gw" targetRef="l2_record_run" />
+    <bpmn:sequenceFlow id="flow_l2_route_to_record" sourceRef="l2_route_findings" targetRef="l2_record_run" />
+    <bpmn:sequenceFlow id="flow_l2_record_to_end" sourceRef="l2_record_run" targetRef="end_l2_complete" />
+
+    <!-- L3 flows -->
+    <bpmn:sequenceFlow id="flow_l3_load_to_age_gw" sourceRef="l3_load_last_run" targetRef="l3_age_gw" />
+    <bpmn:sequenceFlow id="flow_l3_stale" sourceRef="l3_age_gw" targetRef="l3_surface_dead_monitor">
+      <bpmn:conditionExpression>l2_stale == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_l3_fresh" sourceRef="l3_age_gw" targetRef="end_l3_fresh" />
+    <bpmn:sequenceFlow id="flow_l3_surface_to_rearm" sourceRef="l3_surface_dead_monitor" targetRef="l3_rearm_runner" />
+    <bpmn:sequenceFlow id="flow_l3_rearm_to_end" sourceRef="l3_rearm_runner" targetRef="end_l3_rearmed" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

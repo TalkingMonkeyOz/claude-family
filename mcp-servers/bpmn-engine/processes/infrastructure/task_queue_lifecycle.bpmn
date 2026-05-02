@@ -1,0 +1,524 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/task-queue-lifecycle"
+    id="Definitions_TaskQueueLifecycle">
+
+  <bpmn:process id="L2_task_queue_lifecycle" name="Task Queue Lifecycle: Enqueue, Claim, Run, Resolve" isExecutable="true">
+
+    <!--
+      F224 - Local Task Queue + Worker Daemon (PG-backed).
+
+      Models the hot path of claude.task_queue:
+        enqueue -> claim (SKIP LOCKED + per-template max_concurrent_runs)
+        -> run (lease + heartbeat) -> complete | retry | dead_letter
+        -> circuit-breaker auto-pause -> resolve_dead_letter (user action)
+
+      Actors:
+        [CLAUDE]   - enqueues, triages dead-letter
+        [DAEMON]   - task_worker.py main loop (script + agent thread pools)
+        [DB]       - claude.task_queue, claude.job_templates, job_run_history
+        [HOOK]     - protocol_inject_hook surfaces digest at SessionStart
+
+      Trigger: any caller of MCP `job_enqueue` (Claude, hook, script).
+      Implementation: scripts/task_worker.py (claim/lease/heartbeat),
+                      mcp-servers/project-tools/server_v2.py (MCP tools),
+                      scripts/cf_circuit_breaker.py (per-template breaker),
+                      scripts/cf_constants.py (pool sizes / lease defaults).
+
+      Key reuse: claim path uses SELECT ... FOR UPDATE SKIP LOCKED with a
+      subquery against the per-template `max_concurrent_runs` cap so the
+      DB enforces concurrency without coordinator state.
+
+      Locked design decisions captured here (workfile 2026-05-02):
+        - Enqueue idempotency: sha256(template_id||version||payload), unique
+          only over active statuses (pending|in_progress).
+        - Execution idempotency: per-template flag; non-idempotent crashes
+          go straight to dead_letter, no re-claim.
+        - Retry: per-template max_attempts; exponential backoff
+          base*(2^(attempt-1)) +/-25% jitter, capped at retry_backoff_max.
+        - Circuit breaker: 5 fails / 10 min window auto-pauses template;
+          manual unpause via job_template(action='unpause').
+        - Dead-letter: status flag; sticky until triaged
+          (resolution_status set: fixed|wont_fix|rerun|superseded);
+          nightly archive ONLY for resolved rows.
+        - Lease: claimed_until = now() + template.lease_duration_secs;
+          worker heartbeat extends every lease/3 seconds.
+    -->
+
+    <!-- ================================================================ -->
+    <!-- START                                                             -->
+    <!-- ================================================================ -->
+    <bpmn:startEvent id="start" name="Caller Invokes job_enqueue">
+      <bpmn:outgoing>flow_start_to_enqueue</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================ -->
+    <!-- PHASE 1: ENQUEUE (idempotency-checked insert)                     -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="enqueue_task" name="[DB] Enqueue: INSERT claude.task_queue" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_enqueue</bpmn:incoming>
+      <bpmn:outgoing>flow_enqueue_to_idem_gw</bpmn:outgoing>
+      <bpmn:script>
+# MCP job_enqueue handler:
+#   - Resolve template_id (by name or id)
+#   - Pin template_version (current_version if not specified)
+#   - Compute idempotency_key = sha256(template_id||version||payload)
+#     unless caller passed one explicitly
+#   - INSERT INTO claude.task_queue (status='pending', priority, ...)
+#     ON CONFLICT (idempotency_key) WHERE status IN ('pending','in_progress') DO NOTHING
+#     RETURNING task_id
+# If the unique partial index trips, the existing active row's task_id is returned.
+task_id = enqueue(template_id, version, payload, priority, idempotency_key)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="idem_collision_gw" name="Idempotency Collision?" default="flow_idem_no_dup">
+      <bpmn:incoming>flow_enqueue_to_idem_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_idem_dup</bpmn:outgoing>
+      <bpmn:outgoing>flow_idem_no_dup</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="return_existing_task" name="[DB] Return existing active task_id" scriptFormat="python">
+      <bpmn:incoming>flow_idem_dup</bpmn:incoming>
+      <bpmn:outgoing>flow_dup_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Caller gets the already-active task_id; no new row.
+caller_result = {"task_id": task_id, "deduped": True}
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_deduped" name="Enqueue Deduped (no new task)">
+      <bpmn:incoming>flow_dup_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- PHASE 2: CLAIM (worker daemon main loop)                          -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="claim_task" name="[DAEMON] Claim: SELECT FOR UPDATE SKIP LOCKED + max_concurrent_runs" scriptFormat="python">
+      <bpmn:incoming>flow_idem_no_dup</bpmn:incoming>
+      <bpmn:outgoing>flow_claim_to_paused_gw</bpmn:outgoing>
+      <bpmn:script>
+# Atomic claim query (the heart of the worker loop):
+#
+# WITH cap AS (
+#   SELECT t.template_id, t.max_concurrent_runs,
+#          COALESCE((SELECT count(*) FROM claude.task_queue q
+#                    WHERE q.template_id = t.template_id
+#                      AND q.status='in_progress'), 0) AS running_count
+#   FROM claude.job_templates t
+#   WHERE t.is_paused = false
+# ),
+# claimable AS (
+#   SELECT q.task_id
+#   FROM claude.task_queue q
+#   JOIN cap ON cap.template_id = q.template_id
+#   WHERE q.status='pending'
+#     AND (q.next_attempt_at IS NULL OR q.next_attempt_at &lt;= now())
+#     AND cap.running_count &lt; cap.max_concurrent_runs
+#   ORDER BY q.priority, q.enqueued_at
+#   FOR UPDATE OF q SKIP LOCKED
+#   LIMIT 1
+# )
+# UPDATE claude.task_queue q
+#    SET status='in_progress',
+#        claimed_by=:worker_id,
+#        claimed_at=now(),
+#        claimed_until=now() + (:lease_secs * interval '1 second'),
+#        attempts = q.attempts + 1,
+#        started_at = COALESCE(q.started_at, now())
+#  WHERE q.task_id IN (SELECT task_id FROM claimable)
+# RETURNING q.*;
+claimed_row = worker.claim_one()
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="template_paused_gw" name="Template Paused (breaker open)?" default="flow_paused_no">
+      <bpmn:incoming>flow_claim_to_paused_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_paused_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_paused_no</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="skip_paused" name="[DAEMON] Skip: template paused, leave row pending" scriptFormat="python">
+      <bpmn:incoming>flow_paused_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_paused_to_idle</bpmn:outgoing>
+      <bpmn:script>
+# Paused templates filtered out by the claim CTE; no rows surface.
+# Worker loop sleeps and re-polls. Row stays pending until template
+# is unpaused via job_template(action='unpause').
+worker.sleep(poll_interval)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_idle" name="Worker Idle (no claimable rows)">
+      <bpmn:incoming>flow_paused_to_idle</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- PHASE 3: RUN (lease + heartbeat, route by kind)                   -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="route_kind" name="[DAEMON] Route to script_pool or agent_pool" scriptFormat="python">
+      <bpmn:incoming>flow_paused_no</bpmn:incoming>
+      <bpmn:outgoing>flow_route_to_heartbeat</bpmn:outgoing>
+      <bpmn:script>
+# template.kind decides which ThreadPoolExecutor handles the row:
+#   - 'script' -> CF_SCRIPT_WORKER_COUNT pool (default 2), spawns subprocess
+#   - 'agent'  -> CF_AGENT_WORKER_COUNT  pool (default 4), uses agent runner
+# Pool isolation prevents heavy CPU scripts from starving agent slots.
+target_pool = "script_pool" if template.kind == "script" else "agent_pool"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="heartbeat_loop" name="[DAEMON] Heartbeat (extend claimed_until every lease/3 secs)" scriptFormat="python">
+      <bpmn:incoming>flow_route_to_heartbeat</bpmn:incoming>
+      <bpmn:outgoing>flow_heartbeat_to_exec</bpmn:outgoing>
+      <bpmn:script>
+# Background thread per running task:
+#   while not done:
+#     UPDATE claude.task_queue SET claimed_until = now() + lease_secs
+#       WHERE task_id=:tid AND claimed_by=:worker_id;
+#     sleep(lease_secs / 3)
+# If worker dies, claimed_until expires; reaper transitions row back
+# to pending (or dead_letter if non-idempotent).
+heartbeat = start_heartbeat_thread(task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="execute_task" name="[DAEMON] Execute payload (subprocess or agent run)" scriptFormat="python">
+      <bpmn:incoming>flow_heartbeat_to_exec</bpmn:incoming>
+      <bpmn:outgoing>flow_exec_to_result_gw</bpmn:outgoing>
+      <bpmn:script>
+# Script kind:  subprocess.run(payload.command, args, cwd, env, timeout)
+# Agent kind:   spawn_agent(payload.prompt, model, mcp_servers) ->
+#               returns transcript + structured findings
+# Captures: returncode, stdout (output_text), structured findings list.
+result = run_payload(template, payload, task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="result_gw" name="Result?" default="flow_result_success">
+      <bpmn:incoming>flow_exec_to_result_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_result_success</bpmn:outgoing>
+      <bpmn:outgoing>flow_result_transient</bpmn:outgoing>
+      <bpmn:outgoing>flow_result_permanent</bpmn:outgoing>
+      <bpmn:outgoing>flow_result_lease_expired</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============== Success path ============== -->
+    <bpmn:scriptTask id="mark_completed" name="[DB] UPDATE status='completed', record result+findings" scriptFormat="python">
+      <bpmn:incoming>flow_result_success</bpmn:incoming>
+      <bpmn:outgoing>flow_completed_to_route_findings</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.task_queue
+#    SET status='completed',
+#        completed_at=now(),
+#        result=:result_jsonb,
+#        output_text=:stdout,
+#        last_error=NULL
+#  WHERE task_id=:tid;
+# INSERT INTO claude.job_run_history (status='completed', payload_snapshot, ...)
+log_completed(task_id, result)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:callActivity id="route_findings" name="Route Findings (severity -> message/feedback/both)" calledElement="agent_finding_routing">
+      <bpmn:incoming>flow_completed_to_route_findings</bpmn:incoming>
+      <bpmn:outgoing>flow_findings_to_breaker_reset</bpmn:outgoing>
+    </bpmn:callActivity>
+
+    <bpmn:scriptTask id="reset_breaker_on_success" name="[DB] Reset circuit-breaker fail-window counter for template" scriptFormat="python">
+      <bpmn:incoming>flow_findings_to_breaker_reset</bpmn:incoming>
+      <bpmn:outgoing>flow_reset_to_end_complete</bpmn:outgoing>
+      <bpmn:script>
+# cf_circuit_breaker.reset(template_id):
+#   - Clear in-memory failure deque for template
+#   - No DB write needed (failures inferred from job_run_history)
+breaker.reset(template_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_completed" name="Task Completed">
+      <bpmn:incoming>flow_reset_to_end_complete</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============== Transient failure path (retry) ============== -->
+    <bpmn:scriptTask id="classify_transient" name="[DAEMON] Classify error (transient_error_classes match)" scriptFormat="python">
+      <bpmn:incoming>flow_result_transient</bpmn:incoming>
+      <bpmn:outgoing>flow_transient_to_attempts_gw</bpmn:outgoing>
+      <bpmn:script>
+# Compare exception class against template.transient_error_classes
+# Default list: ConnectionError, TimeoutError, OSError, psycopg.OperationalError
+is_transient = error_class in template.transient_error_classes
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="attempts_gw" name="attempts &lt; max_attempts?" default="flow_attempts_exhausted">
+      <bpmn:incoming>flow_transient_to_attempts_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_attempts_remaining</bpmn:outgoing>
+      <bpmn:outgoing>flow_attempts_exhausted</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="schedule_retry" name="[DB] UPDATE status='pending', set next_attempt_at (exp backoff + jitter)" scriptFormat="python">
+      <bpmn:incoming>flow_attempts_remaining</bpmn:incoming>
+      <bpmn:outgoing>flow_retry_to_breaker_check</bpmn:outgoing>
+      <bpmn:script>
+# delay = template.retry_backoff_base * (2 ** (attempts - 1))
+# delay = min(delay, template.retry_backoff_max)
+# delay *= 1 + random.uniform(-jitter_pct, +jitter_pct) / 100
+# UPDATE claude.task_queue
+#    SET status='pending',
+#        claimed_by=NULL, claimed_at=NULL, claimed_until=NULL,
+#        next_attempt_at = now() + delay * interval '1 second',
+#        last_error=:err
+#  WHERE task_id=:tid;
+schedule_retry(task_id, template, attempts, error)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== Permanent failure path (dead_letter) ============== -->
+    <bpmn:scriptTask id="mark_dead_letter" name="[DB] UPDATE status='dead_letter' (sticky until triaged)" scriptFormat="python">
+      <bpmn:incoming>flow_result_permanent</bpmn:incoming>
+      <bpmn:incoming>flow_attempts_exhausted</bpmn:incoming>
+      <bpmn:outgoing>flow_dead_to_breaker_check</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.task_queue
+#    SET status='dead_letter',
+#        completed_at=now(),
+#        last_error=:err
+#  WHERE task_id=:tid;
+# Row stays in dead_letter until user calls
+# job_template(action='resolve_dead_letter', task_id=..., resolution_status=...)
+log_dead_letter(task_id, error)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== Lease-expired path (re-claim or dead_letter) ============== -->
+    <bpmn:scriptTask id="reaper_check_idempotent" name="[DAEMON] Reaper: lease expired -> idempotent?" scriptFormat="python">
+      <bpmn:incoming>flow_result_lease_expired</bpmn:incoming>
+      <bpmn:outgoing>flow_reaper_to_idem_gw</bpmn:outgoing>
+      <bpmn:script>
+# Reaper sweep (runs in worker main loop):
+#   SELECT * FROM claude.task_queue
+#    WHERE status='in_progress' AND claimed_until &lt; now()
+# For each: check template.is_idempotent
+is_idempotent = template.is_idempotent
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="idempotent_gw" name="is_idempotent?" default="flow_not_idempotent">
+      <bpmn:incoming>flow_reaper_to_idem_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_idempotent</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_idempotent</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="release_to_pending" name="[DB] Release lease, status='pending' for re-claim" scriptFormat="python">
+      <bpmn:incoming>flow_is_idempotent</bpmn:incoming>
+      <bpmn:outgoing>flow_release_to_breaker_check</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.task_queue
+#    SET status='pending',
+#        claimed_by=NULL, claimed_at=NULL, claimed_until=NULL
+#  WHERE task_id=:tid AND status='in_progress' AND claimed_until &lt; now();
+release_lease(task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== Circuit-breaker check (after every failure) ============== -->
+    <bpmn:exclusiveGateway id="breaker_check_merge" name="Failure path merge">
+      <bpmn:incoming>flow_retry_to_breaker_check</bpmn:incoming>
+      <bpmn:incoming>flow_dead_to_breaker_check</bpmn:incoming>
+      <bpmn:incoming>flow_release_to_breaker_check</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_breaker</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="evaluate_breaker" name="[DAEMON] Evaluate circuit breaker (5 fails / 10 min)" scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_breaker</bpmn:incoming>
+      <bpmn:outgoing>flow_breaker_to_trip_gw</bpmn:outgoing>
+      <bpmn:script>
+# cf_circuit_breaker.record_failure(template_id):
+#   - Push now() onto in-memory deque
+#   - Trim deque to entries within pause_threshold_window_secs (600s)
+#   - If len(deque) >= pause_threshold_fails (5): trip = True
+trip = breaker.record_failure(template_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="trip_gw" name="Breaker tripped?" default="flow_no_trip">
+      <bpmn:incoming>flow_breaker_to_trip_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_trip_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_trip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="trip_breaker" name="[DB] UPDATE template SET is_paused=true, paused_reason='breaker_trip'" scriptFormat="python">
+      <bpmn:incoming>flow_trip_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_trip_to_surface</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.job_templates
+#    SET is_paused=true,
+#        paused_at=now(),
+#        paused_reason=:reason
+#  WHERE template_id=:tid;
+# Subsequent claims skip this template until manual unpause.
+pause_template(template_id, reason="breaker_trip:5_fails_10_min")
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="surface_breaker_feedback" name="[DB] work_create severity=critical feedback + channel message" scriptFormat="python">
+      <bpmn:incoming>flow_trip_to_surface</bpmn:incoming>
+      <bpmn:outgoing>flow_surface_to_failed_end</bpmn:outgoing>
+      <bpmn:script>
+# Tier 2 surfacing (workfile section "Failure handling - locked"):
+#   - work_create(type='feedback', feedback_type='bug', priority=1)
+#   - send_message(severity='critical', body=...)
+# Both linked back to template_id and the dead_letter task_id.
+surface_critical(template_id, task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="failure_end_merge" name="Failure path end-merge">
+      <bpmn:incoming>flow_no_trip</bpmn:incoming>
+      <bpmn:incoming>flow_surface_to_failed_end</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_failed_end</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_failed" name="Task Failed (retry pending or dead-letter)">
+      <bpmn:incoming>flow_merge_to_failed_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ============== Lease-expired & non-idempotent => dead_letter ============== -->
+    <bpmn:sequenceFlow id="flow_not_idempotent" sourceRef="idempotent_gw" targetRef="mark_dead_letter" />
+
+    <!-- ================================================================ -->
+    <!-- PHASE 4: RESOLVE DEAD LETTER (user/Claude triage)                 -->
+    <!-- ================================================================ -->
+    <bpmn:userTask id="user_triage" name="[CLAUDE] Triage dead-letter task (read result + findings)">
+      <bpmn:outgoing>flow_triage_to_resolution_gw</bpmn:outgoing>
+    </bpmn:userTask>
+
+    <bpmn:exclusiveGateway id="resolution_gw" name="Resolution?" default="flow_resolution_wont_fix">
+      <bpmn:incoming>flow_triage_to_resolution_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_resolution_fixed</bpmn:outgoing>
+      <bpmn:outgoing>flow_resolution_wont_fix</bpmn:outgoing>
+      <bpmn:outgoing>flow_resolution_rerun</bpmn:outgoing>
+      <bpmn:outgoing>flow_resolution_superseded</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="apply_resolution" name="[DB] UPDATE resolution_status, resolved_at, resolved_by, resolution_notes" scriptFormat="python">
+      <bpmn:incoming>flow_resolution_fixed</bpmn:incoming>
+      <bpmn:incoming>flow_resolution_wont_fix</bpmn:incoming>
+      <bpmn:incoming>flow_resolution_superseded</bpmn:incoming>
+      <bpmn:outgoing>flow_apply_to_resolved_end</bpmn:outgoing>
+      <bpmn:script>
+# job_template(action='resolve_dead_letter', task_id=..., resolution_status=...)
+# UPDATE claude.task_queue
+#    SET resolution_status=:status,   -- fixed|wont_fix|superseded
+#        resolved_at=now(),
+#        resolved_by=:who,
+#        resolution_notes=:notes,
+#        superseded_by_task_id=:replacement (when superseded)
+#  WHERE task_id=:tid;
+# Row now eligible for nightly archive into claude.task_queue_archive.
+apply_resolution(task_id, resolution_status)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="rerun_enqueue" name="[DB] job_enqueue new task (resolution_status='rerun')" scriptFormat="python">
+      <bpmn:incoming>flow_resolution_rerun</bpmn:incoming>
+      <bpmn:outgoing>flow_rerun_to_resolved_end</bpmn:outgoing>
+      <bpmn:script>
+# Enqueue a fresh task with same payload; original dead_letter row gets
+# resolution_status='rerun' and superseded_by_task_id pointing at the new one.
+new_task_id = enqueue_replacement(original_task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_resolved" name="Dead-letter Resolved">
+      <bpmn:incoming>flow_apply_to_resolved_end</bpmn:incoming>
+      <bpmn:incoming>flow_rerun_to_resolved_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Sequence Flows                                                    -->
+    <!-- ================================================================ -->
+    <bpmn:sequenceFlow id="flow_start_to_enqueue" sourceRef="start" targetRef="enqueue_task" />
+    <bpmn:sequenceFlow id="flow_enqueue_to_idem_gw" sourceRef="enqueue_task" targetRef="idem_collision_gw" />
+    <bpmn:sequenceFlow id="flow_idem_dup" sourceRef="idem_collision_gw" targetRef="return_existing_task">
+      <bpmn:conditionExpression>idempotency_collision == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_idem_no_dup" sourceRef="idem_collision_gw" targetRef="claim_task" />
+    <bpmn:sequenceFlow id="flow_dup_to_end" sourceRef="return_existing_task" targetRef="end_deduped" />
+
+    <bpmn:sequenceFlow id="flow_claim_to_paused_gw" sourceRef="claim_task" targetRef="template_paused_gw" />
+    <bpmn:sequenceFlow id="flow_paused_yes" sourceRef="template_paused_gw" targetRef="skip_paused">
+      <bpmn:conditionExpression>template_paused == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_paused_no" sourceRef="template_paused_gw" targetRef="route_kind" />
+    <bpmn:sequenceFlow id="flow_paused_to_idle" sourceRef="skip_paused" targetRef="end_idle" />
+
+    <bpmn:sequenceFlow id="flow_route_to_heartbeat" sourceRef="route_kind" targetRef="heartbeat_loop" />
+    <bpmn:sequenceFlow id="flow_heartbeat_to_exec" sourceRef="heartbeat_loop" targetRef="execute_task" />
+    <bpmn:sequenceFlow id="flow_exec_to_result_gw" sourceRef="execute_task" targetRef="result_gw" />
+
+    <bpmn:sequenceFlow id="flow_result_success" sourceRef="result_gw" targetRef="mark_completed">
+      <bpmn:conditionExpression>result_kind == "success"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_result_transient" sourceRef="result_gw" targetRef="classify_transient">
+      <bpmn:conditionExpression>result_kind == "transient_failure"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_result_permanent" sourceRef="result_gw" targetRef="mark_dead_letter">
+      <bpmn:conditionExpression>result_kind == "permanent_failure"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_result_lease_expired" sourceRef="result_gw" targetRef="reaper_check_idempotent">
+      <bpmn:conditionExpression>result_kind == "lease_expired"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_completed_to_route_findings" sourceRef="mark_completed" targetRef="route_findings" />
+    <bpmn:sequenceFlow id="flow_findings_to_breaker_reset" sourceRef="route_findings" targetRef="reset_breaker_on_success" />
+    <bpmn:sequenceFlow id="flow_reset_to_end_complete" sourceRef="reset_breaker_on_success" targetRef="end_completed" />
+
+    <bpmn:sequenceFlow id="flow_transient_to_attempts_gw" sourceRef="classify_transient" targetRef="attempts_gw" />
+    <bpmn:sequenceFlow id="flow_attempts_remaining" sourceRef="attempts_gw" targetRef="schedule_retry">
+      <bpmn:conditionExpression>attempts &lt; max_attempts</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_attempts_exhausted" sourceRef="attempts_gw" targetRef="mark_dead_letter" />
+
+    <bpmn:sequenceFlow id="flow_retry_to_breaker_check" sourceRef="schedule_retry" targetRef="breaker_check_merge" />
+    <bpmn:sequenceFlow id="flow_dead_to_breaker_check" sourceRef="mark_dead_letter" targetRef="breaker_check_merge" />
+
+    <bpmn:sequenceFlow id="flow_reaper_to_idem_gw" sourceRef="reaper_check_idempotent" targetRef="idempotent_gw" />
+    <bpmn:sequenceFlow id="flow_is_idempotent" sourceRef="idempotent_gw" targetRef="release_to_pending">
+      <bpmn:conditionExpression>is_idempotent == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_release_to_breaker_check" sourceRef="release_to_pending" targetRef="breaker_check_merge" />
+
+    <bpmn:sequenceFlow id="flow_merge_to_breaker" sourceRef="breaker_check_merge" targetRef="evaluate_breaker" />
+    <bpmn:sequenceFlow id="flow_breaker_to_trip_gw" sourceRef="evaluate_breaker" targetRef="trip_gw" />
+    <bpmn:sequenceFlow id="flow_trip_yes" sourceRef="trip_gw" targetRef="trip_breaker">
+      <bpmn:conditionExpression>breaker_tripped == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_trip" sourceRef="trip_gw" targetRef="failure_end_merge" />
+    <bpmn:sequenceFlow id="flow_trip_to_surface" sourceRef="trip_breaker" targetRef="surface_breaker_feedback" />
+    <bpmn:sequenceFlow id="flow_surface_to_failed_end" sourceRef="surface_breaker_feedback" targetRef="failure_end_merge" />
+    <bpmn:sequenceFlow id="flow_merge_to_failed_end" sourceRef="failure_end_merge" targetRef="end_failed" />
+
+    <bpmn:sequenceFlow id="flow_triage_to_resolution_gw" sourceRef="user_triage" targetRef="resolution_gw" />
+    <bpmn:sequenceFlow id="flow_resolution_fixed" sourceRef="resolution_gw" targetRef="apply_resolution">
+      <bpmn:conditionExpression>resolution == "fixed"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_resolution_wont_fix" sourceRef="resolution_gw" targetRef="apply_resolution">
+      <bpmn:conditionExpression>resolution == "wont_fix"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_resolution_superseded" sourceRef="resolution_gw" targetRef="apply_resolution">
+      <bpmn:conditionExpression>resolution == "superseded"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_resolution_rerun" sourceRef="resolution_gw" targetRef="rerun_enqueue">
+      <bpmn:conditionExpression>resolution == "rerun"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_apply_to_resolved_end" sourceRef="apply_resolution" targetRef="end_resolved" />
+    <bpmn:sequenceFlow id="flow_rerun_to_resolved_end" sourceRef="rerun_enqueue" targetRef="end_resolved" />
+
+  </bpmn:process>
+
+</bpmn:definitions>

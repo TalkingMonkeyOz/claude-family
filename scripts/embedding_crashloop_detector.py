@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Detect embedding service crash loops and auto-file feedback (F208.5).
 
-Scans ~/.claude/logs/embedding-service.log for consecutive `Failed to load model:`
-or `NO_SUCHFILE` lines within a rolling 90-minute window. 3+ failures in that
-window triggers a feedback filing via capture_failure().
+Now uses cf_circuit_breaker.CircuitBreaker for generic state management.
+Scans ~/.claude/logs/embedding-service.log for error patterns, records failures
+to the circuit breaker. On breaker trip, auto-files feedback via capture_failure().
 
-Designed to run via scheduled_jobs (cron-style). Safe to run frequently: uses
-a marker file to avoid duplicate filings for the same incident.
+Designed to run via scheduled_jobs (cron-style). Safe to run frequently:
+circuit breaker prevents duplicate filings for same incident.
 
 Usage:
     python embedding_crashloop_detector.py [--window-minutes N] [--threshold N]
@@ -19,10 +19,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from cf_circuit_breaker import CircuitBreaker
 from failure_capture import capture_failure
 
 LOG_FILE = Path.home() / ".claude" / "logs" / "embedding-service.log"
-MARKER_FILE = Path.home() / ".claude" / "embedding-crashloop-last-filed.txt"
 # Matches log lines like "2026-04-18 11:11:02 - ERROR - Failed to load model: ..."
 LINE_RX = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) - (ERROR|WARNING) - "
@@ -31,6 +31,7 @@ LINE_RX = re.compile(
 
 
 def parse_failures(log_path: Path):
+    """Parse log file and return list of (timestamp, message) tuples."""
     if not log_path.exists():
         return []
     failures = []
@@ -50,71 +51,24 @@ def parse_failures(log_path: Path):
     return failures
 
 
-def window_has_crashloop(failures, window_minutes: int, threshold: int):
-    """Return the latest window-end timestamp with >= threshold failures, or None."""
-    if len(failures) < threshold:
-        return None
-    window = timedelta(minutes=window_minutes)
-    # Sliding window over sorted timestamps
-    failures.sort(key=lambda x: x[0])
-    for i in range(len(failures) - threshold + 1):
-        start = failures[i][0]
-        end_idx = i + threshold - 1
-        if failures[end_idx][0] - start <= window:
-            return failures[end_idx][0]
-    return None
-
-
-def already_filed_for(ts: datetime) -> bool:
-    """Check the marker file to see if we already filed for this incident window."""
-    if not MARKER_FILE.exists():
-        return False
-    try:
-        last = datetime.fromisoformat(MARKER_FILE.read_text().strip())
-        # Same incident = within 2 hours of last-filed timestamp
-        return abs((ts - last).total_seconds()) < 2 * 3600
-    except Exception:
-        return False
-
-
-def mark_filed(ts: datetime):
-    try:
-        MARKER_FILE.parent.mkdir(exist_ok=True)
-        MARKER_FILE.write_text(ts.isoformat())
-    except Exception:
-        pass
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--window-minutes", type=int, default=90)
-    ap.add_argument("--threshold", type=int, default=3)
-    args = ap.parse_args()
-
+def on_breaker_trip():
+    """Callback: invoked when circuit breaker trips. Files feedback."""
     failures = parse_failures(LOG_FILE)
     if not failures:
-        print("[embedding-crashloop-detector] no failures found")
-        return 0
+        return
 
-    hit = window_has_crashloop(failures, args.window_minutes, args.threshold)
-    if not hit:
-        print(f"[embedding-crashloop-detector] {len(failures)} total failures, no crashloop in last {args.window_minutes}min")
-        return 0
+    failures.sort(key=lambda x: x[0])
+    recent = failures[-5:] if len(failures) >= 5 else failures
 
-    if already_filed_for(hit):
-        print(f"[embedding-crashloop-detector] crashloop at {hit} already filed, skipping")
-        return 0
-
-    recent = [f for f in failures if f[0] >= hit - timedelta(minutes=args.window_minutes)]
-    summary = "\n".join(f"  {ts:%Y-%m-%d %H:%M:%S} - {msg}" for ts, msg in recent[-5:])
+    summary = "\n".join(f"  {ts:%Y-%m-%d %H:%M:%S} - {msg}" for ts, msg in recent)
     error = (
-        f"Embedding service crash loop: {len(recent)} failures within "
-        f"{args.window_minutes}min window ending {hit:%Y-%m-%d %H:%M:%S}.\n\n"
+        f"Embedding service crash loop detected (circuit breaker tripped).\n\n"
         f"Recent failures:\n{summary}\n\n"
         f"Check {LOG_FILE} for full context. Likely causes: "
         f"missing snapshot files (run scripts/fix_embedding_cache.py), "
         f"corrupted cache, HF_HUB_OFFLINE blocking recovery."
     )
+
     result = capture_failure(
         system_name="embedding_service",
         error_message=error,
@@ -123,11 +77,51 @@ def main():
         auto_file_feedback=True,
     )
     if result.get("feedback_id"):
-        mark_filed(hit)
-        print(f"[embedding-crashloop-detector] filed feedback {result['feedback_id']}")
+        print(f"[embedding-crashloop-detector] circuit breaker tripped, filed feedback {result['feedback_id']}")
     else:
-        print(f"[embedding-crashloop-detector] capture_failure result: {result}")
-    return 0
+        print(f"[embedding-crashloop-detector] circuit breaker trip callback result: {result}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--window-minutes", type=int, default=90)
+    ap.add_argument("--threshold", type=int, default=3)
+    args = ap.parse_args()
+
+    # Window in seconds
+    window_secs = args.window_minutes * 60
+
+    # Create circuit breaker with callback
+    cb = CircuitBreaker(
+        name="embedding-service",
+        threshold_fails=args.threshold,
+        window_secs=window_secs,
+        on_trip=on_breaker_trip,
+    )
+
+    failures = parse_failures(LOG_FILE)
+    if not failures:
+        print("[embedding-crashloop-detector] no failures found")
+        return 0
+
+    # Record each failure to the circuit breaker
+    failures.sort(key=lambda x: x[0])
+    for ts, msg in failures:
+        # Only record recent failures (within window)
+        if ts >= datetime.utcnow() - timedelta(seconds=window_secs):
+            cb.record_failure(error_class="LogError", error_message=msg)
+
+    state = cb.state()
+    print(
+        f"[embedding-crashloop-detector] {state['fail_count_in_window']} failures in window, "
+        f"tripped={state['tripped']}"
+    )
+
+    if state["tripped"]:
+        print(f"[embedding-crashloop-detector] circuit breaker is TRIPPED (reason: {state['tripped_reason']})")
+        return 1
+    else:
+        return 0
 
 
 if __name__ == "__main__":

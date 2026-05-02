@@ -22,6 +22,7 @@ Usage:
 
 Author: Project HAL (F160 CKG Performance Fix)
 Created: 2026-03-28
+Refactored: 2026-05-02 (BT698 — extracted daemon_helper.py)
 """
 
 import sys
@@ -29,29 +30,24 @@ import os
 import json
 import re
 import time
-import signal
 import logging
-import hashlib
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 from pathlib import Path
 from typing import Optional
 
+# Import shared daemon infrastructure (BT698)
+_scripts_dir = Path(__file__).parent
+if str(_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir))
+from daemon_helper import DaemonContext
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-PORT_RANGE_START = 9800
-PORT_RANGE_SIZE = 100
 IDLE_TIMEOUT_SECS = 30 * 60  # 30 minutes
 REINDEX_DEBOUNCE_SECS = 2.0   # Wait this long after last request before running indexer
-PID_DIR = Path.home() / ".claude"
-LOG_DIR = Path.home() / ".claude" / "logs"
-
-# Prime-step offsets used to scan for a free port when the hashed port is taken.
-# Coprime with 100 so we visit distinct slots; bounded scan keeps us inside the
-# 9800-9899 range when wrapped via modulo. (FB220 — collision avoidance.)
-PORT_SCAN_OFFSETS = (0, 7, 13, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71)
 
 # Symbol extraction patterns (same as code_collision_hook.py)
 SYMBOL_PATTERNS = [
@@ -74,49 +70,7 @@ SKIP_NAMES = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Port resolution
-# ---------------------------------------------------------------------------
-def resolve_port(project_name: str) -> int:
-    """Deterministic preferred port from project name. Range: 9800-9899.
-
-    Used as a *first guess* for both daemon spawn and client lookup.
-    The daemon may end up on a different port if the hashed slot is taken
-    (~21% collision probability with 7+ projects); the actual port is then
-    persisted to the PID file via write_pid_file(). Clients should call
-    read_port_file() before falling back to this function. Uses hashlib (not
-    hash()) for cross-process determinism. (FB220.)
-    """
-    digest = int(hashlib.md5(project_name.encode()).hexdigest(), 16)
-    return PORT_RANGE_START + (digest % PORT_RANGE_SIZE)
-
-
-def _is_port_free(port: int) -> bool:
-    """Return True if 127.0.0.1:port can be bound right now."""
-    import socket
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        s.bind(('127.0.0.1', port))
-    except OSError:
-        return False
-    finally:
-        s.close()
-    return True
-
-
-def find_available_port(project_name: str) -> int:
-    """Find a free port for this daemon, preferring the hashed slot.
-
-    Scans the hash + prime-step offsets, wrapping inside [9800, 9899]. If every
-    offset is taken (extreme contention) returns the hashed port and lets bind
-    fail upstream — better to fail loudly than silently use a stranger's port.
-    """
-    base = resolve_port(project_name)
-    for offset in PORT_SCAN_OFFSETS:
-        candidate = PORT_RANGE_START + ((base - PORT_RANGE_START + offset) % PORT_RANGE_SIZE)
-        if _is_port_free(candidate):
-            return candidate
-    return base
+# Port resolution is now in DaemonContext (daemon_helper.py)
 
 
 # ---------------------------------------------------------------------------
@@ -468,12 +422,12 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 class CKGServer(ThreadingHTTPServer):
     """HTTP server with idle timeout and project context."""
 
-    def __init__(self, project_name: str, project_path: str, port: int):
+    def __init__(self, project_name: str, project_path: str, port: int, daemon_ctx: DaemonContext):
         self.project_name = project_name
         self.project_path = project_path
+        self.daemon_ctx = daemon_ctx
         self.start_time = time.time()
         self.symbol_count = 0
-        self._idle_timer: Optional[threading.Timer] = None
 
         # Initialize reindex queue (serializes indexer runs — FB278 fix)
         self.reindex_queue = ReindexQueue(project_name, project_path)
@@ -501,11 +455,7 @@ class CKGServer(ThreadingHTTPServer):
 
     def reset_idle_timer(self):
         """Reset the idle shutdown timer."""
-        if self._idle_timer:
-            self._idle_timer.cancel()
-        self._idle_timer = threading.Timer(IDLE_TIMEOUT_SECS, self._idle_shutdown)
-        self._idle_timer.daemon = True
-        self._idle_timer.start()
+        self.daemon_ctx.reset_idle_timer(self._idle_shutdown)
 
     def _idle_shutdown(self):
         """Shut down after idle timeout."""
@@ -514,86 +464,14 @@ class CKGServer(ThreadingHTTPServer):
 
     def cleanup(self):
         """Clean up resources on shutdown."""
-        if self._idle_timer:
-            self._idle_timer.cancel()
+        self.daemon_ctx.cancel_idle_timer()
         self.db.close()
-        # Remove PID file
-        try:
-            _pid_file_path(self.project_name).unlink(missing_ok=True)
-        except OSError:
-            pass
+        self.daemon_ctx.cleanup()
         logger.info("Cleanup complete")
 
 
-# ---------------------------------------------------------------------------
-# PID + port management (FB220)
-#
-# PID-file format is a tiny key=value document so it can carry the actual
-# bound port alongside the PID. Backwards compatible with the legacy
-# "<pid>" single-line format — read_pid_file() handles both shapes.
-#
-# Example contents:
-#     pid=12345
-#     port=9883
-# ---------------------------------------------------------------------------
-def _pid_file_path(project_name: str) -> Path:
-    return PID_DIR / f"ckg-daemon-{project_name}.pid"
-
-
-def _parse_pid_file(text: str) -> dict:
-    """Parse PID-file text. Accepts both legacy ('<pid>') and kv ('pid=…\\nport=…') forms."""
-    out: dict = {}
-    text = (text or "").strip()
-    if not text:
-        return out
-    if "=" not in text:
-        # Legacy format — just a bare PID.
-        try:
-            out["pid"] = int(text)
-        except ValueError:
-            pass
-        return out
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        key = key.strip().lower()
-        value = value.strip()
-        if not value:
-            continue
-        if key in ("pid", "port"):
-            try:
-                out[key] = int(value)
-            except ValueError:
-                continue
-        else:
-            out[key] = value
-    return out
-
-
-def write_pid_file(project_name: str, port: int) -> Path:
-    """Write PID + actual bound port atomically."""
-    pid_file = _pid_file_path(project_name)
-    payload = f"pid={os.getpid()}\nport={port}\n"
-    tmp = pid_file.with_suffix(pid_file.suffix + ".tmp")
-    tmp.write_text(payload)
-    os.replace(tmp, pid_file)
-    return pid_file
-
-
-def read_pid_file(project_name: str) -> Optional[int]:
-    """Return the PID written by the daemon, or None. Tolerates legacy + new formats."""
-    pid_file = _pid_file_path(project_name)
-    if not pid_file.exists():
-        return None
-    try:
-        info = _parse_pid_file(pid_file.read_text())
-    except OSError:
-        return None
-    pid = info.get("pid")
-    return int(pid) if pid is not None else None
-
+# PID file functions are now in DaemonContext (daemon_helper.py)
+# Public API wrappers for backward compatibility:
 
 def read_port_file(project_name: str) -> Optional[int]:
     """Return the actual bound port from the PID file, or None if absent.
@@ -603,33 +481,11 @@ def read_port_file(project_name: str) -> Optional[int]:
     collision pushed it off its hash slot. Falls back to None on legacy files
     that only carry a PID — caller should then use resolve_port().
     """
-    pid_file = _pid_file_path(project_name)
-    if not pid_file.exists():
-        return None
-    try:
-        info = _parse_pid_file(pid_file.read_text())
-    except OSError:
-        return None
-    port = info.get("port")
-    return int(port) if port is not None else None
-
-
-def is_process_running(pid: int) -> bool:
-    """Check if a process with given PID is running."""
-    try:
-        if sys.platform == 'win32':
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-            if handle:
-                kernel32.CloseHandle(handle)
-                return True
-            return False
-        else:
-            os.kill(pid, 0)
-            return True
-    except (OSError, PermissionError):
-        return False
+    ctx = DaemonContext('ckg-daemon', project_name)
+    info = ctx.read_pid_file()
+    if info:
+        return info.get('port')
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -645,38 +501,39 @@ def main():
     project_name = sys.argv[1]
     project_path = sys.argv[2]
 
-    # Set up logging
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOG_DIR / f"ckg-daemon-{project_name}.log"
-
-    logging.basicConfig(
-        filename=str(log_file),
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S',
+    # Create daemon context for lifecycle management (BT698)
+    daemon_ctx = DaemonContext(
+        'ckg-daemon',
+        project_name,
+        port_range_start=9800,
+        port_range_size=100,
+        idle_timeout_secs=IDLE_TIMEOUT_SECS,
     )
-    logger = logging.getLogger(f'ckg-daemon-{project_name}')
+
+    # Set up logging
+    logger = daemon_ctx.setup_logger()
 
     # Check if already running (FB220 — prefer existing daemon's port)
-    existing_pid = read_pid_file(project_name)
-    if existing_pid and is_process_running(existing_pid):
-        existing_port = read_port_file(project_name)
+    if daemon_ctx.is_daemon_alive():
+        info = daemon_ctx.read_pid_file()
+        existing_port = info.get('port') if info else None
         logger.info(
-            f"Daemon already running (PID {existing_pid}, port {existing_port}), exiting"
+            f"Daemon already running (PID {info['pid']}, port {existing_port}), exiting"
         )
         sys.exit(0)
 
-    # Pick a free port — bind-first scan to avoid TOCTOU races. We try the
-    # hashed slot, then prime-step offsets, and stop at the first port that
-    # actually binds. (FB220 — earlier scan-then-bind raced on Windows where
-    # SO_REUSEADDR=True silently allowed both daemons to bind 9883.)
-    hashed = resolve_port(project_name)
+    # Pick a free port — bind-first scan to avoid TOCTOU races
+    hashed = daemon_ctx.resolve_port()
     server = None
+    port = None
     last_err: Optional[OSError] = None
+
+    # Scan available ports using daemon_ctx's prime-step logic
+    from daemon_helper import PORT_SCAN_OFFSETS
     for offset in PORT_SCAN_OFFSETS:
-        candidate = PORT_RANGE_START + ((hashed - PORT_RANGE_START + offset) % PORT_RANGE_SIZE)
+        candidate = daemon_ctx.port_range_start + ((hashed - daemon_ctx.port_range_start + offset) % daemon_ctx.port_range_size)
         try:
-            server = CKGServer(project_name, project_path, candidate)
+            server = CKGServer(project_name, project_path, candidate, daemon_ctx)
             port = candidate
             break
         except OSError as e:
@@ -687,8 +544,6 @@ def main():
             raise
 
     if server is None:
-        # Every candidate was busy — almost certainly an existing daemon for
-        # this project that isn't holding our PID file. Fail loudly.
         logger.error(
             f"All scanned ports busy for {project_name} (last error: {last_err}). "
             f"If a stale daemon is running, kill it and retry."
@@ -701,9 +556,8 @@ def main():
             f"instead (persisted to PID file for clients)"
         )
 
-    # Write PID + actual bound port AFTER successful bind so the file always
-    # reflects reality (avoids stale port=X pointing at a failed bind).
-    write_pid_file(project_name, port)
+    # Write PID + actual bound port AFTER successful bind
+    daemon_ctx.write_pid_file(os.getpid(), port)
 
     try:
         logger.info(
@@ -713,12 +567,13 @@ def main():
 
         # Handle graceful shutdown
         def signal_handler(signum, frame):
-            logger.info(f"Received signal {signum}, shutting down")
+            logger.info(f"Received signal {signum}, shutting down gracefully")
             server.shutdown()
 
-        signal.signal(signal.SIGTERM, signal_handler)
+        import signal as signal_module
+        signal_module.signal(signal_module.SIGTERM, signal_handler)
         if sys.platform != 'win32':
-            signal.signal(signal.SIGHUP, signal_handler)
+            signal_module.signal(signal_module.SIGHUP, signal_handler)
 
         server.serve_forever()
 

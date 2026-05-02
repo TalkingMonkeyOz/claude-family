@@ -32,6 +32,16 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
 # ============================================================================
+# F224 — Job Queue Handler Imports
+# ============================================================================
+
+from handlers.job_template import handle_job_template
+from handlers.job_schedule import handle_job_schedule
+from handlers.job_enqueue import handle_job_enqueue
+from handlers.job_cancel import handle_job_cancel
+from handlers.job_status import handle_job_status
+
+# ============================================================================
 # FastMCP Setup
 # ============================================================================
 
@@ -13432,6 +13442,357 @@ def snooze_reminder(
         reason: Why snoozed — appended to rationale for audit trail.
     """
     return _run_async(tool_snooze_reminder(reminder_ref, new_due_at, reason))
+
+
+# ============================================================================
+# F224 — Job Queue MCP Tools
+# ============================================================================
+
+@mcp.tool()
+def job_template(
+    action: Literal[
+        "create", "update", "publish_version", "add_origin", "remove_origin",
+        "list", "read", "pause", "unpause", "resolve_dead_letter",
+    ],
+    template_id: str = "",
+    name: str = "",
+    description: str = "",
+    kind: Literal["agent", "script"] = "agent",
+    owner: str = "",
+    max_concurrent_runs: int = 1,
+    max_attempts: int = 3,
+    lease_duration_secs: int = 300,
+    is_idempotent: bool = False,
+    payload: dict | None = None,
+    notes: str = "",
+    origin_kind: str = "",
+    origin_ref: str = "",
+    origin_role: str = "",
+    origin_note: str = "",
+    origin_id: str = "",
+    task_id: str = "",
+    resolution: str = "",
+    kind_filter: str = "",
+    is_paused_filter: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Manage job template definitions in claude.job_templates.
+
+    Use when: Creating, updating, versioning, or introspecting job templates that
+    define what background jobs do and how they are executed.
+
+    Actions:
+      create           — Define a new template (name, description, kind required).
+      update           — Patch metadata columns (not payload; use publish_version for that).
+      publish_version  — Bump template version with a new payload dict.
+      add_origin       — Link a knowledge source (memory, article, feedback, feature, workfile, url).
+      remove_origin    — Unlink a knowledge source by origin_id.
+      list             — Paginated template catalog with optional kind/is_paused filters.
+      read             — Full detail: row + all versions + origins + last 10 runs.
+      pause            — Suspend scheduling (blocks job_enqueue too).
+      unpause          — Resume a paused template.
+      resolve_dead_letter — Resolve a dead_letter task: fixed | wont_fix | rerun | superseded.
+
+    Args:
+        action: Operation to perform.
+        template_id: Template UUID (required for update, publish_version, add_origin,
+                     remove_origin, read, pause, unpause).
+        name: Template name (required for create; used as display label).
+        description: Human-readable description (required for create).
+        kind: 'agent' (runs a Claude agent) or 'script' (runs a Python script).
+        owner: Owner identifier (defaults to current session_id).
+        max_concurrent_runs: Max parallel active runs for this template.
+        max_attempts: Max retry attempts before dead_letter.
+        lease_duration_secs: Seconds before a claimed task's lease expires.
+        is_idempotent: Whether repeated enqueues with the same payload are safe.
+        payload: Baseline payload dict (for create with initial version, or publish_version).
+        notes: Version notes for publish_version.
+        origin_kind: One of memory | article | feedback | feature | workfile | url (add_origin).
+        origin_ref: UUID or URL of the referenced object (add_origin).
+        origin_role: One of rationale | spec | reference | superseded_by (add_origin).
+        origin_note: Optional note for add_origin.
+        origin_id: UUID to remove (remove_origin).
+        task_id: Dead-letter task UUID (resolve_dead_letter).
+        resolution: fixed | wont_fix | rerun | superseded (resolve_dead_letter).
+        kind_filter: Filter list results by kind ('agent' or 'script').
+        is_paused_filter: Filter list results by paused state.
+        limit: Max rows for list (default 50).
+        offset: Pagination offset for list.
+    """
+    kwargs: dict = {}
+    if template_id:
+        kwargs["template_id"] = template_id
+    if name:
+        kwargs["name"] = name
+    if description:
+        kwargs["description"] = description
+    if kind:
+        kwargs["kind"] = kind
+    if owner:
+        kwargs["owner"] = owner
+    if max_concurrent_runs != 1:
+        kwargs["max_concurrent_runs"] = max_concurrent_runs
+    if max_attempts != 3:
+        kwargs["max_attempts"] = max_attempts
+    if lease_duration_secs != 300:
+        kwargs["lease_duration_secs"] = lease_duration_secs
+    if is_idempotent:
+        kwargs["is_idempotent"] = is_idempotent
+    if payload is not None:
+        kwargs["payload"] = payload
+    if notes:
+        kwargs["notes"] = notes
+    if origin_kind:
+        kwargs["origin_kind"] = origin_kind
+    if origin_ref:
+        kwargs["origin_ref"] = origin_ref
+    if origin_role:
+        kwargs["origin_role"] = origin_role
+    if origin_note:
+        kwargs["note"] = origin_note
+    if origin_id:
+        kwargs["origin_id"] = origin_id
+    if task_id:
+        kwargs["task_id"] = task_id
+    if resolution:
+        kwargs["resolution"] = resolution
+    if kind_filter:
+        kwargs["kind"] = kind_filter
+    if is_paused_filter is not None:
+        kwargs["is_paused"] = is_paused_filter
+    kwargs["limit"] = limit
+    kwargs["offset"] = offset
+    return handle_job_template(action, **kwargs)
+
+
+@mcp.tool()
+def job_schedule(
+    action: Literal["create", "update", "pause", "unpause", "list", "unschedule"],
+    scheduled_job_id: str = "",
+    template_id: str = "",
+    schedule: str = "",
+    template_version: str = "latest",
+    description: str = "",
+    job_name: str = "",
+    project_id: str = "",
+    fields: dict | None = None,
+    filters: dict | None = None,
+    reason: str = "",
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """Manage recurring job schedules in claude.scheduled_jobs.
+
+    Use when: Creating or managing cron-style recurring jobs that run on a schedule.
+    Prefer this over /schedule (cloud, billable) when work can run locally.
+    See storage-rules.md scheduling tier matrix: create_reminder (one-off, local) vs
+    job_schedule (recurring, local) vs /schedule (cloud/isolated sandbox only).
+
+    Actions:
+      create     — Register a new scheduled job. schedule is required (cron or human-readable).
+                   Optionally link to a template_id so the runner enqueues the right task.
+      update     — Patch fields on an existing scheduled job (pass fields dict).
+      pause      — Set is_active=false (job stops running until unpaused).
+      unpause    — Set is_active=true.
+      list       — Paginated list with optional filters (template_id, is_active, project_id).
+      unschedule — Delete the scheduled job and write a reason to audit_log.
+
+    Schedule formats accepted:
+      Cron:           "0 6 * * *" (5-part standard cron)
+      Human-readable: "Daily @ 6:00 AM", "Hourly", "Weekly"
+      Special:        "At logon"
+
+    template_version: 'latest' (default) resolves at run time; pass an integer to pin.
+
+    Args:
+        action: Operation to perform.
+        scheduled_job_id: Job UUID (required for update, pause, unpause, unschedule).
+        template_id: Optional template UUID to link (create) or filter (list).
+        schedule: Schedule string — required for create.
+        template_version: 'latest' or integer version pin.
+        description: Human-readable description of what this job does.
+        job_name: Short name (auto-generated if omitted).
+        project_id: Project UUID for scoping.
+        fields: Dict of columns to update (for action='update').
+        filters: Dict of filters for action='list' (template_id, is_active, project_id).
+        reason: Reason for unschedule (written to audit_log).
+        limit: Max rows for list.
+        offset: Pagination offset for list.
+    """
+    kwargs: dict = {}
+    if scheduled_job_id:
+        kwargs["scheduled_job_id"] = scheduled_job_id
+    if template_id:
+        kwargs["template_id"] = template_id
+    if schedule:
+        kwargs["schedule"] = schedule
+    if template_version:
+        kwargs["template_version"] = template_version
+    if description:
+        kwargs["description"] = description
+    if job_name:
+        kwargs["job_name"] = job_name
+    if project_id:
+        kwargs["project_id"] = project_id
+    if fields:
+        kwargs["fields"] = fields
+    if filters:
+        kwargs["filters"] = filters
+    if reason:
+        kwargs["reason"] = reason
+    kwargs["limit"] = limit
+    kwargs["offset"] = offset
+    return handle_job_schedule(action, **kwargs)
+
+
+@mcp.tool()
+def job_enqueue(
+    template_id: str = "",
+    template_name: str = "",
+    template_version: int | None = None,
+    payload_override: dict | None = None,
+    priority: int = 3,
+    idempotency_key: str = "",
+    parent_session_id: str = "",
+    project_id: str = "",
+) -> dict:
+    """Enqueue a job for immediate execution (hot path — atomic single INSERT).
+
+    Use when: You want to run a background agent or script task right now, not on a schedule.
+
+    Scheduling tier decision tree (storage-rules.md):
+      "Remind me later"  → create_reminder() — local DB, free, one-off
+      "Run every day"    → job_schedule()    — local DB, free, recurring
+      "Enqueue now"      → job_enqueue()     — local DB, free, immediate
+      "Cloud / isolated" → /schedule skill   — Anthropic cloud, BILLABLE
+
+    Idempotency: if idempotency_key is omitted, one is auto-derived from
+    (template_id, version, payload). A second enqueue with the same key while
+    a task is active returns action='already_active' with the existing task_id —
+    safe to call repeatedly.
+
+    Returns: {success, task_id, idempotency_key, action: 'enqueued'|'already_active', message}
+
+    Args:
+        template_id: Template UUID (one of template_id or template_name required).
+        template_name: Template name (case-sensitive, alternative to template_id).
+        template_version: Specific version to use. None = template's current_version.
+        payload_override: Merged on top of template payload (deep merge, override wins).
+        priority: 1=critical, 2=high, 3=normal, 4=low, 5=backlog. Default 3.
+        idempotency_key: Explicit dedup key. Omit to auto-derive.
+        parent_session_id: Session UUID for audit trail (defaults to CLAUDE_SESSION_ID env var).
+        project_id: Project UUID for filtering/dashboards.
+    """
+    return handle_job_enqueue(
+        template_id=template_id or None,
+        template_name=template_name or None,
+        template_version=template_version,
+        payload_override=payload_override,
+        priority=priority,
+        idempotency_key=idempotency_key or None,
+        parent_session_id=parent_session_id or None,
+        project_id=project_id or None,
+    )
+
+
+@mcp.tool()
+def job_cancel(
+    task_id: str,
+    force: bool = False,
+    reason: str = "",
+    cancelling_session_id: str = "",
+) -> dict:
+    """Cancel a task in the task queue (atomic — soft or hard).
+
+    Use when: A running or pending task needs to be stopped.
+
+    Cancellation modes:
+      force=False (default) — Soft cancel:
+        pending    → status='cancelled' immediately
+        in_progress → cancel_requested=true; worker exits gracefully between steps
+      force=True — Hard cancel:
+        pending    → status='cancelled' immediately
+        in_progress → status='cancelled' + lease revoked; worker hits lease-revoked error
+                       on next heartbeat
+
+    Terminal tasks (completed, failed, cancelled, dead_letter, superseded) cannot
+    be cancelled — returns action='already_terminal'.
+
+    Returns: {success, task_id, previous_status, action: 'cancelled'|'cancel_requested'|'already_terminal', message}
+
+    Args:
+        task_id: Task UUID to cancel (required).
+        force: False = soft cancel (graceful); True = hard cancel (immediate).
+        reason: Optional reason recorded in audit_log.
+        cancelling_session_id: Session UUID for audit trail.
+    """
+    return handle_job_cancel(
+        task_id=task_id,
+        force=force,
+        reason=reason or None,
+        cancelling_session_id=cancelling_session_id or None,
+    )
+
+
+@mcp.tool()
+def job_status(
+    view: Literal["board", "queue", "dead_letter", "runs", "result", "templates", "template"],
+    project: str = "",
+    template_id: str = "",
+    task_id: str = "",
+    template_filter: str = "",
+    status_filter: list[str] | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    days_back: int = 7,
+) -> dict:
+    """Read-only visibility into the job queue system. Mirrors work_board() pattern.
+
+    Use when: Monitoring job health, triaging dead letters, inspecting a specific task result,
+    or browsing the template catalog.
+
+    Views:
+      board        — System snapshot: queue counts (pending/in_progress/dead_letter) +
+                     recent runs (24h) + active templates. Start here for orientation.
+      queue        — Live pending/in_progress tasks with priority, lease info, and age.
+                     Filter by project, template, or status list.
+      dead_letter  — Unresolved dead_letter tasks ordered oldest-first. Use this for
+                     triage; resolve with job_template(action='resolve_dead_letter').
+      runs         — Filtered job_run_history rows (audit log). Supports days_back,
+                     template_filter, status_filter, project.
+      result       — Single task: full task_queue row + agent_session join + linked feedback.
+                     Requires task_id.
+      templates    — Template catalog with 30-day stats (runs_total, runs_dead, p95_duration).
+      template     — Single template detail: row + last 10 versions + origins + recent runs.
+                     Requires template_id (UUID or name).
+
+    Graceful fallback: if job_templates/task_queue tables do not yet exist (pre-migration),
+    views return empty datasets rather than errors.
+
+    Args:
+        view: Which view to display (required).
+        project: Project UUID for filtering (board, queue, dead_letter, runs).
+        template_id: Template UUID or name — required for view='template';
+                     used as identifier for view='result'.
+        task_id: Task UUID — required for view='result'.
+        template_filter: Template UUID or name filter for queue and runs views.
+        status_filter: Status list filter for queue and runs (e.g. ['pending', 'in_progress']).
+        limit: Max rows returned (default 50, max 200).
+        offset: Pagination offset.
+        days_back: Days of history for view='runs' (default 7, max 365).
+    """
+    return handle_job_status(
+        view=view,
+        project=project or None,
+        template_id=template_id or None,
+        task_id=task_id or None,
+        template_filter=template_filter or None,
+        status_filter=status_filter,
+        limit=limit,
+        offset=offset,
+        days_back=days_back,
+    )
 
 
 # ============================================================================

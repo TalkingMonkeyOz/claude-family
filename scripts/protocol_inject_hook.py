@@ -337,6 +337,57 @@ def _query_recent_changes(project_name: str) -> str:
         return ""
 
 
+def _build_queue_digest() -> str:
+    """Build a one-line queue digest (Tier 3 surfacing). Returns None if all clean.
+
+    Queries task_queue and job_templates for live metrics. Silent if no issues.
+    Returns: "Job queue: N dead_letter unreviewed (oldest: D days), M template(s) paused, R runs/24h"
+    or empty string if all clean.
+    """
+    if not DB_URI:
+        return ""
+    try:
+        import psycopg2
+        conn = psycopg2.connect(DB_URI, connect_timeout=2)
+        cur = conn.cursor()
+        # Single round-trip: dead_letter metrics + paused templates + 24h run count.
+        cur.execute("""
+            SELECT
+              (SELECT COUNT(*) FROM claude.task_queue
+               WHERE status='dead_letter' AND resolution_status IS NULL) AS dead_letter_unresolved,
+              (SELECT EXTRACT(EPOCH FROM (now() - MIN(completed_at)))/86400
+               FROM claude.task_queue
+               WHERE status='dead_letter' AND resolution_status IS NULL
+               AND completed_at IS NOT NULL) AS oldest_dead_letter_days,
+              (SELECT COUNT(*) FROM claude.job_templates
+               WHERE is_paused=true) AS paused_templates,
+              (SELECT COUNT(*) FROM claude.job_run_history
+               WHERE started_at > now() - interval '24 hours') AS runs_24h
+        """)
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if row:
+            dead_unresolved, oldest_days, paused_count, runs_24h = row
+            # Silent if all clean
+            if not dead_unresolved and not paused_count:
+                return ""
+            # Build non-empty parts
+            parts = []
+            if dead_unresolved:
+                oldest_str = f"oldest: {int(oldest_days)} days" if oldest_days else "recently"
+                parts.append(f"{dead_unresolved} dead_letter unreviewed ({oldest_str})")
+            if paused_count:
+                parts.append(f"{paused_count} template(s) paused")
+            if runs_24h:
+                parts.append(f"{runs_24h} runs/24h")
+            return f"Job queue: {', '.join(parts)}"
+    except Exception:
+        pass  # Fail silently — don't block the hook
+    return ""
+
+
 def _query_domain_concepts(user_prompt: str, project_name: str) -> str:
     """Search entity catalog for domain_concept dossiers matching the prompt.
 
@@ -389,7 +440,10 @@ def main():
     # 3. Pending messages — lightweight DB check
     message_alert = _check_pending_messages(project_name)
 
-    # 4. Knowledge + domain concept + recent-changes queries — parallel w/ timeout
+    # 4. Queue digest (Tier 3 surfacing) — lightweight per-session check
+    queue_digest = _build_queue_digest()
+
+    # 5. Knowledge + domain concept + recent-changes queries — parallel w/ timeout
     user_prompt = hook_input.get('prompt', '')
     dossier_context = ""
     knowledge_context = ""
@@ -423,8 +477,9 @@ def main():
     if user_prompt and os.environ.get("CLAUDE_DISABLE_DECOMPOSER") != "1":
         decomposition_hint = _decompose_prompt(user_prompt)
 
-    # 5. Combine — decomposition hint goes near the top (after protocol) so it's
+    # 6. Combine — decomposition hint goes near the top (after protocol) so it's
     # the first thing Claude sees about the incoming prompt's shape.
+    # Queue digest follows message_alert for time-sensitive operational concerns.
     # Recent changes lives between knowledge_context and dossier_context — same
     # tier as RELEVANT KNOWLEDGE, just time-windowed instead of keyword-matched.
     parts = [p for p in [
@@ -432,13 +487,14 @@ def main():
         decomposition_hint,
         session_context,
         message_alert,
+        queue_digest,
         knowledge_context,
         recent_changes_context,
         dossier_context,
     ] if p]
     combined = "\n\n".join(parts)
 
-    # 6. Return in Claude Code hook format
+    # 7. Return in Claude Code hook format
     result = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",

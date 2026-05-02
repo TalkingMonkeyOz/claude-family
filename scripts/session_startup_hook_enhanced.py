@@ -889,6 +889,24 @@ def main():
             except Exception as e:
                 logger.warning(f"CKG staleness check failed (non-fatal): {e}")
 
+            # === TASK WORKER WATCHDOG (F224 BT705) ===
+            # SessionStart watchdog to ensure task_worker daemon is running.
+            # Mirrors ckg_daemon respawn pattern. Task Scheduler spawns at-logon;
+            # this ensures respawn if the daemon crashes between logons.
+            try:
+                from daemon_helper import watchdog_respawn
+                respawned = watchdog_respawn(
+                    name="task-worker",
+                    project_name=project_name,
+                    daemon_module_path="scripts.task_worker",
+                )
+                if respawned:
+                    logger.info(f"task-worker: respawned (was dead)")
+                else:
+                    logger.info(f"task-worker: already running")
+            except Exception as e:
+                logger.warning(f"task-worker watchdog failed (non-fatal): {e}")
+
             # === EMBEDDING SERVICE WARMUP (FB413) ===
             # Fire-and-forget spawn if /health probe fails so the service is hot
             # by the time recall_memories / remember / entity_read first call it.
@@ -1072,6 +1090,21 @@ def main():
                     context_lines.append(f"System staleness detected: {summary}. Run /maintenance to repair.")
             except Exception as e:
                 logger.warning(f"Staleness detection skipped: {e}")
+
+            # L3 Liveness Check: Monitor-the-monitor for queue_health_check (F224 BT706)
+            try:
+                from queue_l3_liveness import check_queue_health_liveness
+                liveness_result = check_queue_health_liveness()
+                if not liveness_result['healthy'] and liveness_result['finding']:
+                    finding = liveness_result['finding']
+                    # Surface the critical finding in context + log
+                    context_lines.append("")
+                    context_lines.append(f"CRITICAL: {finding['title']}")
+                    context_lines.append(f"  {finding['body']}")
+                    context_lines.append(f"  Suggested: {finding['suggested_action']}")
+                    logger.error(f"L3 Liveness Critical: {finding['title']}")
+            except Exception as e:
+                logger.warning(f"L3 liveness check failed (non-fatal): {e}")
 
             # Clean task_map to prevent stale session errors from discipline hook
             if session_id:

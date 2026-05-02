@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "generated_at": "2026-04-18T23:23:33.910959",
+    "generated_at": "2026-05-02T09:34:18.906882",
     "source": "PostgreSQL (claude.workspaces)",
     "description": "Auto-generated workspace mappings. Do not edit manually."
   },
@@ -39,11 +39,6 @@
       "path": "C:\\Projects\\claude-family",
       "type": "infrastructure",
       "description": "Claude Family infrastructure, shared configs, and documentation"
-    },
-    "mcp-search-test": {
-      "path": "C:\\Projects\\mcp-search-test",
-      "type": "infrastructure",
-      "description": "Test project for MCPSearch auto mode verification"
     },
     "project-metis": {
       "path": "C:\\Projects\\project-metis",
@@ -89,11 +84,6 @@
       "path": "C:\\Projects\\finance-mui",
       "type": "web",
       "description": "Personal Finance Management - React + TypeScript + Material-UI + Tauri implementation"
-    },
-    "ATO-tax-agent": {
-      "path": "C:\\Projects\\ATO-tax-agent",
-      "type": "work-research",
-      "description": "ATO tax agent tools (private work project)"
     },
     "monash-engagement": {
       "path": "C:\\Projects\\monash-engagement",

@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/agent-finding-routing"
+    id="Definitions_AgentFindingRouting">
+
+  <bpmn:process id="agent_finding_routing" name="Agent Finding Routing: Severity-based Message + Feedback Routing" isExecutable="true">
+
+    <!--
+      F224 - Q4 D2 routing pattern.
+
+      An agent or scheduled health check produces structured findings:
+        finding = {
+          severity: 'info' | 'warning' | 'high' | 'critical',
+          title: str,
+          description: str,
+          source_task_id: uuid,    (FK to task_queue.task_id)
+          template_id: uuid,
+          payload: jsonb           (arbitrary structured detail)
+        }
+
+      Routing matrix (locked, workfile section "Failure handling - locked"):
+        info     -> log only (output_text + result jsonb on task_queue row)
+        warning  -> channel-messaging only (no feedback row)
+        high     -> claude.feedback (work_create), severity=high, no message
+        critical -> BOTH: feedback + send_message(severity=critical)
+
+      Linkage:
+        - When a feedback row is created, the surfaced_as_feedback_id column on
+          claude.task_queue is populated (FK to claude.feedback).
+        - One task can produce N findings; the highest-severity feedback wins
+          for surfaced_as_feedback_id; lower-severity ones get linked via
+          claude.cross_links.
+        - Messages are tagged with task_id so the MUI Job Queue Monitor
+          can show them in the drill-down view.
+
+      Distinct from the existing audit_findings_pipeline (development/):
+        - That model is human-driven (Claude triages a list at audit time).
+        - This model is automatic (severity table, no human gate).
+        - Reused concept: 'finding' as a structured record. We do NOT call
+          out to audit_findings_pipeline because it requires human classify
+          steps and Claude userTasks; this routing is a fully automated
+          subprocess invoked from task_queue_lifecycle and queue_health_monitoring.
+    -->
+
+    <!-- ================================================================ -->
+    <!-- START                                                             -->
+    <!-- ================================================================ -->
+    <bpmn:startEvent id="start" name="Findings List Available">
+      <bpmn:outgoing>flow_start_to_validate</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <bpmn:scriptTask id="validate_findings" name="[HOOK] Validate findings list shape" scriptFormat="python">
+      <bpmn:incoming>flow_start_to_validate</bpmn:incoming>
+      <bpmn:outgoing>flow_validate_to_has_gw</bpmn:outgoing>
+      <bpmn:script>
+# Each finding must have: severity, title, description, source_task_id.
+# Reject malformed entries; loud-fail on schema violation per design lock
+# "data-safety is the only non-negotiable".
+findings = sanitize_findings(raw_findings)
+has_findings = len(findings) &gt; 0
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="has_findings_gw" name="Has findings?" default="flow_no_findings">
+      <bpmn:incoming>flow_validate_to_has_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_has_findings</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_findings</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_findings" name="No Findings to Route">
+      <bpmn:incoming>flow_no_findings</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- LOOP: PER-FINDING ROUTING                                         -->
+    <!-- ================================================================ -->
+    <bpmn:scriptTask id="pick_finding" name="[HOOK] Pick next finding from list" scriptFormat="python">
+      <bpmn:incoming>flow_has_findings</bpmn:incoming>
+      <bpmn:incoming>flow_more_yes</bpmn:incoming>
+      <bpmn:outgoing>flow_pick_to_severity_gw</bpmn:outgoing>
+      <bpmn:script>
+# current = findings[current_index]
+current = findings[current_index]
+severity = current["severity"]
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="severity_gw" name="Severity?" default="flow_severity_info">
+      <bpmn:incoming>flow_pick_to_severity_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_severity_info</bpmn:outgoing>
+      <bpmn:outgoing>flow_severity_warning</bpmn:outgoing>
+      <bpmn:outgoing>flow_severity_high</bpmn:outgoing>
+      <bpmn:outgoing>flow_severity_critical</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <!-- ============== INFO: log only ============== -->
+    <bpmn:scriptTask id="log_only" name="[DAEMON] Log finding to output_text + result jsonb" scriptFormat="python">
+      <bpmn:incoming>flow_severity_info</bpmn:incoming>
+      <bpmn:outgoing>flow_log_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# Append finding into claude.task_queue.result['findings'] array.
+# No external surfacing.
+append_finding_to_task_result(source_task_id, current)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== WARNING: message only ============== -->
+    <bpmn:scriptTask id="send_warning_message" name="[MCP] send_message(severity='warning')" scriptFormat="python">
+      <bpmn:incoming>flow_severity_warning</bpmn:incoming>
+      <bpmn:outgoing>flow_warning_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# send_message(
+#   recipient='claude-family',
+#   subject=current['title'],
+#   body=current['description'],
+#   severity='warning',
+#   metadata={'task_id': source_task_id, 'template_id': template_id}
+# )
+send_warning_msg(current, source_task_id, template_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== HIGH: feedback only + linkage ============== -->
+    <bpmn:scriptTask id="create_high_feedback" name="[MCP] work_create(type='feedback', priority=2)" scriptFormat="python">
+      <bpmn:incoming>flow_severity_high</bpmn:incoming>
+      <bpmn:outgoing>flow_high_fb_to_link</bpmn:outgoing>
+      <bpmn:script>
+# work_create(
+#   type='feedback',
+#   feedback_type='bug',
+#   priority=2,           -- 'high' per column_registry priority enum
+#   name=current['title'],
+#   description=current['description'],
+# )
+# Returns feedback_id.
+feedback_id = create_feedback("high", current)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="link_high_feedback_to_task" name="[DB] UPDATE task_queue.surfaced_as_feedback_id" scriptFormat="python">
+      <bpmn:incoming>flow_high_fb_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_high_link_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# UPDATE claude.task_queue
+#    SET surfaced_as_feedback_id = :feedback_id
+#  WHERE task_id = :source_task_id
+#    AND surfaced_as_feedback_id IS NULL;   -- only set highest-severity wins;
+# secondary findings linked via claude.cross_links instead.
+link_feedback_to_task(source_task_id, feedback_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== CRITICAL: feedback + message + linkage ============== -->
+    <bpmn:scriptTask id="create_critical_feedback" name="[MCP] work_create(type='feedback', priority=1)" scriptFormat="python">
+      <bpmn:incoming>flow_severity_critical</bpmn:incoming>
+      <bpmn:outgoing>flow_crit_fb_to_msg</bpmn:outgoing>
+      <bpmn:script>
+# work_create(
+#   type='feedback',
+#   feedback_type='bug',
+#   priority=1,           -- 'critical'
+#   name=current['title'],
+#   description=current['description'],
+# )
+feedback_id = create_feedback("critical", current)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="send_critical_message" name="[MCP] send_message(severity='critical')" scriptFormat="python">
+      <bpmn:incoming>flow_crit_fb_to_msg</bpmn:incoming>
+      <bpmn:outgoing>flow_crit_msg_to_link</bpmn:outgoing>
+      <bpmn:script>
+# send_message(severity='critical', body=...).
+# Carries feedback_id so the recipient can drill in.
+send_critical_msg(current, feedback_id, source_task_id)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="link_critical_feedback_to_task" name="[DB] UPDATE task_queue.surfaced_as_feedback_id" scriptFormat="python">
+      <bpmn:incoming>flow_crit_msg_to_link</bpmn:incoming>
+      <bpmn:outgoing>flow_crit_link_to_advance</bpmn:outgoing>
+      <bpmn:script>
+# Same linkage as the high path; critical findings always overwrite
+# any existing surfaced_as_feedback_id (highest severity wins).
+# Lower-severity prior findings get downgraded to cross_links.
+link_feedback_to_task(source_task_id, feedback_id, force=True)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ============== Loop tail ============== -->
+    <bpmn:scriptTask id="advance_index" name="[HOOK] current_index += 1" scriptFormat="python">
+      <bpmn:incoming>flow_log_to_advance</bpmn:incoming>
+      <bpmn:incoming>flow_warning_to_advance</bpmn:incoming>
+      <bpmn:incoming>flow_high_link_to_advance</bpmn:incoming>
+      <bpmn:incoming>flow_crit_link_to_advance</bpmn:incoming>
+      <bpmn:outgoing>flow_advance_to_more_gw</bpmn:outgoing>
+      <bpmn:script>
+current_index = current_index + 1
+more_findings = current_index &lt; len(findings)
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="more_findings_gw" name="More findings?" default="flow_no_more">
+      <bpmn:incoming>flow_advance_to_more_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_more_yes</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_more</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="summarize" name="[HOOK] Build routing summary" scriptFormat="python">
+      <bpmn:incoming>flow_no_more</bpmn:incoming>
+      <bpmn:outgoing>flow_summary_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Returns counts by severity for the parent process to log.
+summary = {
+  "info": info_count,
+  "warning": warning_count,
+  "high": high_count,
+  "critical": critical_count,
+  "feedback_ids": created_feedback_ids,
+}
+routing_complete = True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_routed" name="All Findings Routed">
+      <bpmn:incoming>flow_summary_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================ -->
+    <!-- Sequence Flows                                                    -->
+    <!-- ================================================================ -->
+    <bpmn:sequenceFlow id="flow_start_to_validate" sourceRef="start" targetRef="validate_findings" />
+    <bpmn:sequenceFlow id="flow_validate_to_has_gw" sourceRef="validate_findings" targetRef="has_findings_gw" />
+    <bpmn:sequenceFlow id="flow_has_findings" sourceRef="has_findings_gw" targetRef="pick_finding">
+      <bpmn:conditionExpression>has_findings == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_findings" sourceRef="has_findings_gw" targetRef="end_no_findings" />
+
+    <bpmn:sequenceFlow id="flow_pick_to_severity_gw" sourceRef="pick_finding" targetRef="severity_gw" />
+    <bpmn:sequenceFlow id="flow_severity_info" sourceRef="severity_gw" targetRef="log_only">
+      <bpmn:conditionExpression>severity == "info"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_severity_warning" sourceRef="severity_gw" targetRef="send_warning_message">
+      <bpmn:conditionExpression>severity == "warning"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_severity_high" sourceRef="severity_gw" targetRef="create_high_feedback">
+      <bpmn:conditionExpression>severity == "high"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_severity_critical" sourceRef="severity_gw" targetRef="create_critical_feedback">
+      <bpmn:conditionExpression>severity == "critical"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+
+    <bpmn:sequenceFlow id="flow_log_to_advance" sourceRef="log_only" targetRef="advance_index" />
+    <bpmn:sequenceFlow id="flow_warning_to_advance" sourceRef="send_warning_message" targetRef="advance_index" />
+
+    <bpmn:sequenceFlow id="flow_high_fb_to_link" sourceRef="create_high_feedback" targetRef="link_high_feedback_to_task" />
+    <bpmn:sequenceFlow id="flow_high_link_to_advance" sourceRef="link_high_feedback_to_task" targetRef="advance_index" />
+
+    <bpmn:sequenceFlow id="flow_crit_fb_to_msg" sourceRef="create_critical_feedback" targetRef="send_critical_message" />
+    <bpmn:sequenceFlow id="flow_crit_msg_to_link" sourceRef="send_critical_message" targetRef="link_critical_feedback_to_task" />
+    <bpmn:sequenceFlow id="flow_crit_link_to_advance" sourceRef="link_critical_feedback_to_task" targetRef="advance_index" />
+
+    <bpmn:sequenceFlow id="flow_advance_to_more_gw" sourceRef="advance_index" targetRef="more_findings_gw" />
+    <bpmn:sequenceFlow id="flow_more_yes" sourceRef="more_findings_gw" targetRef="pick_finding">
+      <bpmn:conditionExpression>more_findings == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_more" sourceRef="more_findings_gw" targetRef="summarize" />
+    <bpmn:sequenceFlow id="flow_summary_to_end" sourceRef="summarize" targetRef="end_routed" />
+  </bpmn:process>
+
+</bpmn:definitions>

@@ -146,6 +146,26 @@ TOOL_GOVERNED_TABLES = {
         'tools': 'secret()',
         'reason': 'Secrets need Windows Credential Manager sync and session fact caching',
     },
+    'task_queue': {
+        'tools': 'job_enqueue(), job_cancel(), job_status()',
+        'reason': 'Task queue needs lease management, concurrency controls, and worker daemon coordination',
+    },
+    'job_templates': {
+        'tools': 'job_template()',
+        'reason': 'Job templates need parameter validation, kind registration, and version history tracking',
+    },
+    'job_template_versions': {
+        'tools': 'job_template(action="publish_version")',
+        'reason': 'Template versions need semantic versioning, immutability, and rollback coordination',
+    },
+    'job_template_origins': {
+        'tools': 'job_template(action="add_origin")',
+        'reason': 'Origins need one-way traceability and audit trail for template sourcing',
+    },
+    'job_run_history': {
+        'tools': 'job_status(view="runs") for reads; worker_daemon writes need -- OVERRIDE: worker_daemon',
+        'reason': 'Run history is read-mostly and append-only; worker daemon has exclusive write access',
+    },
 }
 
 
