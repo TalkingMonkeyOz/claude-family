@@ -162,6 +162,9 @@ class TestResolverHappyPath:
     """Verification criterion: work_item_resolve_legacy('FB###') returns the work_item_id."""
 
     def test_resolve_legacy_returns_work_item_id(self, db_conn):
+        # Use a fixture-only legacy code to avoid colliding with the F226 backfill
+        # which now owns real FB### / F### / BT### / TODO-### codes.
+        FIXTURE_CODE = "FB-FIXTURE-LEGACY-RESOLVE-TEST"
         with db_conn.cursor() as cur:
             pid = _project_id(cur)
             wid = _create_work_item(cur, pid, kind="bug", stage="triaged",
@@ -169,10 +172,11 @@ class TestResolverHappyPath:
             cur.execute(
                 "INSERT INTO claude.work_item_code_history "
                 "(work_item_id, short_code, code_kind) VALUES (%s, %s, 'legacy')",
-                (wid, "FB316"),
+                (wid, FIXTURE_CODE),
             )
             cur.execute(
-                "SELECT claude.work_item_resolve_legacy('FB316') AS resolved"
+                "SELECT claude.work_item_resolve_legacy(%s) AS resolved",
+                (FIXTURE_CODE,),
             )
             assert cur.fetchone()["resolved"] == wid
         db_conn.rollback()

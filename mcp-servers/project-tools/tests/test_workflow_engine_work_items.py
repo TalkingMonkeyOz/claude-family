@@ -121,8 +121,18 @@ class TestSideEffectsRoundTrip:
     """Drive transitions through WorkflowEngine and verify side effects fire."""
 
     def _engine(self, db_conn):
+        """Wrap db_conn with a no-commit shim so engine.commit() doesn't break the rollback fixture."""
         from server_v2 import WorkflowEngine
-        return WorkflowEngine(db_conn)
+
+        class _NoCommitConn:
+            def __init__(self, inner):
+                object.__setattr__(self, "_inner", inner)
+            def commit(self):
+                return None
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        return WorkflowEngine(_NoCommitConn(db_conn))
 
     def test_set_started_at_fires_on_planned_to_in_progress(self, db_conn):
         with db_conn.cursor() as cur:
