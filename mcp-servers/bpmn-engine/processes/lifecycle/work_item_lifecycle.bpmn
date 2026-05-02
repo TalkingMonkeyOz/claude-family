@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/work-item-lifecycle"
+    id="Definitions_WIL">
+  <!--
+    PROCESS: WORK ITEM LIFECYCLE (F226)
+    Single state machine for all kinds (bug, idea, improvement, design, change,
+    question, feature, refactor, infrastructure, documentation, stream, task,
+    reminder). Replaces feature_workflow.bpmn + task_lifecycle.bpmn +
+    feedback_to_feature.bpmn after F226 Phase 3.
+
+    Stages (8): raw, triaged, planned, in_progress, blocked, done, dropped, parked.
+    Side-effects: set_started_at, set_completed_at, check_parent_rollup,
+                  reopen_clear_completion.
+
+    Drives: claude.work_items.stage column. Transitions live in
+    claude.workflow_transitions WHERE entity_type='work_items'.
+
+    Related: work_item_migration.bpmn (Phase rollout), commit_resolve_v2.bpmn
+    (auto-advance to 'done' on commit-msg token match).
+  -->
+  <bpmn:process id="work_item_lifecycle" name="Work Item Lifecycle (Unified)" isExecutable="true">
+    <!--
+      Input data:
+        - work_item_id: UUID
+        - kind: bug|idea|improvement|design|change|question|feature|refactor|
+                infrastructure|documentation|stream|task|reminder
+        - current_stage: raw|triaged|planned|in_progress|blocked|done|dropped|parked
+        - requested_stage: target stage from caller
+        - actor: identity_id triggering the transition
+        - reason: optional override_reason for skip-conditions path
+      Output:
+        - new_stage
+        - side_effects_executed: list of handler names
+        - rollup_triggered: bool (true iff parent advanced to 'done')
+    -->
+
+    <bpmn:startEvent id="start" name="Transition Requested">
+      <bpmn:outgoing>f_start_to_classify</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Classify the requested transition by current → target pair -->
+    <bpmn:scriptTask id="classify_transition" name="[DB] Lookup workflow_transitions row">
+      <bpmn:incoming>f_start_to_classify</bpmn:incoming>
+      <bpmn:outgoing>f_classify_to_gw_valid</bpmn:outgoing>
+      <bpmn:script>
+-- SELECT requires_condition, side_effect FROM claude.workflow_transitions
+-- WHERE entity_type='work_items' AND from_stage=current_stage AND to_stage=requested_stage.
+-- If no row: invalid transition.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_valid" name="Transition Valid?" default="f_invalid">
+      <bpmn:incoming>f_classify_to_gw_valid</bpmn:incoming>
+      <bpmn:outgoing>f_valid</bpmn:outgoing>
+      <bpmn:outgoing>f_invalid</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_invalid" name="Rejected (Invalid Transition)">
+      <bpmn:incoming>f_invalid</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Conditions check (deps for tasks, or override_reason bypass) -->
+    <bpmn:exclusiveGateway id="gw_conditions" name="Conditions Pass?" default="f_blocked_by_condition">
+      <bpmn:incoming>f_valid</bpmn:incoming>
+      <bpmn:outgoing>f_conditions_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_blocked_by_condition</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_blocked" name="Blocked (Predecessor Open)">
+      <bpmn:incoming>f_blocked_by_condition</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Route by target stage to its side-effect handlers -->
+    <bpmn:exclusiveGateway id="gw_target_stage" name="Target Stage?">
+      <bpmn:incoming>f_conditions_ok</bpmn:incoming>
+      <bpmn:outgoing>f_route_in_progress</bpmn:outgoing>
+      <bpmn:outgoing>f_route_done</bpmn:outgoing>
+      <bpmn:outgoing>f_route_dropped</bpmn:outgoing>
+      <bpmn:outgoing>f_route_blocked</bpmn:outgoing>
+      <bpmn:outgoing>f_route_other</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="se_set_started_at" name="[SIDE-EFFECT] set_started_at">
+      <bpmn:incoming>f_route_in_progress</bpmn:incoming>
+      <bpmn:outgoing>f_started_to_apply</bpmn:outgoing>
+      <bpmn:script>
+-- UPDATE claude.work_items
+-- SET started_at = COALESCE(started_at, NOW())
+-- WHERE work_item_id = $1.
+-- Idempotent: re-entering in_progress doesn't overwrite first started_at.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="se_set_completed_at" name="[SIDE-EFFECT] set_completed_at + check_parent_rollup">
+      <bpmn:incoming>f_route_done</bpmn:incoming>
+      <bpmn:outgoing>f_done_to_rollup_check</bpmn:outgoing>
+      <bpmn:script>
+-- UPDATE claude.work_items
+-- SET completed_at = COALESCE(completed_at, NOW()),
+--     completed_session_id = COALESCE(completed_session_id, $session)
+-- WHERE work_item_id = $1.
+-- Then trigger check_parent_rollup.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Parent rollup: if ALL siblings of this work_item are stage IN ('done','dropped'),
+         cascade-advance the parent_id row to 'done'. Recurses up the hierarchy. -->
+    <bpmn:exclusiveGateway id="gw_rollup_eligible" name="All Siblings Closed?" default="f_no_rollup">
+      <bpmn:incoming>f_done_to_rollup_check</bpmn:incoming>
+      <bpmn:outgoing>f_rollup_eligible</bpmn:outgoing>
+      <bpmn:outgoing>f_no_rollup</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="rollup_parent" name="[REC] Advance parent → done (recursive)">
+      <bpmn:incoming>f_rollup_eligible</bpmn:incoming>
+      <bpmn:outgoing>f_rollup_to_apply</bpmn:outgoing>
+      <bpmn:script>
+-- Recursive call into work_item_lifecycle for parent_id with requested_stage='done'.
+-- Bottoms out when parent_id IS NULL or sibling check fails.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="se_dropped" name="[SIDE-EFFECT] set_completed_at (dropped path)">
+      <bpmn:incoming>f_route_dropped</bpmn:incoming>
+      <bpmn:outgoing>f_dropped_to_apply</bpmn:outgoing>
+      <bpmn:script>
+-- Same as set_completed_at but stage='dropped'. completed_at still gets a timestamp
+-- — represents the close event regardless of polarity.
+-- attributes.dropped_reason should be present (validated upstream).
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="se_blocked" name="[SIDE-EFFECT] log blocked_by_id">
+      <bpmn:incoming>f_route_blocked</bpmn:incoming>
+      <bpmn:outgoing>f_blocked_to_apply</bpmn:outgoing>
+      <bpmn:script>
+-- INSERT INTO claude.audit_log (entity_type='work_items', event_type='blocked',
+-- metadata={blocked_by_id, blocked_reason}).
+-- work_items.blocked_by_id is the cross-tree blocker reference.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="se_other" name="[SIDE-EFFECT] none (other targets)">
+      <bpmn:incoming>f_route_other</bpmn:incoming>
+      <bpmn:outgoing>f_other_to_apply</bpmn:outgoing>
+      <bpmn:script>
+-- raw, triaged, planned, parked: no side effects beyond UPDATE stage + audit row.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- All paths converge here for the actual stage write + audit log entry -->
+    <bpmn:exclusiveGateway id="gw_apply_merge" name="Apply Merge">
+      <bpmn:incoming>f_started_to_apply</bpmn:incoming>
+      <bpmn:incoming>f_rollup_to_apply</bpmn:incoming>
+      <bpmn:incoming>f_no_rollup</bpmn:incoming>
+      <bpmn:incoming>f_dropped_to_apply</bpmn:incoming>
+      <bpmn:incoming>f_blocked_to_apply</bpmn:incoming>
+      <bpmn:incoming>f_other_to_apply</bpmn:incoming>
+      <bpmn:outgoing>f_apply_to_write</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="apply_stage_write" name="[DB] UPDATE work_items.stage + INSERT audit_log">
+      <bpmn:incoming>f_apply_to_write</bpmn:incoming>
+      <bpmn:outgoing>f_write_to_end</bpmn:outgoing>
+      <bpmn:script>
+-- BEGIN;
+--   UPDATE claude.work_items SET stage = $new_stage, updated_at = NOW() WHERE work_item_id = $1;
+--   INSERT INTO claude.audit_log (entity_type='work_items', entity_id, event_type='stage_change',
+--                                 from_stage, to_stage, side_effects_executed, actor, reason);
+-- COMMIT;
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_completed" name="Stage Applied">
+      <bpmn:incoming>f_write_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_classify"     sourceRef="start"               targetRef="classify_transition"/>
+    <bpmn:sequenceFlow id="f_classify_to_gw_valid"  sourceRef="classify_transition" targetRef="gw_valid"/>
+    <bpmn:sequenceFlow id="f_valid"                 sourceRef="gw_valid"            targetRef="gw_conditions">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">transition_exists == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_invalid"               sourceRef="gw_valid"            targetRef="end_invalid"/>
+    <bpmn:sequenceFlow id="f_conditions_ok"         sourceRef="gw_conditions"       targetRef="gw_target_stage">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">conditions_pass == True or override_reason is not None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_blocked_by_condition"  sourceRef="gw_conditions"       targetRef="end_blocked"/>
+    <bpmn:sequenceFlow id="f_route_in_progress"     sourceRef="gw_target_stage"     targetRef="se_set_started_at">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">requested_stage == "in_progress"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_done"            sourceRef="gw_target_stage"     targetRef="se_set_completed_at">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">requested_stage == "done"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_dropped"         sourceRef="gw_target_stage"     targetRef="se_dropped">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">requested_stage == "dropped"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_blocked"         sourceRef="gw_target_stage"     targetRef="se_blocked">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">requested_stage == "blocked"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_other"           sourceRef="gw_target_stage"     targetRef="se_other"/>
+    <bpmn:sequenceFlow id="f_started_to_apply"      sourceRef="se_set_started_at"   targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_done_to_rollup_check"  sourceRef="se_set_completed_at" targetRef="gw_rollup_eligible"/>
+    <bpmn:sequenceFlow id="f_rollup_eligible"       sourceRef="gw_rollup_eligible"  targetRef="rollup_parent">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">all_siblings_closed == True and parent_id is not None</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_rollup"             sourceRef="gw_rollup_eligible"  targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_rollup_to_apply"       sourceRef="rollup_parent"       targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_dropped_to_apply"      sourceRef="se_dropped"          targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_blocked_to_apply"      sourceRef="se_blocked"          targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_other_to_apply"        sourceRef="se_other"            targetRef="gw_apply_merge"/>
+    <bpmn:sequenceFlow id="f_apply_to_write"        sourceRef="gw_apply_merge"      targetRef="apply_stage_write"/>
+    <bpmn:sequenceFlow id="f_write_to_end"          sourceRef="apply_stage_write"   targetRef="end_completed"/>
+  </bpmn:process>
+</bpmn:definitions>

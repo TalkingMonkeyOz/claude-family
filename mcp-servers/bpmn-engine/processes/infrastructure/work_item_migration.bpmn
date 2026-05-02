@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/work-item-migration"
+    id="Definitions_WIM">
+  <!--
+    PROCESS: WORK ITEM MIGRATION (F226 Strangler Fig)
+    Mirrors kg_dual_write.bpmn pattern, generalised for the F226 4-phase rollout.
+    Shows the dual-write coupling between legacy tables (features, build_tasks,
+    feedback, todos) and the unified claude.work_items table during Phase 2.
+
+    Phase gating (single feature flag per phase, single rollback):
+      - Phase 1 (build):       work_items table created, FLAG OFF — no dual-write
+      - Phase 2 (dual-write):  f226_dual_write_enabled=true → mirror writes
+      - Phase 3 (flip):        legacy tables become views over work_items
+      - Phase 4 (retire):      drop deprecated MCP aliases
+
+    Drives: scripts/jobs/f226_parity_check.py (verification),
+            scripts/schema_migrations/f226_backfill_work_items.py (initial load).
+    Related: kg_dual_write.bpmn (template), work_item_lifecycle.bpmn (consumer).
+  -->
+  <bpmn:process id="work_item_migration" name="Work Item Migration (Strangler Fig 4-Phase)" isExecutable="true">
+    <!--
+      Input data (per legacy-table write event):
+        - source_table: features | build_tasks | feedback | todos
+        - source_id:    UUID of legacy row
+        - op:           INSERT | UPDATE | DELETE
+        - new_row:      payload (NULL for DELETE)
+        - old_row:      payload (NULL for INSERT)
+        - phase:        current F226 phase (1|2|3|4)
+        - dual_write_enabled: bool (config flag)
+      Output:
+        - mirror_success: bool
+        - work_item_id: UUID of mirrored row
+        - failure_reason: text (when mirror_success=false)
+    -->
+
+    <bpmn:startEvent id="start" name="Legacy Table Write Event">
+      <bpmn:outgoing>f_start_to_phase_check</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Phase gate: Phase 1 = no mirroring; Phase 2+ = mirror -->
+    <bpmn:exclusiveGateway id="gw_phase" name="Phase &gt;= 2 and Flag Enabled?" default="f_phase1_skip">
+      <bpmn:incoming>f_start_to_phase_check</bpmn:incoming>
+      <bpmn:outgoing>f_phase_active</bpmn:outgoing>
+      <bpmn:outgoing>f_phase1_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_phase1_skip" name="Skipped (Phase 1, Flag Off)">
+      <bpmn:incoming>f_phase1_skip</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Resolve canonical work_item_id by legacy_short_code via code-history sidecar -->
+    <bpmn:scriptTask id="resolve_work_item" name="[DB] Resolve work_item_id via work_item_code_history">
+      <bpmn:incoming>f_phase_active</bpmn:incoming>
+      <bpmn:outgoing>f_resolve_to_route</bpmn:outgoing>
+      <bpmn:script>
+-- SELECT work_item_id FROM claude.work_item_code_history
+-- WHERE short_code equals legacy_table_prefix concatenated with source short_code.
+-- If not found and op equals INSERT: mint new work_items row + history entry.
+-- If not found and op equals UPDATE or DELETE: data integrity error to capture_failure.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- Route by source legacy table -->
+    <bpmn:exclusiveGateway id="gw_source" name="Source Table?">
+      <bpmn:incoming>f_resolve_to_route</bpmn:incoming>
+      <bpmn:outgoing>f_route_features</bpmn:outgoing>
+      <bpmn:outgoing>f_route_build_tasks</bpmn:outgoing>
+      <bpmn:outgoing>f_route_feedback</bpmn:outgoing>
+      <bpmn:outgoing>f_route_todos</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="sync_features" name="[HANDLER] sync_features_to_work_items">
+      <bpmn:incoming>f_route_features</bpmn:incoming>
+      <bpmn:outgoing>f_features_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- Map: feature_type → kind. status → stage per master design §4.3.
+-- plan_data → work_items.plan_data (typed column, post-research-refinement §A.2).
+-- parent_feature_id → parent_id.
+-- F### short_code preserved in work_item_code_history.code_kind='legacy'.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_build_tasks" name="[HANDLER] sync_build_tasks_to_work_items">
+      <bpmn:incoming>f_route_build_tasks</bpmn:incoming>
+      <bpmn:outgoing>f_build_tasks_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- Map: kind = 'task'. task_type → attributes.task_type.
+-- verification, files_affected → typed columns (post-research §A.2).
+-- feature_id → parent_id. BT### → work_item_code_history.
+-- COVERS FB446 GAP: completed_at gets stamped on stage='done' transition
+-- via work_item_lifecycle.set_completed_at side-effect.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_feedback" name="[HANDLER] sync_feedback_to_work_items">
+      <bpmn:incoming>f_route_feedback</bpmn:incoming>
+      <bpmn:outgoing>f_feedback_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- Map: feedback_type → kind. status → stage per §4.3.
+-- priority (text) → priority (int): high=2, medium=3, low=4.
+-- screenshot_path → attributes.screenshot_path.
+-- FB### → work_item_code_history.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="sync_todos" name="[HANDLER] sync_todos_to_work_items">
+      <bpmn:incoming>f_route_todos</bpmn:incoming>
+      <bpmn:outgoing>f_todos_to_merge</bpmn:outgoing>
+      <bpmn:script>
+-- Map: kind = 'task' (with task_scope) or 'reminder'.
+-- task_scope preserved as typed column.
+-- content → title (truncate to 500), active_form → description.
+-- todos has no short_code, so legacy_short_code = NULL for these rows.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_validate" name="Sync Result Merge">
+      <bpmn:incoming>f_features_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_build_tasks_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_feedback_to_merge</bpmn:incoming>
+      <bpmn:incoming>f_todos_to_merge</bpmn:incoming>
+      <bpmn:outgoing>f_validate_to_gw_success</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:exclusiveGateway id="gw_success" name="Mirror Succeeded?" default="f_mirror_failed">
+      <bpmn:incoming>f_validate_to_gw_success</bpmn:incoming>
+      <bpmn:outgoing>f_mirror_ok</bpmn:outgoing>
+      <bpmn:outgoing>f_mirror_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="audit_mirror" name="[DB] INSERT enforcement_log row">
+      <bpmn:incoming>f_mirror_ok</bpmn:incoming>
+      <bpmn:outgoing>f_audit_to_end</bpmn:outgoing>
+      <bpmn:script>
+-- INSERT INTO claude.enforcement_log (event_type='f226_dual_write',
+-- source_table, source_id, work_item_id, op, latency_ms).
+-- Used by f226_parity_check.py to verify mirror lag stays within budget.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_synced" name="Mirrored to work_items">
+      <bpmn:incoming>f_audit_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="capture_failure" name="[CAPTURE] failure_capture pipeline">
+      <bpmn:incoming>f_mirror_failed</bpmn:incoming>
+      <bpmn:outgoing>f_failure_to_end</bpmn:outgoing>
+      <bpmn:script>
+-- Same coupling as kg_dual_write: trigger AFTER, exception bubbles, legacy tx
+-- rolls back. Phase 2 accepts strict coupling; Phase 3 flip removes the dual
+-- path entirely (legacy tables become views, single write path).
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_failed" name="Mirror Failed (Tx Rolled Back)">
+      <bpmn:incoming>f_failure_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_phase_check" sourceRef="start"           targetRef="gw_phase"/>
+    <bpmn:sequenceFlow id="f_phase_active"         sourceRef="gw_phase"        targetRef="resolve_work_item">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">phase &gt;= 2 and dual_write_enabled == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_phase1_skip"          sourceRef="gw_phase"        targetRef="end_phase1_skip"/>
+    <bpmn:sequenceFlow id="f_resolve_to_route"     sourceRef="resolve_work_item" targetRef="gw_source"/>
+    <bpmn:sequenceFlow id="f_route_features"       sourceRef="gw_source"       targetRef="sync_features">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "features"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_build_tasks"    sourceRef="gw_source"       targetRef="sync_build_tasks">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "build_tasks"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_feedback"       sourceRef="gw_source"       targetRef="sync_feedback">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "feedback"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_route_todos"          sourceRef="gw_source"       targetRef="sync_todos">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">source_table == "todos"</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_features_to_merge"    sourceRef="sync_features"    targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_build_tasks_to_merge" sourceRef="sync_build_tasks" targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_feedback_to_merge"    sourceRef="sync_feedback"    targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_todos_to_merge"       sourceRef="sync_todos"       targetRef="gw_validate"/>
+    <bpmn:sequenceFlow id="f_validate_to_gw_success" sourceRef="gw_validate"    targetRef="gw_success"/>
+    <bpmn:sequenceFlow id="f_mirror_ok"            sourceRef="gw_success"      targetRef="audit_mirror">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">mirror_success == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_mirror_failed"        sourceRef="gw_success"      targetRef="capture_failure"/>
+    <bpmn:sequenceFlow id="f_audit_to_end"         sourceRef="audit_mirror"    targetRef="end_synced"/>
+    <bpmn:sequenceFlow id="f_failure_to_end"       sourceRef="capture_failure" targetRef="end_failed"/>
+  </bpmn:process>
+</bpmn:definitions>

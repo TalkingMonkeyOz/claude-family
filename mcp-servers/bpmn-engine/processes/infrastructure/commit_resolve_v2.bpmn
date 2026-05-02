@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/commit-resolve-v2"
+    id="Definitions_CRV2">
+  <!--
+    PROCESS: COMMIT-MSG AUTO-RESOLVE v2 (F226)
+    Supersedes the FB397 commit_fb_resolve_hook.py (FB-only) with a unified
+    handler that recognises all four token formats:
+      [W###]   — canonical work_item code (post-F226)
+      [FB###]  — legacy feedback short_code (resolved via work_item_code_history)
+      [BT###]  — legacy build_task short_code (resolved via work_item_code_history)
+      [F###]   — legacy feature short_code (resolved via work_item_code_history)
+    Plus range syntax: [BT694-712], [FB1-5] expand into individual codes.
+
+    Hook: PostToolUse on Bash, fires only when:
+      - command starts with `git commit`
+      - tool succeeded (exit 0)
+      - resulting commit message exists (skips amend-without-message,
+        merges, dry-run, no-verify)
+
+    Action per resolved code: work_item_advance(code, stage='done'). Skips no-op
+    if already 'done'. Respects skip-conditions only when override_reason set.
+
+    Drives: scripts/commit_resolve_v2_hook.py.
+    Replaces: scripts/commit_fb_resolve_hook.py (retired in F226 Phase 4).
+    Drives FB445 closure (BT auto-resolve) and rolls FB397 forward.
+  -->
+  <bpmn:process id="commit_resolve_v2" name="Commit-msg Auto-Resolve v2 (Unified Tokens)" isExecutable="true">
+    <!--
+      Input data (PostToolUse Bash event):
+        - command: bash command line
+        - exit_code: int
+        - tool_response: stdout/stderr from git
+      Output:
+        - resolved_codes: list of work_item codes advanced to 'done'
+        - skipped_reasons: list of {code, reason} for tokens that didn't advance
+    -->
+
+    <bpmn:startEvent id="start" name="PostToolUse Bash Event">
+      <bpmn:outgoing>f_start_to_is_commit</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- Cheap detection: is this a git commit invocation? -->
+    <bpmn:exclusiveGateway id="gw_is_commit" name="Is `git commit` and Succeeded?" default="f_not_commit">
+      <bpmn:incoming>f_start_to_is_commit</bpmn:incoming>
+      <bpmn:outgoing>f_is_commit</bpmn:outgoing>
+      <bpmn:outgoing>f_not_commit</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_not_commit" name="Skipped (Not Commit)">
+      <bpmn:incoming>f_not_commit</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:scriptTask id="extract_message" name="[GIT] git log -1 --format=%B HEAD">
+      <bpmn:incoming>f_is_commit</bpmn:incoming>
+      <bpmn:outgoing>f_message_to_skip_check</bpmn:outgoing>
+      <bpmn:script>
+-- subprocess.run(['git', 'log', '-1', '--format=%B', 'HEAD'], capture_output=True).
+-- If returncode != 0 or message empty: skip (likely amend without message).
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_skip_invalid" name="Valid Commit Context?" default="f_skip">
+      <bpmn:incoming>f_message_to_skip_check</bpmn:incoming>
+      <bpmn:outgoing>f_proceed</bpmn:outgoing>
+      <bpmn:outgoing>f_skip</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_skipped" name="Skipped (Amend/Merge/Dry-Run)">
+      <bpmn:incoming>f_skip</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Token extraction with range expansion -->
+    <bpmn:scriptTask id="extract_tokens" name="[REGEX] Extract [W###] [FB###] [BT###] [F###] + ranges">
+      <bpmn:incoming>f_proceed</bpmn:incoming>
+      <bpmn:outgoing>f_tokens_to_resolve</bpmn:outgoing>
+      <bpmn:script>
+-- Regex patterns:
+--   r'\[\s*W\s*(\d+)\s*\]'                                — W tokens
+--   r'\[\s*FB\s*(\d+)\s*(?:-\s*(\d+))?\s*\]'              — FB single + range
+--   r'\[\s*BT\s*(\d+)\s*(?:-\s*(\d+))?\s*\]'              — BT single + range
+--   r'\[\s*F\s*(\d+)\s*(?:-\s*(\d+))?\s*\]'               — F single + range
+-- Range expansion: [BT694-712] → BT694, BT695, …, BT712.
+-- Dedup the union, preserve insertion order.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_has_tokens" name="Any Tokens Found?" default="f_no_tokens">
+      <bpmn:incoming>f_tokens_to_resolve</bpmn:incoming>
+      <bpmn:outgoing>f_resolve_loop</bpmn:outgoing>
+      <bpmn:outgoing>f_no_tokens</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:endEvent id="end_no_tokens" name="No Tokens — Nothing to Resolve">
+      <bpmn:incoming>f_no_tokens</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Per-token resolution: lookup canonical work_item_id via code_history,
+         then call work_item_advance(stage='done'). Logs skips for unknown codes. -->
+    <bpmn:scriptTask id="resolve_each_token" name="[LOOP] resolve_legacy + work_item_advance(stage='done')">
+      <bpmn:incoming>f_resolve_loop</bpmn:incoming>
+      <bpmn:outgoing>f_resolve_to_audit</bpmn:outgoing>
+      <bpmn:script>
+-- For each token in resolved_codes:
+--   1. work_item_id = work_item_resolve_legacy(token)
+--      If None: append({code, reason='unknown_code'}) to skipped_reasons; continue.
+--   2. SELECT stage FROM claude.work_items WHERE work_item_id = $1.
+--      If stage IN ('done','dropped'): append({code, reason='already_terminal'}); continue.
+--   3. work_item_advance(work_item_id, stage='done', actor=session_id, source='commit_hook').
+--      On success: append code to resolved_codes_actual.
+--      On WorkflowEngine reject: append({code, reason=reject_msg}) to skipped_reasons.
+-- Fail-open: any exception → log + continue with next token.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="audit_decisions" name="[DB] INSERT enforcement_log per resolution">
+      <bpmn:incoming>f_resolve_to_audit</bpmn:incoming>
+      <bpmn:outgoing>f_audit_to_end</bpmn:outgoing>
+      <bpmn:script>
+-- INSERT INTO claude.enforcement_log (event_type='commit_auto_resolve_v2',
+--   commit_sha, branch, resolved_codes, skipped_reasons, session_id, latency_ms).
+-- Allows operators to audit resolution patterns + spot persistent skips.
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:endEvent id="end_resolved" name="Resolution Complete">
+      <bpmn:incoming>f_audit_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- Sequence flows -->
+    <bpmn:sequenceFlow id="f_start_to_is_commit"   sourceRef="start"            targetRef="gw_is_commit"/>
+    <bpmn:sequenceFlow id="f_is_commit"            sourceRef="gw_is_commit"     targetRef="extract_message">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">is_git_commit and exit_code == 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_not_commit"           sourceRef="gw_is_commit"     targetRef="end_not_commit"/>
+    <bpmn:sequenceFlow id="f_message_to_skip_check" sourceRef="extract_message" targetRef="gw_skip_invalid"/>
+    <bpmn:sequenceFlow id="f_proceed"              sourceRef="gw_skip_invalid"  targetRef="extract_tokens">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">commit_context_valid == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_skip"                 sourceRef="gw_skip_invalid"  targetRef="end_skipped"/>
+    <bpmn:sequenceFlow id="f_tokens_to_resolve"    sourceRef="extract_tokens"   targetRef="gw_has_tokens"/>
+    <bpmn:sequenceFlow id="f_resolve_loop"         sourceRef="gw_has_tokens"    targetRef="resolve_each_token">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">tokens_count &gt; 0</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="f_no_tokens"            sourceRef="gw_has_tokens"    targetRef="end_no_tokens"/>
+    <bpmn:sequenceFlow id="f_resolve_to_audit"     sourceRef="resolve_each_token" targetRef="audit_decisions"/>
+    <bpmn:sequenceFlow id="f_audit_to_end"         sourceRef="audit_decisions"  targetRef="end_resolved"/>
+  </bpmn:process>
+</bpmn:definitions>
