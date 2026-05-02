@@ -1614,10 +1614,19 @@ class WorkflowEngine:
 
     # Map entity_type to (table, pk_column, short_code_prefix)
     ENTITY_MAP = {
-        'feedback':    ('claude.feedback',    'feedback_id', 'FB'),
-        'features':    ('claude.features',    'feature_id',  'F'),
-        'build_tasks': ('claude.build_tasks', 'task_id',     'BT'),
+        'feedback':    ('claude.feedback',    'feedback_id',  'FB'),
+        'features':    ('claude.features',    'feature_id',   'F'),
+        'build_tasks': ('claude.build_tasks', 'task_id',      'BT'),
+        'work_items':  ('claude.work_items',  'work_item_id', 'W'),
     }
+
+    # Stages that count as "closed" for completed_at + parent rollup (work_items only)
+    WORK_ITEM_CLOSED_STAGES = ('done', 'dropped')
+
+    # work_items uses 'stage' instead of 'status'. Other entities use 'status'.
+    @classmethod
+    def _status_col(cls, entity_type: str) -> str:
+        return 'stage' if entity_type == 'work_items' else 'status'
 
     def __init__(self, conn):
         self.conn = conn
@@ -1631,15 +1640,16 @@ class WorkflowEngine:
             raise ValueError(f"Unknown entity_type: {entity_type}")
 
         table, pk_col, prefix = self.ENTITY_MAP[entity_type]
+        status_col = self._status_col(entity_type)
         cur = self.conn.cursor()
         try:
-            # Try short code first (e.g., 'BT3', 'F12', 'FB5')
+            # Try short code first (e.g., 'BT3', 'F12', 'FB5', 'W42')
             clean_id = item_id.upper().strip()
             if clean_id.startswith(prefix):
                 code_num = clean_id[len(prefix):]
                 if code_num.isdigit():
                     cur.execute(f"""
-                        SELECT {pk_col}::text, status, short_code
+                        SELECT {pk_col}::text, {status_col} AS status, short_code
                         FROM {table}
                         WHERE short_code = %s
                     """, (int(code_num),))
@@ -1649,7 +1659,7 @@ class WorkflowEngine:
 
             # Try UUID
             cur.execute(f"""
-                SELECT {pk_col}::text, status, short_code
+                SELECT {pk_col}::text, {status_col} AS status, short_code
                 FROM {table}
                 WHERE {pk_col}::text = %s
             """, (item_id,))
@@ -1840,12 +1850,104 @@ class WorkflowEngine:
                 return msg
 
             if side_effect_name == 'set_started_at':
-                cur.execute("""
-                    UPDATE claude.build_tasks
-                    SET started_at = COALESCE(started_at, NOW())
-                    WHERE task_id = %s::uuid
-                """, (entity_id,))
+                # Dispatch on entity_type — build_tasks and work_items both have started_at
+                if entity_type == 'work_items':
+                    cur.execute("""
+                        UPDATE claude.work_items
+                        SET started_at = COALESCE(started_at, NOW())
+                        WHERE work_item_id = %s::uuid
+                    """, (entity_id,))
+                else:
+                    cur.execute("""
+                        UPDATE claude.build_tasks
+                        SET started_at = COALESCE(started_at, NOW())
+                        WHERE task_id = %s::uuid
+                    """, (entity_id,))
                 return "Set started_at timestamp"
+
+            if side_effect_name == 'set_completed_at':
+                # F226 / FB446: stamp completed_at on transition to a closed stage.
+                # Idempotent — COALESCE keeps the original timestamp if already set.
+                if entity_type == 'work_items':
+                    session_id = os.environ.get('CLAUDE_SESSION_ID')
+                    cur.execute("""
+                        UPDATE claude.work_items
+                        SET completed_at = COALESCE(completed_at, NOW()),
+                            completed_session_id = COALESCE(completed_session_id,
+                                                             NULLIF(%s,'')::uuid)
+                        WHERE work_item_id = %s::uuid
+                    """, (session_id or '', entity_id))
+                    # F226: fold check_parent_rollup into the close path so workflow_transitions
+                    # only needs one side_effect column per row.
+                    rollup_msg = self.execute_side_effect(
+                        'check_parent_rollup', entity_type, entity_id
+                    )
+                    return f"Set completed_at; rollup: {rollup_msg}"
+                elif entity_type == 'build_tasks':
+                    cur.execute("""
+                        UPDATE claude.build_tasks
+                        SET completed_at = COALESCE(completed_at, NOW())
+                        WHERE task_id = %s::uuid
+                    """, (entity_id,))
+                    return "Set completed_at timestamp"
+                else:
+                    return f"set_completed_at not supported for {entity_type}"
+
+            if side_effect_name == 'check_parent_rollup':
+                # F226: when a work_item closes, see if its parent should auto-close too.
+                # Mirrors check_feature_completion but uses work_items.parent_id instead of
+                # the feature_id/parent_feature_id pair.
+                cur.execute("""
+                    SELECT parent.work_item_id::text AS pid,
+                           parent.stage AS parent_stage,
+                           'W' || parent.short_code AS parent_code,
+                           (SELECT COUNT(*) FROM claude.work_items child
+                            WHERE child.parent_id = parent.work_item_id
+                              AND child.stage NOT IN ('done', 'dropped')
+                              AND child.is_deleted = FALSE) AS remaining
+                    FROM claude.work_items me
+                    JOIN claude.work_items parent ON parent.work_item_id = me.parent_id
+                    WHERE me.work_item_id = %s::uuid
+                """, (entity_id,))
+                row = cur.fetchone()
+                if not row:
+                    return "No parent work_item — top-level"
+                if row['remaining'] > 0:
+                    return f"{row['remaining']} sibling(s) remaining for {row['parent_code']}"
+                if row['parent_stage'] != 'in_progress':
+                    return (
+                        f"All children done for {row['parent_code']} but parent stage is "
+                        f"'{row['parent_stage']}' — rollup deferred to sweep."
+                    )
+                # Auto-rollup: advance parent to done
+                rollup = self.execute_transition(
+                    entity_type='work_items',
+                    item_id=row['parent_code'],
+                    new_status='done',
+                    change_source='auto_rollup',
+                    metadata={
+                        'reason': 'all_children_closed',
+                        'trigger_work_item_id': entity_id,
+                    },
+                )
+                if not rollup.get('success'):
+                    return (
+                        f"All children done for {row['parent_code']} but auto-rollup failed: "
+                        f"{rollup.get('error', 'unknown error')}"
+                    )
+                return f"{row['parent_code']} auto-rolled up to done."
+
+            if side_effect_name == 'reopen_clear_completion':
+                # F226: re-entering in_progress from done (or triaged from dropped) clears
+                # completed_at + completed_session_id so the next close stamps fresh.
+                if entity_type == 'work_items':
+                    cur.execute("""
+                        UPDATE claude.work_items
+                        SET completed_at = NULL, completed_session_id = NULL
+                        WHERE work_item_id = %s::uuid
+                    """, (entity_id,))
+                    return "Cleared completed_at on reopen"
+                return f"reopen_clear_completion not supported for {entity_type}"
 
             if side_effect_name == 'archive_plan_data':
                 # Could archive plan_data to a history table - for now just log
@@ -1942,11 +2044,12 @@ class WorkflowEngine:
 
             # 4. Execute the status update
             table, pk_col, _ = self.ENTITY_MAP[entity_type]
+            status_col = self._status_col(entity_type)
             cur = self.conn.cursor()
             try:
                 cur.execute(f"""
                     UPDATE {table}
-                    SET status = %s, updated_at = NOW()
+                    SET {status_col} = %s, updated_at = NOW()
                     WHERE {pk_col} = %s::uuid
                 """, (new_status, entity_uuid))
 
