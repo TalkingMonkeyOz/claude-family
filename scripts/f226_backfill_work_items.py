@@ -237,6 +237,9 @@ def _row_to_work_item_payload(source_table: str, row: dict) -> dict:
         base['attributes']['dropped_reason'] = drop_reason
 
     base['attributes']['legacy_table'] = source_table
+    if row.get('status'):
+        # Preserve original legacy status so compat views can reverse-map exactly.
+        base['attributes']['original_legacy_status'] = row['status']
     return base
 
 
