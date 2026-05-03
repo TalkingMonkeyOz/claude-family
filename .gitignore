@@ -65,6 +65,10 @@ output/
 .mcp.json
 nul
 
+# Obsidian per-user UI state (workspace.json gets rewritten every Obsidian launch)
+**/.obsidian/workspace.json
+**/.obsidian/workspace-mobile.json
+
 # Downloaded reference repos (keep local, don't track)
 knowledge-vault/20-Domains/awesome-copilot-reference/
 tools/claude-voice/ClaudeVoice/bin/
