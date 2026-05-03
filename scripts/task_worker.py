@@ -1114,6 +1114,15 @@ def main():
         thread_name_prefix="task-worker-agent",
     )
 
+    def _on_idle_timeout():
+        logger.info(
+            f"idle timeout reached ({IDLE_TIMEOUT_SECS}s with empty queue); "
+            f"initiating graceful shutdown"
+        )
+        _sigterm(None, None)
+
+    idle_timer_armed = False
+
     try:
         consecutive_errors = 0
         while not _shutting_down.is_set():
@@ -1130,10 +1139,16 @@ def main():
 
             if task is None:
                 consecutive_errors = 0
+                if not idle_timer_armed:
+                    ctx.reset_idle_timer(_on_idle_timeout)
+                    idle_timer_armed = True
                 _shutting_down.wait(timeout=CLAIM_POLL_INTERVAL)
                 continue
 
             consecutive_errors = 0
+            if idle_timer_armed:
+                ctx.cancel_idle_timer()
+                idle_timer_armed = False
             kind = str(task.get("kind") or "script")
             pool = script_pool if kind == "script" else agent_pool
 
