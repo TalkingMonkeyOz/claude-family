@@ -8,6 +8,7 @@ allowed-tools:
   - Bash
   - Grep
   - Task
+paths: "**/test_*.py|**/*_test.py|**/tests/**|**/*.test.{ts,tsx,js,jsx}|**/*.spec.{ts,tsx,js,jsx}"
 ---
 
 # Testing Patterns Skill

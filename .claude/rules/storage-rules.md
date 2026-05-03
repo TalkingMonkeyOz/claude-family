@@ -1,6 +1,6 @@
 # Storage Rules
 
-> **Provenance**: DB-managed (`claude.rules` table, scope='global' + 'project'). Edit via `UPDATE claude.rules` then `config_manage(action="deploy_project")` — never edit the deployed `.md` directly. **Last updated 2026-05-01** to reflect Knowledge Architecture v2 (vault sunset, DB-first canonical) + scheduling tier matrix.
+> **Provenance**: DB-managed (`claude.rules` table, scope='global' + 'project'). Edit via `UPDATE claude.rules` then `config_manage(action="deploy_project")` — never edit the deployed `.md` directly. **Last updated 2026-05-02** (F224 — task_queue row + canonical decision tree added to Scheduling Tier Matrix). Prior update 2026-05-01 (vault sunset, Knowledge Architecture v2).
 
 ## Canonical Position (Architecture v2, 2026-04-09)
 
@@ -42,10 +42,10 @@ The markdown vault at `knowledge-vault/` is the **pre-v2 human documentation lay
 **Status**: read-only legacy. Embeddings still indexed so vault content surfaces in `recall_memories()` results during the migration window. Migration to DB is task #649.
 
 **What this means for you**:
-- ❌ Don't write new operational knowledge to the vault
-- ❌ Don't update SOPs as vault markdown — create a skill or BPMN process model
-- ✅ It's fine to *read* vault docs when explicitly asked or when an embedding hit lands
-- ✅ When you find vault content that should be in the DB, migrate it via `remember()` / `entity_store()` / `article_write()` and flag the vault doc for archival
+- Don't write new operational knowledge to the vault
+- Don't update SOPs as vault markdown — create a skill or BPMN process model
+- It's fine to *read* vault docs when explicitly asked or when an embedding hit lands
+- When you find vault content that should be in the DB, migrate it via `remember()` / `entity_store()` / `article_write()` and flag the vault doc for archival
 
 ## Credential Workflow
 
@@ -119,11 +119,11 @@ You own your knowledge quality. Don't leave wrong, stale, or duplicate entries f
 **Every change preserves existing state.** Burned by FB320 (deep-merge bug wiped workspace overrides). Not happening again.
 
 **Schema migrations**: ADDITIVE only.
-- `ADD COLUMN ... NULL` ✅
-- `CREATE INDEX IF NOT EXISTS` ✅
-- `DROP COLUMN` ❌ (use deprecation envelope, retire later)
-- `ALTER COLUMN ... NOT NULL` without default ❌
-- `RENAME COLUMN` ❌ (add new + dual-write + retire)
+- `ADD COLUMN ... NULL` OK
+- `CREATE INDEX IF NOT EXISTS` OK
+- `DROP COLUMN` NO (use deprecation envelope, retire later)
+- `ALTER COLUMN ... NOT NULL` without default NO
+- `RENAME COLUMN` NO (add new + dual-write + retire)
 
 **Config deployments**: PRESERVE overrides.
 - `generate_project_settings.py` keeps existing permissions (line 489-490)
@@ -158,22 +158,60 @@ You own your knowledge quality. Don't leave wrong, stale, or duplicate entries f
 **Specific bypass to avoid** (per FB341):
 - `mcp__postgres__execute_sql` against `claude.feedback`/`features`/`build_tasks` -> use `work_board()` / `get_ready_tasks()` / `work_status()` instead
 - `mcp__postgres__execute_sql` against `claude.knowledge`/`entities` -> use `recall_memories()` / `entity_read()` / `memory_manage()`
+- `mcp__postgres__execute_sql` against `claude.task_queue`/`job_templates`/`job_template_versions`/`job_template_origins` -> use `job_enqueue` / `job_template` / `job_status` (F224, NEW 2026-05-02)
 - Reading `information_schema.columns` -> file FB345 (until `get_schema(table=…, mode='raw')` ships)
 
-If you MUST use raw SQL (telemetry, mcp_usage, scheduled_jobs — currently no MCP wrapper), add an `-- OVERRIDE: <reason>` comment so the gap is visible to FB343/FB344.
+If you MUST use raw SQL (telemetry, mcp_usage, scheduled_jobs without a wrapper, worker daemon claim path — currently no MCP wrapper), add an `-- OVERRIDE: <reason>` comment so the gap is visible to FB343/FB344.
 
-## Scheduling Tier Matrix (MANDATORY, NEW 2026-05-01)
+## Scheduling Tier Matrix (MANDATORY, NEW 2026-05-01, EXTENDED 2026-05-02 with task_queue)
 
-**Three local-first scheduling tools, plus one cloud one. Pick the cheapest that does the job.**
+**Four scheduling tools — three local-first, one cloud. Pick the cheapest that does the job.**
 
 | I want... | Use | Cost | Where it runs |
 |---|---|---|---|
-| Remind me to check X in N days | `create_reminder(due_at, body, rationale)` → RM-code, surfaces at SessionStart | Free | Local DB |
-| Recurring system maintenance (cron) | `INSERT INTO claude.scheduled_jobs` (or via MCP wrapper if present) | Free | Local `scripts/job_runner.py` |
-| Run my code remotely / open a PR / isolated sandbox | `/schedule` skill (RemoteTrigger API) | **Billable** | Anthropic cloud |
+| Remind me to check X in N days (judgment call) | `create_reminder(due_at, body, rationale)` → RM-code, surfaces at SessionStart | Free | Local DB |
+| Recurring system maintenance (cron) | `job_schedule(action='create', template_id=..., schedule=...)` (F224) — or legacy `INSERT INTO claude.scheduled_jobs` for pre-template rows | Free | Local `scripts/job_runner.py` + `scripts/task_worker.py` |
+| **One-shot async work, run now-ish, no block** (F224, **NEW 2026-05-02**) | `job_enqueue(template_name=..., payload_override=...)` → claim/lease/retry/dead-letter via PG-backed queue | Free | Local `scripts/task_worker.py` |
+| Run code remotely / open a PR / isolated sandbox | `/schedule` skill (RemoteTrigger API) | **Billable** | Anthropic cloud |
 
-**Bypass to avoid** (added per task #1033, 2026-05-01):
-- Reaching for `/schedule` (cloud, billable) when `create_reminder` (local, free) handles "remind me later" — confirmed anti-pattern.
-- The remote agent **cannot** access your local filesystem, local PostgreSQL, or local services. If the work needs `~/.claude/logs/`, `claude.*` schema, or local processes, it MUST be `create_reminder` or a `scheduled_jobs` entry.
+### Canonical Decision Tree (USE THIS when in doubt)
 
-**Decision**: before invoking `/schedule`, ask: *does this need to run in Anthropic's cloud (PR, isolated env) or could a local Claude session pick it up via SessionStart reminder?* If local can do it → `create_reminder`. If recurring → `scheduled_jobs`. Only use `/schedule` when cloud sandbox is genuinely required.
+```
+Need work to happen later or in background.
+│
+├─ Does it need to run in Anthropic's cloud sandbox? (open a PR, isolated env)
+│   └─ YES → /schedule (billable). Stop.
+│
+├─ Does it recur on a fixed schedule? (daily/hourly/weekly)
+│   └─ YES → job_schedule (cron-triggered template run). Stop.
+│
+├─ Does it need a human/Claude judgment call to surface at a future date?
+│   ("In 14 days, ask if X is still useful")
+│   └─ YES → create_reminder (SessionStart prompt). Stop.
+│
+└─ One-shot async work, run now-ish, no block? → job_enqueue (queue + worker drains)
+```
+
+### Easy-to-Confuse Cases (anti-pattern table — F224, FB416/#1033 fix)
+
+| Case | Wrong choice | Right choice |
+|---|---|---|
+| "Reindex CKG for project X" | `/schedule` (cloud, billable) NO | `job_enqueue` YES — local, free |
+| "Audit doc links every Monday" | `job_enqueue` NO (one-off) | `job_schedule` YES |
+| "Verify FB342 fix in 7 days" | `job_enqueue` NO (no surfacing) | `create_reminder` YES — judgment call |
+| "Run drift detector hourly" | Manual cron NO | `job_schedule` YES |
+| "Open a cleanup PR for flag X in 2 weeks" | `job_enqueue` NO (can't open remote PR) | `/schedule` YES — needs cloud sandbox |
+| "Backfill 4K embeddings" | Direct subprocess NO | `job_enqueue` YES — gets retry, lease, failure surfacing |
+| "Audit X every night, summarise into feedback" | `/schedule` (cloud) NO | `job_schedule` with kind=agent template YES |
+
+### Bypass to avoid
+
+- Reaching for `/schedule` (cloud, billable) when `create_reminder` / `job_enqueue` / `job_schedule` (local, free) handles it. **Confirmed anti-pattern** (FB416, task #1033, 2026-05-01).
+- The remote agent **cannot** access your local filesystem, local PostgreSQL, or local services. If the work needs `~/.claude/logs/`, `claude.*` schema, or local processes, it MUST be one of the local options.
+- Rolling your own per-tool queue (like `ckg_daemon.ReindexQueue`) when `job_enqueue` covers the pattern. F224 provides the generic framework — extract into a job_template instead.
+
+### Decision short form
+
+Before invoking `/schedule`, ask: *does this need cloud sandbox (PR, isolated env) or could a local Claude session / queue worker handle it?*
+- If local can do it → `create_reminder` (judgment call) **OR** `job_enqueue` (one-shot async) **OR** `job_schedule` (recurring).
+- Only use `/schedule` when cloud sandbox is genuinely required.
