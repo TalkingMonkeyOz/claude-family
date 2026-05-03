@@ -899,6 +899,7 @@ def main():
                     name="task-worker",
                     project_name=project_name,
                     daemon_module_path="scripts.task_worker",
+                    extra_args=[project_name, cwd],
                 )
                 if respawned:
                     logger.info(f"task-worker: respawned (was dead)")

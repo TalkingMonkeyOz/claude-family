@@ -312,20 +312,33 @@ class DaemonContext:
                 self._logger.removeHandler(handler)
 
 
-def watchdog_respawn(name: str, project_name: str, daemon_module_path: str) -> bool:
+def watchdog_respawn(
+    name: str,
+    project_name: str,
+    daemon_module_path: str,
+    extra_args: list | None = None,
+) -> bool:
     """Called by SessionStart hook. Check PID file + heartbeat; respawn if dead.
 
-    Intended for use in SessionStart hook to ensure the daemon is running.
     If the daemon is not running, spawns a new one via the provided module.
+    On Windows, the child is detached (DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+    so it survives the SessionStart hook process exit.
+
+    Returns True only after a post-spawn liveness check confirms the child is
+    still alive (catches the FB451 class of bug where wrong argv causes the
+    daemon to exit immediately).
 
     Args:
         name: Daemon name (e.g. 'ckg-daemon')
         project_name: Project name
-        daemon_module_path: Path to daemon module (e.g. 'scripts.ckg_daemon')
-            The module must have a main() function that accepts no arguments
+        daemon_module_path: Path to daemon module (e.g. 'scripts.task_worker')
+        extra_args: Positional args appended after `python -m <module>`.
+            Required for daemons whose entry script reads sys.argv.
 
     Returns:
-        True if respawn was triggered, False if daemon was healthy
+        True if respawn was triggered AND the child is still alive after a
+        short settle window. False if the daemon was already healthy or the
+        respawn failed.
     """
     ctx = DaemonContext(name, project_name)
 
@@ -335,23 +348,29 @@ def watchdog_respawn(name: str, project_name: str, daemon_module_path: str) -> b
 
     # Daemon is dead — respawn it
     try:
-        # Parse module path
-        parts = daemon_module_path.rsplit('.', 1)
-        if len(parts) == 2:
-            module_name, func_name = parts
-        else:
-            module_name = daemon_module_path
+        argv = [sys.executable, '-m', daemon_module_path]
+        if extra_args:
+            argv.extend(str(a) for a in extra_args)
 
-        # Spawn in background process instead of calling directly
-        # This allows the parent process (SessionStart hook) to return immediately
-        subprocess.Popen(
-            [sys.executable, '-m', module_name],
+        popen_kwargs = dict(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True if sys.platform != 'win32' else False,
         )
-        return True
-    except Exception:
-        pass
+        if sys.platform == 'win32':
+            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            popen_kwargs['creationflags'] = 0x00000008 | 0x00000200
+        else:
+            popen_kwargs['start_new_session'] = True
 
-    return False
+        proc = subprocess.Popen(argv, **popen_kwargs)
+
+        # Settle window: catch immediate-exit failures (wrong argv, import error).
+        try:
+            rc = proc.wait(timeout=1.0)
+            # Process exited within 1s — respawn failed.
+            return False
+        except subprocess.TimeoutExpired:
+            # Still running after settle window — success.
+            return True
+    except Exception:
+        return False
