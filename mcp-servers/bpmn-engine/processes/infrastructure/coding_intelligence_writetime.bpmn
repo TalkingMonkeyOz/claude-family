@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions
+    xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+    xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+    xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+    targetNamespace="http://claude-family/bpmn/coding-intelligence-writetime"
+    id="Definitions_CIW">
+
+  <bpmn:process id="coding_intelligence_writetime"
+                name="Coding Intelligence: PreToolUse Write/Edit injection"
+                isExecutable="true">
+
+    <!--
+      F232.P3 — Write-time symbol-anchored injection.
+
+      Wraps PreToolUse(Edit|Write) and composes additionalContext from:
+        (TIME)  claude.knowledge rows whose kg_links anchor to the
+                symbols/files in the target edit region.
+        (SPACE) hal-semantic-engine.overlay_get_full_context for those
+                symbols (intent, invariants, concerns, similar siblings).
+
+      Companion files:
+        scripts/overlay_resolved_symbol_cache.py        (caller-side cache)
+        scripts/migrations/2026-05-04-f232-p3-…sql      (kg_links + mcp_usage)
+        mcp-servers/bpmn-engine/tests/
+            test_coding_intelligence_writetime.py        (10-case suite)
+
+      Anti-pollution invariants (workfile 4ecd7e88, Phase 4.1 lessons):
+        1. NO silent degradation on MCP-init failure — abort + marker.
+        2. Latency p95 enforcement — auto-trip fast=True after 50-call window.
+        3. Injection budget hard cap (2000 tokens, lowest-score dropped first).
+        4. Idempotency — same edit on same content_hash → same injection.
+
+      Reuses content_validation.bpmn structure:
+        - PreToolUse start event
+        - Extract → check → exclusive-gateway pattern
+        - Multi-end-event design (allowed_with_context / allowed_no_context /
+          aborted_init_failure)
+        - DB-availability gracefulness
+    -->
+
+    <!-- ================================================================== -->
+    <!-- START                                                               -->
+    <!-- ================================================================== -->
+    <bpmn:startEvent id="start" name="PreToolUse Edit/Write">
+      <bpmn:outgoing>flow_start_extract</bpmn:outgoing>
+    </bpmn:startEvent>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 1: EXTRACT TARGET INFO                                        -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="extract_target_info"
+                     name="[HOOK] Extract target file + edit region"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_start_extract</bpmn:incoming>
+      <bpmn:outgoing>flow_extract_to_check</bpmn:outgoing>
+      <bpmn:script>
+# Read tool_input from stdin JSON.
+# Extract: file_path, project, edit_lines (start, end), tool_name
+# Outputs: file_path, project, edit_lines, tool_name
+has_target = has_target if has_target is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="check_indexable_target"
+                     name="[HOOK] Check indexable scope"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_extract_to_check</bpmn:incoming>
+      <bpmn:outgoing>flow_check_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# is_indexable == False when: binary, generated, gitignored,
+# or path matches *.{png,jpg,svg,lock,min.js,...}
+is_indexable = is_indexable if is_indexable is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_indexable" name="Indexable?" default="flow_not_indexable">
+      <bpmn:incoming>flow_check_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_is_indexable</bpmn:outgoing>
+      <bpmn:outgoing>flow_not_indexable</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="allow_unindexed"
+                     name="[HOOK] Allow (Not Indexed)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_not_indexable</bpmn:incoming>
+      <bpmn:outgoing>flow_unindexed_to_end</bpmn:outgoing>
+      <bpmn:script>
+decision = "allow"
+reason = "File not in CKG-indexable scope"
+outcome = "allowed_no_context"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 2: SYMBOL RESOLUTION                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="resolve_edit_symbols"
+                     name="[TOOL] Resolve symbols at edit_lines"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_is_indexable</bpmn:incoming>
+      <bpmn:outgoing>flow_resolve_to_memq</bpmn:outgoing>
+      <bpmn:script>
+# Calls find_symbol / get_module_map for symbols overlapping edit_lines.
+# Empty list ⇒ fall through to file-path-anchored memory query only.
+# Outputs: candidate_symbols [(qualified_name, file_path, symbol_id?)]
+candidate_symbols = candidate_symbols if candidate_symbols is not None else []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 3: ANCHORED MEMORY QUERY (TIME axis)                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:scriptTask id="connect_db"
+                     name="[DB] Connect to PostgreSQL"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_resolve_to_memq</bpmn:incoming>
+      <bpmn:outgoing>flow_db_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Try psycopg3 then psycopg2 (matches content_validation.bpmn pattern).
+db_available = db_available if db_available is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_db_available" name="DB available?" default="flow_no_db">
+      <bpmn:incoming>flow_db_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_db_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_no_db</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="skip_memories_no_db"
+                     name="[HOOK] Skip memories (DB down)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_no_db</bpmn:incoming>
+      <bpmn:outgoing>flow_no_db_to_overlay_gw</bpmn:outgoing>
+      <bpmn:script>
+# DB down: skip memory query, continue to overlay enrichment if available.
+memories = []
+fallback_reason = "db_unavailable"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="query_anchored_memories"
+                     name="[DB] Query memories by kg_links"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_db_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_memq_to_overlay_gw</bpmn:outgoing>
+      <bpmn:script>
+# SELECT * FROM claude.knowledge
+#   WHERE kg_links @> [{kind:'symbol', id:&lt;id&gt;}, ...]
+#      OR kg_links @> [{kind:'file', path:&lt;file_path&gt;}]
+# ORDER BY (recency × times_applied) DESC LIMIT N
+# Empty result is fine — continue with overlay-only injection.
+memories = memories if memories is not None else []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 4: OVERLAY ENRICHMENT (SPACE axis) — gated                    -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="gw_has_overlay" name="Overlay queryable?" default="flow_skip_overlay">
+      <bpmn:incoming>flow_memq_to_overlay_gw</bpmn:incoming>
+      <bpmn:incoming>flow_no_db_to_overlay_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_query_overlay</bpmn:outgoing>
+      <bpmn:outgoing>flow_skip_overlay</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="init_aggregator"
+                     name="[TOOL] Init hal-semantic-engine MCP"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_query_overlay</bpmn:incoming>
+      <bpmn:outgoing>flow_init_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Per Phase 4.1 / FB456: aggregator MCP-init failure is NOT silent-degrade.
+# We assert wire health here and route to abort_init_failure on failure.
+aggregator_init_ok = aggregator_init_ok if aggregator_init_ok is not None else True
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_aggregator_init" name="Aggregator init?" default="flow_init_failed">
+      <bpmn:incoming>flow_init_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_init_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_init_failed</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="abort_init_failure"
+                     name="[HOOK] Abort: aggregator init failure"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_init_failed</bpmn:incoming>
+      <bpmn:outgoing>flow_abort_to_end</bpmn:outgoing>
+      <bpmn:script>
+# Phase 4.1 anti-pollution gate 1: do NOT silent-allow.
+# Allow the operation but emit a warning marker the user/telemetry can see.
+decision = "allow"
+reason = "Aggregator MCP unavailable; injection skipped (NOT silent-degrade)"
+outcome = "aborted_init_failure"
+fallback_reason = "init_failure"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="query_overlay_context"
+                     name="[TOOL] overlay_get_full_context (cached)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_init_ok</bpmn:incoming>
+      <bpmn:outgoing>flow_overlay_to_gw</bpmn:outgoing>
+      <bpmn:script>
+# Per candidate_symbol:
+#   payload = cache.get_context_with_cache(
+#     qualified_name=qn, file_path=fp, project=p, N=3, fast=False)
+# Latency budget &lt;100ms p95; on rolling-window p95 &gt; 100ms, set fast=True for session.
+# Outputs: overlay_results[], overlay_outcome ∈ {ok, project_mismatch, timeout}
+overlay_outcome = overlay_outcome if overlay_outcome is not None else "ok"
+overlay_results = overlay_results if overlay_results is not None else []
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:exclusiveGateway id="gw_overlay_outcome" name="Overlay outcome?" default="flow_overlay_other">
+      <bpmn:incoming>flow_overlay_to_gw</bpmn:incoming>
+      <bpmn:outgoing>flow_overlay_ok</bpmn:outgoing>
+      <bpmn:outgoing>flow_overlay_mismatch</bpmn:outgoing>
+      <bpmn:outgoing>flow_overlay_other</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="retry_after_mismatch"
+                     name="[TOOL] Retry once with force_reresolve"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_overlay_mismatch</bpmn:incoming>
+      <bpmn:outgoing>flow_retry_to_compose</bpmn:outgoing>
+      <bpmn:script>
+# project_mismatch: cache full-cleared by helper; retry exactly once.
+# If second call also errors, treat as overlay-unavailable and continue.
+retry_succeeded = retry_succeeded if retry_succeeded is not None else True
+overlay_results = overlay_results if overlay_results is not None else []
+fallback_reason = None if retry_succeeded else "overlay_unavailable"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="overlay_timeout_fallback"
+                     name="[HOOK] Cancel + log timeout"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_overlay_other</bpmn:incoming>
+      <bpmn:outgoing>flow_timeout_to_compose</bpmn:outgoing>
+      <bpmn:script>
+# Aggregator exceeded budget — drop overlay enrichment, continue with memories only.
+overlay_results = []
+fallback_reason = "timeout"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="skip_overlay_no_symbols"
+                     name="[HOOK] Skip overlay (no symbols / no MCP)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_skip_overlay</bpmn:incoming>
+      <bpmn:outgoing>flow_skip_to_compose</bpmn:outgoing>
+      <bpmn:script>
+# candidate_symbols empty OR hal-semantic-engine not registered.
+overlay_results = []
+fallback_reason = fallback_reason if fallback_reason is not None else "no_symbols"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- PHASE 5: COMPOSE + LOG                                              -->
+    <!-- ================================================================== -->
+
+    <bpmn:exclusiveGateway id="gw_compose_merge" name="Compose merge">
+      <bpmn:incoming>flow_overlay_ok</bpmn:incoming>
+      <bpmn:incoming>flow_retry_to_compose</bpmn:incoming>
+      <bpmn:incoming>flow_timeout_to_compose</bpmn:incoming>
+      <bpmn:incoming>flow_skip_to_compose</bpmn:incoming>
+      <bpmn:outgoing>flow_merge_to_compose</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+
+    <bpmn:scriptTask id="compose_injection"
+                     name="[HOOK] Compose additionalContext (budget-capped)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_merge_to_compose</bpmn:incoming>
+      <bpmn:outgoing>flow_compose_to_log</bpmn:outgoing>
+      <bpmn:script>
+# Steps:
+#   a) Score memories by (recency × times_applied × symbol_overlap)
+#   b) Order overlay_results by concerns priority (auth/PII/sessions ▶ generic)
+#   c) Dedupe between memories and overlay (symbol+text similarity &gt; 0.8)
+#   d) Truncate to budget (default 1500, hard cap 2000) — lowest-score-first
+#   e) Compose additionalContext markdown (see workfile 4ecd7e88 § Compose)
+# Idempotent: same inputs → same injection_token_count, same dedup_count.
+injection_token_count = injection_token_count if injection_token_count is not None else 0
+has_injection = has_injection if has_injection is not None else False
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <bpmn:scriptTask id="log_event"
+                     name="[DB] Log to mcp_usage (best-effort)"
+                     scriptFormat="python">
+      <bpmn:incoming>flow_compose_to_log</bpmn:incoming>
+      <bpmn:outgoing>flow_log_to_end</bpmn:outgoing>
+      <bpmn:script>
+# INSERT INTO claude.mcp_usage (
+#   tool_kind='hook', mcp_server='hal-semantic-engine',
+#   target_files, target_symbols,
+#   memories_surfaced_n, overlay_calls_n, injection_token_count, ...
+# )
+# Failure is non-fatal — the allow proceeds regardless.
+decision = "allow"
+reason = "Injection composed" if has_injection else "No applicable context"
+outcome = "allowed_with_context" if has_injection else "allowed_no_context"
+      </bpmn:script>
+    </bpmn:scriptTask>
+
+    <!-- ================================================================== -->
+    <!-- END EVENTS                                                          -->
+    <!-- ================================================================== -->
+
+    <bpmn:endEvent id="end_allowed_no_context" name="Allowed: No Context">
+      <bpmn:incoming>flow_unindexed_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_allowed_with_context" name="Allowed: With Context">
+      <bpmn:incoming>flow_log_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <bpmn:endEvent id="end_aborted_init_failure" name="Aborted: Init Failure">
+      <bpmn:incoming>flow_abort_to_end</bpmn:incoming>
+    </bpmn:endEvent>
+
+    <!-- ================================================================== -->
+    <!-- SEQUENCE FLOWS                                                      -->
+    <!-- ================================================================== -->
+
+    <!-- Phase 1 -->
+    <bpmn:sequenceFlow id="flow_start_extract" sourceRef="start" targetRef="extract_target_info"/>
+    <bpmn:sequenceFlow id="flow_extract_to_check" sourceRef="extract_target_info" targetRef="check_indexable_target"/>
+    <bpmn:sequenceFlow id="flow_check_to_gw" sourceRef="check_indexable_target" targetRef="gw_indexable"/>
+    <bpmn:sequenceFlow id="flow_is_indexable" sourceRef="gw_indexable" targetRef="resolve_edit_symbols">
+      <bpmn:conditionExpression>is_indexable == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_not_indexable" sourceRef="gw_indexable" targetRef="allow_unindexed"/>
+    <bpmn:sequenceFlow id="flow_unindexed_to_end" sourceRef="allow_unindexed" targetRef="end_allowed_no_context"/>
+
+    <!-- Phase 2 → Phase 3 -->
+    <bpmn:sequenceFlow id="flow_resolve_to_memq" sourceRef="resolve_edit_symbols" targetRef="connect_db"/>
+    <bpmn:sequenceFlow id="flow_db_to_gw" sourceRef="connect_db" targetRef="gw_db_available"/>
+    <bpmn:sequenceFlow id="flow_db_ok" sourceRef="gw_db_available" targetRef="query_anchored_memories">
+      <bpmn:conditionExpression>db_available == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_no_db" sourceRef="gw_db_available" targetRef="skip_memories_no_db"/>
+    <bpmn:sequenceFlow id="flow_no_db_to_overlay_gw" sourceRef="skip_memories_no_db" targetRef="gw_has_overlay"/>
+    <bpmn:sequenceFlow id="flow_memq_to_overlay_gw" sourceRef="query_anchored_memories" targetRef="gw_has_overlay"/>
+
+    <!-- Phase 4: overlay enrichment (gated) -->
+    <bpmn:sequenceFlow id="flow_query_overlay" sourceRef="gw_has_overlay" targetRef="init_aggregator">
+      <bpmn:conditionExpression>len(candidate_symbols) &gt; 0 and overlay_mcp_registered == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_skip_overlay" sourceRef="gw_has_overlay" targetRef="skip_overlay_no_symbols"/>
+    <bpmn:sequenceFlow id="flow_init_to_gw" sourceRef="init_aggregator" targetRef="gw_aggregator_init"/>
+    <bpmn:sequenceFlow id="flow_init_ok" sourceRef="gw_aggregator_init" targetRef="query_overlay_context">
+      <bpmn:conditionExpression>aggregator_init_ok == True</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_init_failed" sourceRef="gw_aggregator_init" targetRef="abort_init_failure"/>
+    <bpmn:sequenceFlow id="flow_abort_to_end" sourceRef="abort_init_failure" targetRef="end_aborted_init_failure"/>
+    <bpmn:sequenceFlow id="flow_overlay_to_gw" sourceRef="query_overlay_context" targetRef="gw_overlay_outcome"/>
+    <bpmn:sequenceFlow id="flow_overlay_ok" sourceRef="gw_overlay_outcome" targetRef="gw_compose_merge">
+      <bpmn:conditionExpression>overlay_outcome == 'ok'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_overlay_mismatch" sourceRef="gw_overlay_outcome" targetRef="retry_after_mismatch">
+      <bpmn:conditionExpression>overlay_outcome == 'project_mismatch'</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="flow_overlay_other" sourceRef="gw_overlay_outcome" targetRef="overlay_timeout_fallback"/>
+    <bpmn:sequenceFlow id="flow_retry_to_compose" sourceRef="retry_after_mismatch" targetRef="gw_compose_merge"/>
+    <bpmn:sequenceFlow id="flow_timeout_to_compose" sourceRef="overlay_timeout_fallback" targetRef="gw_compose_merge"/>
+    <bpmn:sequenceFlow id="flow_skip_to_compose" sourceRef="skip_overlay_no_symbols" targetRef="gw_compose_merge"/>
+
+    <!-- Phase 5: compose + log -->
+    <bpmn:sequenceFlow id="flow_merge_to_compose" sourceRef="gw_compose_merge" targetRef="compose_injection"/>
+    <bpmn:sequenceFlow id="flow_compose_to_log" sourceRef="compose_injection" targetRef="log_event"/>
+    <bpmn:sequenceFlow id="flow_log_to_end" sourceRef="log_event" targetRef="end_allowed_with_context"/>
+
+  </bpmn:process>
+
+  <bpmndi:BPMNDiagram id="BPMNDiagram_1">
+    <bpmndi:BPMNPlane id="BPMNPlane_1" bpmnElement="coding_intelligence_writetime">
+      <bpmndi:BPMNShape id="s_start" bpmnElement="start">
+        <dc:Bounds x="50" y="200" width="36" height="36"/>
+      </bpmndi:BPMNShape>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+
+</bpmn:definitions>
