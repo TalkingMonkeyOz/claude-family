@@ -319,7 +319,16 @@ def _normalize_file_paths(file_path: str) -> List[str]:
 
 
 def resolve_symbols_for_file(conn, file_path: str) -> List[Dict[str, Any]]:
-    """Return symbols indexed in CKG for this file (best-effort)."""
+    """Return symbols indexed in CKG for this file (best-effort).
+
+    Priority order so the orchestrator's [:5] window catches the
+    high-value symbols on huge files (server_v2.py is 14K+ LOC):
+      1. Symbols with an existing hal.intent_overlay annotation
+      2. Then by line_number ascending
+
+    Returns both `name` (bare, hal's natural key) and `qualified_name`
+    (display) so the orchestrator can pass the bare form to hal.
+    """
     if not conn or not file_path:
         return []
     candidates = _normalize_file_paths(file_path)
@@ -327,13 +336,20 @@ def resolve_symbols_for_file(conn, file_path: str) -> List[Dict[str, Any]]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT symbol_id,
-                   COALESCE(NULLIF(scope, '') || '.' || name, name) AS qualified_name,
-                   kind, line_number
-            FROM   claude.code_symbols
-            WHERE  file_path = ANY(%s)
-            ORDER  BY line_number NULLS LAST
-            LIMIT  20
+            SELECT cs.symbol_id,
+                   cs.name,
+                   COALESCE(NULLIF(cs.scope, '') || '.' || cs.name, cs.name) AS qualified_name,
+                   cs.kind, cs.line_number,
+                   EXISTS (
+                       SELECT 1 FROM hal.intent_overlay io
+                       WHERE io.file_path = cs.file_path
+                         AND io.qualified_name = cs.name
+                   ) AS has_annotation
+            FROM   claude.code_symbols cs
+            WHERE  cs.file_path = ANY(%s)
+            ORDER  BY has_annotation DESC,
+                      cs.line_number NULLS LAST
+            LIMIT  200
             """,
             (candidates,),
         )
@@ -427,7 +443,10 @@ def run(input_data: Dict[str, Any], aggregator: Optional[Callable] = None,
 
     if symbols and aggregator is not _disabled_aggregator:
         for sym in symbols[:5]:  # Limit overlay calls per hook invocation
-            qn = sym.get("qualified_name")
+            # Hal's seeder uses bare `name` as the natural key for
+            # qualified_name lookups; CKG's COALESCE-built display string
+            # (e.g. "module.foo") would miss. Pass bare name when present.
+            qn = sym.get("name") or sym.get("qualified_name")
             if not qn:
                 continue
             try:
