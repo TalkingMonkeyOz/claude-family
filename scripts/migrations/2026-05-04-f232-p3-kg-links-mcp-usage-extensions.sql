@@ -153,15 +153,15 @@ CREATE INDEX IF NOT EXISTS idx_tool_use_metrics_window
 -- tool_kind is the only constrained field; bypass_detected and
 -- nudge_fired are plain BOOLEAN. Hawthorne flag likewise BOOLEAN.
 INSERT INTO claude.column_registry
-    (table_name, column_name, valid_values, description, registered_at)
+    (table_name, column_name, data_type, is_nullable, valid_values, description)
 VALUES
-    ('mcp_usage', 'tool_kind',
-     ARRAY['mcp', 'harness', 'hook'],
-     'F232: source of the tool call. Defaults to ''mcp''.',
-     NOW())
+    ('mcp_usage', 'tool_kind', 'VARCHAR(16)', TRUE,
+     '["mcp", "harness", "hook"]'::jsonb,
+     'F232: source of the tool call. Defaults to ''mcp''.')
 ON CONFLICT (table_name, column_name) DO UPDATE
     SET valid_values = EXCLUDED.valid_values,
-        description  = EXCLUDED.description;
+        description  = EXCLUDED.description,
+        updated_at   = NOW();
 
 
 -- ---------------------------------------------------------------------

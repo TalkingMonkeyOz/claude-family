@@ -259,7 +259,7 @@ def query_anchored_memories(conn, file_path: str, symbol_ids: List[str]) -> List
         params: List[Any] = [json.dumps([{"kind": "file", "path": file_path}])]
         for sid in symbol_ids:
             clauses.append("kg_links @> %s::jsonb")
-            params.append(json.dumps([{"kind": "symbol", "id": sid}]))
+            params.append(json.dumps([{"kind": "symbol", "id": str(sid)}]))
         where = " OR ".join(clauses)
         cur.execute(
             f"""
