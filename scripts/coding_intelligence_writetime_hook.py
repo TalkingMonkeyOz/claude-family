@@ -105,17 +105,41 @@ def _mock_aggregator(**kwargs: Any) -> Dict[str, Any]:
     }
 
 
-def _live_aggregator(**kwargs: Any) -> Dict[str, Any]:
-    """Live hal-semantic-engine.overlay_get_full_context client.
+_HAL_PATH = os.environ.get("HAL_REPO_PATH", "C:/Projects/project-hal")
+_LIVE_FN: Optional[Callable] = None
 
-    Wired via the project-tools MCP bridge or direct hal-semantic-engine
-    MCP call. NOT YET IMPLEMENTED — flips on once hal task #466 ships
-    and the wire path is verified end-to-end.
+
+def _load_live_aggregator() -> Callable:
+    """Lazy import of hal-semantic-engine.overlay_get_full_context.
+
+    Wire-path verified 2026-05-04 against hal commit f60b4ce (task #466
+    stub: full v1.1 envelope, validation, project_mismatch detection,
+    UUID resolution path). Direct Python import — same process, no MCP
+    JSON-RPC overhead.
     """
-    raise NotImplementedError(
-        "live aggregator not yet wired — set F232_AGGREGATOR_MODE=mock "
-        "or =disabled until hal task #466 ships"
-    )
+    global _LIVE_FN
+    if _LIVE_FN is not None:
+        return _LIVE_FN
+    if not os.environ.get("DATABASE_URI"):
+        try:
+            from config import get_database_uri
+            os.environ["DATABASE_URI"] = get_database_uri()
+        except Exception:
+            pass
+    if _HAL_PATH not in sys.path:
+        sys.path.insert(0, _HAL_PATH)
+    from src.core.server import overlay_get_full_context as fn  # type: ignore
+    _LIVE_FN = fn
+    return fn
+
+
+def _live_aggregator(**kwargs: Any) -> Dict[str, Any]:
+    """Live client — calls hal-semantic-engine.overlay_get_full_context."""
+    fn = _load_live_aggregator()
+    raw = fn(**{k: v for k, v in kwargs.items() if v is not None})
+    if isinstance(raw, str):
+        return json.loads(raw)
+    return raw  # already a dict (defensive)
 
 
 def get_aggregator() -> Callable[..., Dict[str, Any]]:
@@ -209,13 +233,28 @@ def compose_injection(
 # ---------------------------------------------------------------------------
 
 
+def _row_to_dict(cur, row: Any) -> Dict[str, Any]:
+    """Normalise psycopg2/3 row variants (tuple, namedtuple, dict-like) to dict."""
+    if isinstance(row, dict):
+        return dict(row)
+    cols = [d[0] for d in cur.description]
+    try:
+        return {col: row[i] for i, col in enumerate(cols)}
+    except (TypeError, KeyError):
+        # dict-like rows where positional access fails — fall back to attr names.
+        return {col: row[col] for col in cols}
+
+
 def query_anchored_memories(conn, file_path: str, symbol_ids: List[str]) -> List[Dict[str, Any]]:
-    """Return up to MEMORIES_PER_QUERY rows whose kg_links anchor here."""
+    """Return up to MEMORIES_PER_QUERY rows whose kg_links anchor here.
+
+    Best-effort: returns [] if claude.knowledge.kg_links is missing
+    (migration not yet applied) — graceful pre-migration behaviour.
+    """
     if not conn:
         return []
     try:
         cur = conn.cursor()
-        # Build the kg_links @> ANY(...) filter as separate ORs (jsonb_path_ops).
         clauses = ["kg_links @> %s::jsonb"]
         params: List[Any] = [json.dumps([{"kind": "file", "path": file_path}])]
         for sid in symbol_ids:
@@ -224,7 +263,8 @@ def query_anchored_memories(conn, file_path: str, symbol_ids: List[str]) -> List
         where = " OR ".join(clauses)
         cur.execute(
             f"""
-            SELECT knowledge_id, title, content, knowledge_type, times_applied
+            SELECT knowledge_id, title, description AS content,
+                   knowledge_type, times_applied
             FROM   claude.knowledge
             WHERE  ({where})
               AND  status IS DISTINCT FROM 'archived'
@@ -235,32 +275,61 @@ def query_anchored_memories(conn, file_path: str, symbol_ids: List[str]) -> List
             params + [MEMORIES_PER_QUERY],
         )
         rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in rows]
+        return [_row_to_dict(cur, r) for r in rows]
     except Exception as exc:
-        logger.warning(f"anchored memory query failed: {exc}")
+        msg = str(exc)
+        if "kg_links" in msg:
+            logger.debug("kg_links column not yet present — pre-migration; "
+                         "anchored memory query disabled")
+        else:
+            logger.warning(f"anchored memory query failed: {exc}")
         return []
+
+
+def _normalize_file_paths(file_path: str) -> List[str]:
+    """Return all path forms claude.code_symbols may have stored.
+
+    The CKG stores absolute Windows paths (e.g. C:\\Projects\\...). The
+    hook may receive either absolute or project-relative input. Try
+    several forms so the lookup matches regardless.
+    """
+    if not file_path:
+        return []
+    forms = {file_path}
+    fwd = file_path.replace("\\", "/")
+    bwd = file_path.replace("/", "\\")
+    forms.add(fwd)
+    forms.add(bwd)
+    if not (file_path.startswith("/") or (len(file_path) > 1 and file_path[1] == ":")):
+        # Project-relative — qualify against likely CF root.
+        cf_root = os.environ.get("CLAUDE_PROJECT_PATH", "C:\\Projects\\claude-family")
+        joined = os.path.join(cf_root, file_path).replace("/", "\\")
+        forms.add(joined)
+        forms.add(joined.replace("\\", "/"))
+    return list(forms)
 
 
 def resolve_symbols_for_file(conn, file_path: str) -> List[Dict[str, Any]]:
     """Return symbols indexed in CKG for this file (best-effort)."""
     if not conn or not file_path:
         return []
+    candidates = _normalize_file_paths(file_path)
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT symbol_id, qualified_name, kind, line_number
+            SELECT symbol_id,
+                   COALESCE(NULLIF(scope, '') || '.' || name, name) AS qualified_name,
+                   kind, line_number
             FROM   claude.code_symbols
-            WHERE  file_path = %s
+            WHERE  file_path = ANY(%s)
             ORDER  BY line_number NULLS LAST
             LIMIT  20
             """,
-            (file_path,),
+            (candidates,),
         )
         rows = cur.fetchall()
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, r)) for r in rows]
+        return [_row_to_dict(cur, r) for r in rows]
     except Exception as exc:
         logger.debug(f"symbol resolve skipped: {exc}")
         return []
@@ -357,14 +426,14 @@ def run(input_data: Dict[str, Any], aggregator: Optional[Callable] = None,
                     qualified_name=qn,
                     file_path=file_path,
                     project=project,
-                    N=SIMILAR_SIBLINGS_K,
+                    sibling_n=SIMILAR_SIBLINGS_K,
                 )
                 overlay_calls_n += 1
                 if payload.get("error") == "project_mismatch":
                     # Retry once with force_reresolve (cache already cleared).
                     payload = cache.get_context_with_cache(
                         qualified_name=qn, file_path=file_path,
-                        project=project, N=SIMILAR_SIBLINGS_K,
+                        project=project, sibling_n=SIMILAR_SIBLINGS_K,
                         force_reresolve=True,
                     )
                     overlay_calls_n += 1
