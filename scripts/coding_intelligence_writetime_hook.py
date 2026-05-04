@@ -209,7 +209,7 @@ def compose_injection(
         lines.append(f"**Patterns previously used here** ({len(memories)} entries):")
         for m in memories[:5]:
             title = m.get("title") or (m.get("content") or "")[:80]
-            kid = m.get("knowledge_id") or m.get("id") or ""
+            kid = str(m.get("knowledge_id") or m.get("id") or "")
             lines.append(f"- [{kid[:8]}] {title}")
 
     if similar_siblings:
@@ -255,8 +255,17 @@ def query_anchored_memories(conn, file_path: str, symbol_ids: List[str]) -> List
         return []
     try:
         cur = conn.cursor()
-        clauses = ["kg_links @> %s::jsonb"]
-        params: List[Any] = [json.dumps([{"kind": "file", "path": file_path}])]
+        # Match every plausible spelling of the path — kg_links rows may
+        # have been seeded as absolute Windows, absolute POSIX, or
+        # project-relative form. The seed pipeline canonicalises to
+        # backslash absolute, but defensive matching keeps us robust to
+        # alternative seeders / hand-edits.
+        path_forms = _normalize_file_paths(file_path) if file_path else [file_path]
+        clauses = []
+        params: List[Any] = []
+        for pf in path_forms:
+            clauses.append("kg_links @> %s::jsonb")
+            params.append(json.dumps([{"kind": "file", "path": pf}]))
         for sid in symbol_ids:
             clauses.append("kg_links @> %s::jsonb")
             params.append(json.dumps([{"kind": "symbol", "id": str(sid)}]))
