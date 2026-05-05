@@ -362,7 +362,10 @@ def resolve_symbols_for_file(conn, file_path: str) -> List[Dict[str, Any]]:
 
 def log_event(conn, *, tool_name: str, file_path: str, target_symbols: List[str],
               memories_n: int, overlay_calls_n: int, injection_chars: int,
-              fallback_reason: Optional[str], outcome: str, latency_ms: float) -> None:
+              fallback_reason: Optional[str], outcome: str, latency_ms: float,
+              session_id: Optional[str] = None,
+              project_name: Optional[str] = None) -> None:
+    """Persist hook outcome into claude.mcp_usage (FB460 fix — column names corrected)."""
     if not conn:
         return
     try:
@@ -370,11 +373,13 @@ def log_event(conn, *, tool_name: str, file_path: str, target_symbols: List[str]
         cur.execute(
             """
             INSERT INTO claude.mcp_usage (
+              session_id, project_name,
               mcp_server, tool_name, tool_kind,
               target_files, target_symbols,
               would_have_been, bypass_detected, nudge_fired,
-              duration_ms, called_at, metadata
+              execution_time_ms, called_at, metadata
             ) VALUES (
+              %s, %s,
               %s, %s, 'hook',
               %s, %s,
               NULL, FALSE, FALSE,
@@ -383,11 +388,13 @@ def log_event(conn, *, tool_name: str, file_path: str, target_symbols: List[str]
             )
             """,
             (
+                session_id,
+                project_name,
                 "hal-semantic-engine",
                 "coding_intelligence_writetime",
                 [file_path] if file_path else None,
                 target_symbols or None,
-                latency_ms,
+                int(round(latency_ms)),
                 json.dumps({
                     "tool": tool_name,
                     "memories_surfaced_n": memories_n,
@@ -395,12 +402,13 @@ def log_event(conn, *, tool_name: str, file_path: str, target_symbols: List[str]
                     "injection_chars": injection_chars,
                     "fallback_reason": fallback_reason,
                     "outcome": outcome,
+                    "latency_ms_precise": latency_ms,
                 }),
             ),
         )
         conn.commit()
     except Exception as exc:
-        logger.debug(f"mcp_usage log skipped: {exc}")
+        logger.warning(f"mcp_usage log failed: {exc}")
         try:
             conn.rollback()
         except Exception:
@@ -420,6 +428,7 @@ def run(input_data: Dict[str, Any], aggregator: Optional[Callable] = None,
     file_path = target["file_path"]
     project = target["project"]
     tool_name = target["tool_name"]
+    session_id = input_data.get("session_id") or os.environ.get("CLAUDE_SESSION_ID")
 
     if not is_indexable(file_path):
         return {"_response": {"decision": "allow"}, "outcome": "allowed_no_context",
@@ -479,7 +488,8 @@ def run(input_data: Dict[str, Any], aggregator: Optional[Callable] = None,
                           target_symbols=symbol_ids, memories_n=len(memories),
                           overlay_calls_n=overlay_calls_n, injection_chars=0,
                           fallback_reason="init_failure",
-                          outcome="aborted_init_failure", latency_ms=latency_ms)
+                          outcome="aborted_init_failure", latency_ms=latency_ms,
+                          session_id=session_id, project_name=project)
                 return {"_response": {"decision": "allow"},
                         "outcome": "aborted_init_failure",
                         "fallback_reason": "init_failure"}
@@ -501,7 +511,8 @@ def run(input_data: Dict[str, Any], aggregator: Optional[Callable] = None,
               target_symbols=symbol_ids, memories_n=len(memories),
               overlay_calls_n=overlay_calls_n, injection_chars=len(text),
               fallback_reason=fallback_reason, outcome=outcome,
-              latency_ms=latency_ms)
+              latency_ms=latency_ms,
+              session_id=session_id, project_name=project)
 
     response: Dict[str, Any] = {"decision": "allow"}
     if text:
